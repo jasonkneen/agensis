@@ -37,7 +37,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { AI_MODELS, type AgentConnection, type AgentWebhook, type ChatSession, type Task, type WorkspaceAgent } from '../../types';
+import { AI_MODELS, type AgentConnection, type AgentPermissionMode, type AgentWebhook, type ChatSession, type OrbConfigInput, type OrbProvider, type OrbRouting, type Task, type WorkspaceAgent } from '../../types';
 import { apiAuthHeaders, apiBaseUrl, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -1033,6 +1033,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   webhooks={webhooks.filter(webhook => webhook.agent_id === selectedAgent.id)}
                   connections={connections.filter(connection => connection.agent_id === selectedAgent.id)}
                   roster={agents}
+                  workspaceId={workspaceId}
                   onUpdateAgent={onUpdateAgent}
                   onConnect={() => setConnectAgentId(selectedAgent.id)}
                   onDisconnect={() => onDisconnectAgent(selectedAgent.id)}
@@ -1587,6 +1588,7 @@ function AgentDetailPane({
   webhooks,
   connections,
   roster,
+  workspaceId,
   onUpdateAgent,
   onConnect,
   onDisconnect,
@@ -1614,6 +1616,8 @@ function AgentDetailPane({
    * agent on its own would preview a voice it may not actually get.
    */
   roster: WorkspaceAgent[];
+  /** Needed by the Access section: revoking a permanent grant is a manage-gated route, not a table write. */
+  workspaceId: string | null;
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
   onConnect: () => void;
   onDisconnect: () => Promise<unknown>;
@@ -1954,6 +1958,10 @@ function AgentDetailPane({
 
           {agent.run_mode === 'daemon' && (
             <HostFoldersSection agent={agent} onUpdateAgent={onUpdateAgent} />
+          )}
+
+          {agent.run_mode === 'daemon' && (
+            <AccessSection agent={agent} workspaceId={workspaceId} onUpdateAgent={onUpdateAgent} />
           )}
 
           {activeConnections.length > 0 && (
@@ -2874,6 +2882,121 @@ function HostFoldersSection({
           <Plus data-icon="inline-start" /> Add
         </Button>
       </div>
+    </AgentDetailSection>
+  );
+}
+
+// Ordered by how much they give away, least first. `permission_mode` had NO UI
+// at all before this — it was settable only through the connect command or the
+// API, which is why the practical answer to "the agent is blocked" had become
+// "run it in yolo".
+const PERMISSION_MODE_OPTIONS: { value: AgentPermissionMode; label: string; hint: string }[] = [
+  {
+    value: 'default',
+    label: 'Ask',
+    hint: 'Stops at anything not already granted and asks in the conversation. Recommended.',
+  },
+  {
+    value: 'accept_edits',
+    label: 'Auto-accept edits',
+    hint: 'File edits run without asking. Commands and everything else still ask.',
+  },
+  {
+    value: 'yolo',
+    label: 'Full access',
+    hint: 'Never asks. Unrestricted shell on the daemon host — only for a machine you would hand over anyway.',
+  },
+];
+
+function AccessSection({
+  agent,
+  workspaceId,
+  onUpdateAgent,
+}: {
+  agent: WorkspaceAgent;
+  workspaceId: string | null;
+  onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+}) {
+  const mode: AgentPermissionMode = agent.permission_mode || 'default';
+  const rules = normalizeList((agent.metadata as Record<string, unknown> | null)?.permission_rules);
+  const [error, setError] = useState('');
+
+  // Through the dedicated route, not a metadata write: `metadata` is MANAGE_ONLY
+  // in the column rules, and routing this here keeps granting and revoking a
+  // permanent rule behind exactly the same capability.
+  const revoke = async (rule: string) => {
+    if (!workspaceId) return;
+    setError('');
+    const response = await fetch(
+      apiUrl(`/backend/workspaces/${workspaceId}/agents/${agent.id}/permission-rules`),
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+        body: JSON.stringify({ rule }),
+      },
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.error) {
+      setError(String(payload.error || 'Could not revoke that rule'));
+      return;
+    }
+    const metadata = { ...(agent.metadata || {}), permission_rules: payload.data?.rules ?? [] };
+    onUpdateAgent(agent.id, { metadata });
+  };
+
+  return (
+    <AgentDetailSection title="Access">
+      <p className="mb-2 text-xs text-muted-foreground">
+        What this agent may do without asking. Note that a folder outside its working
+        directory needs a <strong>host folder</strong> above — no permission mode or grant
+        can reach one.
+      </p>
+      <div className="mb-3 grid gap-1.5">
+        {PERMISSION_MODE_OPTIONS.map(option => (
+          <label
+            key={option.value}
+            className={cn(
+              'flex cursor-pointer items-start gap-2 rounded-md border px-2 py-1.5 text-sm transition-colors',
+              mode === option.value ? 'border-ring bg-muted/50' : 'border-border hover:bg-muted/30',
+            )}
+          >
+            <input
+              type="radio"
+              className="mt-1"
+              name={`permission-mode-${agent.id}`}
+              checked={mode === option.value}
+              onChange={() => onUpdateAgent(agent.id, { permission_mode: option.value })}
+            />
+            <span className="min-w-0">
+              <span className="block font-semibold">{option.label}</span>
+              <span className="block text-xs text-muted-foreground">{option.hint}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+
+      <div className="mb-1 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+        Always allowed
+      </div>
+      {rules.length > 0 ? (
+        <div className="space-y-1.5">
+          {rules.map(rule => (
+            <div key={rule} className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/30 px-2 py-1 text-sm">
+              <ShieldCheck className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate font-mono text-xs" title={rule}>{rule}</span>
+              <Button type="button" variant="ghost" size="icon-xs" onClick={() => void revoke(rule)} aria-label={`Revoke ${rule}`}>
+                <X />
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground/70">
+          Nothing granted permanently. Rules land here when someone answers an approval request
+          with &ldquo;Always allow&rdquo;.
+        </p>
+      )}
+      {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
     </AgentDetailSection>
   );
 }

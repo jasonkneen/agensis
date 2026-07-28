@@ -1163,3 +1163,58 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_provider_created ON usage_events(pro
 INSERT INTO app_settings (key, value)
      VALUES ('usage.metering_started_at', now()::text)
 ON CONFLICT (key) DO NOTHING;
+
+-- --------------------------------------------------------------------------
+-- Interactive tool approvals (server/agent-permissions.cjs)
+--
+-- One row per "may I run this?" a daemon agent raised, and the answer a human
+-- gave it. The row outlives the socket on purpose: a server restart must not
+-- lose a prompt the daemon is still holding a turn open for.
+--
+-- `rules` holds the EXACT rule strings the daemon's "always allow" button would
+-- grant (e.g. `Bash(git clone:*)`). Permanent grants are merged into
+-- workspace_agents.metadata.permission_rules, which is MANAGE_ONLY in
+-- shared/backend-core.cjs — so making one needs `manage` while unblocking a
+-- running job needs only `write`.
+CREATE TABLE IF NOT EXISTS agent_permission_requests (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+  job_id uuid,
+  connection_id uuid,
+  session_id uuid,
+  message_id uuid,
+  -- The daemon's own request id, unique per daemon process.
+  request_key text NOT NULL,
+  tool_name text NOT NULL DEFAULT '',
+  tool_detail text NOT NULL DEFAULT '',
+  title text NOT NULL DEFAULT '',
+  description text NOT NULL DEFAULT '',
+  rules jsonb NOT NULL DEFAULT '[]'::jsonb,
+  scopes jsonb NOT NULL DEFAULT '[]'::jsonb,
+  -- pending | allowed | denied | expired
+  status text NOT NULL DEFAULT 'pending',
+  -- once | session | always, set only on an allow.
+  scope text NOT NULL DEFAULT '',
+  decided_by uuid,
+  decided_by_name text NOT NULL DEFAULT '',
+  decided_at timestamptz,
+  expires_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- A redelivered frame must update the prompt already on screen, never stack a
+-- second one beside it.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_permission_requests_key
+  ON agent_permission_requests(connection_id, request_key);
+CREATE INDEX IF NOT EXISTS idx_agent_permission_requests_pending
+  ON agent_permission_requests(workspace_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_permission_requests_job
+  ON agent_permission_requests(job_id);
+
+-- The transcript anchor for a request. Nullable: a request whose message insert
+-- failed is still a real pending request, and dropping it would wedge the turn.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS permission_request_id uuid;
+CREATE INDEX IF NOT EXISTS idx_messages_permission_request
+  ON messages(permission_request_id) WHERE permission_request_id IS NOT NULL;

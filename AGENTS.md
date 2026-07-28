@@ -46,6 +46,37 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
 
 ## Recent cross-cutting features (2026-07)
 
+- **Interactive tool approvals** — a daemon agent that hits a tool it isn't
+  cleared for now ASKS, in the conversation it is working in, instead of erroring.
+  `server/agent-permissions.cjs` owns the table (`agent_permission_requests`),
+  the `agent_permission_request` socket handler, and the decide route; the daemon
+  half is `packages/agensis-cli/src/permissions.mjs` + a `canUseTool` callback in
+  `connectionExecutors.mjs`. Things to know before touching it:
+  - **Settings files are NOT the grant store, and never were.** The daemon runs
+    Claude with `settingSources: []` (lean mode, on by default) and `--safe-mode`
+    on the subprocess lane, so `~/.claude/settings.local.json` on the daemon host
+    is read by nothing. An operator editing one sees no effect and no error. The
+    allowlist is ours: `workspace_agents.metadata.permission_rules`, a jsonb
+    write with no DDL — the same no-migration route `host_folders` took.
+  - **Rule identity is the SDK's own suggestion, compared verbatim.** Claude
+    hands `canUseTool` the exact rules its "always allow" would write; a stored
+    rule matches when it is byte-identical to one being offered right now. We
+    never reimplement `Bash(git clone:*)` matching, so we cannot drift from it,
+    and a rule we fail to match costs one extra prompt rather than an ungranted
+    tool call.
+  - **RBAC split**: once/session and every denial need `write`; `always` needs
+    `manage`, because it writes `workspace_agents.metadata`, which is MANAGE_ONLY
+    in `shared/backend-core.cjs`. Refusing must never wait for an admin.
+  - **A decision is delivered before it is recorded**, to the EXACT connection
+    that raised it. A reconnected daemon is a new process with no memory of the
+    request id, so "any live socket for this agent" would record an approval that
+    nothing acted on and show "Approved" over a tool call that never ran.
+  - **A permission rule cannot reach a folder.** Working-directory access is a
+    separate gate that no rule and not even `--dangerously-skip-permissions`
+    lifts — only `--add-dir` / `additionalDirectories`, i.e. host folders. If an
+    agent "still can't write there" after a grant, it is a host-folder problem.
+  - Codex agents get once/session only: the app-server has no per-rule grant, so
+    an "always" would have to mean "any command, forever".
 - **Sessions scoped to a project (canvas layer)** — `chat_sessions.canvas_id`
   (nullable text, mirrors `canvas_objects.layer_id`; **null = unassigned, shown
   in every project**). New channels stamp the active `activeLayerId`; splits
