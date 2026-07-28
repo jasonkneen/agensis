@@ -6600,7 +6600,7 @@ const {
 // reason: a pending approval must survive a server restart, because the daemon
 // on the other side is still holding its turn open waiting for the answer.
 const agentPermissions = createAgentPermissions({
- badRequest, forbidden, getDb, parseJsonObject,
+ badRequest, forbidden, getDb, parseJsonObject, normalizeAgentPermissionMode,
  enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
  notifyDbSubscribers: (...a) => realtime.notifyDbSubscribers(...a),
  sendWs: (...a) => realtime.sendWs(...a),
@@ -6609,7 +6609,7 @@ const agentPermissions = createAgentPermissions({
 const {
  decideAgentPermissionRequest, expireConnectionPermissionRequests,
  expireStalePermissionRequests, handleAgentPermissionRequest,
- publicPermissionRequest, revokeAgentPermissionRule,
+ publicPermissionRequest, revokeAgentPermissionRule, setAgentPermissionMode,
 } = agentPermissions;
 
 // Task dispatch owns four of the maps resetTestState() clears, and the cadence
@@ -6910,7 +6910,7 @@ function createApp() {
  mountInferenceRoutes(app, { ...coreDeps(), authorizeUserOrFarmWorkspace, bindInferenceAbort, createOpenAIInferenceStreamRelay, inferenceBroker, liveSharedModelRoutes, publicInferenceModel });
 
  mountConnectionsRoutes(app, { ...coreDeps(), buildInboxSql, isConnectionSocketLive, publicAgentConnection });
- mountAgentPermissionRoutes(app, { ...coreDeps(), decideAgentPermissionRequest, publicPermissionRequest, revokeAgentPermissionRule });
+ mountAgentPermissionRoutes(app, { ...coreDeps(), decideAgentPermissionRequest, publicPermissionRequest, revokeAgentPermissionRule, setAgentPermissionMode });
  mountInboxRoutes(app, { ...coreDeps(), INBOX_DEFAULT_LIMIT, INBOX_FILTERS, INBOX_MAX_LIMIT, THREAD_INBOX_DEFAULT_LIMIT, buildInboxSql, buildThreadInboxSql, inboxMentionHandle, inboxMentionPattern, toInboxItem, toThreadInboxItem });
  mountLinkPreviewsRoutes(app, { ...coreDeps(), LINK_PREVIEW_COLUMNS, LINK_PREVIEW_MAX_PER_REQUEST, fetchLinkPreview, fetchPreviewImage, linkPreviewCacheKey, linkPreviewDbRateLimiter, linkPreviewImageDbRateLimiter, linkPreviewImageRateLimiter, linkPreviewRateLimiter, normalizeUnfurlUrl, publicLinkPreview, upsertLinkPreview });
  mountFeedbackRoutes(app, {
@@ -7585,6 +7585,7 @@ module.exports = {
   expireStalePermissionRequests,
   expireConnectionPermissionRequests,
   revokeAgentPermissionRule,
+  setAgentPermissionMode,
   publicPermissionRequest,
   handleAgentJobSegment,
   agentStepContent,

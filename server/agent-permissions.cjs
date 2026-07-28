@@ -134,6 +134,7 @@ function createAgentPermissions(deps = {}) {
   badRequest,
   forbidden,
   enforceWorkspaceRole,
+  normalizeAgentPermissionMode,
   // Deliberately NOT findConnectedAgent: a decision goes to the EXACT connection
   // that raised the request, never to "some live socket for this agent" — see
   // deliverDecision.
@@ -456,6 +457,36 @@ function createAgentPermissions(deps = {}) {
   return rows.length;
  }
 
+ /**
+  * Set an agent's permission mode.
+  *
+  * Needs its OWN route because `permission_mode` is in
+  * PRIVILEGED_DB_COLUMNS_BY_TABLE — the generic /backend/db/update path deletes
+  * it silently, so the Agents window's radio buttons appeared to work and
+  * persisted nothing. The strip is right: without it any member holding `write`
+  * could flip an agent to 'yolo' and hand themselves unrestricted shell on the
+  * daemon host. So this route exists at `manage`, matching the capability every
+  * other widening of an agent's reach already costs.
+  */
+ async function setAgentPermissionMode({ userId, workspaceId, agentId, permissionMode } = {}) {
+  const mode = normalizeAgentPermissionMode(permissionMode);
+  // normalize maps anything unrecognised to 'default'. Silently downgrading a
+  // typo'd 'yolo' to 'default' is safe, but silently ACCEPTING it as a
+  // deliberate choice is not — reject what we did not understand.
+  if (!['default', 'accept_edits', 'yolo'].includes(String(permissionMode || '').trim())) {
+   throw badRequest('permission_mode must be default, accept_edits, or yolo');
+  }
+  await enforceWorkspaceRole(userId, workspaceId, 'manage');
+  const rows = await getDb().unsafe(
+   `update workspace_agents set permission_mode = $3, updated_at = now()
+      where id = $1 and workspace_id = $2 returning *`,
+   [String(agentId || ''), String(workspaceId || ''), mode],
+  );
+  if (!rows.length) throw Object.assign(new Error('Agent was not found'), { status: 404 });
+  notifyDbSubscribers('workspace_agents', 'UPDATE', rows);
+  return mode;
+ }
+
  /** Drop a permanent grant. Manage-only, same as making one. */
  async function revokeAgentPermissionRule({ userId, workspaceId, agentId, rule } = {}) {
   const target = line(rule, MAX_RULE_LENGTH);
@@ -486,6 +517,7 @@ function createAgentPermissions(deps = {}) {
   handleAgentPermissionRequest,
   publicPermissionRequest,
   revokeAgentPermissionRule,
+  setAgentPermissionMode,
   // Exported for tests: the rule/scope normalisation is the part that decides
   // what a button is allowed to grant.
   __internals: { allowedScopes, normalizeRules, requestContent },
@@ -495,7 +527,8 @@ function createAgentPermissions(deps = {}) {
 function mountAgentPermissionRoutes(app, deps = {}) {
  const {
   requireAuth, jsonError, enforceWorkspaceRole, getDb,
-  decideAgentPermissionRequest, revokeAgentPermissionRule, publicPermissionRequest,
+  decideAgentPermissionRequest, revokeAgentPermissionRule, setAgentPermissionMode,
+  publicPermissionRequest,
  } = deps;
 
  // Everything still awaiting an answer in this workspace. The card in the
@@ -527,6 +560,20 @@ function mountAgentPermissionRoutes(app, deps = {}) {
     scope: req.body?.scope,
    });
    res.json({ data: request, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.put('/backend/workspaces/:workspaceId/agents/:agentId/permission-mode', requireAuth, async (req, res) => {
+  try {
+   const permissionMode = await setAgentPermissionMode({
+    userId: req.userId,
+    workspaceId: String(req.params.workspaceId || '').trim(),
+    agentId: String(req.params.agentId || '').trim(),
+    permissionMode: req.body?.permission_mode ?? req.body?.permissionMode,
+   });
+   res.json({ data: { permission_mode: permissionMode }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
