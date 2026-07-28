@@ -143,10 +143,87 @@ async function assertSafeOutboundUrl(rawUrl, label = 'base_url') {
  return url.toString().replace(/\/+$/, '');
 }
 
+// --- Browsing variant -------------------------------------------------------
+//
+// The web browser panel fetches pages server-side, so it needs the same address
+// checks — but NOT assertSafeOutboundUrl's other rules, which exist for a stored
+// operator `base_url` and are wrong for browsing:
+//   * HTTPS-only. A user typing an http:// address should reach it; there is no
+//     workspace API key on that wire to protect.
+//   * Trailing-slash normalisation and a string return. A browsing caller needs
+//     the URL object, path and query intact.
+// The address predicate is deliberately NOT re-derived — same isBlockedAddress.
+async function assertSafeBrowsingUrl(rawUrl) {
+ const reject = (message) => {
+  const error = new Error(`url ${message}`);
+  error.status = 400;
+  throw error;
+ };
+ let url;
+ try { url = new URL(String(rawUrl || '').trim()); } catch { return reject('must be a valid absolute URL'); }
+ if (url.protocol !== 'https:' && url.protocol !== 'http:') reject('must use http or https');
+ const lowerHost = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+ if (lowerHost.endsWith('.local') || lowerHost.endsWith('.internal')) reject('must use a public hostname');
+ if (url.username || url.password) reject('must not embed credentials');
+
+ const host = url.hostname.replace(/^\[|\]$/g, '');
+ let addresses;
+ if (net.isIP(host)) {
+  addresses = [host];
+ } else {
+  try {
+   addresses = (await dns.lookup(host, { all: true, verbatim: true })).map(entry => entry.address);
+  } catch {
+   return reject('host could not be resolved');
+  }
+ }
+ if (!addresses.length) reject('host could not be resolved');
+ if (addresses.some(isBlockedAddress)) reject('must not resolve to a private, loopback, link-local or reserved address');
+
+ return url;
+}
+
+// Closes the DNS-rebinding limit named at the top of this file. The pre-flight
+// resolve above and undici's own resolve for the connection are two separate
+// lookups, so a hostname whose TTL expires in between can move to a private
+// address. Re-checking inside the dispatcher's lookup means the SOCKET refuses
+// it, leaving no window to win. Callers that pass this dispatcher get the
+// stronger guarantee; the note above still holds for callers that do not.
+//
+// Built lazily so requiring this leaf module never pulls in undici for the
+// callers that only want the predicate.
+let cachedGuardedAgent = null;
+function guardedFetchAgent() {
+ if (cachedGuardedAgent) return cachedGuardedAgent;
+ const { Agent } = require('undici');
+ cachedGuardedAgent = new Agent({
+  connect: {
+   lookup(hostname, options, callback) {
+    require('dns').lookup(hostname, { ...options, all: true }, (err, addresses) => {
+     if (err) return callback(err, null, null);
+     const list = Array.isArray(addresses) ? addresses : [addresses];
+     for (const entry of list) {
+      if (isBlockedAddress(entry.address)) {
+       const blocked = new Error(`blocked ${entry.address}`);
+       blocked.code = 'ESSRFBLOCKED';
+       return callback(blocked, null, null);
+      }
+     }
+     if (options && options.all) return callback(null, list, null);
+     return callback(null, list[0].address, list[0].family);
+    });
+   },
+  },
+ });
+ return cachedGuardedAgent;
+}
+
 module.exports = {
  BLOCKED_IPV4_RANGES,
  ipv4ToInt,
  ipv6Groups,
  isBlockedAddress,
  assertSafeOutboundUrl,
+ assertSafeBrowsingUrl,
+ guardedFetchAgent,
 };

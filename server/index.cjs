@@ -100,6 +100,7 @@ const { createBuiltinTurn } = require('./builtin-turn.cjs');
 const TASK_MENTION_CLAIM_MS = 5_000;
 const { mountFeedbackRoutes } = require('./feedback-routes.cjs');
 const { mountAiChatRoutes } = require('./ai-chat-routes.cjs');
+const { installBrowserProxy } = require('./browser-proxy.cjs');
 const { mountVaultRoutes } = require('./vault-routes.cjs');
 const { mountTenantsRoutes } = require('./tenants-routes.cjs');
 const { mountSchedulesRoutes } = require('./schedules-routes.cjs');
@@ -2006,6 +2007,10 @@ const mcpRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 // our key attached. Keyed per-agent, and tighter than mcpRateLimiter on purpose —
 // the general MCP limiter still applies on top.
 const providerCallRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+// One page view is many requests — a single site load in the spike was 230-460
+// subresources — so this is sized per-page, not per-click. It exists to stop the
+// route being used as a general-purpose relay, not to ration browsing.
+const browserProxyRateLimiter = createRateLimiter({ windowMs: 60_000, max: 900 });
 // The voice preview spends real money per press, so it is capped harder than
 // anything else here. Twenty presses a minute is far more than auditioning
 // voices needs and far less than a stuck retry loop would cost.
@@ -7309,6 +7314,10 @@ function createApp() {
  // only "which voices exist" and "let me hear this one".
 
  mountTtsRoutes(app, { ...coreDeps(), cartesiaApiKey, cartesiaSpeak, cartesiaVoices, normalizeVoicePreference, ttsPreviewRateLimiter });
+
+ // Web-only egress for the browser panel; the desktop shell uses <webview> and
+ // never calls this. Auth + rate limit are both mandatory — see the module header.
+ installBrowserProxy(app, { requireAuth, rateLimiter: browserProxyRateLimiter });
 
  mountAiChatRoutes(app, {
   ...coreDeps(),
