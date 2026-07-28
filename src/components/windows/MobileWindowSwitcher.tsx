@@ -1,4 +1,4 @@
-import { Activity, Bot, Brain, Clock, FileText, Inbox, ListTodo, Menu, MessageSquare, Sparkles, Users, X, type LucideIcon , Building2 } from 'lucide-react';
+import { Activity, Bot, Brain, Clock, FileText, Globe, Inbox, SquareTerminal, ListTodo, Menu, MessageSquare, Sparkles, Users, X, type LucideIcon , Building2 } from 'lucide-react';
 import type { FloatingWindow, FloatingWindowType } from '../../types';
 import { cn } from '@/lib/utils';
 
@@ -14,6 +14,8 @@ const TYPE_ICON: Record<FloatingWindowType, LucideIcon> = {
   schedules: Clock,
   inbox: Inbox,
   tenants: Building2,
+  browser: Globe,
+  terminal: SquareTerminal,
 };
 
 interface MobileWindowSwitcherProps {

@@ -1,6 +1,6 @@
 import { DEFAULT_BACKGROUND_OPACITY } from './lib/wallpaperDefaults';
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
-import { MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2 } from 'lucide-react';
+import { Globe, SquareTerminal, MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2 } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { WorkspaceRail } from './components/layout/WorkspaceRail';
@@ -152,6 +152,8 @@ const ActivityWindowContent = lazy(() => import('./components/windows/ActivityWi
 const AgentsWindowContent = lazy(() => import('./components/windows/AgentsWindowContent').then(m => ({ default: m.AgentsWindowContent })));
 const UsersWindow = lazy(() => import('./components/windows/UsersWindow').then(m => ({ default: m.UsersWindow })));
 const SchedulesWindow = lazy(() => import('./components/windows/SchedulesWindow').then(m => ({ default: m.SchedulesWindow })));
+const TerminalPanel = lazy(() => import('./components/windows/TerminalPanel').then(m => ({ default: m.TerminalPanel })));
+const BrowserPanel = lazy(() => import('./components/windows/BrowserPanel').then(m => ({ default: m.BrowserPanel })));
 const InboxWindowContent = lazy(() => import('./components/inbox/InboxWindowContent').then(m => ({ default: m.InboxWindowContent })));
 
 const TOUR_KEY = 'agensis_tour_complete';
@@ -181,6 +183,8 @@ function windowDockIcon(type: FloatingWindow['type']) {
   if (type === 'tasks') return <CheckCircle2 className="size-4" />;
   if (type === 'activity') return <Activity className="size-4" />;
   if (type === 'agents') return <Bot className="size-4" />;
+  if (type === 'browser') return <Globe className="size-4" />;
+  if (type === 'terminal') return <SquareTerminal className="size-4" />;
   return <FileText className="size-4" />;
 }
 
@@ -1197,6 +1201,27 @@ function AppContent() {
     openWindow('tenants', { title: 'Tenants', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
+  const handleOpenBrowser = useCallback(() => {
+    const count = windows.filter(w => w.type === 'browser').length;
+    openWindow('browser', {
+      title: count === 0 ? 'Browser' : `Browser ${count + 1}`,
+      canvasId: activeLayerId,
+      ownerUserId: user?.id,
+    });
+  }, [windows, openWindow, activeLayerId, user?.id]);
+
+  // Terminals and browsers are NOT singletons like the other window types — you
+  // want several open at once, each with its own shell or page. Every press
+  // opens a new one; the number keeps the dock and window switcher readable.
+  const handleOpenTerminal = useCallback(() => {
+    const count = windows.filter(w => w.type === 'terminal').length;
+    openWindow('terminal', {
+      title: count === 0 ? 'Terminal' : `Terminal ${count + 1}`,
+      canvasId: activeLayerId,
+      ownerUserId: user?.id,
+    });
+  }, [windows, openWindow, activeLayerId, user?.id]);
+
   const handleOpenMemory = useCallback(() => {
     const existing = windows.find(w => w.type === 'memory');
     if (existing) {
@@ -2080,6 +2105,8 @@ function AppContent() {
             onAgentMessage={handleAgentDirectMessage}
             onAgentProfile={handleSidebarAgentProfile}
             onOpenTemplates={handleOpenTemplates}
+            onOpenBrowser={handleOpenBrowser}
+            onOpenTerminal={handleOpenTerminal}
             openTaskCount={
               // countOpenTasks, NOT useTasks' openTasks: that list includes
               // subtasks, which are not rows in the Tasks window, so the badge
@@ -3191,7 +3218,97 @@ function CanvasLayerScene({
                   onUpdateWebhook={onUpdateAgentWebhook}
                   onConfigureWebhook={onConfigureAgentWebhook}
                   onOpenConnections={onOpenConnections}
+                  // The chat surface needs ~40 inputs that already exist here;
+                  // handing the agents window a closure keeps that wiring in ONE
+                  // place instead of copying it into a second component.
+                  // InactiveChatWindow owns its own message subscription, so the
+                  // pane shows history and live replies for a session that is not
+                  // the globally-active one, and promotes it on first send.
+                  renderSessionChat={session => (
+                    <InactiveChatWindow
+                      session={session}
+                      windowTitle={session.title || 'Conversation'}
+                      facts={facts}
+                      documents={documents}
+                      agents={agents}
+                      agentConnections={agentConnections}
+                      presenceUsers={presenceUsers}
+                      selectedAgent={selectedAgent}
+                      onSelectAgent={onSelectAgent}
+                      onAgentProfile={onAgentProfile}
+                      onSessionMetaSaved={onSessionMetaSaved}
+                      canvasGroups={canvasGroups}
+                      canvasObjects={canvasObjects}
+                      workspaceId={workspaceId}
+                      uploadedFiles={uploadedFiles}
+                      onUploadFiles={onUploadFiles}
+                      onCreateTask={onCreateTask}
+                      systemCapabilities={systemCapabilities}
+                      contextControls={null}
+                      onSetActiveSession={onSetActiveSession}
+                      onSendMessage={onSendMessage}
+                      onOpenThread={onOpenThread}
+                    />
+                  )}
                 />
+              </Suspense>
+            </FloatingWindowShell>
+          );
+        }
+
+        if (win.type === 'terminal') {
+          return (
+            <FloatingWindowShell
+              key={win.id}
+              window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
+              onClose={onCloseWindow}
+              onFocus={onFocusWindow}
+              onUpdate={onUpdateWindow}
+              onMinimize={onMinimizeWindow}
+              onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
+              titleIcon={<SquareTerminal size={13} />}
+              breadcrumb={workspaceName}
+            >
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <TerminalPanel />
+              </Suspense>
+            </FloatingWindowShell>
+          );
+        }
+
+        if (win.type === 'browser') {
+          return (
+            <FloatingWindowShell
+              key={win.id}
+              window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
+              onClose={onCloseWindow}
+              onFocus={onFocusWindow}
+              onUpdate={onUpdateWindow}
+              onMinimize={onMinimizeWindow}
+              onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
+              titleIcon={<Globe size={13} />}
+              breadcrumb={workspaceName}
+            >
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <BrowserPanel />
               </Suspense>
             </FloatingWindowShell>
           );

@@ -18,6 +18,8 @@ type WindowIdentity = {
   canvasId?: string;
   sessionId?: string;
   documentId?: string;
+  /** Present on a real window; absent when only a prospective identity is known. */
+  id?: string;
 };
 
 function generateId(): string {
@@ -114,6 +116,10 @@ function getDefaultRestoreSize(type: FloatingWindowType): { width: number; heigh
     // Narrower than the old 940 default (was reading as a full-width feed rather
     // than a chat-like pane) but still wide enough for two-pane triage: default
     // list width (340) + a readable detail column comfortably fit in 760.
+    // Browsing wants width before height — most pages are laid out for a
+    // desktop viewport and reflow badly under ~700px.
+    browser: { width: Math.min(1040, Math.max(700, Math.round(viewport.width * 0.66))), height: Math.min(760, Math.max(520, Math.round(viewport.height * 0.74))) },
+    terminal: { width: Math.min(900, Math.max(620, Math.round(viewport.width * 0.56))), height: Math.min(620, Math.max(420, Math.round(viewport.height * 0.6))) },
     inbox: { width: Math.min(760, Math.max(560, Math.round(viewport.width * 0.58))), height: Math.min(740, Math.max(540, Math.round(viewport.height * 0.76))) },
   };
   return fitWindowSize(sizeMap[type] || sizeMap.chat, viewport, WORKSPACE_WINDOW_MARGIN);
@@ -167,10 +173,21 @@ function getFullViewportBounds(): WindowBounds {
   };
 }
 
+/**
+ * Types you can have SEVERAL of at once. Every other type is a singleton keyed by
+ * its type (see `getWindowIdentityKey` and the guard in `openWindow`): reopening
+ * focuses the existing one. A terminal or a browser is different — each instance
+ * holds its own shell or page, so a second press has to give you a second window.
+ */
+const MULTI_INSTANCE_TYPES = new Set<FloatingWindowType>(['terminal', 'browser']);
+
 function getWindowIdentityKey(source: WindowIdentity): string {
   const canvasId = source.canvasId || 'base';
   if (source.sessionId) return `${canvasId}:session:${source.sessionId}`;
   if (source.documentId) return `${canvasId}:document:${source.documentId}`;
+  // Keyed by id, not type: sharing one bounds slot across every terminal would
+  // make each new one restore on top of the last, exactly overlapping.
+  if (MULTI_INSTANCE_TYPES.has(source.type) && source.id) return `${canvasId}:id:${source.id}`;
   return `${canvasId}:type:${source.type}`;
 }
 
@@ -516,7 +533,7 @@ export function useWindows() {
       // and un-minimizes the existing one instead of stacking a duplicate. App's
       // launchers already do this; enforcing it here keeps full-expand's
       // "one instance of each type max" invariant true regardless of caller.
-      if (!opts?.sessionId && !opts?.documentId) {
+      if (!opts?.sessionId && !opts?.documentId && !MULTI_INSTANCE_TYPES.has(type)) {
         const existing = prev.find(w => w.type === type && w.canvasId === opts?.canvasId);
         if (existing) {
           nextZIndexRef.current++;

@@ -19,7 +19,9 @@ import {
  Hash,
  Inbox,
  Layers3,
+ Globe,
  LayoutTemplate,
+ SquareTerminal,
  LogOut,
  MessageSquare,
  Minimize2,
@@ -256,6 +258,8 @@ interface SidebarProps {
  onOpenThread?: (sessionId: string, parentMessageId: string) => void;
  onOpenMemory: () => void;
  onOpenSkills?: () => void;
+ onOpenBrowser?: () => void;
+ onOpenTerminal?: () => void;
  onOpenTasks?: () => void;
  onOpenActivity?: () => void;
  onOpenAgents?: () => void;
@@ -316,6 +320,8 @@ export const Sidebar = React.memo(function Sidebar({
  onOpenThread,
  onOpenMemory,
  onOpenSkills,
+ onOpenBrowser,
+ onOpenTerminal,
  onOpenTasks,
  onOpenActivity,
  onOpenAgents,
@@ -564,6 +570,8 @@ export const Sidebar = React.memo(function Sidebar({
     {onOpenUsers && <SidebarRailButton icon={<Users />} title="Users" onClick={onOpenUsers} />}
     {onOpenSchedules && <SidebarRailButton icon={<Clock />} title="Schedules" onClick={onOpenSchedules} />}
     {onOpenTemplates && <SidebarRailButton icon={<LayoutTemplate />} title="Applets" onClick={onOpenTemplates} />}
+    {onOpenBrowser && <SidebarRailButton icon={<Globe />} title="Browser" onClick={onOpenBrowser} />}
+    {onOpenTerminal && <SidebarRailButton icon={<SquareTerminal />} title="Terminal" onClick={onOpenTerminal} />}
     <div className="flex-1" />
     <SidebarRailButton icon={<Settings />} title="App settings" onClick={onOpenSettings} />
     <SidebarRailButton icon={<LogOut />} title="Sign out" onClick={onSignOut} />
@@ -925,6 +933,8 @@ export const Sidebar = React.memo(function Sidebar({
       {onOpenUsers && <ActionTile icon={<Users />} label="Users" active={focusedWindowType === 'users'} onClick={onOpenUsers} />}
       {onOpenSchedules && <ActionTile icon={<Clock />} label="Schedules" active={focusedWindowType === 'schedules'} onClick={onOpenSchedules} />}
       {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Applets" onClick={onOpenTemplates} />}
+      {onOpenBrowser && <ActionTile icon={<Globe />} label="Browser" active={focusedWindowType === 'browser'} onClick={onOpenBrowser} />}
+      {onOpenTerminal && <ActionTile icon={<SquareTerminal />} label="Terminal" active={focusedWindowType === 'terminal'} onClick={onOpenTerminal} />}
      </div>
     </ScrollArea>
 

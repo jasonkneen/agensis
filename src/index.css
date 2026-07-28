@@ -5205,3 +5205,16 @@ select {
 .pixel-btn:active {
  transform: translate(1px, 1px);
 }
+
+/* Embedded frames eat pointer events while a window is being dragged or resized.
+   A <webview> is a separate PROCESS and an <iframe> a separate document, so once
+   the pointer crosses one the shell's document-level pointermove/pointerup stop
+   arriving: the drag loses its grip and the window locks in a resizing state that
+   never ends. FloatingWindowShell sets data-window-interacting for exactly the
+   length of the gesture; making the frame pointer-transparent keeps every event
+   with the document that started the drag. Interaction returns the instant the
+   attribute clears. */
+[data-window-interacting='true'] webview,
+[data-window-interacting='true'] iframe {
+  pointer-events: none;
+}

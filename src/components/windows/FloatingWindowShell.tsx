@@ -761,6 +761,15 @@ export function FloatingWindowShell({
         onDragLeave={e => e.stopPropagation()}
         onDrop={e => e.stopPropagation()}
         className={cn('flex flex-col overflow-visible text-card-foreground', cornerClass)}
+        // Drag and resize track the pointer through DOCUMENT-level listeners, and
+        // an embedded frame swallows them: an Electron <webview> is a separate
+        // process and an <iframe> a separate document, so the moment the pointer
+        // crosses one, `pointermove` stops arriving and the `pointerup` that ends
+        // the gesture never lands — the window loses the grip mid-drag and then
+        // stays stuck resizing forever. This flag is what index.css keys off to
+        // make embedded frames pointer-transparent for the length of the gesture,
+        // so the events stay with the document that started it.
+        data-window-interacting={isDragging || isResizing ? 'true' : undefined}
         style={shellStyle}
       >
         <div

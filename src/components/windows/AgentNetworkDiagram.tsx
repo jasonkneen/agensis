@@ -38,6 +38,8 @@ interface AgentNetworkDiagramProps {
   workspaceId?: string | null;
   currentUserId?: string | null;
   onSelectAgent?: (id: string) => void;
+  /** A session node was activated — the window opens its chat beside the map. */
+  onSelectSession?: (id: string) => void;
   /**
    * The window's ONE agent selection, mirrored here so the map highlights the
    * same agent whose card is lit in the grid and whose detail pane is open.
@@ -98,6 +100,7 @@ export function AgentNetworkDiagram({
   workspaceId = null,
   currentUserId = null,
   onSelectAgent,
+  onSelectSession,
   selectedAgentId = null,
 }: AgentNetworkDiagramProps) {
   const [path, setPath] = useState<MeshPath>([]);
@@ -199,8 +202,12 @@ export function AgentNetworkDiagram({
     // mesh on an agent opens (or retargets) the window's detail pane, so the
     // map and the card grid share one selection.
     if (node.kind === 'agent' && node.refId) onSelectAgent?.(node.refId);
+    // Same contract for a session: activating it both drills the map in AND
+    // opens that conversation in the side pane, so the map and the chat stay
+    // one selection rather than two things to keep in step.
+    if (node.kind === 'session' && node.refId) onSelectSession?.(node.refId);
     goTo(drillInto(path, node));
-  }, [goTo, path, view.center.id, onSelectAgent]);
+  }, [goTo, path, view.center.id, onSelectAgent, onSelectSession]);
 
   const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'Escape' || path.length === 0) return;

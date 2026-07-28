@@ -123,6 +123,14 @@ interface AgentsWindowContentProps {
   connections?: AgentConnection[];
   /** Network view only: the sessions/tasks it drills through. Read-only. */
   sessions?: ChatSession[];
+  /**
+   * Renders a live chat for one session, beside the map. Supplied as a RENDER
+   * PROP rather than a component plus twenty data props: the chat surface needs
+   * ~40 inputs (messages, streaming, threads, uploads, capabilities…) that App
+   * already has in scope, and threading them through this window would duplicate
+   * that wiring and let the two copies drift. Absent = the pane never appears.
+   */
+  renderSessionChat?: (session: ChatSession) => React.ReactNode;
   tasks?: Task[];
   workspaceId?: string | null;
   workspaceName?: string;
@@ -249,6 +257,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   webhooks,
   connections = [],
   sessions = [],
+  renderSessionChat,
   tasks = [],
   workspaceId = null,
   workspaceName = 'agensis',
@@ -355,6 +364,12 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const fidget = useFidgetDrag();
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const selectedAgent = agents.find(agent => agent.id === selectedAgentId) || null;
+  // The side pane shows ONE thing. A session wins over an agent because it is the
+  // more specific click: you drilled from the agent into its conversation. Close
+  // the chat and the agent's detail is still there underneath.
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const selectedSession = sessions.find(session => session.id === selectedSessionId) || null;
+  const sessionChat = selectedSession && renderSessionChat ? renderSessionChat(selectedSession) : null;
   const connectAgent = agents.find(agent => agent.id === connectAgentId) || null;
   // An external focus request (e.g. opening an agent from elsewhere) drills into it;
   // otherwise the window opens on the card grid, not a pre-selected agent.
@@ -834,6 +849,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   currentUserId={currentUserId}
                   selectedAgentId={selectedAgentId}
                   onSelectAgent={setSelectedAgentId}
+                  onSelectSession={renderSessionChat ? setSelectedSessionId : undefined}
                 />
               );
               if (layoutView === 'network') {
@@ -952,7 +968,26 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
               return <div className="min-h-0 flex-1 overflow-y-auto px-1 pt-1.5 pb-2">{grid}</div>;
             })()}
             </section>
-            {selectedAgent && (
+            {sessionChat ? (
+              <section className="flex min-h-0 w-[clamp(24rem,45%,34rem)] shrink-0 flex-col overflow-hidden pl-3 @max-2xl/agentswin:w-full @max-2xl/agentswin:pl-0">
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card/40">
+                  <div className="flex shrink-0 items-center gap-2 border-b border-border/60 px-3 py-2">
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                      {selectedSession?.title || 'Conversation'}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label="Close conversation"
+                      onClick={() => setSelectedSessionId(null)}
+                    >
+                      <X />
+                    </Button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-hidden">{sessionChat}</div>
+                </div>
+              </section>
+            ) : selectedAgent && (
               <section className="flex min-h-0 w-[clamp(24rem,45%,34rem)] shrink-0 flex-col overflow-hidden pl-3 @max-2xl/agentswin:w-full @max-2xl/agentswin:pl-0">
                 <AgentDetailPane
                   agent={selectedAgent}
