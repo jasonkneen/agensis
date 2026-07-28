@@ -97,6 +97,7 @@ import { buildTranscriptRows } from '../chat/toolSteps';
 import { PermissionRequestCard } from '../chat/PermissionRequestCard';
 import { isPermissionRequestMessage } from '../chat/permissionRequests';
 import { usePermissionRequests } from '../../hooks/usePermissionRequests';
+import { shouldOverlaySidePanel, type ChatSidePanel } from '../chat/sidePanelLayout';
 import { isBroadcastFromThread } from '../chat/channelView';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import {
@@ -295,7 +296,9 @@ type ParticipantCandidate = ChannelParticipant & {
 };
 
 type MessageOverrides = Record<string, Partial<ChatMessage> & { deleted?: boolean }>;
-type ChatSidePanel = 'thread' | 'files' | 'pins' | 'profile' | 'sub-thread' | 'sub-threads';
+// Declared beside the layout rule that consumes it, so the panel list and the
+// "is it wide enough to split?" decision cannot drift apart.
+export type { ChatSidePanel };
 
 // The chat column: message list and composer share ONE width so they line up.
 // They were independent before — the composer was centred at max-w-[800px] while
@@ -388,6 +391,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const [messageActionBusy, setMessageActionBusy] = useState<string | null>(null);
   const [deleteMessageTarget, setDeleteMessageTarget] = useState<ChatMessage | null>(null);
   const [panelWidth, setPanelWidth] = useState(360);
+  const [shellWidth, setShellWidth] = useState(0);
   // Thread replies read better as a near-even split than the narrow fixed
   // sidebar used for files/pins/profile/sub-thread panels, so it gets its own
   // width state. `null` means "not manually resized yet" — render at a CSS
@@ -402,6 +406,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const sidePanelRef = useRef<HTMLElement | null>(null);
+  const shellRef = useRef<HTMLDivElement | null>(null);
 
   useComposerAutosize(inputRef, input);
 
@@ -1105,10 +1110,28 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     return persistedParticipants.find(participant => participantMatchesLookupKey(participant, key)) || directAgent;
   }, [directAgent, directProfileKey, persistedParticipants, profileAgent, profileAgentKey]);
 
-  // NOTE: We intentionally do NOT auto-open the agent profile side panel when a
-  // DM is opened. The profile is available on demand via the profile toolbar
-  // button (openAgentProfilePanel). Auto-opening popped the sidebar every time a
-  // chat was selected, which Jason flagged as unwanted.
+  // Width of the chat shell itself, not the viewport. On the agents view the
+  // chat is a floating window inside a large page, so `useIsMobile` answers the
+  // wrong question — it would report "desktop" for a window too narrow to hold
+  // a transcript and a panel side by side.
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(entries => {
+      const width = entries[0]?.contentRect.width ?? 0;
+      // Ignore a transient 0 (the window is collapsed or being torn down):
+      // treating it as "very narrow" would flip a panel to full width on the
+      // way out and animate it back in on the way in.
+      if (width > 0) setShellWidth(width);
+    });
+    observer.observe(shell);
+    return () => observer.disconnect();
+  }, []);
+
+  // A DM deliberately opens with NO side panel. Auto-opening the agent profile
+  // spent half the width on a card nobody asked for — worst in a narrow window,
+  // where it left the messages in a column a few words wide. The profile is one
+  // click away on the toolbar, and that click is the request.
 
   const participantCandidates = useMemo(
     () => buildParticipantCandidates(presenceUsers, agents, agentConnections, persistedParticipants),
@@ -1550,6 +1573,17 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
     setProfileAgentKey(key);
     setSidePanel('profile');
   };
+  // Too narrow to split: the panel takes the whole shell and the transcript
+  // steps aside, the way it already behaves on a phone. Derived from what the
+  // MESSAGES would be left with rather than a fixed breakpoint, so it also
+  // catches a panel dragged too wide inside a roomy window.
+  const overlaySidePanel = shouldOverlaySidePanel({
+    shellWidth,
+    sidePanel,
+    panelWidth,
+    threadPanelWidth,
+  });
+
   const closeSidePanel = () => {
     if (sidePanel === 'thread') onCloseThread?.();
     if (sidePanel === 'sub-thread') onCloseSubThread?.();
@@ -1580,7 +1614,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
   };
 
   return (
-    <div className="channel-shell flex h-full min-w-0 overflow-hidden text-card-foreground">
+    <div ref={shellRef} className="channel-shell flex h-full min-w-0 overflow-hidden text-card-foreground">
       {/* Wraps the message column AND the side panel, because the huddle panel
           is one of the side panels and drives off the same hook the toolbar
           button and the card do. It stays scoped to this channel rather than
@@ -1591,7 +1625,10 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
         workspaceId={showHuddle ? workspaceId : null}
         sessionId={showHuddle ? inferredSessionId : null}
       >
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      {/* `hidden`, not unmounted: the transcript keeps its scroll position, its
+          loaded pages and any in-flight composer text, so closing the panel
+          returns to exactly the conversation that was left, not the top of it. */}
+      <div className={cn('flex min-w-0 flex-1 flex-col overflow-hidden', overlaySidePanel && 'hidden')}>
         <div className="channel-header relative z-20 shrink-0 border-b border-border">
           <div className="flex h-11 min-w-0 items-center gap-1.5 overflow-hidden px-3">
             {isDirectMessage ? (
@@ -2336,14 +2373,28 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
       {!readOnly && sidePanel && (
         <aside
           ref={sidePanelRef}
-          className="channel-side-panel relative flex h-full shrink-0 flex-col border-l border-border text-card-foreground"
-          style={{ width: sidePanel === 'thread' ? (threadPanelWidth ?? '45%') : panelWidth }}
+          className={cn(
+            'channel-side-panel relative flex h-full flex-col text-card-foreground',
+            overlaySidePanel
+              // Takes the window. No left border — there is nothing beside it to
+              // divide from — and it slides in from the right so it reads as
+              // arriving over the conversation rather than replacing it.
+              ? 'w-full flex-1 animate-in slide-in-from-right-4 duration-200'
+              : 'shrink-0 border-l border-border',
+          )}
+          style={overlaySidePanel
+            ? undefined
+            : { width: sidePanel === 'thread' ? (threadPanelWidth ?? '45%') : panelWidth }}
         >
-          <div
-            className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1 cursor-col-resize"
-            onPointerDown={beginPanelResize}
-            aria-hidden
-          />
+          {/* No drag handle when the panel owns the whole shell: there is no
+              split left to drag, and the handle sat on the window's own edge. */}
+          {!overlaySidePanel && (
+            <div
+              className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1 cursor-col-resize"
+              onPointerDown={beginPanelResize}
+              aria-hidden
+            />
+          )}
           {sidePanel === 'profile' ? (
             <AgentProfileSidePanel
               agent={profileAgent}
