@@ -27,10 +27,10 @@
     "reset:test-account": "node --env-file=.env scripts/reset-test-account.cjs",
     "desktop:dev": "node scripts/desktop-dev.mjs",
     "desktop:build": "node scripts/desktop-build.mjs",
-    "desktop:dist": "node scripts/desktop-build.mjs",
-    "electron:dev": "node scripts/electron-dev.mjs",
-    "electron:build": "node scripts/electron-build.mjs",
-    "electron:dist": "node scripts/electron-build.mjs --publish never"
+    "desktop:dist": "node scripts/desktop-build.mjs --publish never",
+    "electron:dev": "node scripts/desktop-dev.mjs",
+    "electron:build": "node scripts/desktop-build.mjs",
+    "electron:dist": "node scripts/desktop-build.mjs --publish never"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
