@@ -1,12 +1,12 @@
 # visual-dev-editor
 
-A dev-time visual editor for static sites. Inject it into a locally-running
-site and you get a Webflow-lite editor: click elements on the live page, edit
-text / CSS / classes / attributes, reorder or delete elements — every change is
-applied to the real DOM immediately **and** written back into the actual HTML
-source files on disk (byte-precise: only the edited span changes).
+A dev-time visual editor for static sites and Vite applications. Inject it into
+a locally-running project and you get a Webflow-lite editor: click elements on
+the live page, edit text / CSS / classes / attributes, reorder or delete
+elements — every change is applied to the real DOM immediately **and** written
+back into the actual HTML or component source files on disk.
 
-> ⚠️ **DEV ONLY.** The edit endpoint rewrites files on disk with no auth. Never
+> **DEV ONLY.** The edit endpoint rewrites files on disk with no auth. Never
 > ship it to production, never expose the server beyond localhost.
 
 No build step, no framework. CommonJS server, plain-script browser client.
@@ -34,6 +34,24 @@ app.use(createEditorMiddleware({ root: __dirname + '/public' }));
 app.use(express.static(__dirname + '/public'));
 ```
 
+For an application with routes rather than separate HTML files, make the
+editor targets explicit:
+
+```js
+app.use(createEditorMiddleware({
+  root: __dirname,
+  targets: [
+    { title: 'Dashboard', href: '/', file: 'public/index.html' },
+    { title: 'Account', href: '/account/settings', file: 'public/index.html' },
+  ],
+}));
+```
+
+`href` is the browser route. Optional `file` maps an unstamped HTML route back
+to its source file. JSX/TSX elements use their source-location stamps instead.
+Configured targets are authoritative, which keeps partials, email templates
+and fixtures out of the selector.
+
 The middleware handles `GET /__visual-editor/client.js` and
 `POST /__visual-editor/edit`; everything else falls through to `next()`.
 
@@ -60,7 +78,18 @@ import react from '@vitejs/plugin-react'
 import { createRequire } from 'module'
 const { visualEditor } = createRequire(import.meta.url)('visual-dev-editor/vite')
 
-export default { plugins: [react(), visualEditor()] }
+export default {
+  plugins: [
+    react(),
+    visualEditor({
+      targets: [
+        { title: 'Home', href: '/' },
+        { title: 'Projects', href: '/projects' },
+        { title: 'Settings', href: '/settings/profile' },
+      ],
+    }),
+  ],
+}
 ```
 
 That does three dev-only things: stamps JSX with source locations, mounts the
@@ -135,8 +164,12 @@ exactly as before and JSX files simply report that they need it.
   down, Delete, Undo, live-layout-preview toggle (see Drag-and-drop), dock
   toggle (pushes the page aside via root margins instead of overlapping it —
   fixed-position page elements may not shift), persistent Light/Dark editor
-  theme toggle, animated save status, close. The theme changes only the editor
-  chrome; the page being edited is never restyled.
+  theme toggle, discovered page-target selector, animated save status, close.
+  The page selector appears when the served project contains multiple full
+  HTML entry points or the integration supplies multiple application
+  `targets`; choosing one loads that separate page or route into the editor.
+  The theme changes only the editor chrome; the page being edited is never
+  restyled.
 - **Resizable panels** — drag the inner edge of either panel to resize it;
   double-click that edge to snap it back to its default width. Widths are
   clamped (190–720px, and always leaving at least 220px of page between the
@@ -161,21 +194,36 @@ exactly as before and JSX files simply report that they need it.
   rings all disappear, and stay gone until select mode returns. The
   selection itself survives — the Navigator, Inspector and breadcrumbs keep
   showing it, and hovering a tree row still highlights it on the page.
+- **In-place text** — double-click a leaf text element to edit its actual
+  rendered text in place. Enter or blur commits one `setText` edit, Escape
+  restores the original, and paste is forced to plain text. Elements with
+  child markup and raw-text elements remain in the Inspector-only/refused
+  paths so an in-place edit cannot flatten structure or corrupt source.
+  Interactive text such as links and buttons requires Select mode, which
+  prevents the first click of a double-click from navigating or submitting.
 - **Drag-and-drop** — with an element selected, press on it and drag (12px
   threshold from the page, 4px from a tree row, where a press can only mean
   "drag"; a drop is only offered once the pointer leaves the dragged element,
   so a click with a shaky hand never moves anything): a semi-transparent
-  ghost of the element follows the pointer and
-  a live insertion marker shows where it would land (2px line for
+  ghost of the element follows the pointer and a live insertion marker shows
+  where it would land (2px line for
   before/after, outline box for dropping into an empty container, red when the
-  target is structurally invalid). Escape cancels.
+  target is structurally invalid). Local edge and centre guides show how the
+  projected stand-in aligns with the target container and nearby siblings,
+  even when live preview is switched off or the dragged element is out of flow;
+  unlike a free-position canvas they report flow alignment rather than
+  inventing x/y positioning. Escape cancels.
 
   With **live layout preview** on (the toolbar toggle, on by default), the
-  page additionally reflows around the drop as you drag: the dragged element
-  is hidden and a box of its exact size is placed at the target, so the gap
-  where it came from closes, everything downstream shifts, and the target
-  container grows — you see the actual result before committing to it. The
-  stand-in carries `data-ve-editor-el`, so `isOurs()` filters it out of
+  immediate target neighbourhood reflows around the drop as you drag. The
+  original is hidden but deliberately keeps its space across containers, while
+  a box of its exact size is placed at the target inside a temporary
+  dimension-locked container. During a reorder within that same isolated
+  container, the old slot closes so the local result stays accurate. Nearby
+  siblings reflow without making distant sections or the whole page jump. A
+  top-level `<body>` move uses the plain marker because inserting there cannot
+  be isolated. The stand-in
+  carries `data-ve-editor-el`, so `isOurs()` filters it out of
   `pageChildren()` and therefore out of every element path and index: the
   preview is invisible to the source-of-truth walk and cannot affect the op
   that gets written. Out-of-flow elements (`position: absolute`/`fixed`) skip
@@ -183,20 +231,13 @@ exactly as before and JSX files simply report that they need it.
   stand-in would invent space that never existed. Dropping an element back
   where it started is detected and writes nothing.
 
-  A live preview feeds back into itself — moving the stand-in reflows the
-  page, which changes what sits under a stationary pointer, which re-targets
-  the stand-in. Four things keep it steady, all tunable at the top of the drag
-  section in `client.js`: the element is lifted out **once** at drag start
-  into its own slot (so the page never lurches), the stand-in is hit-testable
-  and pointing at it means "no change", target re-evaluation is gated on
-  `CANDIDATE_STEP` (5px) of real pointer travel and coalesced to one update
-  per animation frame, and a committed slot is held until the pointer travels
-  `RELOCATE_MIN` (18px) — distance is immune to the feedback loop, because our
-  own reflow never moves the pointer. `SWAP_MARGIN` (6px) adds hysteresis on
-  each target's midline. Measured on the demo page: zero relocations across 30
-  frames of a jittering held pointer, and zero target changes closer together
-  than 12px of travel across a full-page sweep. Validity follows a
-  simplified HTML content model (`canContain`): void/embedded elements accept
+  A live preview still feeds back into hit-testing, so the stand-in is
+  hit-testable and pointing at it means "no change". Target re-evaluation is
+  gated on `CANDIDATE_STEP` (5px) of real pointer travel and coalesced to one
+  update per animation frame; a committed slot is held until the pointer
+  travels `RELOCATE_MIN` (18px), and `SWAP_MARGIN` (6px) adds hysteresis on
+  each target's midline. Validity follows a simplified HTML content model
+  (`canContain`): void/embedded elements accept
   nothing, phrasing parents reject block children, `li` only into list
   parents, table parts only into their table contexts, `option`/`optgroup`
   only into `select`/`datalist`, and `html`/`head`/`body` are never draggable.
@@ -234,18 +275,29 @@ If your page is assembled from multiple source files, mark regions with
 `data-ve-file="path/relative/to/root.html"` — the nearest ancestor's value
 wins.
 
+The discovery response conservatively lists full HTML documents under the
+served root; fragments are ignored. For an SPA, a project with a non-root base,
+or any host whose routes do not map directly to files, pass `targets` to
+`visualEditor()` or `createEditorMiddleware()` as shown above. When there is
+more than one target, the toolbar shows a **Page to edit** selector. Changing
+it waits for pending edits, then performs a normal page navigation, so each
+target keeps its own DOM and URL; the editor remains an add-on to the host
+project, not a router or content store.
+
 ## Try the demo
 
-A ready-made demo site lives in `examples/` (two pages, stylesheet included):
+A ready-made demo site lives in `examples/` (five separate content pages,
+stylesheet included):
 
 ```bash
 npm run demo
 # → http://localhost:4399
 ```
 
-Edits made through the editor are written into `examples/*.html`, so you can
-inspect the byte-precise source patching afterwards (undo with Ctrl/Cmd+Z, or
-`git checkout -- examples/` to reset everything).
+Use the toolbar's page selector to load Home, Work, Services, Contact or About.
+Edits are written into that page's own `examples/*.html` source, so you can
+inspect the byte-precise patching afterwards (undo with Ctrl/Cmd+Z, or restore
+the example files with Git).
 
 ## Tests
 

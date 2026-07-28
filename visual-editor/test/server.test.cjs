@@ -21,10 +21,10 @@ const PAGE = [
 ].join('\n');
 
 /** Spin up a real server on an ephemeral port, run fn, always tear it down. */
-async function withServer(fn) {
+async function withServer(fn, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 've-http-'));
   fs.writeFileSync(path.join(root, 'index.html'), PAGE, 'utf8');
-  const server = startServer({ root, port: 0 });
+  const server = startServer({ root, port: 0, ...options });
   await new Promise((resolve) => server.listening ? resolve() : server.once('listening', resolve));
   const port = server.address().port;
   const base = 'http://127.0.0.1:' + port;
@@ -36,6 +36,28 @@ async function withServer(fn) {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
+test('configured application targets replace static discovery in the palette response', async () => {
+  const targets = [
+    { title: 'Dashboard', href: '/', file: 'index.html' },
+    { title: 'Account settings', href: '/account/settings?tab=profile', file: 'src/routes/account.tsx' },
+    { title: 'External', href: 'https://example.com/leave' },
+  ];
+  await withServer(async ({ base }) => {
+    const res = await fetch(base + '/__visual-editor/palette');
+    assert.strictEqual(res.status, 200);
+    const body = await res.json();
+
+    assert.deepStrictEqual(body.pages, [
+      { title: 'Dashboard', href: '/', file: 'index.html' },
+      {
+        title: 'Account settings',
+        href: '/account/settings?tab=profile',
+        file: 'src/routes/account.tsx',
+      },
+    ]);
+  }, { targets });
+});
 
 /** Raw HTTP request — needed for headers fetch() refuses to send (Host). */
 function rawRequest({ port, method, path: reqPath, headers, body }) {

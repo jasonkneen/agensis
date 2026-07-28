@@ -193,7 +193,10 @@
   // An element (or ancestor) may override with data-ve-file for setups where
   // one page is assembled from several source files.
   // -------------------------------------------------------------------------
+  var currentPageSourceFile = null;
+
   function pageFile() {
+    if (currentPageSourceFile) return currentPageSourceFile;
     var p = decodeURIComponent(location.pathname);
     if (p.endsWith('/')) p += 'index.html';
     return p.replace(/^\/+/, '');
@@ -271,6 +274,7 @@
       '  --mini-border: #344054; --empty-icon: #5f6878; --status-idle: #697284;',
       '  --chip-remove: rgba(85,230,165,.7);',
       '  --overlay-bg: #101623; --overlay-tx: #cfe4ff; --overlay-shadow: rgba(0,0,0,.5);',
+      '  --guide-edge: #4f9cf9; --guide-center: #ff6b9d; --guide-shadow: rgba(79,156,249,.55);',
       '  --leftw: ' + DEFAULT_LEFT_W + 'px; --rightw: ' + DEFAULT_RIGHT_W + 'px;',
       '}',
       ':host([data-theme="light"]) {',
@@ -291,6 +295,7 @@
       '  --mini-border: #b7c0cd; --empty-icon: #8a95a4; --status-idle: #818b99;',
       '  --chip-remove: #087f5b;',
       '  --overlay-bg: #ffffff; --overlay-tx: #0d4f96; --overlay-shadow: rgba(24,33,44,.22);',
+      '  --guide-edge: #1769c2; --guide-center: #b4236a; --guide-shadow: rgba(23,105,194,.35);',
       '}',
       '.ve { position: fixed; z-index: 2147483000; background: var(--bg); color: var(--tx);',
       '  -webkit-backdrop-filter: blur(14px) saturate(1.15); backdrop-filter: blur(14px) saturate(1.15);',
@@ -535,6 +540,8 @@
       '  font: inherit; cursor: pointer; transition: background .12s, color .12s; }',
       '#bar button:hover { background: var(--bg3); color: var(--tx); border-color: var(--line2); }',
       '#bar button.on { background: var(--selected); color: var(--blue); border-color: rgba(79,156,249,.4); }',
+      '#page-select { display: none; width: min(160px, 22vw); height: 26px; flex: none;',
+      '  border-color: var(--line2); background-color: var(--bg3); color: var(--tx2); }',
       '#status { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--tx2);',
       '  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }',
       '#status .dotp { width: 6px; height: 6px; border-radius: 50%; background: var(--status-idle); flex: none; }',
@@ -563,6 +570,9 @@
       '#ov-drop-label { background: var(--blue); color: #fff; padding: 0 6px; font-size: 10px;',
       '  border-radius: 3px; display: none; white-space: nowrap; }',
       '#ov-drop-label.bad { background: var(--red); }',
+      '.ov-guide { position: fixed; z-index: 2147483003; pointer-events: none; background: var(--guide-edge);',
+      '  box-shadow: 0 0 4px var(--guide-shadow); }',
+      '.ov-guide.center { background: var(--guide-center); }',
     ].join('\n'),
   }));
 
@@ -620,7 +630,7 @@
   var delBtn = h('button', { title: 'Delete element (⌫)' }, [svgIcon('trash')]);
   var undoBtn = h('button', { title: 'Undo (⌘Z)' }, [svgIcon('undo'), 'Undo']);
   var liveBtn = h('button', {
-    title: 'Live layout preview: while dragging, reflow the page around where the element would land',
+    title: 'Live layout preview: reflow only the immediate target area while dragging',
   }, [svgIcon('live')]);
   var dockBtn = h('button', {
     title: 'Dock: push the page aside instead of overlapping it',
@@ -631,6 +641,11 @@
     'aria-label': 'Light editor theme',
     'aria-pressed': 'false',
   }, [svgIcon('sun'), 'Light']);
+  var pageSelect = h('select', {
+    id: 'page-select',
+    title: 'Choose a page to load into the editor',
+    'aria-label': 'Page to edit',
+  });
   var closeBtn = h('button', { title: 'Close editor' }, [svgIcon('x')]);
   var bar = h('div', { class: 've', id: 'bar' }, [
     h('div', { class: 'group' }, [selectBtn]),
@@ -639,6 +654,7 @@
     liveBtn,
     dockBtn,
     themeBtn,
+    pageSelect,
     statusEl,
     closeBtn,
   ]);
@@ -1067,11 +1083,13 @@
       ovLine.style.display = 'none';
       ovInside.style.display = 'none';
       ovDropLabel.style.display = 'none';
+      clearAlignmentGuides();
     }
   }
 
   function refreshOverlays() {
     var el = state.selected;
+    if (textEdit) { hideSelOverlays(); updateDims(); return; }
     // Out of select mode the canvas belongs to the page: the selection still
     // exists (panels, breadcrumbs, keyboard nav all keep working) but nothing
     // is painted over the page. Without this the next scroll or style commit
@@ -1564,6 +1582,72 @@
   }
   addBtn.addEventListener('click', function () { setPaletteOpen(!paletteOpen); });
 
+  function pageTargetHref(page) {
+    var raw = page && (page.href || page.path);
+    if (!raw) return '';
+    try {
+      var url = new URL(raw.charAt(0) === '/' ? raw : '/' + raw, location.origin);
+      if (url.origin !== location.origin) return '';
+      return url.pathname + url.search + url.hash;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function canonicalPageHref(href) {
+    try {
+      var url = new URL(href, location.origin);
+      var pathname = url.pathname.replace(/\/index\.html?$/i, '/');
+      return pathname + url.search + url.hash;
+    } catch (e) {
+      return href;
+    }
+  }
+
+  function renderPageTargets(pages) {
+    pageSelect.textContent = '';
+    currentPageSourceFile = null;
+    var targets = (pages || []).map(function (page) {
+      return { page: page, href: pageTargetHref(page) };
+    }).filter(function (target) { return !!target.href; });
+    var current = canonicalPageHref(location.pathname + location.search + location.hash);
+    var active = targets.find(function (target) {
+      return canonicalPageHref(target.href) === current;
+    });
+    if (active && active.page.file) currentPageSourceFile = active.page.file;
+    if (targets.length < 2) {
+      pageSelect.style.display = 'none';
+      return;
+    }
+    targets.forEach(function (target) {
+      var page = target.page;
+      var option = h('option', { value: target.href, text: page.title || target.href });
+      option.title = target.href + (page.file ? ' — ' + page.file : '');
+      pageSelect.appendChild(option);
+    });
+    if (active) pageSelect.value = active.href;
+    pageSelect.title = 'Page to edit — ' + (active ? active.href : location.pathname);
+    pageSelect.style.display = 'block';
+  }
+  pageSelect.addEventListener('change', function () {
+    var href = pageSelect.value;
+    if (!href || canonicalPageHref(href) ===
+        canonicalPageHref(location.pathname + location.search + location.hash)) return;
+    // Blurring an active inline edit queues its save. Do not let navigation
+    // abort that request: leave only after every pending source write settles.
+    pageSelect.disabled = true;
+    editChain.then(function () {
+      var link = document.createElement('a');
+      link.setAttribute('data-ve-editor-el', '');
+      link.setAttribute('href', href);
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      pageSelect.disabled = false;
+    });
+  });
+
   /** Ask the server what the host project is made of. Entirely optional. */
   function loadProject() {
     fetch('/__visual-editor/palette', { headers: { accept: 'application/json' } })
@@ -1571,6 +1655,7 @@
       .then(function (p) {
         if (!p || !p.ok) return;
         project = p;
+        renderPageTargets(p.pages);
         if (paletteOpen) rebuildPalette();
       })
       .catch(function () { /* discovery is a nicety; ignore */ });
@@ -2468,13 +2553,149 @@
   }
 
   // -------------------------------------------------------------------------
+  // In-place text editing
+  // -------------------------------------------------------------------------
+  var textEdit = null;
+
+  function savedAttr(el, name) {
+    return { name: name, had: el.hasAttribute(name), value: el.getAttribute(name) };
+  }
+
+  function restoreSavedAttr(el, saved) {
+    if (saved.had) el.setAttribute(saved.name, saved.value);
+    else el.removeAttribute(saved.name);
+  }
+
+  function canInlineEditText(el) {
+    if (!el || el.namespaceURI !== 'http://www.w3.org/1999/xhtml') return false;
+    var tag = el.tagName.toLowerCase();
+    if (pageChildren(el).length || VOID_TAGS[tag] || RAW_TEXT_TAGS[tag]) return false;
+    if (tag === 'input' || tag === 'select' || tag === 'option' || tag === 'optgroup') return false;
+    if (!selMode() && el.closest &&
+        el.closest('a,button,input,select,textarea,summary,label,[role="button"],[role="link"]')) {
+      setStatus('turn on Select mode to edit interactive text in place');
+      return false;
+    }
+    var blocked = editBlockedReason(el);
+    if (blocked) {
+      setStatus(blocked, 'err');
+      return false;
+    }
+    return true;
+  }
+
+  function selectInlineText(el) {
+    try {
+      var range = document.createRange();
+      range.selectNodeContents(el);
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } catch (e) { /* selection APIs can be unavailable in embedded browsers */ }
+  }
+
+  function pastePlainText(ev) {
+    if (!textEdit) return;
+    var data = ev.clipboardData || window.clipboardData;
+    var value = data && data.getData ? data.getData('text/plain') : '';
+    ev.preventDefault();
+    try {
+      var selection = window.getSelection();
+      if (!selection || !selection.rangeCount) return;
+      var range = selection.getRangeAt(0);
+      range.deleteContents();
+      var node = document.createTextNode(value);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } catch (e) { /* keep the edit safe even when selection insertion fails */ }
+  }
+
+  function finishInlineTextEdit(cancel) {
+    if (!textEdit) return;
+    var edit = textEdit;
+    textEdit = null;
+    var el = edit.el;
+    el.removeEventListener('keydown', edit.onKeyDown);
+    el.removeEventListener('blur', edit.onBlur);
+    el.removeEventListener('paste', pastePlainText);
+    var newText = cancel ? edit.oldText : el.textContent;
+    restoreSavedAttr(el, edit.contentEditable);
+    restoreSavedAttr(el, edit.spellcheck);
+    restoreSavedAttr(el, edit.tabindex);
+    restoreSavedAttr(el, edit.marker);
+    restoreSavedAttr(el, edit.style);
+
+    if (cancel || newText === edit.oldText) {
+      el.textContent = edit.oldText;
+      refreshAll();
+      return;
+    }
+
+    var dom = {
+      undo: function () { el.textContent = edit.oldText; },
+      redo: function () { el.textContent = newText; },
+    };
+    dom.redo();
+    if (fileFor(el)) sendEdit(opFor(el, { op: 'setText', text: newText }), dom);
+    refreshAll();
+  }
+
+  function beginInlineTextEdit(el) {
+    if (!canInlineEditText(el)) return false;
+    if (textEdit) finishInlineTextEdit(false);
+    select(el);
+    var edit = {
+      el: el,
+      oldText: el.textContent,
+      contentEditable: savedAttr(el, 'contenteditable'),
+      spellcheck: savedAttr(el, 'spellcheck'),
+      tabindex: savedAttr(el, 'tabindex'),
+      marker: savedAttr(el, 'data-ve-inline-edit'),
+      style: savedAttr(el, 'style'),
+    };
+    edit.onKeyDown = function (ev) {
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        finishInlineTextEdit(true);
+      } else if (ev.key === 'Enter' && !ev.shiftKey) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        finishInlineTextEdit(false);
+      }
+    };
+    edit.onBlur = function () { finishInlineTextEdit(false); };
+    textEdit = edit;
+    el.setAttribute('data-ve-inline-edit', '');
+    el.setAttribute('contenteditable', 'plaintext-only');
+    el.setAttribute('spellcheck', 'true');
+    if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+    el.style.setProperty('outline', '2px solid ' + (prefs.theme === 'light' ? '#1769c2' : '#4f9cf9'), 'important');
+    el.style.setProperty('outline-offset', '2px', 'important');
+    el.style.setProperty('caret-color', prefs.theme === 'light' ? '#1769c2' : '#4f9cf9', 'important');
+    el.style.setProperty('cursor', 'text', 'important');
+    el.addEventListener('keydown', edit.onKeyDown);
+    el.addEventListener('blur', edit.onBlur);
+    el.addEventListener('paste', pastePlainText);
+    hideSelOverlays();
+    el.focus();
+    selectInlineText(el);
+    return true;
+  }
+
+  // -------------------------------------------------------------------------
   // Select mode (crosshair) — capture-phase listeners on the document
   // -------------------------------------------------------------------------
   function onHover(ev) {
+    if (textEdit) { hoverClear(); return; }
     if (isOurs(ev.target)) { hoverClear(); return; }
     hoverHighlight(ev.target);
   }
   function onClickCapture(ev) {
+    if (textEdit && (ev.target === textEdit.el || textEdit.el.contains(ev.target))) return;
     // Swallow the click that follows a completed drag.
     if (suppressClick) {
       suppressClick = false;
@@ -2490,7 +2711,13 @@
     select(ev.target);
   }
   function onDblClick(ev) {
-    if (isOurs(ev.target) || selMode()) return;
+    if (isOurs(ev.target) || drag) return;
+    if (beginInlineTextEdit(ev.target)) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
+    if (selMode()) return;
     ev.preventDefault();
     ev.stopPropagation();
     select(ev.target);
@@ -2538,6 +2765,7 @@
   }
   // Losing focus mid-hold (alt-tab, devtools, …) must not stick the invert.
   function onWindowBlur() {
+    if (textEdit) finishInlineTextEdit(false);
     if (!state.modeKeyHeld) return;
     state.modeKeyHeld = false;
     refreshModeUI();
@@ -2704,6 +2932,7 @@
 
   function onNavKey(ev) {
     if (drag) return;
+    if (textEdit) return;
     if (typingTarget() || editorFocused()) return;
     var el = state.selected;
     if (ev.key === 'Escape') {
@@ -2819,6 +3048,7 @@
   var suppressClick = false;
   var noSelectStyle = null;
   var ghost = null;
+  var guideEls = [];
 
   function setNoSelect(on) {
     if (on && !noSelectStyle) {
@@ -2857,17 +3087,138 @@
     if (ghost) { ghost.remove(); ghost = null; }
   }
 
+  // -- Local alignment guides --------------------------------------------------
+  // This editor moves elements through document flow rather than assigning
+  // free x/y coordinates. Guides therefore describe the ACTUAL target
+  // stand-in after layout: matching edges and centres against its nearby
+  // siblings and target container. Segments span only the matched elements,
+  // instead of crossing the whole viewport.
+  var ALIGN_GUIDE_THRESHOLD = 3;
+  function clearAlignmentGuides() {
+    guideEls.forEach(function (el) { el.remove(); });
+    guideEls = [];
+  }
+
+  function measureGuideCandidate(c) {
+    if (placeholder && placeholder.parentNode) return placeholder.getBoundingClientRect();
+    if (!drag || !c || !c.valid || !c.parent) return null;
+    var probe = buildPlaceholder(drag.el);
+    probe.setAttribute('data-ve-guide-probe', '');
+    probe.style.setProperty('visibility', 'hidden', 'important');
+    probe.style.setProperty('pointer-events', 'none', 'important');
+    try {
+      if (c.inside) c.parent.insertBefore(probe, c.parent === document.body ? host : null);
+      else if (c.before) c.parent.insertBefore(probe, c.refEl);
+      else c.parent.insertBefore(probe, c.refEl.nextElementSibling);
+      return probe.getBoundingClientRect();
+    } finally {
+      probe.remove();
+    }
+  }
+
+  function renderAlignmentGuides(c) {
+    clearAlignmentGuides();
+    if (!c || !c.valid) return;
+    var dragRect = measureGuideCandidate(c);
+    if (!dragRect) return;
+    if ((!dragRect.width && !dragRect.height) || !c.parent) return;
+
+    var refs = [{ rect: c.parent.getBoundingClientRect(), container: true }];
+    var siblings = pageChildren(c.parent).filter(function (el) { return el !== drag.el; });
+    var pivot = c.refEl ? siblings.indexOf(c.refEl) : siblings.length;
+    if (pivot < 0) pivot = siblings.length;
+    siblings.slice(Math.max(0, pivot - 6), Math.min(siblings.length, pivot + 7))
+      .forEach(function (el) {
+        var r = el.getBoundingClientRect();
+        if (r.width || r.height) refs.push({ rect: r, container: false });
+      });
+
+    var found = Object.create(null);
+    function addGuide(axis, dragPos, refPos, type, refRect) {
+      if (Math.abs(dragPos - refPos) > ALIGN_GUIDE_THRESHOLD) return;
+      var pos = (dragPos + refPos) / 2;
+      var start = axis === 'vertical'
+        ? Math.min(dragRect.top, refRect.top)
+        : Math.min(dragRect.left, refRect.left);
+      var end = axis === 'vertical'
+        ? Math.max(dragRect.bottom, refRect.bottom)
+        : Math.max(dragRect.right, refRect.right);
+      var key = axis + ':' + Math.round(pos);
+      var item = found[key];
+      if (!item) {
+        item = found[key] = { axis: axis, pos: pos, start: start, end: end, type: type };
+      } else {
+        item.start = Math.min(item.start, start);
+        item.end = Math.max(item.end, end);
+        if (type === 'center') item.type = 'center';
+      }
+    }
+
+    var dcx = dragRect.left + dragRect.width / 2;
+    var dcy = dragRect.top + dragRect.height / 2;
+    refs.forEach(function (ref) {
+      var r = ref.rect;
+      var rcx = r.left + r.width / 2;
+      var rcy = r.top + r.height / 2;
+      addGuide('vertical', dragRect.left, r.left, 'edge', r);
+      addGuide('vertical', dragRect.right, r.right, 'edge', r);
+      if (!ref.container) {
+        addGuide('vertical', dragRect.left, r.right, 'edge', r);
+        addGuide('vertical', dragRect.right, r.left, 'edge', r);
+      }
+      addGuide('vertical', dcx, rcx, 'center', r);
+      addGuide('horizontal', dragRect.top, r.top, 'edge', r);
+      addGuide('horizontal', dragRect.bottom, r.bottom, 'edge', r);
+      if (!ref.container) {
+        addGuide('horizontal', dragRect.top, r.bottom, 'edge', r);
+        addGuide('horizontal', dragRect.bottom, r.top, 'edge', r);
+      }
+      addGuide('horizontal', dcy, rcy, 'center', r);
+    });
+
+    var bounds = canvasBounds();
+    Object.keys(found).forEach(function (key) {
+      var item = found[key];
+      var start = item.start - 4, end = item.end + 4;
+      if (item.axis === 'vertical' && bounds) {
+        if (item.pos < bounds.left || item.pos > bounds.right) return;
+        start = Math.max(start, bounds.top); end = Math.min(end, bounds.bottom);
+      } else if (item.axis === 'horizontal' && bounds) {
+        if (item.pos < bounds.top || item.pos > bounds.bottom) return;
+        start = Math.max(start, bounds.left); end = Math.min(end, bounds.right);
+      }
+      if (end <= start) return;
+      var line = h('div', {
+        class: 'ov-guide' + (item.type === 'center' ? ' center' : ''),
+        'data-axis': item.axis,
+      });
+      if (item.axis === 'vertical') {
+        line.style.left = item.pos + 'px';
+        line.style.top = start + 'px';
+        line.style.width = '1px';
+        line.style.height = (end - start) + 'px';
+      } else {
+        line.style.left = start + 'px';
+        line.style.top = item.pos + 'px';
+        line.style.width = (end - start) + 'px';
+        line.style.height = '1px';
+      }
+      shadow.appendChild(line);
+      guideEls.push(line);
+    });
+  }
+
   // -- Live layout preview ------------------------------------------------------
-  // Instead of only drawing a line where the element *would* land, put a real
-  // box of the element's exact size into the page at that spot and hide the
-  // original. The page reflows for real, so you see the actual result — the
-  // gap closing where it left, everything downstream shifting up, the target
-  // container growing — while you are still dragging.
+  // Put a real box of the element's exact size into the target neighbourhood,
+  // but keep the hidden original in flow and freeze the target container's
+  // outer dimensions. Nearby siblings still show their real reflow without
+  // making distant sections or the whole document jump.
   //
   // The placeholder carries data-ve-editor-el, so isOurs() filters it out of
   // pageChildren() and therefore out of every element path and index. The
   // source-of-truth walk never sees it and the op maths is untouched.
   var placeholder = null;
+  var previewContainer = null;
 
   /** Absolutely/fixed-positioned elements are out of flow: hiding one frees no
    * space and a block placeholder would invent space that never existed, so
@@ -2883,6 +3234,7 @@
     var cs = getComputedStyle(el);
     var ph = document.createElement('div');
     ph.setAttribute('data-ve-editor-el', '');
+    ph.setAttribute('data-ve-preview-placeholder', '');
     // Deliberately hit-testable: elementFromPoint returning the stand-in is how
     // computeCandidate recognises "the pointer is already over the drop slot".
     // With pointer-events:none it would return whatever sits behind instead —
@@ -2902,32 +3254,90 @@
     return ph;
   }
 
+  function restorePreviewContainer() {
+    if (!previewContainer) return;
+    var parent = previewContainer.el;
+    if (previewContainer.style == null) parent.removeAttribute('style');
+    else parent.setAttribute('style', previewContainer.style);
+    if (previewContainer.marker == null) parent.removeAttribute('data-ve-preview-isolated');
+    else parent.setAttribute('data-ve-preview-isolated', previewContainer.marker);
+    previewContainer = null;
+  }
+
+  function detachPlacedPreview() {
+    if (placeholder && placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
+    restorePreviewContainer();
+  }
+
+  function isolatePreviewContainer(parent) {
+    if (!parent || parent === document.body || parent === document.documentElement) return false;
+    var r = parent.getBoundingClientRect();
+    if (!r.width && !r.height) return false;
+    previewContainer = {
+      el: parent,
+      style: parent.hasAttribute('style') ? parent.getAttribute('style') : null,
+      marker: parent.hasAttribute('data-ve-preview-isolated')
+        ? parent.getAttribute('data-ve-preview-isolated') : null,
+    };
+    parent.setAttribute('data-ve-preview-isolated', '');
+    parent.style.setProperty('box-sizing', 'border-box', 'important');
+    parent.style.setProperty('contain', 'layout', 'important');
+    parent.style.setProperty('width', r.width + 'px', 'important');
+    parent.style.setProperty('height', r.height + 'px', 'important');
+    parent.style.setProperty('min-width', r.width + 'px', 'important');
+    parent.style.setProperty('max-width', r.width + 'px', 'important');
+    parent.style.setProperty('min-height', r.height + 'px', 'important');
+    parent.style.setProperty('max-height', r.height + 'px', 'important');
+    return true;
+  }
+
+  function setPreviewOriginCollapsed(collapsed) {
+    if (!drag || !drag.originHidden) return;
+    if (drag.previewStyle == null) drag.el.removeAttribute('style');
+    else drag.el.setAttribute('style', drag.previewStyle);
+    if (collapsed) drag.el.style.setProperty('display', 'none', 'important');
+    else drag.el.style.setProperty('visibility', 'hidden', 'important');
+  }
+
   /** True when both candidates describe the same insertion slot. */
   function sameSlot(a, b) {
     return !!a && !!b && a.parent === b.parent && a.refEl === b.refEl &&
       a.inside === b.inside && a.before === b.before;
   }
 
-  /** Swap the element for its stand-in the moment the drag begins, in the
-   * element's OWN slot. Doing it here rather than on the first valid target
-   * means the page reaches its "element lifted out" layout once, at the start,
-   * instead of lurching into it mid-drag. */
+  /** Hide the element without removing its space. The target stand-in stays
+   * detached until a local, valid container has been resolved. */
   function startLayoutPreview() {
     if (!drag || placeholder || !canPreviewLayout(drag.el)) return;
-    placeholder = buildPlaceholder(drag.el);       // measure before hiding
-    drag.prevDisplay = drag.el.style.display;
-    drag.el.parentNode.insertBefore(placeholder, drag.el);
-    drag.el.style.display = 'none';
+    placeholder = buildPlaceholder(drag.el);
+    drag.previewStyle = drag.el.hasAttribute('style') ? drag.el.getAttribute('style') : null;
     drag.originHidden = true;
+    setPreviewOriginCollapsed(false);
     drag.previewSlot = null;
   }
 
-  /** Relocate the stand-in to the candidate slot. It is never removed here:
-   * pulling it out for an invalid or absent target would collapse the layout
-   * and slam it back on the next move. No target simply means "stay put". */
+  /** Relocate the stand-in inside a dimension-locked target container. Root
+   * body moves keep the ordinary marker: previewing them would necessarily
+   * reflow the whole page, which is exactly what local preview avoids. */
   function showLayoutPreview(c) {
-    if (!placeholder || !c || !c.valid) return;
-    if (sameSlot(c, drag.previewSlot)) return;     // already there — no reflow
+    if (!placeholder) return;
+    if (!c || !c.valid || c.parent === document.body) {
+      detachPlacedPreview();
+      setPreviewOriginCollapsed(false);
+      drag.previewSlot = null;
+      return;
+    }
+    if (sameSlot(c, drag.previewSlot) && placeholder.parentNode) return;
+    detachPlacedPreview();
+    if (!isolatePreviewContainer(c.parent)) {
+      setPreviewOriginCollapsed(false);
+      drag.previewSlot = null;
+      return;
+    }
+    // Within one isolated flow, the old slot must close so the stand-in shows
+    // the real reorder. Across containers the hidden source keeps its space,
+    // preventing the source side of the page from shifting at a distance.
+    setPreviewOriginCollapsed(c.parent === drag.el.parentElement);
     if (c.inside) c.parent.insertBefore(placeholder, c.parent === document.body ? host : null);
     else if (c.before) c.parent.insertBefore(placeholder, c.refEl);
     else c.parent.insertBefore(placeholder, c.refEl.nextElementSibling);
@@ -2936,13 +3346,14 @@
 
   /** Tear the preview down and put the real element back on screen. */
   function endLayoutPreview() {
-    if (placeholder && placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
+    detachPlacedPreview();
+    clearAlignmentGuides();
     placeholder = null;
     if (drag) {
       drag.previewSlot = null;
       if (drag.originHidden) {
-        drag.el.style.display = drag.prevDisplay || '';
-        if (!drag.el.getAttribute('style')) drag.el.removeAttribute('style');
+        if (drag.previewStyle == null) drag.el.removeAttribute('style');
+        else drag.el.setAttribute('style', drag.previewStyle);
         drag.originHidden = false;
       }
     }
@@ -2994,9 +3405,10 @@
     // the user is aiming. Keep the current candidate. Re-deriving one here is
     // the core oscillation — the stand-in would target its way out from under
     // the pointer, reflow, and come straight back.
-    if (placeholder && (t === placeholder || placeholder.contains(t))) return drag.candidate;
+    if (placeholder && placeholder.parentNode &&
+        (t === placeholder || placeholder.contains(t))) return drag.candidate;
     if (!t || isOurs(t)) return null;
-    if (!placeholder) {
+    if (!placeholder || !placeholder.parentNode) {
       // No preview (toggle off, or an out-of-flow element): still hovering the
       // element itself means the pointer has not been taken anywhere yet.
       // Walking up to an ancestor would invent a target — a few px of travel
@@ -3244,6 +3656,7 @@
       drag.candidate = computeDragCandidate(drag.lastX, drag.lastY);
       showLayoutPreview(drag.candidate);
       renderDropMarker();
+      renderAlignmentGuides(drag.candidate);
     });
   }
   function cancelCandidateUpdate() {
@@ -3252,7 +3665,7 @@
 
   // -- Pointer wiring -----------------------------------------------------------------
   function onPointerDown(ev) {
-    if (ev.button !== 0 || isOurs(ev.target)) return;
+    if (textEdit || ev.button !== 0 || isOurs(ev.target)) return;
     // Selection-first: pressing anywhere inside the already-selected element
     // (including on its children, which usually cover its whole surface)
     // starts a page drag. Works in select mode too: if the press never passes
@@ -3364,10 +3777,12 @@
   // selects — clicks themselves are swallowed by onClickCapture. Outside
   // select mode, only block when a drag is armed or active.
   function onSelectStart(ev) {
+    if (textEdit && (ev.target === textEdit.el || textEdit.el.contains(ev.target))) return;
     if ((drag || selMode()) && !isOurs(ev.target)) ev.preventDefault();
   }
   function onPageMouseDown(ev) {
     if (isOurs(ev.target)) return;
+    if (textEdit && (ev.target === textEdit.el || textEdit.el.contains(ev.target))) return;
     if (selMode() || drag || (state.selected && state.selected.contains(ev.target))) {
       ev.preventDefault();
     }
@@ -3415,7 +3830,13 @@
   // Global listeners
   // -------------------------------------------------------------------------
   function onMouseMove(ev) { if (selMode()) onHover(ev); }
-  function onScroll() { refreshOverlays(); }
+  function onScroll() {
+    refreshOverlays();
+    if (drag && drag.active) {
+      renderDropMarker();
+      renderAlignmentGuides(drag.candidate);
+    }
+  }
   function onResize() {
     // A narrower window can invalidate stored widths — re-clamp so the canvas
     // strip between the panels never disappears.
@@ -3439,6 +3860,7 @@
   // -------------------------------------------------------------------------
   var api = {
     disable: function () {
+      if (textEdit) finishInlineTextEdit(false);
       document.removeEventListener('mousemove', onMouseMove, true);
       document.removeEventListener('click', onClickCapture, true);
       document.removeEventListener('dblclick', onDblClick, true);
