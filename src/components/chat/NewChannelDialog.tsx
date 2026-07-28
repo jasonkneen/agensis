@@ -72,7 +72,11 @@ export function NewChannelDialog({ open, onOpenChange, onCreate }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-3xl">
+      {/* `sm:` matters: DialogContent's base is `sm:max-w-sm`, and tailwind-merge
+          keeps an unprefixed `max-w-3xl` ALONGSIDE it rather than replacing it —
+          so above 640px the base media query won and this dialog rendered at
+          384px, collapsing the card grid to a single column. */}
+      <DialogContent className="sm:max-w-3xl">
         {preview ? (
           <BridgePreview template={preview} onBack={() => setPreview(null)} />
         ) : (
