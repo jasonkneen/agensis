@@ -73,6 +73,22 @@ function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
   const findTask = (id) => state.tasks.find((t) => t.id === String(id));
   const active = (j) => j.status === 'queued' || j.status === 'running';
 
+  // "Waiting for its agent", modelled from the message thread rather than from the
+  // server's WHERE clause — a mock that re-states the filter under test only ever
+  // proves the mock. Only human messages carry source_task_id; the agent's replies
+  // hang off that root, so the thread is root + its children, newest last.
+  const threadOf = (taskId) => {
+    const root = state.messages.find((m) => String(m.source_task_id) === String(taskId) && !m.thread_parent_id);
+    if (!root) return [];
+    return state.messages.filter((m) => m.id === root.id || m.thread_parent_id === root.id);
+  };
+  const hadLastWord = (taskId) => {
+    const thread = threadOf(taskId);
+    return thread.length > 0 && (thread[thread.length - 1].sender_kind || 'user') === 'agent';
+  };
+  const isWaiting = (t) => t.status !== 'done' && t.status !== 'cancelled'
+    && (t.status === 'todo' || !hadLastWord(t.id));
+
   const db = {
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
@@ -85,19 +101,19 @@ function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
       }
       if (n.startsWith('select id, title, workspace_id, created_at from tasks')) {
         return state.tasks
-          .filter((t) => t.workspace_id === params[0] && String(t.assignee_id || '') === String(params[1]) && t.status === 'todo')
+          .filter((t) => t.workspace_id === params[0] && String(t.assignee_id || '') === String(params[1]) && isWaiting(t))
           .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || a.id.localeCompare(b.id))
           .slice(0, Number(params[2]))
           .map((t) => ({ id: t.id, title: t.title, workspace_id: t.workspace_id, created_at: t.created_at }));
       }
-      if (n.startsWith('select count(*)::int as ahead from tasks')) {
+      if (n.startsWith('select (select count(*)::int from tasks t')) {
         const self = findTask(params[2]);
-        if (!self) return [{ ahead: 0 }];
+        if (!self) return [];
         const ahead = state.tasks.filter((t) => t.workspace_id === params[0]
-          && String(t.assignee_id || '') === String(params[1]) && t.status === 'todo'
+          && String(t.assignee_id || '') === String(params[1]) && isWaiting(t)
           && (String(t.created_at) < String(self.created_at)
             || (t.created_at === self.created_at && t.id < self.id))).length;
-        return [{ ahead }];
+        return [{ ahead, waiting: isWaiting(self) }];
       }
       if (n.startsWith("update tasks set status = $1, source_type = 'chat', source_id = $2")) {
         const task = findTask(params[2]);
@@ -188,9 +204,12 @@ function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
       if (n.startsWith('insert into messages')) {
         seq += 1;
         const nested = n.includes('thread_parent_id, source_task_id');
+        // sender_kind is a literal in both inserts: every message a task dispatch
+        // writes is the human's nag. The agent's reply arrives on the daemon
+        // result path instead — see postAgentReply.
         const row = nested
-          ? { id: `m-${seq}`, session_id: params[0], content: params[1], thread_parent_id: params[2], source_task_id: params[3] }
-          : { id: `m-${seq}`, session_id: params[0], content: params[1], thread_parent_id: null, source_task_id: params[2] };
+          ? { id: `m-${seq}`, session_id: params[0], content: params[1], thread_parent_id: params[2], source_task_id: params[3], sender_kind: 'user' }
+          : { id: `m-${seq}`, session_id: params[0], content: params[1], thread_parent_id: null, source_task_id: params[2], sender_kind: 'user' };
         state.messages.push(row);
         return [{ ...row }];
       }
@@ -227,6 +246,21 @@ function jobRunner(world, { mode = 'builtin' } = {}) {
       status: 'running',
       metadata: { mode, threadParentId },
     });
+    // Every real turn path writes the agent's "Thinking 0s" placeholder into the
+    // work thread as the job is created (builtin-turn.cjs, all three lanes), and
+    // insertActiveAgentJob DELETES it again if the job is refused. That is what
+    // takes a task out of the waiting set the moment it starts being worked —
+    // without it the drain would hand the same task out over and over.
+    if (threadParentId) {
+      world.state.messages.push({
+        id: `m-placeholder-${seq}`,
+        session_id: sessionId,
+        content: 'Thinking 0s',
+        thread_parent_id: threadParentId,
+        source_task_id: null,
+        sender_kind: 'agent',
+      });
+    }
     return { started: true, reason: 'dispatched' };
   };
   return { runs, run };
@@ -243,6 +277,137 @@ async function settle(predicate, attempts = 200) {
 }
 
 const statuses = (world) => world.state.tasks.map((t) => `${t.id}:${t.status}`).sort();
+
+// What a task that has ALREADY been started looks like: the human's seed nag plus
+// the agent's "Thinking 0s" placeholder in its subthread. `status: 'in_progress'`
+// alone is not that — a task can also be in progress with no thread at all, which
+// is precisely the assigned-but-never-dispatched case the drain now has to catch.
+// Fixtures that mean "this one is being worked on" have to say so.
+function seedStartedThread(world, taskId) {
+  const rootId = `m-seed-${taskId}`;
+  world.state.messages.push(
+    { id: rootId, session_id: SESSION.id, content: `@coder — task ${taskId}`, thread_parent_id: null, source_task_id: taskId, sender_kind: 'user' },
+    { id: `m-thinking-${taskId}`, session_id: SESSION.id, content: 'Thinking 0s', thread_parent_id: rootId, source_task_id: null, sender_kind: 'agent' },
+  );
+}
+
+// The agent answering in the task's subthread. Written by the daemon result path,
+// not by continueConversation, so it is posted explicitly rather than folded into
+// jobRunner — and it is what takes a task back OUT of the queue.
+function postAgentReply(world, taskId) {
+  const root = world.state.messages.find((m) => String(m.source_task_id) === String(taskId) && !m.thread_parent_id);
+  assert.ok(root, `no subthread exists for ${taskId} to reply in`);
+  world.state.messages.push({
+    id: `m-agent-${world.state.messages.length + 1}`,
+    session_id: SESSION.id,
+    content: 'Done.',
+    thread_parent_id: root.id,
+    source_task_id: null,
+    sender_kind: 'agent',
+  });
+}
+
+// --- (0) queued at a status the drain could not see --------------------------
+//
+// The live failure this file was extended for: BOTH queue-admission paths leave
+// the task's status alone, and the drain only ever selected `status = 'todo'`.
+// Assign or nag anything that is already in progress and it was admitted to the
+// queue, logged with a confident position, and then never looked at again.
+
+test('a task queued while it is already in progress is drained, not stranded', async () => {
+  const world = makeWorld({
+    tasks: [taskRow('t-1', { status: 'in_progress' })],
+    jobs: [{ id: 'job-live', workspace_id: WS, agent_id: AGENT.id, session_id: SESSION.id, status: 'running', metadata: { mode: 'builtin' } }],
+  });
+  __test.setTestDb(world.db);
+  const { runs, run } = jobRunner(world);
+
+  const out = await __test.dispatchTaskAssignment({ workspaceId: WS, taskId: 't-1', agentId: AGENT.id, run });
+  assert.equal(out.reason, 'queued', 'the agent is mid-turn, so it goes into the queue');
+  assert.equal(runs.length, 0);
+
+  // The agent frees up. This is the moment the task used to vanish for good.
+  world.state.jobs[0].status = 'done';
+  const drained = await __test.drainAgentTaskQueue({ workspaceId: WS, agentId: AGENT.id, run });
+
+  assert.equal(drained.dispatched, true, 'the in-progress task is picked up');
+  assert.equal(drained.taskId, 't-1');
+  assert.equal(runs.length, 1, 'and a real turn runs for it');
+});
+
+test('a task assigned but never dispatched is waiting, whatever status it carries', async () => {
+  // Two tasks left over from a dropped dispatch: assigned, in_progress, no thread.
+  const world = makeWorld({ tasks: [taskRow('t-1', { status: 'in_progress' }), taskRow('t-2', { status: 'in_progress' })] });
+  __test.setTestDb(world.db);
+  const { runs, run } = jobRunner(world);
+
+  const first = await __test.drainAgentTaskQueue({ workspaceId: WS, agentId: AGENT.id, run });
+  assert.equal(first.taskId, 't-1', 'oldest first, exactly as for todo tasks');
+
+  world.state.jobs[0].status = 'done';
+  const second = await __test.drainAgentTaskQueue({ workspaceId: WS, agentId: AGENT.id, run });
+  assert.equal(second.taskId, 't-2', 'and the backlog keeps draining');
+  assert.equal(runs.length, 2);
+});
+
+test('an in-progress task the agent has already answered is NOT re-dispatched', async () => {
+  // The loop the status widening would otherwise open: without the last-word test
+  // this task would be re-run on every single job completion, forever.
+  const world = makeWorld({ tasks: [taskRow('t-1', { status: 'in_progress' })] });
+  __test.setTestDb(world.db);
+  const { runs, run } = jobRunner(world);
+
+  const first = await __test.drainAgentTaskQueue({ workspaceId: WS, agentId: AGENT.id, run });
+  assert.equal(first.dispatched, true, 'it starts once');
+
+  postAgentReply(world, 't-1');
+  world.state.jobs[0].status = 'done';
+
+  const again = await __test.drainAgentTaskQueue({ workspaceId: WS, agentId: AGENT.id, run });
+  assert.equal(again.dispatched, false, 'the agent had the last word, so it is done here');
+  assert.equal(again.reason, 'empty');
+  assert.equal(runs.length, 1, 'exactly one turn was ever spent on it');
+});
+
+test('a human nagging an answered task puts it back in the queue', async () => {
+  const world = makeWorld({ tasks: [taskRow('t-1', { status: 'in_progress' })] });
+  __test.setTestDb(world.db);
+  const { runs, run } = jobRunner(world);
+
+  await __test.drainAgentTaskQueue({ workspaceId: WS, agentId: AGENT.id, run });
+  postAgentReply(world, 't-1');
+  world.state.jobs[0].status = 'done';
+  assert.equal((await __test.drainAgentTaskQueue({ workspaceId: WS, agentId: AGENT.id, run })).dispatched, false);
+
+  // A successful dispatch KEEPS its claim for 15s so a re-save cannot double-run
+  // it. A human nag minutes later is past that window; the test is not.
+  __test.releaseTaskDispatch('t-1', AGENT.id);
+
+  // A human replies in the subthread — the @mention path's queue admission.
+  const root = world.state.messages.find((m) => String(m.source_task_id) === 't-1' && !m.thread_parent_id);
+  world.state.messages.push({
+    id: 'm-human-nag', session_id: SESSION.id, content: 'any update?',
+    thread_parent_id: root.id, source_task_id: 't-1', sender_kind: 'user',
+  });
+
+  const woken = await __test.drainAgentTaskQueue({ workspaceId: WS, agentId: AGENT.id, run });
+  assert.equal(woken.dispatched, true, 'the human has the last word again, so the agent owes a reply');
+  assert.equal(runs.length, 2);
+});
+
+test('taskQueuePosition never invents a position for a task the drain will not take', async () => {
+  const world = makeWorld({ tasks: [taskRow('t-1', { status: 'in_progress' }), taskRow('t-2')] });
+  __test.setTestDb(world.db);
+  const { run } = jobRunner(world);
+
+  await __test.drainAgentTaskQueue({ workspaceId: WS, agentId: AGENT.id, run });
+  postAgentReply(world, 't-1');
+
+  // t-1 is answered, so it is out of the queue — and must not report a position.
+  assert.equal(await __test.taskQueuePosition(WS, AGENT.id, 't-1'), 0, 'answered means no position, not "1"');
+  // t-2 is genuinely first in line now that t-1 has dropped out.
+  assert.equal(await __test.taskQueuePosition(WS, AGENT.id, 't-2'), 1, 'and the number ahead reflects the same set the drain reads');
+});
 
 // --- (1) three tasks, one agent ---------------------------------------------
 
@@ -268,8 +433,9 @@ test('assigning three tasks to one agent runs the first and leaves two WAITING, 
   assert.equal(world.state.jobs[0].session_id, SESSION.id);
   assert.equal(inProgress[0].source_id, SESSION.id, 'the started task is linked to the chat it runs in');
 
-  // No orphan seed messages for the two that never started.
-  assert.equal(world.state.messages.length, 1, 'only the dispatched task was nagged about');
+  // No orphan seed messages for the two that never started. (Seed nags carry
+  // source_task_id; the agent's own placeholder does not.)
+  assert.equal(world.state.messages.filter((m) => m.source_task_id).length, 1, 'only the dispatched task was nagged about');
 });
 
 test('a queued task keeps the status the human left it in and gains no chat link', async () => {
@@ -356,6 +522,7 @@ test('draining is a no-op while the agent still has a live job', async () => {
 
 test('draining an agent with nothing waiting is free and silent', async () => {
   const world = makeWorld({ tasks: [taskRow('t-1', { status: 'in_progress' })] });
+  seedStartedThread(world, 't-1'); // already being worked on — not waiting
   __test.setTestDb(world.db);
   const { runs, run } = jobRunner(world);
 
@@ -541,6 +708,7 @@ test('finishing a job drains the queue (finalizeAgentJobResult)', async () => {
     tasks: [taskRow('t-1', { status: 'in_progress' }), taskRow('t-2'), taskRow('t-3')],
     jobs: [{ id: 'job-1', workspace_id: WS, agent_id: AGENT.id, session_id: SESSION.id, status: 'running', metadata: { mode: 'daemon' } }],
   });
+  seedStartedThread(world, 't-1'); // t-1 is what job-1 is working on
   __test.setTestDb(world.db);
 
   await __test.finalizeAgentJobResult(
@@ -558,6 +726,7 @@ test('a timed-out or abandoned job drains the queue (finalizeStuckJob)', async (
     tasks: [taskRow('t-1', { status: 'in_progress' }), taskRow('t-2')],
     jobs: [{ id: 'job-1', workspace_id: WS, agent_id: AGENT.id, session_id: SESSION.id, status: 'running', metadata: { mode: 'daemon', handle: 'coder' } }],
   });
+  seedStartedThread(world, 't-1'); // t-1 is what the wedged job was working on
   __test.setTestDb(world.db);
 
   // The same path the reaper, the socket-close sweep and startup reconcile use.

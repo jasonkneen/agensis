@@ -181,6 +181,55 @@ function createTaskDispatch(deps = {}) {
 
  const TASK_QUEUE_MAX_STRIKES = 3;
 
+ // What "waiting for this agent" means, in ONE place: drainAgentTaskQueue SELECTs
+ // it and taskQueuePosition counts it. The two drifting apart is exactly how
+ // assigned tasks disappeared — the drain read `status = 'todo'`, while BOTH
+ // queue-admission paths (dispatchTaskAssignment's mid-turn branch and the
+ // task-comment @mention branch in index.cjs) deliberately leave the status alone.
+ // A task queued at anything other than 'todo' was invisible to the drain forever,
+ // and taskQueuePosition — which never checked the task's OWN status — still
+ // logged a confident "queue position 1" over the top of it.
+ //
+ // Assigned + unfinished + the agent has not had the last word = waiting.
+ //
+ // That last clause is the loop guard. After a turn, the agent's reply — or, on a
+ // failed turn, its rewritten placeholder — is the newest message in the task's
+ // thread, so the task drops out of the queue until a human says something else.
+ // Without it, widening the status filter would re-dispatch every in_progress task
+ // on every job completion, forever. A task nobody has posted about yet has no
+ // thread at all, and coalesce()'s 'user' default makes that waiting — which is
+ // the assigned-but-never-dispatched case (the one that reads as "I assigned it
+ // and nothing happened").
+ //
+ // Only human messages carry source_task_id; the agent's replies are children of
+ // that root, hence the join through coalesce(thread_parent_id, id).
+ //
+ // sender_kind is deliberately in the WHERE and never in the projection: the guard
+ // in tests/message-tool-steps.test.cjs requires any message column list naming it
+ // to carry the tool-step columns too, since a projection that omits them renders
+ // blank chips. This reads a timestamp, not a message.
+ const taskThreadLastWordAt = (t, cmp) => `(
+           select max(m.created_at)
+             from messages m
+             join messages root on root.id = coalesce(m.thread_parent_id, m.id)
+            where root.source_task_id = ${t}.id
+              and root.thread_parent_id is null
+              and root.deleted_at is null
+              and m.deleted_at is null
+              and m.sender_kind ${cmp} 'agent'
+         )`;
+
+ // '-infinity' makes "never spoke" lose every comparison, which is what puts a
+ // task with no thread at all — assigned but never dispatched — into the queue.
+ // Note the direction: on a tie the task is WAITING. An ambiguous thread should
+ // cost a turn, never a lost task.
+ const taskWaitingSql = (t) => `${t}.status not in ('done', 'cancelled')
+        and (
+          ${t}.status = 'todo'
+          or coalesce(${taskThreadLastWordAt(t, '=')}, '-infinity'::timestamptz)
+             <= coalesce(${taskThreadLastWordAt(t, '<>')}, '-infinity'::timestamptz)
+        )`;
+
  // Per-process failure counter, keyed `${taskId}:${agentId}`. A task whose
  // dispatch keeps failing for a reason the queue cannot fix (agent misconfigured,
  // turn budget exhausted, DB error) is dropped from the drain after this many
@@ -215,14 +264,21 @@ function createTaskDispatch(deps = {}) {
  // number of drains they have to wait through. Best-effort: 0 means "unknown".
  async function taskQueuePosition(workspaceId, agentId, taskId) {
   const rows = await getDb().unsafe(
-   `select count(*)::int as ahead
-       from tasks t, tasks self
-      where self.id = $3
-        and t.workspace_id = $1 and t.assignee_id = $2 and t.status = 'todo'
-        and (t.created_at, t.id) < (self.created_at, self.id)`,
+   `select
+        (select count(*)::int
+           from tasks t
+          where t.workspace_id = $1 and t.assignee_id = $2
+            and ${taskWaitingSql('t')}
+            and (t.created_at, t.id) < (self.created_at, self.id)) as ahead,
+        (${taskWaitingSql('self')}) as waiting
+      from tasks self
+     where self.id = $3`,
    [String(workspaceId || ''), String(agentId), String(taskId)],
   ).catch(() => []);
-  const ahead = Number(rows[0]?.ahead);
+  // Never quote a position for a task the drain would not pick up: the number a
+  // human reads has to be a number of drains they will actually be served by.
+  if (!rows[0] || rows[0].waiting !== true) return 0;
+  const ahead = Number(rows[0].ahead);
   return Number.isFinite(ahead) ? ahead + 1 : 0;
  }
 
@@ -415,9 +471,10 @@ function createTaskDispatch(deps = {}) {
   taskQueueSelecting.add(key);
   try {
    waiting = await getDb().unsafe(
-    `select id, title, workspace_id, created_at from tasks
-        where workspace_id = $1 and assignee_id = $2 and status = 'todo'
-        order by created_at asc, id asc
+    `select id, title, workspace_id, created_at from tasks t
+        where t.workspace_id = $1 and t.assignee_id = $2
+          and ${taskWaitingSql('t')}
+        order by t.created_at asc, t.id asc
         limit $3`,
     [wsId, aId, TASK_QUEUE_SCAN_LIMIT],
    );
