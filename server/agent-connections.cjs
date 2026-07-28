@@ -501,6 +501,25 @@ function createAgentConnections(deps = {}) {
    && (caps.memoryRoot === null || typeof caps.memoryRoot === 'string');
  }
 
+ function ampRuntimeFromMessage(value) {
+  const amp = parseJsonObject(parseJsonObject(value).amp);
+  if (amp.id !== 'amp') return null;
+  const project = parseJsonObject(amp.project);
+  return {
+   id: 'amp',
+   available: amp.available === true,
+   version: String(amp.version || '').slice(0, 120),
+   reason: amp.available === true ? null : String(amp.reason || 'amp_cli_crashed').slice(0, 100),
+   project: amp.available === true && (project.id || project.name || project.repository)
+    ? {
+     id: String(project.id || '').slice(0, 160),
+     name: String(project.name || '').slice(0, 200),
+     repository: String(project.repository || '').slice(0, 500),
+    }
+    : null,
+  };
+ }
+
  // Pure drift decision, extracted so it can be unit-tested without a DB. Given the last
  // stored capabilities and the hashes the daemon just sent on its heartbeat, decide which
  // full-snapshot re-pushes to nudge. Rules:
@@ -688,6 +707,10 @@ function createAgentConnections(deps = {}) {
    commands: Array.isArray(message.commands) ? message.commands : [],
    clis: Array.isArray(message.clis) ? message.clis : [],
    mcpServers: Array.isArray(message.mcpServers) ? message.mcpServers : [],
+   runtimes: (() => {
+    const amp = ampRuntimeFromMessage(message.runtimes);
+    return amp ? { amp } : {};
+   })(),
    sharedModels: sharedModelsFromMessage(message.sharedModels),
    codingRoute: message.codingRoute === true,
    shared: message.shared === true,
@@ -737,6 +760,7 @@ function createAgentConnections(deps = {}) {
 
  return {
   applyAgentIdentity,
+  ampRuntimeFromMessage,
   capabilitiesDriftNudges,
   capabilitiesShapeValid,
   closeTakenAgentDaemons,

@@ -1,5 +1,19 @@
 [
   {
+    "version": "amp-orb-runtime",
+    "date": "2026-07-28",
+    "title": "An Amp orb can live inside an Agensis conversation",
+    "summary": "Add the Amp Orb agent, connect it from a repository through agensis-agent, and talk to it like any other workspace agent. The connected machine uses its own signed-in Amp CLI to create a fresh orb for a new conversation. Later messages continue that exact Amp thread, and its output streams into the Agensis chat while it works. The completed reply includes a link to the Amp thread. Amp credentials stay on the connected machine, and if Amp is missing, signed out, out of credit, unable to access the project, or cannot start the orb, the conversation says what needs fixing instead of quietly running a different agent.",
+    "highlights": [
+      "Amp Orb is available in the agent template gallery and connects through the normal agensis-agent command",
+      "A new Agensis conversation starts a fresh Amp-managed orb; replies continue the same exact Amp thread",
+      "Progress, tool steps and answers stream into the Agensis conversation, with an Amp thread link at the end",
+      "Amp login and billing stay on the connected machine — Agensis never receives the account credential",
+      "Missing CLI, login, project access, credit, setup, timeout and cancellation failures are shown explicitly",
+      "An Amp failure never falls back to Claude, Codex or another configured coding command"
+    ]
+  },
+  {
     "version": "memory-pane",
     "date": "2026-07-27",
     "title": "The Memory file browser opens with both panes, and you can resize them",
@@ -289,14 +303,13 @@
     "version": "workspace-vault",
     "date": "2026-07-26",
     "title": "One vault for every key your workspace uses",
-    "summary": "Settings has a Vault tab, and it now shows every credential the workspace holds instead of only the loose ones you typed in yourself. Provider keys and orb signing secrets used to be stored in the same vault but hidden from the list, which meant a key like Box's could not be entered anywhere — there was nothing on screen to type it into. Each entry now appears grouped under the thing it belongs to: Box's API key under Box, an orb's signing secret under that orb's name. Everything is write-only. You can set a value, replace it, or delete it, and after that agensis will only ever tell you that it is set and when — no masked preview, no reveal button, because the server no longer reads a stored value back for any screen. Agents take their provider keys from the vault, so setting Box's key here is what makes the Sandbox Agent able to provision; if a key is missing, the agent now names the vault entry to add rather than an environment variable on a machine you may not have.",
+    "summary": "Settings has a Vault tab, and it now shows every credential the workspace holds instead of only the loose ones you typed in yourself. Provider keys used to be stored in the same vault but hidden from the list, which meant a key like Box's could not be entered anywhere — there was nothing on screen to type it into. Each entry now appears grouped under the provider it belongs to. Everything is write-only. You can set a value, replace it, or delete it, and after that agensis will only ever tell you that it is set and when — no masked preview, no reveal button, because the server no longer reads a stored value back for any screen. Agents take their provider keys from the vault, so setting Box's key here is what makes the Sandbox Agent able to provision; if a key is missing, the agent now names the vault entry to add rather than an environment variable on a machine you may not have.",
     "highlights": [
-      "Settings -> Vault lists every credential the workspace has, grouped by the provider or orb that owns it",
+      "Settings -> Vault lists every credential the workspace has, grouped by the provider that owns it",
       "Provider credentials can be entered for the first time — including the Box key the Sandbox Agent needs",
       "Write-only throughout: set, replace or delete, and nothing is ever shown back, not even masked",
       "Every value is encrypted at rest, and any older entry stored before that is re-encrypted automatically",
       "Owner and admin only, per workspace — a member of one workspace can never reach another's keys",
-      "An orb's signing secret is visible in the list but still rotated from that orb's own panel",
       "When a key is missing, an agent tells you which vault entry to add and stops instead of failing at the provider"
     ]
   },
@@ -434,21 +447,6 @@
       "One selection everywhere: pick an agent on a card or on a map node, and it is highlighted in both and opened on the right",
       "In a narrow window the details still take the full width, with a back arrow to return to the roster",
       "Your chosen view — grid, map, or both — is remembered per workspace"
-    ]
-  },
-  {
-    "version": "orbs",
-    "date": "2026-07-26",
-    "title": "Webhooks that actually wake your agent, and can prove who sent them",
-    "summary": "An agent webhook now behaves like a real event listener. Point GitHub or Stripe at it, paste in the signing secret, and deliveries are verified before anything runs, de-duplicated so a provider retry cannot run your agent twice, and answered immediately instead of holding the connection open for the whole reply. Give the webhook a standing instruction and the event payload is passed alongside it as clearly-marked untrusted data, rather than being handed to your agent as if you had typed it.",
-    "highlights": [
-      "Signature verification for GitHub and Stripe, plus a signed generic mode for anything else — a delivery that does not verify is refused, never run \"just in case\"",
-      "Retries are recognised and ignored: the same delivery arriving twice runs your agent once",
-      "Webhooks now genuinely wake the agent in its own runtime with its own tools, instead of a one-shot reply with none of them",
-      "Choose whether each event opens a new conversation or is appended to one ongoing thread",
-      "Give the webhook its own instruction, and narrow the payload to just the fields you care about",
-      "A per-webhook hourly limit, so a misbehaving repository cannot run your agent hundreds of times",
-      "A webhook with no signing secret is marked Unsigned, and will not run an agent that has elevated permissions until you add one"
     ]
   },
   {

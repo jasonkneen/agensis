@@ -35,4 +35,11 @@ describe('AGENT_TEMPLATES', () => {
     const handles = AGENT_TEMPLATES.map(t => t.handle);
     expect(new Set(handles).size).toBe(handles.length);
   });
+
+  it('defines Amp Orb as an explicit daemon runtime, never a generic fallback', () => {
+    const template = AGENT_TEMPLATES.find(t => t.id === 'amp-orb');
+    expect(template).toBeDefined();
+    expect(template!.runMode).toBe('daemon');
+    expect(template!.metadata).toEqual({ runtime: 'amp' });
+  });
 });

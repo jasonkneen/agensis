@@ -49,29 +49,6 @@ function mountMcpDoorsRoutes(app, deps = {}) {
   res.send(renderSkillMd({ baseUrl: skillBaseUrl(req) }));
  });
 
- // --- Orbs: the event-driven webhook trigger --------------------------------
- // (plans/021-event-driven-orbs.md)
- //
- // What this route used to do, and why all of it had to change:
- //
- //   1. It built the prompt as
- //      `req.body.prompt || .text || .message || JSON.stringify(req.body)` —
- //      the attacker-controlled payload WAS the entire user turn, delivered to an
- //      agent whose permission_mode may be 'yolo' (--no-sandbox --yolo).
- //   2. It called runAnthropicCompletion INLINE, so a daemon or sandbox agent
- //      never actually ran in its runtime: it got a one-shot built-in completion
- //      with no tools, no filesystem and no agent_jobs row. The orb never woke.
- //   3. It awaited that completion before responding, routinely blowing past
- //      GitHub's ~10s delivery timeout — so the provider retried, and with no
- //      deduplication each retry created another session and another billed run.
- //      The synchronous response shape was the retry-storm generator.
- //   4. Nothing was verified. The token was the only authenticator, so a URL
- //      leaked into a CI log was an unlimited agent-run button.
- //
- // Unauthenticated, so every gate below is load-bearing. The order is
- // cheap-before-expensive with one deliberate exception: the IP rate limiter runs
- // FIRST, ahead of the free header checks, because it is the only defence against
- // volume and a malformed flood is still load.
 }
 
 module.exports = { mountMcpDoorsRoutes };

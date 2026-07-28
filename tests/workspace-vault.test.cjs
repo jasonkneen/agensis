@@ -68,7 +68,6 @@ const EDITOR = 'user-editor';
 const OUTSIDER = 'user-outsider';
 
 const BOX_KEY = `${SANDBOX_VAULT_PREFIX}box:api_key`;
-const ORB_KEY = 'orb:5f3ab19c-1111-4111-8111-111111111111';
 const SECRET_VALUE = 'box_live_NeverShowThisAnywhere_9f2';
 
 // ---------------------------------------------------------------------------
@@ -76,7 +75,7 @@ const SECRET_VALUE = 'box_live_NeverShowThisAnywhere_9f2';
 // a test can assert on what was asked as well as what came back.
 // ---------------------------------------------------------------------------
 
-function makeVaultDb({ secrets = {}, roles = {}, owners = {}, agents = [], orbs = [] } = {}) {
+function makeVaultDb({ secrets = {}, roles = {}, owners = {}, agents = [] } = {}) {
   const rows = new Map(Object.entries(secrets).map(([composite, entry]) => {
     const at = composite.indexOf(':');
     const workspaceId = composite.slice(0, at);
@@ -159,9 +158,6 @@ function makeVaultDb({ secrets = {}, roles = {}, owners = {}, agents = [], orbs 
         rows.delete(`${params[0]}:${params[1]}`);
         return [];
       }
-      if (n.startsWith('select id, name from agent_webhooks')) {
-        return orbs.filter((orb) => orb.workspace_id === params[0]).map((orb) => ({ id: orb.id, name: orb.name }));
-      }
       if (n.startsWith('select metadata from workspace_agents')) {
         return agents.filter((agent) => agent.workspace_id === params[0]).map((agent) => ({ metadata: agent.metadata }));
       }
@@ -229,13 +225,11 @@ test('the vault list shows every namespaced entry, grouped, and no part of any v
     roles: ROLES,
     secrets: {
       [`${WS}:${BOX_KEY}`]: cipher,
-      [`${WS}:${ORB_KEY}`]: await __test.encryptVaultSecret('orb-signing-secret'),
       [`${WS}:STRIPE_TOKEN`]: await __test.encryptVaultSecret('sk_live_something'),
       [`${WS}:ANTHROPIC_API_KEY`]: await __test.encryptVaultSecret('sk-ant-workspace'),
       // Another workspace's row, in the same table. It must not appear.
       [`${OTHER_WS}:${BOX_KEY}`]: await __test.encryptVaultSecret('other-workspace-key'),
     },
-    orbs: [{ workspace_id: WS, id: ORB_KEY.slice('orb:'.length), name: 'GitHub pushes' }],
   });
   __test.setTestDb(db);
 
@@ -249,15 +243,11 @@ test('the vault list shows every namespaced entry, grouped, and no part of any v
     // Namespaced entries are VISIBLE — this is the whole point. They used to be
     // filtered out of this list, which is why a Box key could not be entered.
     assert.ok(byKey.has(BOX_KEY), 'the provider credential must be listed');
-    assert.ok(byKey.has(ORB_KEY), 'the orb signing secret must be listed');
 
     // ...and CLASSIFIED, so each reads as belonging to its owner.
     assert.equal(byKey.get(BOX_KEY).group, 'provider');
     assert.equal(byKey.get(BOX_KEY).ownerLabel, 'Box sandboxes');
     assert.equal(byKey.get(BOX_KEY).lane, 'provider');
-    assert.equal(byKey.get(ORB_KEY).group, 'orb');
-    assert.equal(byKey.get(ORB_KEY).ownerLabel, 'GitHub pushes', 'an orb entry is labelled with its orb');
-    assert.equal(byKey.get(ORB_KEY).lane, 'none', 'an orb secret has no vault write lane');
     assert.equal(byKey.get('STRIPE_TOKEN').group, 'shared');
     assert.equal(byKey.get('ANTHROPIC_API_KEY').group, 'managed');
 
@@ -332,26 +322,26 @@ test('a secret written through the vault cannot be read back through any vault r
 });
 
 test('the generic vault routes cannot address a namespaced entry', async () => {
+  const namespacedKey = 'retired-integration:signing-secret';
   const db = makeVaultDb({
     roles: ROLES,
-    secrets: { [`${WS}:${ORB_KEY}`]: await __test.encryptVaultSecret('orb-signing-secret') },
+    secrets: { [`${WS}:${namespacedKey}`]: await __test.encryptVaultSecret('signing-secret') },
   });
   __test.setTestDb(db);
 
   await withServer(async (baseUrl) => {
     const token = await __test.issueToken(OWNER, '1');
     for (const method of ['PUT', 'DELETE']) {
-      const res = await authed(baseUrl, token, `/backend/workspaces/${WS}/vault/${encodeURIComponent(ORB_KEY)}`, {
+      const res = await authed(baseUrl, token, `/backend/workspaces/${WS}/vault/${encodeURIComponent(namespacedKey)}`, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: method === 'PUT' ? JSON.stringify({ value: 'hijacked' }) : undefined,
       });
-      assert.equal(res.status, 400, `${method} on an orb key must be refused`);
+      assert.equal(res.status, 400, `${method} on a namespaced key must be refused`);
     }
     // DELETE used to have no charset check at all, so a manage-role user could
-    // destroy an orb's signing secret from the generic secrets list and every
-    // delivery would 503 with nothing to point at.
-    assert.ok(db.rows.has(`${WS}:${ORB_KEY}`), 'the orb secret survived');
+    // destroy an integration-owned secret from the generic secrets list.
+    assert.ok(db.rows.has(`${WS}:${namespacedKey}`), 'the namespaced secret survived');
     assert.ok(
       !db.calls.some((call) => call.n.startsWith('delete from workspace_secrets')),
       'the refusal happens before any delete is issued',
@@ -909,7 +899,7 @@ test('classifyVaultKey agrees with the namespaces the rest of the code uses', ()
     ['sandbox:box:api_key', { group: 'provider', lane: 'provider', provider: 'box', credential: 'api_key' }],
     ['sandbox:box:api_key:extra', { group: 'unknown', lane: 'none' }],
     ['sandbox:box', { group: 'unknown', lane: 'none' }],
-    ['orb:abc', { group: 'orb', lane: 'none' }],
+    ['legacy:abc', { group: 'unknown', lane: 'none' }],
     ['STRIPE_TOKEN', { group: 'shared', lane: 'shared' }],
   ];
   for (const [key, expected] of cases) {

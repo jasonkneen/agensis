@@ -3,7 +3,7 @@
 // server/thread-inbox.cjs — the sidebar's Threads list.
 // ----------------------------------------------------------------------------
 // PURE. No DB handle, no express, no network — the same rule as
-// server/orbs.cjs and server/sandbox-skills.cjs. It builds SQL text and maps
+// server/sandbox-skills.cjs. It builds SQL text and maps
 // rows; the route supplies the connection. That is what makes the interesting
 // half (the follow rule, the bounds, the wire shape) unit-testable.
 //

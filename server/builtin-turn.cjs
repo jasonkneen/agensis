@@ -318,6 +318,52 @@ function createBuiltinTurn(deps = {}) {
   return text.replace(/\s+/g, ' ').slice(0, 200);
  }
 
+ const AMP_THREAD_ID_RE = /^T-[A-Za-z0-9-]{20,100}$/;
+
+ function isAmpRuntimeAgent(agent) {
+  return String(agent?.metadata?.runtime || '').trim().toLowerCase() === 'amp';
+ }
+
+ function connectionSupportsAmpRuntime(connection) {
+  return connection?.capabilities?.runtimes?.amp?.id === 'amp';
+ }
+
+ function validAmpThreadId(value) {
+  const threadId = String(value || '').trim();
+  return AMP_THREAD_ID_RE.test(threadId) ? threadId : '';
+ }
+
+ // An Amp thread belongs to one Agensis conversation lane, not merely to the
+ // agent. The same Amp agent can be working in several channels and threads at
+ // once; reusing its newest thread globally would cross-contaminate all of them.
+ async function loadAmpThreadBinding({ workspaceId, agentId, sessionId, threadParentId = null }) {
+  const rows = await getDb().unsafe(
+   `select metadata from agent_jobs
+      where workspace_id = $1
+        and agent_id = $2
+        and session_id = $3
+        and (status = 'done' or (status = 'error' and coalesce(metadata->>'ampThreadId', '') <> ''))
+        and metadata->>'runtime' = 'amp'
+        and coalesce(metadata->>'ampLaneThreadParentId', metadata->>'threadParentId', '') = $4
+      order by finished_at desc nulls last, created_at desc
+      limit 1`,
+   [workspaceId, agentId, sessionId, threadParentId ? String(threadParentId) : ''],
+  );
+  const metadata = rows[0]?.metadata && typeof rows[0].metadata === 'object'
+   ? rows[0].metadata
+   : {};
+  const ampThreadId = validAmpThreadId(metadata.ampThreadId);
+  if (rows.length > 0 && !ampThreadId) {
+   // A lane that already acquired an Amp binding but lost/corrupted it is not
+   // a new lane. Mark continuation as required so the daemon refuses rather
+   // than silently creating a replacement orb with unrelated context.
+   return { id: 'amp', continuationRequired: true };
+  }
+  return ampThreadId
+   ? { id: 'amp', continuationRequired: true, threadId: ampThreadId, threadUrl: `https://ampcode.com/threads/${ampThreadId}` }
+   : { id: 'amp' };
+ }
+
  async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [] }) {
   if (!isAgentEnabled(agent)) return { ok: false, pending: false };
   const handle = slugHandle(agent.handle || agent.name);
@@ -761,6 +807,29 @@ function createBuiltinTurn(deps = {}) {
    return { ok: false, pending: false };
   }
 
+  // Runtime selection is a cross-version protocol boundary. An older daemon
+  // does not understand job.runtime and would run this prompt through its normal
+  // coding CLI. Refuse before creating or dispatching a job unless this exact
+  // live connection has advertised Amp support; the daemon's own preflight then
+  // owns the more specific installed/auth/project/setup failure.
+  if (isAmpRuntimeAgent(agent) && !connectionSupportsAmpRuntime(connection)) {
+   const assistantRows = await getDb().unsafe(
+    `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+        values ($1, 'assistant', $2, $3, 'agent', $4, $5, $6)
+        returning *`,
+    [
+     sessionId,
+     `@${handle} cannot start an Amp orb because the connected agensis-agent has not advertised Amp support yet. Wait for capabilities to sync, or update agensis-agent and reconnect.`,
+     workThreadParentId,
+     String(agent.id),
+     agent.name,
+     broadcastToChannel,
+    ],
+   );
+   notifyDbSubscribers('messages', 'INSERT', assistantRows);
+   return { ok: false, pending: false };
+  }
+
   const responseMessageId = crypto.randomUUID();
   const pendingMessageRows = await getDb().unsafe(
    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
@@ -771,6 +840,9 @@ function createBuiltinTurn(deps = {}) {
   notifyDbSubscribers('messages', 'INSERT', pendingMessageRows);
 
   const daemonPrompt = buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote, sandboxSkillNote);
+  const ampRuntime = isAmpRuntimeAgent(agent)
+   ? await loadAmpThreadBinding({ workspaceId, agentId: agent.id, sessionId, threadParentId: workThreadParentId })
+   : null;
   const jobRows = await insertActiveAgentJob(
    `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, created_by, prompt, status, started_at, metadata)
       values ($1, $2, $3, $4, $5, $6, 'running', now(), $7::jsonb)
@@ -787,7 +859,19 @@ function createBuiltinTurn(deps = {}) {
     // `metadata || ...` APPENDED instead of merging and metadata became an array;
     // metadata->>'responseMessageId' then returned null and finalizeStuckJob could
     // never clear the "Thinking …" placeholder, hanging the thread forever.
-    { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, responseMessageId, mode: 'daemon' },
+    {
+     handle,
+     threadParentId: threadParentId || null,
+     workThreadParentId,
+     broadcastToChannel,
+     responseMessageId,
+     mode: 'daemon',
+     ...(ampRuntime ? {
+      runtime: 'amp',
+      ampLaneThreadParentId: workThreadParentId || null,
+      ...(ampRuntime.threadId ? { ampThreadId: ampRuntime.threadId, ampThreadUrl: ampRuntime.threadUrl } : {}),
+     } : {}),
+    },
    ],
    responseMessageId,
   );
@@ -809,6 +893,7 @@ function createBuiltinTurn(deps = {}) {
     permission_mode: agentPayload.permission_mode,
     permissionFlags: agentPayload.permissionFlags,
     agent: agentPayload,
+    ...(ampRuntime ? { runtime: ampRuntime } : {}),
     responseMessageId,
    },
   });
@@ -995,7 +1080,10 @@ function createBuiltinTurn(deps = {}) {
  return {
   builtinStepDetail,
   builtinToolIdentity,
+  connectionSupportsAmpRuntime,
   getBuiltinToolset,
+  isAmpRuntimeAgent,
+  loadAmpThreadBinding,
   mcpToolDeps,
   runAgentTurn,
   runAnthropicCompletion,
@@ -1003,6 +1091,7 @@ function createBuiltinTurn(deps = {}) {
   streamAnthropicTurn,
   streamFlushDue,
   toolResultText,
+  validAmpThreadId,
   BUILTIN_FLUSH_INTERVAL_MS,
   BUILTIN_TOOL_LOOP_MAX_CALLS,
   BUILTIN_TOOL_LOOP_MAX_STEPS,

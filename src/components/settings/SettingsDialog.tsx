@@ -1393,8 +1393,8 @@ function SecretsPanel({ workspaceId }: { workspaceId: string | null }) {
 // The vault surface.
 //
 // Every credential the workspace holds, in one place, grouped so a namespaced
-// entry reads as belonging to its provider or its orb rather than sitting loose in
-// a flat list. Each entry is WRITE-ONLY: set it, replace it, delete it. There is
+// entry reads as belonging to its provider rather than sitting loose in a flat
+// list. Each entry is WRITE-ONLY: set it, replace it, delete it. There is
 // no preview and no reveal, because the server has nothing to reveal — the list
 // route neither decrypts nor selects the secret columns.
 // ---------------------------------------------------------------------------
@@ -1488,9 +1488,8 @@ function VaultEntryRow({
   );
 }
 
-// Exported for tests/unit/vaultPanelRender.test.ts: whether an orb row offers a
-// write it cannot perform, and whether a value ever reaches the DOM, are claims
-// only a mount can settle.
+// Exported for tests/unit/vaultPanelRender.test.ts: whether a value ever reaches
+// the DOM is a claim only a mount can settle.
 export function VaultSections({ workspaceId }: { workspaceId: string | null }) {
   const {
     sections,
@@ -1541,7 +1540,6 @@ export function VaultSections({ workspaceId }: { workspaceId: string | null }) {
           <div className="mb-1 text-sm font-semibold">{section.title}</div>
           <FieldDescription className="mb-2">
             {section.group === 'provider' && 'Credentials your agents spend through agensis. An agent never receives the value — it names an operation and the server attaches the key.'}
-            {section.group === 'orb' && 'Owned by their orbs. Rotate one from that orb\'s own panel, where you can also re-register it with the provider.'}
             {section.group === 'shared' && 'Loose secrets for this workspace.'}
             {section.group === 'unknown' && 'Entries whose key does not match any known namespace.'}
           </FieldDescription>
@@ -1561,7 +1559,7 @@ export function VaultSections({ workspaceId }: { workspaceId: string | null }) {
                     updatedAt={entry.updated_at}
                     note={[
                       entry.description,
-                      entry.lane === 'none' ? 'Managed by its orb.' : '',
+                      entry.lane === 'none' ? 'This namespaced entry is no longer managed by an installed integration.' : '',
                       entry.env ? `Falls back to ${entry.env} when the server runs locally.` : '',
                       entry.legacy_plaintext ? 'Stored before encryption at rest — replace it to re-encrypt.' : '',
                     ].filter(Boolean).join(' ') || undefined}

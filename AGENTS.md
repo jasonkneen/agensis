@@ -115,14 +115,13 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
     `providerCallRateLimiter` at 20/min on top of `mcpRateLimiter`.
   No schema change — `activity_events` already existed in all three places.
 - **The workspace vault** — `workspace_secrets` is the home of every credential a
-  workspace holds, in four namespaces: the platform-managed keys
+  workspace holds, in three namespaces: the platform-managed keys
   (`MANAGED_SECRET_KEYS`), `sandbox:<provider>:<credential>` for a provider skill's
-  API key, `orb:<webhook id>` for an orb's signing secret, and anything else as a
-  user-defined shared secret. `classifyVaultKey` in `shared/backend-core.cjs` is the
-  single classification both backends use; it also decides the **write lane**
-  (`managed` → `/settings/secrets`, `provider` → `/sandbox-credentials`, `shared` →
-  `/vault/:key`, `orb` → none, rotated from the orb's own panel). Surfaced in
-  Settings → Vault, grouped by owner.
+  API key, and anything else as a user-defined shared secret. `classifyVaultKey`
+  in `shared/backend-core.cjs` is the single classification both backends use; it
+  also decides the **write lane** (`managed` → `/settings/secrets`, `provider` →
+  `/sandbox-credentials`, `shared` → `/vault/:key`). Surfaced in Settings → Vault,
+  grouped by owner.
   - **WRITE-ONLY.** No route returns a value, in full or masked. The list route
     neither decrypts nor selects the secret columns — `VAULT_META_SELECT` asks
     Postgres for `configured` and `legacy_plaintext` as booleans, so there is

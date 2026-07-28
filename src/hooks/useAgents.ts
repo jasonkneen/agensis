@@ -21,6 +21,7 @@ export interface CreateAgentInput {
   instructions?: string;
   tools?: string[];
   skills?: string[];
+  metadata?: Record<string, unknown>;
   handle?: string;
   model?: string;
   run_mode?: 'builtin' | 'daemon' | 'sandbox';
@@ -115,6 +116,7 @@ export function useAgents(workspaceId: string | null, userId?: string, seed?: Wo
       instructions: input.instructions ?? '',
       tools: input.tools ?? [],
       skills: input.skills ?? [],
+      metadata: input.metadata ?? {},
       handle: input.handle ?? agentHandle(input.name),
       model: input.model ?? 'auto',
       run_mode: input.run_mode ?? 'builtin',

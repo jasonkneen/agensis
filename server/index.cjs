@@ -65,19 +65,6 @@ const {
 const { mountHuddleRoutes, ensureHuddlesSchema } = require('./huddles.cjs');
 const { channelIntentNote } = require('../shared/channelIntent.cjs');
 const {
- ORB_MAX_BODY_BYTES,
- ORB_MAX_PAYLOAD_FIELDS,
- ORB_PROVIDERS,
- ORB_ROUTING_MODES,
- composeOrbMessage,
- normalizeOrbProvider,
- normalizeOrbRateLimit,
- normalizeOrbRouting,
- orbDispatchRefusal,
- parseOrbBody,
- verifyOrbDelivery,
-} = require('./orbs.cjs');
-const {
  THREAD_INBOX_DEFAULT_LIMIT,
  buildThreadInboxSql,
  toThreadInboxItem,
@@ -127,7 +114,6 @@ const { mountInboxRoutes } = require('./inbox-routes.cjs');
 const { mountLinkPreviewsRoutes } = require('./link-previews-routes.cjs');
 const { mountAgentsRoutes } = require('./agents-routes.cjs');
 const { mountJoinPagesRoutes } = require('./join-pages-routes.cjs');
-const { mountOrbWebhooksRoutes } = require('./orb-webhooks-routes.cjs');
 const { mountTtsRoutes } = require('./tts-routes.cjs');
 const { mountMcpDoorsRoutes } = require('./mcp-doors-routes.cjs');
 const { mountConnectionsRoutes } = require('./connections-routes.cjs');
@@ -847,61 +833,6 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id);
     ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
-
-    -- Orbs (plans/021): an agent_webhooks row becomes an "orb" — an agent woken
-    -- by a verified external event — once these are set. Defaults reproduce the
-    -- pre-orb behaviour EXACTLY (generic/unsigned, a fresh session per delivery)
-    -- so no existing row changes meaning. The signing secret is NOT stored here:
-    -- this table is in the backendClient allowlists and the frontend does a
-    -- literal select('*'), so any column added here ships to the browser. It
-    -- lives in the workspace vault under the key orb:<webhook id>.
-    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS provider text NOT NULL DEFAULT 'generic';
-    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS prompt text NOT NULL DEFAULT '';
-    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS payload_fields jsonb NOT NULL DEFAULT '[]'::jsonb;
-    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS routing text NOT NULL DEFAULT 'new';
-    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS rate_limit_per_hour integer NOT NULL DEFAULT 60;
-    -- ADVISORY UI hint only: "is a signing secret configured for this orb".
-    -- Safe to ship to the browser (it is a boolean, not key material) and it
-    -- survives a reload, which is why it is a column rather than a derived
-    -- response field. The trigger route NEVER consults it — it reads the vault
-    -- entry itself, so a drifted flag can weaken nothing.
-    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS has_signing_secret boolean NOT NULL DEFAULT false;
-    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL;
-    ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS thread_root_message_id uuid REFERENCES messages(id) ON DELETE SET NULL;
-
-    -- Inbound delivery ledger: the deduplication gate AND the delivery log.
-    --
-    -- Dedupe is DB-level on purpose. claimTaskDispatch is a process-local Map
-    -- with a 15s window — right for swallowing one human's double-click, useless
-    -- against a provider retry that lands minutes later, after a Fly restart, or
-    -- on a second machine. This mirrors flow_webhook_deliveries' idempotency
-    -- instead (UNIQUE plus an on-conflict-do-nothing insert), which is the same
-    -- problem solved in the outbound direction.
-    --
-    -- delivery_key is NULL when the provider supplies no delivery id, and the
-    -- unique index is PARTIAL so those rows never claim the idempotency slot:
-    -- a hard uniqueness constraint on body_hash would permanently swallow two
-    -- genuinely distinct byte-identical events. Rejected/throttled rows are also
-    -- written with a NULL key, so a delivery refused now is still accepted when
-    -- the provider retries it legitimately later.
-    CREATE TABLE IF NOT EXISTS orb_deliveries (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      webhook_id uuid NOT NULL REFERENCES agent_webhooks(id) ON DELETE CASCADE,
-      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      delivery_key text,
-      body_hash text NOT NULL DEFAULT '',
-      event_type text NOT NULL DEFAULT '',
-      status text NOT NULL DEFAULT 'accepted'
-        CHECK (status IN ('accepted', 'duplicate', 'rejected', 'throttled', 'failed')),
-      session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL,
-      message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
-      detail text NOT NULL DEFAULT '',
-      created_at timestamptz DEFAULT now()
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_orb_deliveries_key
-      ON orb_deliveries(webhook_id, delivery_key) WHERE delivery_key IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS idx_orb_deliveries_webhook
-      ON orb_deliveries(webhook_id, created_at DESC);
 
     -- Link preview (unfurl) cache. Keyed by a hash of the NORMALIZED url and
     -- deliberately NOT workspace-scoped: the whole point is one outbound fetch
@@ -2260,109 +2191,6 @@ function inviteTokenLookupParams(token) {
  const hashed = hashAgentToken(token);
  const legacy = /^[a-f0-9]{64}$/i.test(String(token || '')) ? hashed : token;
  return [hashed, legacy];
-}
-
-// An orb's signing secret lives in the workspace vault, NOT on agent_webhooks:
-// that table is in the backendClient allowlists and useAgentWebhooks does a
-// literal select('*'), so any column added to it ships to the browser (this is
-// why gateway_configs stays out of the allowlists entirely). The colon makes the
-// namespace uncollidable with user-defined vault keys, which the vault route
-// restricts to [A-Za-z0-9_.-] — so a user can neither read nor overwrite an orb
-// secret through /backend/workspaces/:id/vault/:key.
-function orbSecretKey(webhookId) {
- return `orb:${String(webhookId || '')}`;
-}
-
-// Validate operator-supplied orb configuration.
-//
-// `fallback` is the existing row on an update, so an OMITTED field keeps its
-// current value instead of silently resetting to a default.
-//
-// Unknown provider/routing values are REJECTED rather than normalized. The pure
-// helpers in server/orbs.cjs coerce an unrecognised provider to 'generic' —
-// correct when reading a row back (fail soft on data), wrong at the API boundary,
-// because an operator who types "gitlab" would get 'generic', which means
-// UNSIGNED, and would never be told.
-//
-// payload_fields is bound as a JS ARRAY by the caller, never JSON.stringify'd:
-// on this server's porsager driver a stringified $n::jsonb bind lands as a jsonb
-// string scalar (see normalizeJsonParam). The Netlify copy stringifies; the two
-// are deliberately opposite.
-function normalizeOrbConfigInput(body = {}, fallback = null) {
- let provider = normalizeOrbProvider(fallback?.provider);
- if (body.provider !== undefined) {
-  const requested = String(body.provider || '').trim().toLowerCase();
-  if (!ORB_PROVIDERS.includes(requested)) {
-   throw badRequest(`Unknown orb provider "${requested}". Supported: ${ORB_PROVIDERS.join(', ')}`);
-  }
-  provider = requested;
- }
-
- let routing = normalizeOrbRouting(fallback?.routing);
- if (body.routing !== undefined) {
-  const requested = String(body.routing || '').trim().toLowerCase();
-  if (!ORB_ROUTING_MODES.includes(requested)) {
-   throw badRequest(`Unknown orb routing "${requested}". Supported: ${ORB_ROUTING_MODES.join(', ')}`);
-  }
-  routing = requested;
- }
-
- let prompt = String(fallback?.prompt || '');
- if (body.prompt !== undefined) {
-  if (typeof body.prompt !== 'string') throw badRequest('prompt must be a string');
-  prompt = body.prompt.slice(0, 4000);
- }
-
- let payloadFields = parseJsonArray(fallback?.payload_fields);
- if (body.payload_fields !== undefined) {
-  const raw = Array.isArray(body.payload_fields)
-   ? body.payload_fields
-   : typeof body.payload_fields === 'string'
-    ? body.payload_fields.split(/[\n,]/)
-    : null;
-  if (!raw) throw badRequest('payload_fields must be an array of dot-paths, or a comma/newline separated string');
-  payloadFields = raw
-   .map((value) => String(value == null ? '' : value).trim())
-   .filter(Boolean)
-   .slice(0, ORB_MAX_PAYLOAD_FIELDS);
-  for (const path of payloadFields) {
-   if (!/^[A-Za-z0-9_$][A-Za-z0-9_$.-]{0,199}$/.test(path)) {
-    throw badRequest(`"${path.slice(0, 60)}" is not a valid payload field path`);
-   }
-  }
- }
-
- const rateLimitPerHour = body.rate_limit_per_hour === undefined
-  ? normalizeOrbRateLimit(fallback?.rate_limit_per_hour)
-  : normalizeOrbRateLimit(body.rate_limit_per_hour);
-
- return { provider, routing, prompt, payloadFields, rateLimitPerHour };
-}
-
-// Record a REFUSED orb delivery so the operator can see why nothing ran.
-//
-// Two deliberate properties. (1) delivery_key is NULL, so a refusal never claims
-// the idempotency slot — a delivery throttled or unverifiable now must still be
-// accepted when the provider retries it legitimately, which it would not be if
-// the refusal had consumed the unique (webhook_id, delivery_key) row.
-// (2) Coalesced to one row per orb per status per minute, so a flood of forged
-// requests cannot turn a read-only rejection into write amplification.
-async function logOrbRejection({ orb, status, bodyHash = '', eventType = '', detail = '' }) {
- try {
-  const rows = await getDb().unsafe(
-   `insert into orb_deliveries (webhook_id, workspace_id, delivery_key, body_hash, event_type, status, detail)
-      select $1, $2, null, $3, $4, $5, $6
-       where not exists (
-         select 1 from orb_deliveries
-          where webhook_id = $1 and status = $5 and created_at > now() - interval '60 seconds'
-       )
-      returning *`,
-   [orb.id, orb.workspace_id, bodyHash, eventType, status, String(detail || '').slice(0, 300)],
-  );
-  if (rows[0]) notifyDbSubscribers('orb_deliveries', 'INSERT', rows);
- } catch (error) {
-  console.error('orb rejection log failed', error?.message || error);
- }
 }
 
 function createAgentConnectToken() {
@@ -4726,9 +4554,9 @@ async function callProviderOperation({ workspaceId, agentId, args = {} } = {}) {
   truncated = read.truncated;
  }
 
- // 7. Everything the provider said is UNTRUSTED and arrives fenced, exactly as an
- //    orb payload does — a box name, a cloned repo's README echoed into a build
- //    log, or an error string are all attacker-influenced text. `knownSecrets`
+ // 7. Everything the provider said is UNTRUSTED and arrives fenced — a box name,
+ //    a cloned repo's README echoed into a build log, or an error string are all
+ //    attacker-influenced text. `knownSecrets`
  //    means a provider echoing the Authorization header it received cannot put the
  //    key back into the agent's context.
  const fenced = fenceProviderOutput({
@@ -6699,6 +6527,7 @@ const {
  runToolUseLoop, toolResultText, mcpToolDeps, getBuiltinToolset,
  builtinToolIdentity, builtinStepDetail, runAgentTurn, streamAnthropicTurn,
  runAnthropicCompletion, streamFlushDue,
+ connectionSupportsAmpRuntime, isAmpRuntimeAgent, loadAmpThreadBinding, validAmpThreadId,
  BUILTIN_FLUSH_INTERVAL_MS, BUILTIN_TOOL_LOOP_MAX_CALLS,
  BUILTIN_TOOL_LOOP_MAX_STEPS, BUILTIN_TOOL_NOTE, BUILTIN_TOOL_RESULT_MAX_CHARS,
 } = builtinTurn;
@@ -6731,7 +6560,7 @@ const {
  hasActiveBurstJob, finalizeStuckJob, failConnectionJobs, reapStuckAgentJobs,
  clearStrandedPlaceholders, handleAgentJobResult, handleAgentJobDelta,
  handleAgentJobStep, handleAgentJobSegment, agentStepParts, agentStepContent,
- finalizeAgentJobResult, claimMcpJob, submitMcpJobResult, reapStuckMcpJobs,
+ finalizeAgentJobResult, ampResultMetadata, validateAmpJobResult, claimMcpJob, submitMcpJobResult, reapStuckMcpJobs,
  dispatchFarmAgentJob, getFarmAgentJob, cancelFarmAgentJob,
 } = agentJobs;
 
@@ -6778,7 +6607,7 @@ const {
  markAgentConnectionOffline, isConnectionSocketLive,
  isConnectionSocketOpen, updateAgentHeartbeat, handleAgentMemorySync,
  handleAgentSkillSync, handleAgentCapabilitiesSync, capabilitiesShapeValid,
- capabilitiesDriftNudges, refreshConnectedAgentConfigs, touchMcpPresence,
+ capabilitiesDriftNudges, ampRuntimeFromMessage, refreshConnectedAgentConfigs, touchMcpPresence,
  hasMcpPresence, pruneOfflineConnections, reconcileAgentConnectionsAtStartup,
  applyAgentIdentity, repairCorruptedAgentIdentities,
  AGENT_DISCONNECT_CLOSE_MESSAGES, AGENT_IDENTITY_SELECT, connectedAgents,
@@ -7004,7 +6833,10 @@ function createApp() {
   ...coreDeps(),
   isWithinAllowedProjectRoot, listProjectFiles, workspaceProjectFileSources,
  });
- mountAgentWebhooksRoutes(app, { ...coreDeps(), DB_TABLE_ACCESS, broadcastGlobal, hashAgentToken, inviteTokenLookupParams, normalizeOrbConfigInput, orbSecretKey, setWorkspaceSecretValue, verifyNetlifyDeploySignature, webhookRateLimiter });
+ mountAgentWebhooksRoutes(app, {
+  ...coreDeps(), broadcastGlobal, continueConversation, hashAgentToken,
+  inviteTokenLookupParams, verifyNetlifyDeploySignature, webhookRateLimiter,
+ });
 
  mountWorkspacesRoutes(app, {
   ...coreDeps(),
@@ -7064,8 +6896,7 @@ function createApp() {
   serverVersion: '1.0.0',
  });
 
- mountMcpDoorsRoutes(app, { ...coreDeps(), mcpHandler, normalizeBaseUrl, renderSkillMd, requestBaseUrl, runAnthropicCompletion, skillManifest, skillRateLimiter });
- mountOrbWebhooksRoutes(app, { ...coreDeps(), ORB_MAX_BODY_BYTES, claimTaskDispatch, composeOrbMessage, continueConversation, findOrCreateDirectSession, getWorkspaceSecretValue, inviteTokenLookupParams, logOrbRejection, normalizeAgentPermissionMode, normalizeOrbProvider, normalizeOrbRateLimit, normalizeOrbRouting, orbDispatchRefusal, orbSecretKey, parseOrbBody, postTaskSubthreadMention, verifyOrbDelivery, webhookRateLimiter });
+ mountMcpDoorsRoutes(app, { ...coreDeps(), mcpHandler, normalizeBaseUrl, renderSkillMd, requestBaseUrl, skillManifest, skillRateLimiter });
 
  mountAuthRoutes(app, {
   ...coreDeps(),
@@ -7644,6 +7475,10 @@ module.exports = {
   boundAgentContextMessages,
   agentRuntimePayload,
   resolveRunTarget,
+  connectionSupportsAmpRuntime,
+  isAmpRuntimeAgent,
+  loadAmpThreadBinding,
+  validAmpThreadId,
   taskStatusOnDispatch,
   resolveDispatchThreadParent,
   shouldMirrorAgentMessage,
@@ -7662,6 +7497,7 @@ module.exports = {
   createTtlPromiseCache,
   hasActiveBurstJob,
   capabilitiesShapeValid,
+  ampRuntimeFromMessage,
   capabilitiesDriftNudges,
   reachFromMessage,
   reachIsDirect,
@@ -7682,6 +7518,8 @@ module.exports = {
   submitMcpJobResult,
   reapStuckMcpJobs,
   finalizeAgentJobResult,
+  ampResultMetadata,
+  validateAmpJobResult,
   dispatchFarmAgentJob,
   disableFarmIntegrationAgents,
   getFarmAgentJob,

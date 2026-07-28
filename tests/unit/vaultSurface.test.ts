@@ -7,7 +7,7 @@ import { __vaultTest, type VaultEntry } from '../../src/hooks/useWorkspaceVault'
 //
 // The server classifies each entry (group, owner, write lane) and the browser
 // groups them for display. Both halves are decisions, not plumbing: getting the
-// grouping wrong is how an orb's signing secret ends up looking like a loose
+// grouping wrong is how a provider credential ends up looking like a loose
 // deletable row, and getting the lane wrong is how the UI offers a write through
 // a route that cannot address the key.
 //
@@ -42,14 +42,6 @@ describe('vault key classification', () => {
     expect(box.ownerLabel).toBe('Box');
     expect(box.label).toBe('API key');
     expect(box.lane).toBe('provider');
-
-    const orb = entry('orb:5f3ab19c-1111-4111-8111-111111111111');
-    expect(orb.group).toBe('orb');
-    expect(orb.label).toBe('Signing secret');
-    // No write lane: rotation belongs to the orb's own panel, where the operator
-    // can also re-register the secret with the provider.
-    expect(orb.lane).toBe('none');
-    expect(orb.ownerLabel).toBe('Orb 5f3ab19c');
   });
 
   it('keeps a user key and a namespaced key in separate address spaces', () => {
@@ -57,7 +49,7 @@ describe('vault key classification', () => {
     // why a user secret can never collide with (or overwrite) a namespaced one.
     expect(VAULT_KEY_RE.test('STRIPE_TOKEN')).toBe(true);
     expect(VAULT_KEY_RE.test('sandbox:box:api_key')).toBe(false);
-    expect(VAULT_KEY_RE.test('orb:abc')).toBe(false);
+    expect(VAULT_KEY_RE.test('legacy:abc')).toBe(false);
     expect(VAULT_KEY_RE.test('a'.repeat(129))).toBe(false);
   });
 
@@ -86,11 +78,10 @@ describe('vault grouping for display', () => {
       entry('STRIPE_TOKEN'),
       entry('sandbox:box:api_key'),
       entry('sandbox:box:org_token'),
-      entry('orb:5f3ab19c-1111-4111-8111-111111111111'),
       entry('ANTHROPIC_API_KEY'),
     ]);
 
-    expect(sections.map(section => section.group)).toEqual(['managed', 'provider', 'orb', 'shared']);
+    expect(sections.map(section => section.group)).toEqual(['managed', 'provider', 'shared']);
 
     const provider = sections.find(section => section.group === 'provider')!;
     // Both Box credentials sit under ONE owner heading rather than as two loose rows.

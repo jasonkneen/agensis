@@ -91,10 +91,10 @@ CREATE TRIGGER trg_workspaces_reject_parent_cycle
   WHEN (NEW.parent_id IS NOT NULL)
   EXECUTE FUNCTION workspaces_reject_parent_cycle();
 
--- THE WORKSPACE VAULT. One table, four namespaces: a platform-managed key
+-- THE WORKSPACE VAULT. One table, three groups: a platform-managed key
 -- (ANTHROPIC_API_KEY), `sandbox:<provider>:<credential>` for a provider skill's
--- API key, `orb:<webhook id>` for an orb's signing secret, and anything else as a
--- user-defined shared secret. Classification lives in shared/backend-core.cjs
+-- API key, and anything else as a user-defined shared secret. Classification
+-- lives in shared/backend-core.cjs
 -- (classifyVaultKey) so both backends agree on what an entry is.
 --
 -- Deliberately NOT in the backendClient allowlists (ALLOWED_TABLES): the only
@@ -675,13 +675,6 @@ CREATE INDEX IF NOT EXISTS idx_memory_file_comments_parent_id ON memory_file_com
 -- plaintext is only ever returned once, at creation. Legacy rows may still hold
 -- plaintext; the trigger route's dual-path lookup (inviteTokenLookupParams)
 -- matches either during the transition. No column/type change needed.
--- Orbs (plans/021): the provider/prompt/payload_fields/routing/rate_limit and
--- session/thread anchor columns turn a plain webhook into an "orb" — an agent
--- woken by a verified external event. Defaults reproduce the pre-orb behaviour
--- exactly (generic, unsigned, a fresh session per delivery). The signing secret
--- is deliberately NOT a column here: this table is in the backendClient
--- allowlists and the frontend does a literal select('*'), so anything stored
--- here reaches the browser. It lives in the workspace vault as `orb:<id>`.
 CREATE TABLE IF NOT EXISTS agent_webhooks (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -691,50 +684,12 @@ CREATE TABLE IF NOT EXISTS agent_webhooks (
   enabled boolean NOT NULL DEFAULT true,
   last_triggered_at timestamptz,
   version integer NOT NULL DEFAULT 1,
-  provider text NOT NULL DEFAULT 'generic',
-  prompt text NOT NULL DEFAULT '',
-  payload_fields jsonb NOT NULL DEFAULT '[]'::jsonb,
-  routing text NOT NULL DEFAULT 'new',
-  rate_limit_per_hour integer NOT NULL DEFAULT 60,
-  -- Advisory UI hint ("is a signing secret configured"), never consulted by the
-  -- trigger route, which reads the vault entry itself.
-  has_signing_secret boolean NOT NULL DEFAULT false,
-  session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL,
-  thread_root_message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id);
-
--- Inbound delivery ledger for orbs: the deduplication gate AND the delivery log.
--- Dedupe is DB-level because a provider retry can land after a Fly restart or on
--- another machine, which the process-local claimTaskDispatch map cannot see; this
--- mirrors flow_webhook_deliveries' `on conflict do nothing` idempotency in the
--- inbound direction. The unique index is PARTIAL so that rows with no
--- provider-supplied delivery id (delivery_key IS NULL — including every
--- rejected/throttled row) never claim the idempotency slot and never block a
--- legitimate later retry.
-CREATE TABLE IF NOT EXISTS orb_deliveries (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  webhook_id uuid NOT NULL REFERENCES agent_webhooks(id) ON DELETE CASCADE,
-  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  delivery_key text,
-  body_hash text NOT NULL DEFAULT '',
-  event_type text NOT NULL DEFAULT '',
-  status text NOT NULL DEFAULT 'accepted'
-    CHECK (status IN ('accepted', 'duplicate', 'rejected', 'throttled', 'failed')),
-  session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL,
-  message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
-  detail text NOT NULL DEFAULT '',
-  created_at timestamptz DEFAULT now()
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_orb_deliveries_key
-  ON orb_deliveries(webhook_id, delivery_key) WHERE delivery_key IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_orb_deliveries_webhook
-  ON orb_deliveries(webhook_id, created_at DESC);
 
 -- F6 (2026-07 review): agent_registrations existed ONLY in the runtime DDL —
 -- a fresh migrate DB never got it, breaking MCP register_agent/approval flows.

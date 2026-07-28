@@ -9,18 +9,18 @@ import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
 // `configured` or it is not, plus when it was last set.
 //
 // Entries are CLASSIFIED, not flat. `group` says what kind of credential it is and
-// `lane` says which route may write it, so a namespaced entry (`sandbox:box:api_key`,
-// `orb:<id>`) renders under the thing that owns it instead of loose in a list.
-export type VaultGroup = 'managed' | 'provider' | 'orb' | 'shared' | 'unknown';
+// `lane` says which route may write it, so a provider entry
+// (`sandbox:box:api_key`) renders under the thing that owns it.
+export type VaultGroup = 'managed' | 'provider' | 'shared' | 'unknown';
 export type VaultLane = 'managed' | 'provider' | 'shared' | 'none';
 
 export interface VaultEntry {
   key: string;
   group: VaultGroup;
   lane: VaultLane;
-  /** The provider slug or orb id this entry belongs to; '' for a loose secret. */
+  /** The provider slug this entry belongs to; '' for a loose secret. */
   owner: string;
-  /** Display name for that owner — a provider's name, an orb's name. */
+  /** Display name for that owner — normally a provider's name. */
   ownerLabel: string;
   /** Display name for the entry itself ('API key', 'Signing secret'). */
   label: string;
@@ -46,12 +46,11 @@ export interface VaultSection {
 const SECTION_TITLES: Record<VaultGroup, string> = {
   managed: 'Platform keys',
   provider: 'Provider credentials',
-  orb: 'Orb signing secrets',
   shared: 'Shared secrets',
   unknown: 'Unrecognised entries',
 };
 
-const SECTION_ORDER: VaultGroup[] = ['managed', 'provider', 'orb', 'shared', 'unknown'];
+const SECTION_ORDER: VaultGroup[] = ['managed', 'provider', 'shared', 'unknown'];
 
 function groupEntries(entries: VaultEntry[]): VaultSection[] {
   const byGroup = new Map<VaultGroup, VaultEntry[]>();

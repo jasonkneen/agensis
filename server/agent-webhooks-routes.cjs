@@ -7,21 +7,19 @@ const crypto = require('crypto');
 // than imported, so the auth, RBAC and rate-limit contract stays single-sourced
 // in index.cjs / shared/backend-core.cjs and this file cannot drift from it.
 //
-// Agent webhooks (orb configuration) and the Netlify deploy hook.
+// Agent webhooks and the Netlify deploy hook.
 //
 // The deploy hook is unauthenticated in the usual sense — Netlify signs it with
 // a JWS whose payload carries a SHA-256 of the exact request body, so
 // verifyNetlifyDeploySignature needs the UNTOUCHED bytes. That is why index.cjs
 // captures rawBody in its express.json verify callback; parsing discards them.
-//
-// Orb secrets are written to the workspace vault under orb:<webhook id> and
-// never returned — the list reports only whether one is configured.
-
 function mountAgentWebhooksRoutes(app, deps = {}) {
  const {
   requireAuth, jsonError, enforceWorkspaceRole, getDb, notifyDbSubscribers,
-  broadcastGlobal, hashAgentToken, normalizeOrbConfigInput, orbSecretKey, setWorkspaceSecretValue,
-  verifyNetlifyDeploySignature,  } = deps;
+  broadcastGlobal, clientIpFromReq, continueConversation, hashAgentToken,
+  inviteTokenLookupParams, rateLimitBlocked, slugHandle,
+  verifyNetlifyDeploySignature, webhookRateLimiter,
+ } = deps;
 
  app.post('/backend/netlify-deploy-hook', (req, res) => {
   try {
@@ -87,27 +85,11 @@ function mountAgentWebhooksRoutes(app, deps = {}) {
    // (inviteTokenLookupParams) so legacy plaintext rows keep working during the
    // transition. The plaintext is returned ONCE here, on creation.
    const token = crypto.randomBytes(32).toString('base64url');
-   // Orb config is optional on create (an omitted field keeps the column default,
-   // which reproduces the pre-orb behaviour) but must be settable here, or an orb
-   // created while the config route is unreachable comes back generic/unsigned
-   // with no prompt and the operator cannot tell why.
-   const config = normalizeOrbConfigInput(req.body || {});
    const rows = await getDb().unsafe(
-    `insert into agent_webhooks
-         (workspace_id, agent_id, name, token, provider, prompt, payload_fields, routing, rate_limit_per_hour)
-         values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+    `insert into agent_webhooks (workspace_id, agent_id, name, token)
+         values ($1, $2, $3, $4)
          returning *`,
-    [
-     workspaceId,
-     agentId || null,
-     String(name).trim(),
-     hashAgentToken(token),
-     config.provider,
-     config.prompt,
-     config.payloadFields,
-     config.routing,
-     config.rateLimitPerHour,
-    ],
+    [workspaceId, agentId || null, String(name).trim(), hashAgentToken(token)],
    );
    notifyDbSubscribers('agent_webhooks', 'INSERT', rows);
    res.json({ data: { ...rows[0], token }, error: null });
@@ -116,75 +98,69 @@ function mountAgentWebhooksRoutes(app, deps = {}) {
   }
  });
 
- // Orb configuration (plans/021). Guards are deliberately identical to the create
- // route above — requireAuth plus enforceWorkspaceRole(..., 'manage') — rather
- // than a new limiter: 'manage' is already the access level agent_webhooks
- // carries in DB_TABLE_ACCESS, and the only unauthenticated surface in this
- // feature is the trigger route, which has webhookRateLimiter plus its own
- // per-orb hourly cap.
- //
- // `signing_secret` is WRITE-ONLY. It goes to the workspace vault, never to a
- // column on agent_webhooks (which the frontend reads with select('*')), and is
- // never returned. An empty string clears it.
- app.put('/backend/agent-webhooks/:id', requireAuth, async (req, res) => {
+ // The URL token is the credential for this generic integration. Deliveries are
+ // translated into normal conversation work so daemon-backed agents (including
+ // the Amp runtime) run through the same job/streaming path as an in-app message.
+ app.post('/backend/webhooks/:token', async (req, res) => {
   try {
-   const webhookId = String(req.params.id || '').trim();
-   if (!webhookId) return jsonError(res, 400, new Error('webhook id is required'));
-   const existing = await getDb().unsafe('select * from agent_webhooks where id = $1 limit 1', [webhookId]);
-   const orb = existing[0];
-   if (!orb) return jsonError(res, 404, new Error('Webhook not found'));
-   await enforceWorkspaceRole(req.userId, orb.workspace_id, 'manage');
-
-   const config = normalizeOrbConfigInput(req.body || {}, orb);
-   let hasSecret = orb.has_signing_secret === true;
-   if (typeof req.body?.signing_secret === 'string') {
-    const secret = req.body.signing_secret.trim();
-    if (secret && secret.length < 16) {
-     return jsonError(res, 400, new Error('A signing secret must be at least 16 characters'));
-    }
-    await setWorkspaceSecretValue(
-     orb.workspace_id,
-     orbSecretKey(orb.id),
-     secret,
-     req.userId,
-     `Signing secret for orb "${String(orb.name || '').slice(0, 80)}"`,
-    );
-    hasSecret = Boolean(secret);
-   }
-   // A non-generic provider with no secret can never verify a delivery, so the
-   // trigger route answers 503. Refuse the configuration that guarantees that
-   // instead of letting the operator discover it from a provider's retry log.
-   if (config.provider !== 'generic' && !hasSecret) {
-    return jsonError(res, 400, new Error(
-     `Provider "${config.provider}" signs its deliveries, so this orb needs a signing secret. `
-     + 'Set signing_secret in the same request, or leave the provider as generic.',
-    ));
-   }
-
-   const name = typeof req.body?.name === 'string' && req.body.name.trim()
-    ? req.body.name.trim().slice(0, 200)
-    : orb.name;
-   const enabled = typeof req.body?.enabled === 'boolean' ? req.body.enabled : orb.enabled;
+   if (rateLimitBlocked(res, webhookRateLimiter, clientIpFromReq(req))) return;
+   const token = String(req.params.token || '');
    const rows = await getDb().unsafe(
-    `update agent_webhooks
-          set name = $2, enabled = $3, provider = $4, prompt = $5, payload_fields = $6::jsonb,
-              routing = $7, rate_limit_per_hour = $8, has_signing_secret = $9, updated_at = now()
-        where id = $1
-        returning *`,
-    [
-     orb.id,
-     name,
-     enabled,
-     config.provider,
-     config.prompt,
-     config.payloadFields,
-     config.routing,
-     config.rateLimitPerHour,
-     hasSecret,
-    ],
+    `select w.*,
+            a.id as agent_row_id,
+            a.name as agent_name,
+            a.handle as agent_handle,
+            a.model,
+            a.enabled as agent_enabled
+       from agent_webhooks w
+       left join workspace_agents a on a.id = w.agent_id
+      where w.token in ($1, $2) and w.enabled = true
+      limit 1`,
+    inviteTokenLookupParams(token),
    );
-   notifyDbSubscribers('agent_webhooks', 'UPDATE', rows);
-   res.json({ data: rows[0], error: null });
+   const webhook = rows[0];
+   if (!webhook) return jsonError(res, 404, new Error('Webhook not found'));
+   if (!webhook.agent_row_id || webhook.agent_enabled === false) {
+    return jsonError(res, 409, new Error('Webhook is not connected to an enabled agent'));
+   }
+
+   const prompt = String(
+    req.body?.prompt || req.body?.text || req.body?.message || JSON.stringify(req.body || {}),
+   ).trim();
+   if (!prompt) return jsonError(res, 400, new Error('Webhook payload did not include prompt, text, or message'));
+
+   const handle = slugHandle(webhook.agent_handle || webhook.agent_name);
+   const sessionRows = await getDb().unsafe(
+    `insert into chat_sessions (workspace_id, title, model, folder)
+         values ($1, $2, $3, 'Webhooks')
+         returning *`,
+    [webhook.workspace_id, `Webhook: ${webhook.name}`, webhook.model || 'auto'],
+   );
+   const session = sessionRows[0];
+   const messageRows = await getDb().unsafe(
+    `insert into messages (session_id, role, content, sender_kind, sender_name)
+         values ($1, 'user', $2, 'system', 'Webhook')
+         returning *`,
+    [session.id, `@${handle} ${prompt}`],
+   );
+   const webhookRows = await getDb().unsafe(
+    'update agent_webhooks set last_triggered_at = now(), updated_at = now() where id = $1 returning *',
+    [webhook.id],
+   );
+   notifyDbSubscribers('chat_sessions', 'INSERT', sessionRows);
+   notifyDbSubscribers('messages', 'INSERT', messageRows);
+   if (webhookRows[0]) notifyDbSubscribers('agent_webhooks', 'UPDATE', webhookRows);
+
+   continueConversation({ workspaceId: webhook.workspace_id, sessionId: session.id })
+    .catch((error) => console.error('webhook dispatch failed', error?.message || error));
+
+   res.status(202).json({
+    data: {
+     sessionId: session.id,
+     messageId: messageRows[0]?.id || null,
+    },
+    error: null,
+   });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }

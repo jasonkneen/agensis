@@ -6,8 +6,7 @@
 // NO DB, NO EXPRESS. Network only through an INJECTED `fetchImpl` and `lookup`,
 // which is what makes the interesting half testable: the redirect chain, the
 // byte cap and the post-redirect re-validation are all exercised in
-// tests/link-preview.test.cjs with no live host and no DNS. Same reason
-// server/orbs.cjs keeps signature verification out of the route.
+// tests/link-preview.test.cjs with no live host and no DNS.
 //
 // Why the unfurl happens here at all, rather than in the browser:
 //

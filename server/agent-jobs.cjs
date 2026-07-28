@@ -302,16 +302,73 @@ function createAgentJobs(deps = {}) {
  // conversation. Shared so both paths render replies identically: mark the job done/error,
  // rewrite the "Thinking …" placeholder (or insert a fresh message), log to Activity, and
  // continue the channel turn loop. `job` must carry agent_name/agent_handle (join on load).
- async function finalizeAgentJobResult(job, { responseText = '', errorText = '', fallbackName = null, fallbackHandle = null } = {}) {
-  const status = errorText ? 'error' : 'done';
+ const AMP_THREAD_ID_RE = /^T-[A-Za-z0-9-]{20,100}$/;
+ const AMP_ERROR_CODE_RE = /^amp_[a-z0-9_]{1,80}$/;
+
+ // A daemon result is an untrusted websocket message. Persist only the Amp
+ // fields Agensis understands, validate the opaque id, and derive the URL here
+ // rather than accepting a daemon-supplied link.
+ function ampResultMetadata(value) {
+  const metadata = parseJsonObject(value);
+  if (metadata.runtime !== 'amp') return {};
+  const ampThreadId = String(metadata.ampThreadId || '').trim();
+  const ampErrorCode = String(metadata.ampErrorCode || '').trim();
+  return {
+   runtime: 'amp',
+   ...(AMP_THREAD_ID_RE.test(ampThreadId) ? {
+    ampThreadId,
+    ampThreadUrl: `https://ampcode.com/threads/${ampThreadId}`,
+   } : {}),
+   ...(AMP_ERROR_CODE_RE.test(ampErrorCode) ? { ampErrorCode } : {}),
+  };
+ }
+
+ // Bind daemon-reported Amp metadata to the job that was actually dispatched.
+ // A valid-looking thread id on a non-Amp result is ignored. Conversely, an Amp
+ // success without a valid id (or with a different id on a continuation) is an
+ // error: accepting either would make the next turn silently lose continuity.
+ function validateAmpJobResult(jobMetadataValue, resultMetadata, errorText = '') {
+  const jobMetadata = parseJsonObject(jobMetadataValue);
+  if (jobMetadata.runtime !== 'amp') return { metadata: {}, errorText };
+
+  const metadata = ampResultMetadata(resultMetadata);
+  const expectedThreadId = AMP_THREAD_ID_RE.test(String(jobMetadata.ampThreadId || '').trim())
+   ? String(jobMetadata.ampThreadId).trim()
+   : '';
+  const receivedThreadId = String(metadata.ampThreadId || '');
+  const threadMismatch = Boolean(expectedThreadId && receivedThreadId && expectedThreadId !== receivedThreadId);
+  if (!errorText && (!receivedThreadId || threadMismatch)) {
+   return {
+    metadata: { runtime: 'amp', ampErrorCode: 'amp_stream_invalid' },
+    errorText: 'Amp completed without returning the thread linked to this conversation.',
+   };
+  }
+  if (threadMismatch) {
+   const safeMetadata = { ...metadata };
+   delete safeMetadata.ampThreadId;
+   delete safeMetadata.ampThreadUrl;
+   return { metadata: safeMetadata, errorText };
+  }
+  return {
+   metadata: metadata.runtime === 'amp' ? metadata : { runtime: 'amp' },
+   errorText,
+  };
+ }
+
+ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', fallbackName = null, fallbackHandle = null, resultMetadata = null } = {}) {
   const jobMetadata = parseJsonObject(job.metadata);
+  const validatedAmp = validateAmpJobResult(jobMetadata, resultMetadata, errorText);
+  const finalErrorText = validatedAmp.errorText;
+  const storedResponseText = !errorText && finalErrorText ? '' : responseText;
+  const status = finalErrorText ? 'error' : 'done';
+  const mergedMetadata = { ...jobMetadata, ...validatedAmp.metadata };
   const statusGuard = jobMetadata.mode === 'farm'
    ? "status in ('queued', 'running')"
    : "status in ('queued', 'running', 'error')";
   const updatedRows = await getDb().unsafe(
-   `update agent_jobs set status = $2, response = $3, error = $4, finished_at = now(), updated_at = now()
+   `update agent_jobs set status = $2, response = $3, error = $4, metadata = $5::jsonb, finished_at = now(), updated_at = now()
       where id = $1 and ${statusGuard} returning *`,
-   [job.id, status, responseText, errorText],
+   [job.id, status, storedResponseText, finalErrorText, mergedMetadata],
   );
   if (updatedRows.length === 0) return null;
   notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
@@ -329,9 +386,12 @@ function createAgentJobs(deps = {}) {
 
   const handle = job.agent_handle || fallbackHandle || slugHandle(job.agent_name);
   const senderName = job.agent_name || fallbackName || handle;
-  const content = errorText
-   ? `@${handle} failed: ${errorText}`
-   : (responseText || `@${handle} finished without output.`);
+  const ampThreadLink = !finalErrorText && mergedMetadata.ampThreadUrl
+   ? `\n\n[Amp thread](${mergedMetadata.ampThreadUrl})`
+   : '';
+  const content = finalErrorText
+   ? `@${handle} failed: ${finalErrorText}`
+   : `${responseText || `@${handle} finished without output.`}${ampThreadLink}`;
   const threadParentId = jobMetadata.threadParentId || null;
   const responseMessageId = jobMetadata.responseMessageId || null;
   // "Send to channel": the agent has been working inside a thread, so THIS write is
@@ -365,15 +425,22 @@ function createAgentJobs(deps = {}) {
    // UPDATE ... returning so the flip fans out to clients like any other change.
    const segmentRows = jobMetadata.lastSegmentMessageId
     ? await getDb().unsafe(
-     broadcastToChannel
-      ? `update messages set broadcast_to_channel = true
-           where id = $1 and session_id = $2 returning *`
-      : 'select * from messages where id = $1 and session_id = $2 limit 1',
-     [String(jobMetadata.lastSegmentMessageId), job.session_id],
+     ampThreadLink
+      ? `update messages
+          set broadcast_to_channel = case when $3 then true else broadcast_to_channel end,
+              content = case when position($4 in content) = 0 then content || $4 else content end
+          where id = $1 and session_id = $2 returning *`
+      : broadcastToChannel
+       ? `update messages set broadcast_to_channel = true
+            where id = $1 and session_id = $2 returning *`
+       : 'select * from messages where id = $1 and session_id = $2 limit 1',
+     ampThreadLink
+      ? [String(jobMetadata.lastSegmentMessageId), job.session_id, broadcastToChannel, ampThreadLink]
+      : [String(jobMetadata.lastSegmentMessageId), job.session_id],
     )
     : [];
    if (segmentRows.length > 0) {
-    if (broadcastToChannel) notifyDbSubscribers('messages', 'UPDATE', segmentRows);
+    if (broadcastToChannel || ampThreadLink) notifyDbSubscribers('messages', 'UPDATE', segmentRows);
     void logMessageActivity(segmentRows);
     void mirrorAgentReplyToTaskComment(segmentRows[0]);
    }
@@ -576,6 +643,7 @@ function createAgentJobs(deps = {}) {
    errorText: textFromValue(message.error).trim(),
    fallbackName: auth.name,
    fallbackHandle: auth.handle,
+   resultMetadata: message.metadata,
   });
   await updateAgentHeartbeat(ws, { busy: false }).catch(() => { });
  }
@@ -1046,6 +1114,8 @@ function createAgentJobs(deps = {}) {
   agentHasAnyActiveJob,
   agentStepContent,
   agentStepParts,
+  ampResultMetadata,
+  validateAmpJobResult,
   cancelFarmAgentJob,
   claimMcpJob,
   clearStrandedPlaceholders,

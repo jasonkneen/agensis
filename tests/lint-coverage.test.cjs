@@ -68,10 +68,6 @@ const MUST_BE_LINTED = [
   'server/skills.cjs',
   // Mints LiveKit join tokens and verifies the LiveKit webhook signature.
   'server/huddles.cjs',
-  // Verifies inbound orb webhook signatures and decides whether a hostile
-  // payload can become agent instructions. It is reached by an UNAUTHENTICATED
-  // route, so it is the last file in the repo that should run with zero rules.
-  'server/orbs.cjs',
   // Decides whether a provisioning base URL may be called at all (the gateway
   // base_url SSRF, one field over — 169.254.169.254 serves cloud IAM
   // credentials), what a provider credential is named in the vault, and whether

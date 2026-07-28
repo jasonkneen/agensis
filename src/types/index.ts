@@ -573,6 +573,15 @@ export interface AgentCapabilities {
  commands?: Array<{ name: string; parent?: string | null }>;
  clis: string[];
  mcpServers: string[];
+ runtimes?: {
+  amp?: {
+   id: 'amp';
+   available: boolean;
+   version: string;
+   reason: string | null;
+   project: { id: string; name: string; repository: string } | null;
+  };
+ };
  sharedModels?: SharedAgentModel[];
  codingRoute?: boolean;
  shared?: boolean;
@@ -615,12 +624,6 @@ export interface AgentJobRow {
  metadata: Record<string, unknown>;
 }
 
-/** Which provider signs deliveries to an orb, and therefore how they verify. */
-export type OrbProvider = 'generic' | 'github' | 'stripe';
-
-/** 'new' opens a session per delivery; 'thread' appends to one stable thread. */
-export type OrbRouting = 'new' | 'thread';
-
 export interface AgentWebhook {
  id: string;
  workspace_id: string;
@@ -630,47 +633,8 @@ export interface AgentWebhook {
  enabled: boolean;
  last_triggered_at: string | null;
  version?: number;
- /** Orb config (plans/021). Every default reproduces the pre-orb behaviour. */
- provider?: OrbProvider;
- /** The operator's instruction — the ONLY instruction region in the composed message. */
- prompt?: string;
- /** Allowlist of dot-paths projected out of the payload. Empty = whole body, truncated. */
- payload_fields?: string[];
- routing?: OrbRouting;
- rate_limit_per_hour?: number;
- /**
-  * Advisory hint only. The secret itself lives in the workspace vault and is
-  * never sent to the browser; the trigger route reads the vault, not this flag.
-  */
- has_signing_secret?: boolean;
- session_id?: string | null;
- thread_root_message_id?: string | null;
  created_at: string;
  updated_at: string;
-}
-
-/**
- * What the orb config route accepts. `signing_secret` is WRITE-ONLY — it is
- * stored in the workspace vault and never read back, so there is no matching
- * field on AgentWebhook. An empty string clears it.
- */
-export type OrbConfigInput = Partial<
- Pick<AgentWebhook, 'name' | 'enabled' | 'provider' | 'prompt' | 'payload_fields' | 'routing' | 'rate_limit_per_hour'>
-> & { signing_secret?: string };
-
-/** One inbound orb delivery: the dedupe record and the operator-visible log row. */
-export interface OrbDelivery {
- id: string;
- webhook_id: string;
- workspace_id: string;
- delivery_key: string | null;
- body_hash: string;
- event_type: string;
- status: 'accepted' | 'duplicate' | 'rejected' | 'throttled' | 'failed';
- session_id: string | null;
- message_id: string | null;
- detail: string;
- created_at: string;
 }
 
 /** A huddle row — an ad-hoc voice call bound to the channel it happened in. */
