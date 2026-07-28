@@ -247,6 +247,30 @@ function createAgentJobs(deps = {}) {
   }
  }
 
+ // Move an agent's still-running jobs onto the connection it just reconnected on.
+ //
+ // A dropped socket does NOT mean the work stopped: the daemon keeps executing the
+ // turn and reconnects ~2s later on a fresh connection id. Without this, the job row
+ // still points at the dead connection, so the deferred failure in markConnectionOffline
+ // would eventually kill a turn that is alive and streaming. handleAgentJobResult
+ // already looks jobs up by (jobId, agentId, workspaceId) rather than by connection,
+ // so the reconnected daemon can deliver the result — this just keeps the row's
+ // bookkeeping pointing at a connection that actually exists.
+ async function rehomeRunningJobs(workspaceId, agentId, connectionId) {
+  if (!workspaceId || !agentId || !connectionId) return [];
+  try {
+   return await getDb().unsafe(
+    `update agent_jobs set connection_id = $1, updated_at = now()
+        where workspace_id = $2 and agent_id = $3 and status = 'running'
+          and connection_id is distinct from $1
+        returning id`,
+    [connectionId, workspaceId, agentId],
+   );
+  } catch {
+   return [];
+  }
+ }
+
  // Fail every running job tied to a connection that just dropped.
  async function failConnectionJobs(connectionId, reason) {
   if (!connectionId) return;
@@ -1129,6 +1153,7 @@ function createAgentJobs(deps = {}) {
   handleAgentJobSegment,
   handleAgentJobStep,
   hasActiveBurstJob,
+  rehomeRunningJobs,
   insertActiveAgentJob,
   isAgentJobLive,
   publicFarmAgentJob,

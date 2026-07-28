@@ -65,6 +65,28 @@ function createRealtime(deps = {}) {
  // which fires 'close' → markAgentConnectionOffline → failConnectionJobs, turning
  // what used to be a 240s silent "Thinking…" hang into a fast, explicit failure.
  const LIVENESS_PING_INTERVAL_MS = 15_000;
+ // Consecutive missed pongs before a socket is terminated. 2 → a daemon has ~30s
+ // to answer before it is declared dead. See the livenessInterval comment.
+ const LIVENESS_MAX_MISSED_PONGS = 2;
+
+ // One liveness tick over a set of sockets. Extracted from the interval so the
+// miss-tolerance is testable without standing up a server and waiting 30s.
+ function sweepLiveness(clients) {
+  const terminated = [];
+  for (const client of clients) {
+   if (client.isAlive === false) {
+    client.missedPongs = (client.missedPongs || 0) + 1;
+    if (client.missedPongs >= LIVENESS_MAX_MISSED_PONGS) {
+     client.terminate();
+     terminated.push(client);
+     continue;
+    }
+   }
+   client.isAlive = false;
+   try { client.ping(); } catch { /* socket already closing */ }
+  }
+  return terminated;
+ }
 
  function sendWs(ws, message) {
   if (ws.readyState !== 1) return false;
@@ -321,7 +343,8 @@ function createRealtime(deps = {}) {
    // Liveness: the heartbeat interval below pings each socket and terminates any
    // that miss a pong, so an ungraceful drop still fires 'close' (→ offline).
    ws.isAlive = true;
-   ws.on('pong', () => { ws.isAlive = true; });
+   ws.missedPongs = 0;
+   ws.on('pong', () => { ws.isAlive = true; ws.missedPongs = 0; });
 
    // H3/H5 — two auth paths, retained for backward compatibility:
    //  (1) Legacy query-param credentials: `agentToken=` or `token=`.
@@ -515,20 +538,21 @@ function createRealtime(deps = {}) {
   });
 
   // Ping connected sockets on every LIVENESS_PING_INTERVAL_MS; terminate any that
-  // didn't answer the previous ping. terminate() fires 'close', which marks the
-  // agent connection offline — this catches daemons that vanish without a clean
-  // disconnect (sleep, network loss, kill -9) and would otherwise show as "online"
-  // forever. The interval also drives isConnectionSocketLive's isAlive flag.
-  const livenessInterval = setInterval(() => {
-   for (const client of wss.clients) {
-    if (client.isAlive === false) {
-     client.terminate();
-     continue;
-    }
-    client.isAlive = false;
-    try { client.ping(); } catch { /* socket already closing */ }
-   }
-  }, LIVENESS_PING_INTERVAL_MS);
+  // missed LIVENESS_MAX_MISSED_PONGS consecutive pings. terminate() fires 'close',
+  // which marks the agent connection offline — this catches daemons that vanish
+  // without a clean disconnect (sleep, network loss, kill -9) and would otherwise
+  // show as "online" forever. The interval also drives isConnectionSocketLive's
+  // isAlive flag.
+  //
+  // Why a counter and not the old single-miss boolean: ONE missed pong inside 15s
+  // was the entire budget, and a laptop daemon misses it routinely — a Wi-Fi roam,
+  // a lid nap, or an event loop starved by the `claude -p` subprocesses it is
+  // supervising. Terminating there kills every job on that connection, including a
+  // turn five minutes into real work (observed live 2026-07-28: a Coder turn died
+  // mid-`tsc`, taking a second DM job with it). Two misses buys ~30s, which covers
+  // an ordinary blip while still catching a genuinely dead socket well inside the
+  // job reaper's window.
+  const livenessInterval = setInterval(() => sweepLiveness(wss.clients), LIVENESS_PING_INTERVAL_MS);
   livenessInterval.unref?.();
   wss.on('close', () => clearInterval(livenessInterval));
   // Server-level errors (a failed upgrade, an EADDR-style listen error surfaced by
@@ -565,6 +589,8 @@ function createRealtime(deps = {}) {
   authorizeRealtimeBroadcast,
   revokeRealtimeAccessForMember,
   registerTestWebsocketClient,
+  sweepLiveness,
+  LIVENESS_MAX_MISSED_PONGS,
   // Exported for __test in index.cjs: the channel-name parser the realtime
   // authorization tests assert directly.
   workspaceIdFromRealtimeChannel,

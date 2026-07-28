@@ -6589,7 +6589,7 @@ const agentJobs = createAgentJobs({
 });
 const {
  insertActiveAgentJob, agentHasActiveJob, agentHasAnyActiveJob,
- hasActiveBurstJob, finalizeStuckJob, failConnectionJobs, reapStuckAgentJobs,
+ hasActiveBurstJob, finalizeStuckJob, failConnectionJobs, rehomeRunningJobs, reapStuckAgentJobs,
  clearStrandedPlaceholders, handleAgentJobResult, handleAgentJobDelta,
  handleAgentJobStep, handleAgentJobSegment, agentStepParts, agentStepContent,
  finalizeAgentJobResult, ampResultMetadata, validateAmpJobResult, claimMcpJob, submitMcpJobResult, reapStuckMcpJobs,
@@ -6643,7 +6643,7 @@ const agentConnections = createAgentConnections({
  failConnectionJobs, finalizeStuckJob, forbidden, getDb, inferenceBroker,
  isAgentEnabled, logConnectionActivity, normalizeSkillDocuments, parseJsonObject,
  publicAgentConnection, publicFarmEnrolledAgent, quoteIdent, reachFromMessage,
- repairStoredIdentity, sharedModelsFromMessage, slugHandle,
+ rehomeRunningJobs, repairStoredIdentity, sharedModelsFromMessage, slugHandle,
  // Realtime is created below, so these two are forwarded lazily rather than
  // captured — the module needs the live functions, not the bindings as they
  // stand at construction time.
@@ -6658,7 +6658,7 @@ const {
  handleAgentSkillSync, handleAgentCapabilitiesSync, capabilitiesShapeValid,
  capabilitiesDriftNudges, ampRuntimeFromMessage, executionRuntimesFromMessage, refreshConnectedAgentConfigs, touchMcpPresence,
  hasMcpPresence, pruneOfflineConnections, reconcileAgentConnectionsAtStartup,
- applyAgentIdentity, repairCorruptedAgentIdentities,
+ applyAgentIdentity, repairCorruptedAgentIdentities, clearPendingJobFailures,
  AGENT_DISCONNECT_CLOSE_MESSAGES, AGENT_IDENTITY_SELECT, connectedAgents,
  registerTestConnectedAgent, listTestConnectedAgents,
 } = agentConnections;
@@ -7384,6 +7384,7 @@ function resetTestState() {
  farmIntegrationCoreInstance = undefined;
  flowConnectionCoreInstance = undefined;
  agentConnections.reset();
+ clearPendingJobFailures();
  taskDispatch.reset();
  conversationLocks.clear();
 }
@@ -7424,6 +7425,8 @@ module.exports = {
   listTestConnectedAgents,
   // One live daemon per agent: registration supersedes an older live connection.
   registerAgentConnection,
+  // A dropped socket is not proof the turn stopped — see daemon-drop-survives.
+  markAgentConnectionOffline,
   disconnectAgentDaemons,
   takeAgentDaemonConnections,
   findConnectedAgent,
@@ -7492,6 +7495,10 @@ module.exports = {
   TOKEN_VERSION_CACHE_TTL_MS,
   getCachedTokenVersion,
   workspaceIdFromRealtimeChannel,
+  // Socket liveness — a daemon must survive a single missed pong.
+  sweepLiveness: (...args) => realtime.sweepLiveness(...args),
+  LIVENESS_MAX_MISSED_PONGS: realtime.LIVENESS_MAX_MISSED_PONGS,
+  clearPendingJobFailures,
   // MCP connect-a-client model — exercised against a fake DB.
   verifyInviteToken,
   verifyWorkspaceMcpToken,

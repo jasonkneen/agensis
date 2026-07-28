@@ -43,6 +43,7 @@ function createAgentConnections(deps = {}) {
   parseJsonObject,
   publicAgentConnection,
   publicFarmEnrolledAgent,
+  rehomeRunningJobs,
   quoteIdent,
   reachFromMessage,
   repairStoredIdentity,
@@ -125,7 +126,11 @@ function createAgentConnections(deps = {}) {
    sendWs(entry.ws, { type: 'agent_disabled', reason: disabledReason, code: reason === 'runtime_mismatch' ? reason : undefined });
    try { entry.ws.close(1008, closeMessage); } catch { /* already closing */ }
   }
-  for (const entry of taken) await markConnectionOffline(entry.connectionId);
+  // A DELIBERATE eviction, not a socket that merely dropped: every reason routed
+  // here (superseded, deactivated, runtime_mismatch) has just told that daemon to
+  // stop, and a released daemon treats it as terminal. Its jobs can never report
+  // back, so they fail now rather than sitting through the reconnect grace window.
+  for (const entry of taken) await markConnectionOffline(entry.connectionId, { evicted: true });
   // A superseded connection is not merely offline, it has been REPLACED, so its
   // row goes now instead of sitting in the roster as a second copy of the same
   // agent until pruneOfflineConnections catches up 120s later. The other reasons
@@ -243,15 +248,65 @@ function createAgentConnections(deps = {}) {
   return markConnectionOffline(ws.agentConnectionId);
  }
 
+ // How long a dropped connection's running jobs are held before they are failed.
+ //
+ // A socket drop is not proof the work stopped. The daemon keeps executing the turn
+ // and reconnects ~2s later; failing its jobs on the spot threw away turns that were
+ // minutes deep and about to deliver an answer. The daemon re-sends the result on its
+ // new socket (handleAgentJobResult matches on agent+job, not connection), and
+ // registerAgentConnection re-homes anything still running — so by the time this
+ // fires, a job still marked running on a dead connection really is orphaned.
+ const JOB_RECONNECT_GRACE_MS = 45_000;
+ // connectionId -> { timer, agentKey }. Kept so a reconnect can cancel the pending
+ // failure for the same agent instead of racing it.
+ const pendingJobFailures = new Map();
+
+ function cancelPendingJobFailures(agentKey) {
+  if (!agentKey) return;
+  for (const [connectionId, pending] of pendingJobFailures) {
+   if (pending.agentKey !== agentKey) continue;
+   clearTimeout(pending.timer);
+   pendingJobFailures.delete(connectionId);
+  }
+ }
+
+ function scheduleConnectionJobFailure(connectionId, agentKey) {
+  const existing = pendingJobFailures.get(connectionId);
+  if (existing) clearTimeout(existing.timer);
+  const timer = setTimeout(() => {
+   pendingJobFailures.delete(connectionId);
+   void failConnectionJobs(connectionId, 'the daemon disconnected');
+  }, JOB_RECONNECT_GRACE_MS);
+  timer.unref?.();
+  pendingJobFailures.set(connectionId, { timer, agentKey });
+ }
+
+ // Test/teardown hook: drop every armed grace timer so a suite does not leak them.
+ function clearPendingJobFailures() {
+  for (const pending of pendingJobFailures.values()) clearTimeout(pending.timer);
+  pendingJobFailures.clear();
+ }
+
  // Settle ONE connection id: drop it from the live map, fail what it was running,
  // flip its row offline. Takes the id rather than the socket because a socket that
  // re-registers already points at its NEW connection id — deriving the id from the
  // socket there would offline the wrong (live) row and fail the wrong jobs.
- async function markConnectionOffline(connectionId) {
+ async function markConnectionOffline(connectionId, { evicted = false } = {}) {
   if (!connectionId) return;
+  const entry = connectedAgents.get(connectionId);
+  const agentKey = entry ? `${entry.workspaceId}:${entry.agentId}` : null;
   connectedAgents.delete(connectionId);
   inferenceBroker.failConnection(connectionId, 'The inference agent connection disconnected.');
-  void failConnectionJobs(connectionId, 'the daemon disconnected');
+  if (evicted) {
+   // Told to stop: nothing is coming back, so don't make the human wait out the
+   // grace window for an answer that cannot arrive.
+   void failConnectionJobs(connectionId, 'the daemon disconnected');
+  } else {
+   // An unexplained socket loss is NOT proof the work stopped — see
+   // JOB_RECONNECT_GRACE_MS. A daemon that reconnects inside the window keeps its
+   // turn; one that doesn't gets the same explicit failure it always did, 45s later.
+   scheduleConnectionJobFailure(connectionId, agentKey);
+  }
   // The process that would have acted on an approval is gone; a card still
   // offering Allow/Deny would be a button that does nothing.
   void expireConnectionPermissionRequests(connectionId);
@@ -549,6 +604,16 @@ function createAgentConnections(deps = {}) {
     console.log(`[agensis] superseded daemon connection ${entry.connectionId} for @${handle} on ${entry.host || 'unknown host'}:${entry.cwd || '?'} — replaced by a newer register from ${host || 'unknown host'}:${cwd || '?'}`);
    }
    await closeTakenAgentDaemons(superseded, 'superseded');
+  }
+  // This register may be a RECONNECT after a blip, with a turn still executing on
+  // the daemon. Cancel the grace-window failure armed when the old socket dropped,
+  // and point those still-running rows at the connection that now exists. Order
+  // matters: cancel first, so the timer cannot fire between the re-home and the
+  // cancel and kill a job we just adopted.
+  cancelPendingJobFailures(`${workspaceId}:${agentId}`);
+  const readopted = await rehomeRunningJobs(workspaceId, agentId, connectionId);
+  if (readopted.length > 0) {
+   console.log(`[agensis] @${handle} reconnected with ${readopted.length} job(s) still running; kept them alive on connection ${connectionId}`);
   }
   void logConnectionActivity(connection, 'agent_connected');
   sendWs(ws, { type: 'agent_registered', connection, agent: auth.agent });
@@ -848,6 +913,7 @@ function createAgentConnections(deps = {}) {
   executionRuntimesFromMessage,
   capabilitiesDriftNudges,
   capabilitiesShapeValid,
+  clearPendingJobFailures,
   closeTakenAgentDaemons,
   disableFarmIntegrationAgents,
   disconnectAgentDaemons,
