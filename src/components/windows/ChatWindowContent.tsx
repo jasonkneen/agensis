@@ -399,7 +399,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const sidePanelRef = useRef<HTMLElement | null>(null);
-  const autoOpenedProfileForRef = useRef<string | null>(null);
 
   useComposerAutosize(inputRef, input);
 
@@ -1080,13 +1079,10 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     return persistedParticipants.find(participant => participantMatchesLookupKey(participant, key)) || directAgent;
   }, [directAgent, directProfileKey, persistedParticipants, profileAgent, profileAgentKey]);
 
-  useEffect(() => {
-    if (!isDirectMessage || !directProfileKey || sidePanel !== null) return;
-    if (autoOpenedProfileForRef.current === directProfileKey) return;
-    autoOpenedProfileForRef.current = directProfileKey;
-    setProfileAgentKey(directProfileKey);
-    setSidePanel('profile');
-  }, [directProfileKey, isDirectMessage, sidePanel]);
+  // NOTE: We intentionally do NOT auto-open the agent profile side panel when a
+  // DM is opened. The profile is available on demand via the profile toolbar
+  // button (openAgentProfilePanel). Auto-opening popped the sidebar every time a
+  // chat was selected, which Jason flagged as unwanted.
 
   const participantCandidates = useMemo(
     () => buildParticipantCandidates(presenceUsers, agents, agentConnections, persistedParticipants),
