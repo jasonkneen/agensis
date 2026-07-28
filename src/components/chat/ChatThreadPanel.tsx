@@ -5,6 +5,7 @@ import { ThreadWorkBadge } from './AgentWorkBadge';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolStepGroup } from './ToolStepGroup';
 import { buildTranscriptRows } from './toolSteps';
+import { usePermissionRequests } from '../../hooks/usePermissionRequests';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { validAgentAccentColor } from '../../lib/agentAccent';
 import type { AIModel, Document, Message as ChatMessage, WorkspaceAgent } from '../../types';
@@ -116,11 +117,16 @@ export function ChatThreadPanel({
   // after each send so it can never silently broadcast the next reply too.
   const [broadcastToChannel, setBroadcastToChannel] = useState(false);
   const replies = threadMessages.filter(reply => reply.id !== parentMessage.id);
+  // Decided tool approvals fold into the chip for the call they gated, same as the
+  // main window, so a thread doesn't accumulate settled permission rows either.
+  const { byId: permissionRequestsById } = usePermissionRequests(workspaceId ?? null);
   // Steps land here (threaded under the agent's reply), so they must be chips in the
   // panel too — a run of four is one summary chip, not four bubbles. The agent's
   // "Thinking …" placeholder rides in that same strip rather than as a bubble of
   // its own; three of those stacked in a thread was the whole reason for this.
-  const replyRows = buildTranscriptRows(replies);
+  const replyRows = buildTranscriptRows(replies, undefined, message =>
+    message.permission_request_id ? permissionRequestsById.get(message.permission_request_id) : undefined,
+  );
 
   useEffect(() => {
     if (models) setModel(current => availableChatModelId(current, models));

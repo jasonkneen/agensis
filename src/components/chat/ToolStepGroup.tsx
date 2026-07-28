@@ -8,13 +8,16 @@ import {
   ListTodo,
   PencilLine,
   Search,
+  ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Terminal,
   Wrench,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { activityChipLabel, activityElapsed, thoughtChipLabel } from '../../lib/activityStatus';
-import type { Message as ChatMessage } from '../../types';
+import type { Message as ChatMessage, PermissionRequest } from '../../types';
+import { permissionOutcomeLabel } from './permissionRequests';
 import {
   bucketToolSteps,
   rememberThinkingElapsed,
@@ -84,13 +87,19 @@ function callCountLabel(count: number): string {
  * reads as one continuous strip instead of chips, a bubble, then more chips.
  */
 export function ToolStepGroup({ row, compact = false }: { row: TranscriptStepRow; compact?: boolean }) {
-  const { steps } = row;
+  const { steps, approvals } = row;
   const panelId = useId();
   const [expanded, setExpanded] = useState(false);
   const [openTools, setOpenTools] = useState<string[]>([]);
 
   const count = steps.length;
   const buckets = useMemo(() => bucketToolSteps(steps), [steps]);
+  // How many calls in this run the human had to approve — drives the shield on the
+  // summary chip, so a reader sees "this had approvals" without expanding anything.
+  const approvedCount = useMemo(
+    () => steps.filter(step => approvals[step.id]?.status === 'allowed').length,
+    [steps, approvals],
+  );
   // Liveness is derived, never stored: a new step or a placeholder tick re-renders
   // this and the answer is recomputed. No timer ticks in the background to decide it.
   // Every chip below is drawn from this one decision, so nothing can claim to be
@@ -134,6 +143,15 @@ export function ToolStepGroup({ row, compact = false }: { row: TranscriptStepRow
                 className={cn('size-3 shrink-0 transition-transform duration-150', expanded && 'rotate-90')}
               />
               <span className="truncate">{callCountLabel(count)}</span>
+              {/* A run that needed a human's yes carries a quiet shield here, so the
+                  approval is visible before anyone expands the strip. Who allowed it
+                  waits on the individual call chip inside. */}
+              {approvedCount > 0 && (
+                <ShieldCheck
+                  className="size-3 shrink-0 text-emerald-500"
+                  aria-label={`${approvedCount} approved tool ${approvedCount === 1 ? 'call' : 'calls'}`}
+                />
+              )}
             </button>
           )}
 
@@ -180,7 +198,7 @@ export function ToolStepGroup({ row, compact = false }: { row: TranscriptStepRow
                 >
                   {bucket.steps.map(step => (
                     <li key={step.id} className="min-w-0">
-                      <ToolStepChip step={step} />
+                      <ToolStepChip step={step} approval={approvals[step.id]} />
                     </li>
                   ))}
                 </ul>
@@ -246,15 +264,17 @@ function ThoughtChip({ thought }: { thought: ThoughtChipData }) {
  * the detail truncates and the untruncated text lives in `title`, so four in a row
  * read as four short units rather than four paragraphs of shell.
  */
-function ToolStepChip({ step }: { step: ChatMessage }) {
+function ToolStepChip({ step, approval }: { step: ChatMessage; approval?: PermissionRequest }) {
   const { name, detail } = toolStepParts(step);
   const Icon = toolIcon(name);
+  const allowed = approval?.status === 'allowed';
+  const ApprovalIcon = allowed ? ShieldCheck : ShieldAlert;
   return (
     <span
-      title={toolStepLabel(step)}
+      title={approval ? `${toolStepLabel(step)} — ${permissionOutcomeLabel(approval)}` : toolStepLabel(step)}
       className={cn(
         CHIP_BASE,
-        'max-w-[22rem] pl-1.5 pr-2 whitespace-nowrap',
+        'max-w-[26rem] pl-1.5 pr-2 whitespace-nowrap',
         'animate-in fade-in-0 slide-in-from-left-1 duration-200',
         CHIP_IDLE,
       )}
@@ -262,6 +282,16 @@ function ToolStepChip({ step }: { step: ChatMessage }) {
       <Icon className="size-3 shrink-0 opacity-70" />
       {name && <span className="shrink-0 font-medium text-foreground/70">{name}</span>}
       {detail && <span className="truncate opacity-80">{detail}</span>}
+      {/* The call the human unblocked names who unblocked it, right where the
+          folded permission card used to be a whole row of its own. */}
+      {approval && (
+        <>
+          <ApprovalIcon className={cn('size-3 shrink-0', allowed ? 'text-emerald-500' : 'text-amber-500')} />
+          <span className={cn('shrink-0 font-sans', allowed ? 'text-emerald-600/90 dark:text-emerald-400/90' : 'text-muted-foreground')}>
+            {permissionOutcomeLabel(approval)}
+          </span>
+        </>
+      )}
     </span>
   );
 }

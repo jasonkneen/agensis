@@ -4,6 +4,7 @@ import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolStepGroup } from './ToolStepGroup';
 import { buildTranscriptRows } from './toolSteps';
+import { usePermissionRequests } from '../../hooks/usePermissionRequests';
 import {
   ComposerAddContent,
   FileChip,
@@ -110,8 +111,14 @@ export function SubThreadPanel({
   const agentParticipants = participants.filter(p => p.kind === 'agent');
   // Consecutive tool steps — and the live "Thinking …" placeholder between them —
   // collapse into one chip row here too: same rules as the channel transcript, just
-  // the compact spacing of a side panel.
-  const messageRows = useMemo(() => buildTranscriptRows(messages), [messages]);
+  // the compact spacing of a side panel. Decided approvals fold into their call's chip.
+  const { byId: permissionRequestsById } = usePermissionRequests(session.workspace_id ?? null);
+  const messageRows = useMemo(
+    () => buildTranscriptRows(messages, undefined, message =>
+      message.permission_request_id ? permissionRequestsById.get(message.permission_request_id) : undefined,
+    ),
+    [messages, permissionRequestsById],
+  );
   useComposerAutosize(inputRef, mentions.input);
   // Same rule as the channel's status line: a placeholder stranded by a job that
   // died is not evidence that anyone is working.

@@ -22,7 +22,7 @@ import {
   parseElapsedMs,
   thoughtChipLabel,
 } from '../../src/lib/activityStatus';
-import type { Message } from '../../src/types';
+import type { Message, PermissionRequest } from '../../src/types';
 
 let seq = 0;
 
@@ -178,6 +178,78 @@ describe('buildTranscriptRows', () => {
   it('leaves the newest group live when nothing follows it', () => {
     const rows = buildTranscriptRows([msg({ sender_id: 'agent-1' }), step()]);
     expect(rows[1].kind === 'steps' && rows[1].endedByReply).toBe(false);
+  });
+});
+
+describe('buildTranscriptRows — folded tool approvals', () => {
+  function request(overrides: Partial<PermissionRequest> = {}): PermissionRequest {
+    return {
+      id: 'req-1', workspaceId: 'w1', agentId: 'agent-1', jobId: null, sessionId: null,
+      messageId: null, toolName: 'Bash', toolDetail: 'git clone', title: '', description: '',
+      rules: [], scopes: ['once', 'session'], status: 'allowed', scope: 'once',
+      decidedBy: 'u1', decidedByName: 'Jason', decidedAt: null, expiresAt: null, createdAt: null,
+      ...overrides,
+    };
+  }
+  /** The anchor message a permission request rides in, pointing at its request row. */
+  function anchor(id: string, overrides: Partial<Message> = {}): Message {
+    return msg({ message_kind: 'permission_request', permission_request_id: id, sender_id: 'agent-1', ...overrides });
+  }
+  const resolveWith = (map: Record<string, PermissionRequest>) =>
+    (message: Message) => (message.permission_request_id ? map[message.permission_request_id] : undefined);
+
+  it('folds a decided approval into the chip for the call it gated', () => {
+    const gated = step();
+    const rows = buildTranscriptRows(
+      [anchor('req-1'), gated],
+      undefined,
+      resolveWith({ 'req-1': request() }),
+    );
+    // No standalone permission row — it lives on the step group now.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe('steps');
+    if (rows[0].kind === 'steps') {
+      expect(rows[0].steps).toHaveLength(1);
+      expect(rows[0].approvals[gated.id]?.decidedByName).toBe('Jason');
+    }
+  });
+
+  it('keeps a still-pending request as its own row so its buttons stay reachable', () => {
+    const rows = buildTranscriptRows(
+      [anchor('req-1'), step()],
+      undefined,
+      resolveWith({ 'req-1': request({ status: 'pending' }) }),
+    );
+    expect(rows.map(row => row.kind)).toEqual(['message', 'steps']);
+    if (rows[1].kind === 'steps') expect(Object.keys(rows[1].approvals)).toHaveLength(0);
+  });
+
+  it('leaves an unresolved anchor as an ordinary row', () => {
+    const rows = buildTranscriptRows([anchor('req-1'), step()], undefined, resolveWith({}));
+    expect(rows.map(row => row.kind)).toEqual(['message', 'steps']);
+  });
+
+  it('restores a decided request to its own row when no step follows it', () => {
+    // A denial: nothing ran, so there is no chip to fold into — the settled row stays.
+    const rows = buildTranscriptRows(
+      [anchor('req-1'), msg({ sender_id: 'agent-1', content: 'ok' })],
+      undefined,
+      resolveWith({ 'req-1': request({ status: 'denied', scope: '' }) }),
+    );
+    expect(rows.map(row => row.kind)).toEqual(['message', 'message']);
+    expect(rows[0].kind === 'message' && rows[0].message.permission_request_id).toBe('req-1');
+  });
+
+  it('only folds into the same agent’s next call', () => {
+    const other = step({ sender_id: 'agent-2' });
+    const rows = buildTranscriptRows(
+      [anchor('req-1', { sender_id: 'agent-1' }), other],
+      undefined,
+      resolveWith({ 'req-1': request() }),
+    );
+    // agent-2's step can't own agent-1's approval, so the anchor keeps its own row.
+    expect(rows.map(row => row.kind)).toEqual(['message', 'steps']);
+    if (rows[1].kind === 'steps') expect(Object.keys(rows[1].approvals)).toHaveLength(0);
   });
 });
 
@@ -462,7 +534,7 @@ describe('isStepGroupLive', () => {
   function group(overrides: Partial<TranscriptStepRow> = {}): TranscriptStepRow {
     return {
       kind: 'steps', key: 'k', steps: [], thinking: [], thoughts: [],
-      index: 0, endedByReply: false, senderKey: 'agent-1',
+      index: 0, endedByReply: false, senderKey: 'agent-1', approvals: {},
       ...overrides,
     };
   }
@@ -495,7 +567,7 @@ describe('resolveGroupChips', () => {
   function group(overrides: Partial<TranscriptStepRow> = {}): TranscriptStepRow {
     return {
       kind: 'steps', key: 'k', steps: [], thinking: [], thoughts: [],
-      index: 0, endedByReply: false, senderKey: 'agent-1',
+      index: 0, endedByReply: false, senderKey: 'agent-1', approvals: {},
       ...overrides,
     };
   }

@@ -4,7 +4,8 @@ import {
   activitySeenAtMs,
   isActivityPlaceholderMessage,
 } from '../../lib/activityStatus';
-import type { Message as ChatMessage } from '../../types';
+import type { Message as ChatMessage, PermissionRequest } from '../../types';
+import { isPermissionRequestMessage } from './permissionRequests';
 
 /** `messages.message_kind` for one agent tool call. Anything else is a real message. */
 export const TOOL_STEP_KIND = 'tool_step';
@@ -69,6 +70,15 @@ export interface TranscriptStepRow {
   endedByReply: boolean;
   /** Whose run this is. Held explicitly because `steps` can be empty. */
   senderKey: string;
+  /**
+   * The decided tool-approval, if any, that gated a step — keyed by the step
+   * message id it belongs to. A permission request the human already answered
+   * folds INTO the chip for the call it unblocked (a shield icon on the chip,
+   * the "who allowed it" on expand) instead of sitting as its own settled row.
+   * Only decided requests land here; a still-pending one keeps its own card so
+   * the buttons stay reachable. Empty for every group that needed no approval.
+   */
+  approvals: Record<string, PermissionRequest>;
 }
 
 export type TranscriptRow = TranscriptMessageRow | TranscriptStepRow;
@@ -249,9 +259,21 @@ function senderKey(message: ChatMessage): string {
 export function buildTranscriptRows(
   messages: ChatMessage[],
   recallThought: (id: string) => string = recallThinkingElapsed,
+  resolvePermission?: (message: ChatMessage) => PermissionRequest | undefined,
 ): TranscriptRow[] {
   const rows: TranscriptRow[] = [];
   let open: TranscriptStepRow | null = null;
+
+  // A decided permission request waiting to bind to the tool step it gated. The
+  // request row is posted just BEFORE the call it unblocks runs, so we hold it
+  // and hand it to the next step from the same sender. If no such step arrives,
+  // `flushStaged` restores it to its own row so a denial is never lost.
+  let staged: { request: PermissionRequest; message: ChatMessage; index: number } | null = null;
+  const flushStaged = () => {
+    if (!staged) return;
+    rows.push({ kind: 'message', key: staged.message.id, message: staged.message, index: staged.index });
+    staged = null;
+  };
 
   const openGroup = (message: ChatMessage, index: number, keyPrefix = 'tool-steps'): TranscriptStepRow => {
     const row: TranscriptStepRow = {
@@ -263,6 +285,7 @@ export function buildTranscriptRows(
       index,
       endedByReply: false,
       senderKey: senderKey(message),
+      approvals: {},
     };
     rows.push(row);
     return row;
@@ -271,15 +294,42 @@ export function buildTranscriptRows(
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     const isStep = isToolStepMessage(message);
-    const isThinking = !isStep && isActivityPlaceholderMessage(message);
+    const isPermission = !isStep && isPermissionRequestMessage(message);
+    const isThinking = !isStep && !isPermission && isActivityPlaceholderMessage(message);
+
+    // A permission request the human already answered folds into the chip for the
+    // call it gated; a pending or unresolved one stays a row so its card keeps its
+    // buttons (the agent's turn is parked on that click).
+    if (isPermission) {
+      const request = resolvePermission?.(message);
+      if (request && request.status !== 'pending') {
+        // Two decided requests before any step can't share one — the first gets
+        // its own settled row rather than being silently overwritten.
+        flushStaged();
+        staged = { request, message, index };
+        continue;
+      }
+      flushStaged();
+      open = null;
+      rows.push({ kind: 'message', key: message.id, message, index });
+      continue;
+    }
 
     if (isStep || isThinking) {
-      if (!open || open.senderKey !== senderKey(message)) open = openGroup(message, index);
+      const key = senderKey(message);
+      // A staged approval only ever gates its OWN agent's next call.
+      if (staged && senderKey(staged.message) !== key) flushStaged();
+      if (!open || open.senderKey !== key) open = openGroup(message, index);
       (isThinking ? open.thinking : open.steps).push(message);
+      if (isStep && staged) {
+        open.approvals[message.id] = staged.request;
+        staged = null;
+      }
       open.index = index;
       continue;
     }
 
+    flushStaged();
     const elapsed = recallThought(message.id);
     if (elapsed) {
       const thought: ThoughtChip = { id: message.id, elapsed };
@@ -291,6 +341,10 @@ export function buildTranscriptRows(
     open = null;
     rows.push({ kind: 'message', key: message.id, message, index });
   }
+
+  // A decided request that never met its step (last message in the list, or the
+  // turn ended after it) still deserves its settled row.
+  flushStaged();
 
   // Walk backwards so a group settles as soon as ANY later message from that sender
   // exists, not only when its reply lands immediately after (a user message can sit

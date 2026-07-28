@@ -911,9 +911,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     [displayMessages, clearCutoffMs],
   );
   const hiddenCount = displayMessages.length - shownMessages.length;
-  // Consecutive tool steps collapse into one chip row; every other message keeps its
-  // own row at its original position. Order is never changed.
-  const shownRows = useMemo(() => buildTranscriptRows(shownMessages), [shownMessages]);
 
   // Tool approvals. A permission_request message is only an ANCHOR — its state
   // (still open? granted for how long? by whom?) lives on the request row, which
@@ -925,6 +922,21 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     busyId: permissionBusyId,
     decide: decidePermission,
   } = usePermissionRequests(workspaceId || null);
+
+  // Consecutive tool steps collapse into one chip row; every other message keeps its
+  // own row at its original position. Order is never changed. A permission request the
+  // human already answered folds into the chip for the call it gated (resolver below),
+  // so decided approvals stop stacking up as their own rows; still-pending ones stay
+  // rows so their card keeps its buttons.
+  const resolvePermissionForRow = useCallback(
+    (message: ChatMessage) =>
+      message.permission_request_id ? permissionRequestsById.get(message.permission_request_id) : undefined,
+    [permissionRequestsById],
+  );
+  const shownRows = useMemo(
+    () => buildTranscriptRows(shownMessages, undefined, resolvePermissionForRow),
+    [shownMessages, resolvePermissionForRow],
+  );
 
   // Marker runs, resolved once per message list rather than per row: the row
   // loop needs to know both "does a group START here" and "is this marker
