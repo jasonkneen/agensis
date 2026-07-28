@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   ArrowRight,
   Brain,
@@ -5,8 +6,10 @@ import {
   FileText,
   Github,
   MessageSquare,
+  Minus,
   MousePointer2,
   PenTool,
+  Plus,
   Users,
 } from 'lucide-react';
 
@@ -33,6 +36,9 @@ function Nav() {
           </a>
           <a href="#teams" className="text-agensis-muted hover:text-white transition-colors">
             For teams
+          </a>
+          <a href="#faq" className="text-agensis-muted hover:text-white transition-colors">
+            FAQ
           </a>
           <a
             href={REPO_URL}
@@ -411,6 +417,118 @@ function Pricing() {
   );
 }
 
+
+// FAQ ------------------------------------------------------------------------
+// One open at a time, the first open on load. Single-open rather than
+// independent toggles because these answers are read while deciding, not
+// compared side by side — and an accordion where everything can be open at once
+// is just a long page with extra clicks.
+const faqs: { q: string; a: string[] }[] = [
+  {
+    q: 'What is agensis?',
+    a: [
+      'One shared workspace where a team and its AI agents work in the same room: a realtime canvas, chat, documents and a shared memory, rather than four tools and a pile of tabs.',
+      'Agents are members of that room. They read the same threads, write to the same documents, and leave their work where the conversation happened — so context survives the person who created it.',
+    ],
+  },
+  {
+    q: 'What do I need to run it?',
+    a: [
+      'The app itself and somewhere to run it. agensis is free and self-hosted, so your data stays on your own infrastructure.',
+      'Agents use the AI subscriptions you already pay for. There is no separate agensis inference bill.',
+    ],
+  },
+  {
+    q: 'Is it really free?',
+    a: [
+      'Yes — the whole app, with no feature gates. Self-hosting means you provide the infrastructure and keep the data.',
+      'The only paid option is hosted storage if you would rather not run your own: $6 per user per month for 100 GB pooled across the team, with backups and versioning.',
+    ],
+  },
+  {
+    q: 'Where does my data live?',
+    a: [
+      'Wherever you put it. Self-hosted means the canvas, documents, messages and memory sit on infrastructure you control.',
+      'Hosted storage is opt-in and additive — a place to keep files, not a condition of using the product.',
+    ],
+  },
+  {
+    q: 'Can I bring my own agents?',
+    a: [
+      'Yes. Agents connect to a workspace and appear alongside everyone else, so an agent you already run can join a channel and be addressed like any other member.',
+      'Each one can use whichever model suits its job; they do not all have to run the same thing.',
+    ],
+  },
+  {
+    q: 'Do agents act on their own?',
+    a: [
+      'They keep work moving between your check-ins, and everything they do lands in a thread you can read.',
+      'You set the direction and make the final call. Nothing an agent does is hidden from the room it happened in.',
+    ],
+  },
+  {
+    q: 'Is it open source?',
+    a: ['Yes. The source is on GitHub, and self-hosting is the default rather than an enterprise upsell.'],
+  },
+];
+
+function Faq() {
+  const [open, setOpen] = useState(0);
+
+  return (
+    <section id="faq" className="relative border-t border-agensis-border">
+      <div className="mx-auto max-w-3xl px-6 py-24">
+        <div className="max-w-2xl">
+          <div className="text-xs uppercase tracking-wider text-agensis-accent">FAQ</div>
+          <h2 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">
+            Questions, answered.
+          </h2>
+        </div>
+
+        <div className="mt-12 divide-y divide-agensis-border border-y border-agensis-border">
+          {faqs.map(({ q, a }, i) => {
+            const expanded = open === i;
+            const answerId = `faq-answer-${i}`;
+            return (
+              <article key={q}>
+                <h3>
+                  {/* The whole row is the control, not just the icon: a 28px
+                      target beside a full-width heading is a miss waiting to
+                      happen, especially on touch. */}
+                  <button
+                    type="button"
+                    onClick={() => setOpen(expanded ? -1 : i)}
+                    aria-expanded={expanded}
+                    aria-controls={answerId}
+                    className="flex w-full items-center justify-between gap-6 py-5 text-left transition-colors hover:text-white"
+                  >
+                    <span className="min-w-0 flex-1 text-base font-medium text-white sm:text-lg">
+                      {q}
+                    </span>
+                    <span
+                      aria-hidden
+                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-agensis-border bg-agensis-panel text-agensis-accent"
+                    >
+                      {expanded ? <Minus className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+                    </span>
+                  </button>
+                </h3>
+                <div id={answerId} hidden={!expanded} className="-mt-1 pb-6">
+                  {a.map(para => (
+                    <p key={para} className="mt-3 text-sm leading-relaxed text-agensis-muted first:mt-0">
+                      {para}
+                    </p>
+                  ))}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function CTA() {
   return (
     <section className="relative border-t border-agensis-border">
@@ -457,6 +575,7 @@ export default function App() {
         <Features />
         <Teams />
         <Pricing />
+        <Faq />
         <CTA />
       </main>
       <Footer />
