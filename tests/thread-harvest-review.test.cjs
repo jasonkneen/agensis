@@ -47,8 +47,8 @@ test('a verdict is only a verdict if it is one of the two we recognise', () => {
 
 test('three kinds land in the two stores that are actually writable', () => {
   assert.equal(harvestAcceptTarget({ kind: 'memory' }).table, 'memory_facts');
-  assert.equal(harvestAcceptTarget({ kind: 'memory' }).category, 'harvested',
-    'its own category, so a harvested fact is distinguishable from a typed one');
+  assert.equal(harvestAcceptTarget({ kind: 'memory' }).category, 'suggested',
+    'its own category, so a suggested fact is distinguishable from a typed one');
   assert.equal(harvestAcceptTarget({ kind: 'doc' }).table, 'documents');
   // A skill has no app-side store — agent_skill_documents is daemon-owned and
   // read-only — so it becomes a written page rather than a claim nobody checked.
@@ -65,7 +65,7 @@ test('an accepted page carries its provenance in the DOCUMENT, not just on scree
     { threadTitle: 'the netlify thing', discardedAt: '2026-07-29T09:00:00Z' },
   );
   assert.ok(content.startsWith('Deploy from a clean clone.'), 'the body leads');
-  assert.match(content, /discarded thread/);
+  assert.match(content, /Suggested from a discarded conversation/);
   assert.match(content, /the netlify thing/);
   assert.match(content, /2026-07-29/);
   // The thread is already deleted, so a reader six months out has no other way
@@ -196,7 +196,7 @@ test('accepting a memory proposal is what writes it into memory_facts', async ()
 
   assert.equal(inserted.length, 1);
   assert.equal(inserted[0].fact, 'Deploy from a clean clone.', 'the MODEL body is what lands, not anything the client sent');
-  assert.equal(inserted[0].category, 'harvested');
+  assert.equal(inserted[0].category, 'suggested');
   assert.equal(inserted[0].workspace_id, 'ws-1');
   const finding = current().findings[0];
   assert.equal(finding.decision, 'accepted');
@@ -214,7 +214,7 @@ test('accepting a doc proposal writes a page carrying its provenance', async () 
   await harvestApi.decideHarvestFinding({ userId: 'u1', workspaceId: 'ws-1', harvestId: 'h1', index: 1, decision: 'accept' });
 
   assert.equal(inserted[0].title, 'Why two backends');
-  assert.equal(inserted[0].folder, 'Harvested');
+  assert.equal(inserted[0].folder, 'Suggestions');
   assert.match(inserted[0].content, /One database, two servers\./);
   assert.match(inserted[0].content, /the netlify thing/);
 });

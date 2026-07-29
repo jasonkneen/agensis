@@ -102,7 +102,10 @@ const { createAgentConnections } = require('./agent-connections.cjs');
 const { createTaskDispatch } = require('./task-dispatch.cjs');
 const { createAgentJobs } = require('./agent-jobs.cjs');
 const { createBuiltinTurn } = require('./builtin-turn.cjs');
-const { createThreadHarvest, isDiscardTransition, mountThreadHarvestRoutes } = require('./thread-harvest.cjs');
+const {
+ createThreadHarvest, isDiscardTransition, mountThreadHarvestRoutes,
+ SUGGEST_SWEEP_INTERVAL_MS,
+} = require('./thread-harvest.cjs');
 
 const TASK_MENTION_CLAIM_MS = 5_000;
 const { mountFeedbackRoutes } = require('./feedback-routes.cjs');
@@ -936,8 +939,10 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_split_parent ON chat_sessions(split_parent_id);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_deleted ON chat_sessions(workspace_id, deleted_at);
 
-    -- Proposals mined from a discarded thread. See server/thread-harvest.cjs for
-    -- why these are proposals and never direct writes into memory_facts/documents.
+    -- Suggestions mined from a conversation, by either trigger (the thread was
+    -- discarded, or it went quiet). See server/thread-harvest.cjs for why these
+    -- are proposals and never direct writes into memory_facts/documents, and
+    -- why the table keeps the older name while the product says "Suggestions".
     CREATE TABLE IF NOT EXISTS thread_harvests (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -950,10 +955,21 @@ async function ensureRuntimeSchema() {
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+    -- The watermark: the newest message a COMPLETED analysis of this session has
+    -- already considered. It is what makes a live conversation cheap to keep
+    -- mining — the next run reads only what has been said since, instead of the
+    -- whole channel from message 1. Nullable, and null means "read from the
+    -- start", so every row that predates this column behaves as it always did.
+    ALTER TABLE thread_harvests ADD COLUMN IF NOT EXISTS cursor_at timestamptz;
     CREATE INDEX IF NOT EXISTS idx_thread_harvests_pending ON thread_harvests(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_thread_harvests_workspace ON thread_harvests(workspace_id, created_at DESC);
+    -- Both halves of the idle sweep's per-session lookup: the watermark and the
+    -- cooldown are read together, once per candidate session, every five minutes.
+    CREATE INDEX IF NOT EXISTS idx_thread_harvests_session ON thread_harvests(session_id, updated_at DESC);
     -- One OPEN harvest per thread: deleting the same thread twice (two clients, a
     -- retry) must not stack a second pending row or bill a second model call.
+    -- The idle sweep leans on this too — it is what makes a race between two
+    -- server processes cost one row rather than two model calls.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_harvests_one_open
       ON thread_harvests(session_id) WHERE status IN ('pending', 'running');
 
@@ -7122,10 +7138,13 @@ const {
  BUILTIN_TOOL_LOOP_MAX_STEPS, BUILTIN_TOOL_NOTE, BUILTIN_TOOL_RESULT_MAX_CHARS,
 } = builtinTurn;
 
-// Mines a discarded thread for skills/memories/docs worth keeping. Constructed
-// here, after runAnthropicCompletion is bound, because that is the one-shot
-// model call it analyses with.
-const { queueThreadHarvest, runDueThreadHarvests, listThreadHarvests, decideHarvestFinding } = createThreadHarvest({
+// Mines this workspace's conversations for skills/memories/docs worth keeping —
+// "Suggestions" in the product. Constructed here, after runAnthropicCompletion
+// is bound, because that is the one-shot model call it analyses with.
+const {
+ queueThreadHarvest, runDueThreadHarvests, sweepIdleSessionHarvests,
+ listThreadHarvests, decideHarvestFinding,
+} = createThreadHarvest({
  getDb: () => getDb(),
  runAnthropicCompletion: (...a) => runAnthropicCompletion(...a),
  notifyDbSubscribers: (...a) => notifyDbSubscribers(...a),
@@ -8160,10 +8179,34 @@ function startBackendServer(port = DEFAULT_PORT) {
  }, 1_000);
  automationWorker.unref?.();
 
+ // Suggestions: notice the conversations that have gone quiet and queue them.
+ //
+ // Its own timer at five minutes rather than a passenger on the 30s reaper.
+ // The selector is a join over `messages` and the per-session cooldown means it
+ // has nothing to do on almost every pass, so running it 10x more often would
+ // be 10x the query for the same result — and five minutes of latency against a
+ // three-hour idle threshold is not latency.
+ //
+ // ENQUEUEING IS NOT SPENDING. This only writes 'pending' rows, capped at
+ // SUGGEST_SWEEP_LIMIT per pass; the model calls stay behind
+ // runDueThreadHarvests on the 30s tick, at its unchanged 3 per tick. The
+ // in-flight boolean is the same pattern as the two workers above: a slow sweep
+ // skips the next pass rather than stacking on top of itself.
+ let suggestionSweepRunning = false;
+ const suggestionSweeper = setInterval(() => {
+  if (suggestionSweepRunning) return;
+  suggestionSweepRunning = true;
+  void sweepIdleSessionHarvests()
+   .catch(error => console.error('[thread-harvest] idle sweep failed:', error.message || error))
+   .finally(() => { suggestionSweepRunning = false; });
+ }, SUGGEST_SWEEP_INTERVAL_MS);
+ suggestionSweeper.unref?.();
+
  server.on('close', () => {
   clearInterval(jobReaper);
   clearInterval(flowDeliveryWorker);
   clearInterval(automationWorker);
+  clearInterval(suggestionSweeper);
   wss.close();
   realtime.reset();
  });
