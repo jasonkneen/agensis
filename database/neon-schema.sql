@@ -687,6 +687,39 @@ CREATE TABLE IF NOT EXISTS workspace_agent_templates (
 CREATE INDEX IF NOT EXISTS idx_workspace_agent_templates_workspace_id
   ON workspace_agent_templates(workspace_id);
 
+-- WORKSPACE-AUTHORED SKILLS. The app-side skill store.
+--
+-- agent_skill_documents (above) is daemon-owned: written by an agent_skill_sync
+-- push, keyed per agent, read-only in-app and absent from ALLOWED_TABLES. This
+-- table is the writable, workspace-scoped half. Sync direction is UNCHANGED --
+-- skills still flow UP from daemons; nothing here is written down onto anyone's
+-- disk. Agents read these bodies at turn time through the `read_skill` MCP tool,
+-- which fences them as untrusted data.
+--
+-- THE ABSENT COLUMNS ARE THE SECURITY CONTROL: no base_url, no credential, no
+-- endpoints, no mcp, no code, no path, no agent_id, no tools, no
+-- permission_mode. A workspace skill carries PROSE and never AUTHORITY. The
+-- privilege-bearing skill shape lives in workspace_agents.metadata.sandbox_skills,
+-- which is MANAGE_ONLY. See shared/workspaceSkills.cjs.
+CREATE TABLE IF NOT EXISTS workspace_skills (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  title text NOT NULL,
+  summary text DEFAULT '',
+  body text NOT NULL,
+  revision integer NOT NULL DEFAULT 1,
+  source text NOT NULL DEFAULT 'authored',
+  origin jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_by uuid,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE (workspace_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_skills_workspace_id
+  ON workspace_skills(workspace_id);
+
 CREATE TABLE IF NOT EXISTS uploaded_files (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,

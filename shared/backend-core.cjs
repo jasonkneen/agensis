@@ -103,6 +103,23 @@ const ALLOWED_TABLES = new Set([
  // there is nothing privileged for a generic write to reach. See the DDL
  // comment in server/index.cjs and shared/agentTemplates.cjs.
  'workspace_agent_templates',
+ // Workspace-authored skills — the app-side skill store. READ through the
+ // generic /db path so the Skills window's list goes live over the same realtime
+ // db_changes subscription every other table uses. Every WRITE is gated to
+ // 'manage' below and goes through /backend/workspaces/:id/skills instead,
+ // because that route is the only place shared/workspaceSkills.cjs runs — and
+ // the validator is what enforces the name rule, the 64 KiB body cap, and the
+ // refusal of a never-carried field. A row written straight through
+ // /backend/db/insert would be a skill with a name `read_skill` cannot look up,
+ // or a body larger than the loader will ever return.
+ //
+ // What makes 'read' safe here is the SHAPE, the same argument
+ // workspace_agent_templates makes: the table has no column for a base_url, a
+ // credential, an mcp server, code or a filesystem path, so there is nothing
+ // privileged for a generic select to reach. SELECTABLE_COLUMNS_BY_TABLE still
+ // pins the column list, because a table in ALLOWED_TABLES with no allow-list
+ // returns every column a later migration adds.
+ 'workspace_skills',
  // Scheduled agent runs. READ through the generic /db path for one reason: a
  // client cannot subscribe to a table it cannot select (authorizeRealtimeBinding
  // -> ensureTable -> enforceDbOperationAccess('select')), and
@@ -167,6 +184,7 @@ const JSON_COLUMNS_BY_TABLE = {
  tasks: new Set(['attachments']),
  feedback_reports: new Set(['page', 'selections', 'diagnostics']),
  workspace_agent_templates: new Set(['tools', 'skills', 'origin']),
+ workspace_skills: new Set(['origin']),
  automations: new Set(['definition']),
  automation_runs: new Set(['payload', 'steps']),
 };
@@ -212,6 +230,10 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  'agent_permission_requests', 'thread_harvests',
  'automations', 'automation_runs',
  'workspace_agent_templates',
+ // Without this line a skill body authored in one workspace is selectable by
+ // any signed-in user in every other one — enforceDbOperationAccess returns
+ // early for a table it does not find here. See the note below.
+ 'workspace_skills',
  // Load-bearing, not tidy. enforceDbOperationAccess returns EARLY for any table
  // that is not in this set (`if (!WORKSPACE_SCOPED_TABLES.has(table) && table !==
  // 'messages') return;`) — so a table that is in ALLOWED_TABLES but missing here
@@ -255,6 +277,17 @@ const DB_TABLE_ACCESS = {
  // which 'write' can already do directly on an agent. The control is the
  // table's SHAPE, not its capability row — it has no privilege-bearing column.
  workspace_agent_templates: DEFAULT_TABLE_ACCESS,
+ // SELECT is 'read' — every member needs the skill list, and the row holds
+ // nothing privileged (the table has no base_url, credential, mcp, code or path
+ // column; that absence is the control, see the DDL comment). Every WRITE is
+ // 'manage' to match agent_schedules/automations: authoring is a 'write'
+ // capability, but it happens through POST/PATCH/DELETE
+ // /backend/workspaces/:id/skills, which is the ONLY place
+ // normalizeWorkspaceSkill runs. Gating the generic path harder than the
+ // dedicated one is what makes "the validator always ran" true rather than
+ // customary — a name that fails the agentskills.io rule is a skill `read_skill`
+ // can never look up, and a 100 KiB body is one the loader silently truncates.
+ workspace_skills: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_connections: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
  cursorbuddy_connection_keys: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_jobs: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
@@ -347,6 +380,14 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
  // erase the only record of where an attacker-influenced system prompt came
  // from — which is the question someone will ask when an agent misbehaves.
  workspace_agent_templates: new Set([
+  'source',
+  'origin',
+ ]),
+ // Same reason, same two columns. Provenance is written only by the dedicated
+ // routes: a generic write that could set source='authored' on a body accepted
+ // from a thread harvest, or rewrite `origin`, would erase the only record of
+ // where a procedure an agent is about to follow actually came from.
+ workspace_skills: new Set([
   'source',
   'origin',
  ]),
@@ -450,6 +491,19 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
  // of yet is excluded by default rather than by review.
  gateway_configs: [
   'id', 'workspace_id', 'name', 'base_url', 'model', 'protocol', 'created_at', 'updated_at',
+ ],
+ // Pinned even though every column here is currently harmless, because a table
+ // in ALLOWED_TABLES with NO entry in this map returns EVERY column to any
+ // member with 'read' — including whatever a future migration adds. This table
+ // is the one people will be tempted to extend (a `path`, an `agent_id`, a
+ // provider hint), so the allow-list is the thing that makes such a column a
+ // deliberate exposure rather than an automatic one.
+ //
+ // `body` IS listed: it is the skill, and the Skills window renders it. What is
+ // NOT listed is nothing today — the point is the next column.
+ workspace_skills: [
+  'id', 'workspace_id', 'name', 'title', 'summary', 'body', 'revision',
+  'source', 'origin', 'created_by', 'created_at', 'updated_at',
  ],
 };
 

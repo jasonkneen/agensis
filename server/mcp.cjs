@@ -242,6 +242,12 @@ const SKILL_ORIGIN_LABEL = Object.freeze({
  daemon: 'a file mirrored from the machine that has this skill',
  sandbox: 'an agensis skill definition',
  host: 'a skill library on the agensis backend host',
+ // Authored in this workspace, in the app. Named as such rather than folded
+ // into "an agensis skill definition" because the two have different authors and
+ // different trust: a sandbox definition is agensis's own and carries a
+ // credentialed call, while this is prose a teammate wrote. The fence around the
+ // body already says it is untrusted; the label says whose words they are.
+ workspace: 'a skill written by someone in this workspace',
 });
 
 // =============================================================================
@@ -1102,7 +1108,7 @@ function buildTools() {
  //    point of storing it rather than fetching it.
  add({
   name: 'list_skills',
-  description: 'List every skill in this workspace and which agents have each one. Each agent is marked `advertised` (a live daemon reported it, so that machine really has it) or `configured` (it is on the agent\'s profile). `has_content` says whether a readable document exists — use read_skill on those.',
+  description: 'List every skill in this workspace and which agents have each one. Each agent is marked `advertised` (a live daemon reported it, so that machine really has it) or `configured` (it is on the agent\'s profile). `has_content` says whether a readable document exists — use read_skill on those. `in_store` means the skill was written here in agensis rather than mirrored from a machine, so it is readable by ANY agent and stays readable while every daemon is offline; such a skill can have no agents at all and still be worth reading.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -1119,6 +1125,11 @@ function buildTools() {
     .map((skill) => ({
      name: skill.name,
      has_content: skill.hasContent,
+     in_store: skill.inStore === true,
+     // The frontmatter `description:` of a stored skill. Present so an agent can
+     // choose which skill to read without spending a read_skill call on each —
+     // '' for a name agensis only knows as a name.
+     summary: String(skill.summary || ''),
      agents: skill.agents.map((a) => ({
       name: a.name,
       handle: a.handle,

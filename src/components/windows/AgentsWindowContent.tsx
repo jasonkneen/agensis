@@ -59,6 +59,7 @@ import {
 } from '@/components/ui/empty';
 import {
   Field,
+  FieldDescription,
   FieldGroup,
   FieldLabel,
 } from '@/components/ui/field';
@@ -85,6 +86,7 @@ import {
 } from '../../lib/agentVoice';
 import { useCartesiaVoices } from '../../hooks/useCartesiaVoices';
 import { useAgentTemplates } from '../../hooks/useAgentTemplates';
+import { useWorkspaceSkills } from '../../hooks/useWorkspaceSkills';
 
 // 418 English voices in one <select> is a scroll nobody finishes; the search
 // box above it is the real control.
@@ -104,8 +106,13 @@ import {
 } from '../../lib/agentTemplates';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { SkillChipsInput } from '../agents/SkillChipsInput';
-import { buildSkillEntries } from '../../lib/skillsView';
-import { buildSkillSuggestions, type SkillSuggestion } from '../../lib/skillTokens';
+import { buildSkillEntries, type SkillEntry } from '../../lib/skillsView';
+import {
+  buildSkillSuggestions,
+  parseSkillTokens,
+  unresolvedSkillTokens,
+  type SkillSuggestion,
+} from '../../lib/skillTokens';
 import { oneOf, setOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useSplitResize } from '../../hooks/useSplitResize';
@@ -475,9 +482,26 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   // daemon, configured on any agent, shipped by agensis, or a library on the
   // backend host. The old field only ever knew the last of those, so a skill
   // sitting on the agent next to this one couldn't be suggested.
+  // Computed once for BOTH forms, and now used twice: the menu offers these
+  // names, and the dangling-reference check under the field asks the same rows
+  // which of the chosen names anything can actually supply a body for.
+  //
+  // The workspace store is fetched here rather than threaded down so the two
+  // consumers cannot disagree about what exists. `unavailable` (an older
+  // backend) simply yields no stored rows, which is the pre-store behaviour.
+  const workspaceSkillStore = useWorkspaceSkills(workspaceId || null);
+  const skillEntries = useMemo(
+    () => buildSkillEntries(
+      agents,
+      connections,
+      undefined,
+      workspaceSkillStore.skills.map(skill => ({ id: skill.id, name: skill.name, summary: skill.summary })),
+    ),
+    [agents, connections, workspaceSkillStore.skills],
+  );
   const skillSuggestions = useMemo(
-    () => buildSkillSuggestions(buildSkillEntries(agents, connections), capabilities),
-    [agents, connections, capabilities],
+    () => buildSkillSuggestions(skillEntries, capabilities),
+    [skillEntries, capabilities],
   );
   const runtimeChoices = useMemo(() => runtimeChoicesFromConnections(connections), [connections]);
 
@@ -755,6 +779,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 runtimeChoices={runtimeChoices}
                 capabilities={capabilities}
                 skillSuggestions={skillSuggestions}
+                skillEntries={skillEntries}
                 onNameChange={setNewName}
                 onAvatarChange={(value) => {
                   setNewAvatar(value);
@@ -1077,6 +1102,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   capabilities={capabilities}
                   runtimeChoices={runtimeChoices}
                   skillSuggestions={skillSuggestions}
+                  skillEntries={skillEntries}
                   webhooks={webhooks.filter(webhook => webhook.agent_id === selectedAgent.id)}
                   connections={connections.filter(connection => connection.agent_id === selectedAgent.id)}
                   roster={agents}
@@ -1273,6 +1299,7 @@ function AgentForm({
   runtimeChoices,
   capabilities,
   skillSuggestions,
+  skillEntries,
   onNameChange,
   onAvatarChange,
   onOpenPetAvatarChange,
@@ -1318,6 +1345,8 @@ function AgentForm({
   capabilities: SystemCapabilities | null;
   /** Every skill name this workspace knows, for the Skills field's menu. */
   skillSuggestions: SkillSuggestion[];
+  /** The same rows, for the dangling-reference check under the field. */
+  skillEntries: SkillEntry[];
   onNameChange: (value: string) => void;
   onAvatarChange: (value: string) => void;
   onOpenPetAvatarChange: (pet: OpenPet) => void;
@@ -1653,6 +1682,23 @@ function AgentForm({
           onChange={onSkillsChange}
           suggestions={skillSuggestions}
         />
+        {/* THE DANGLING-REFERENCE WARNING. A skill list is a list of NAMES, and
+            a name resolves to nothing on its own — so a template authored
+            elsewhere could hand this form `security-review` and the agent would
+            advertise a skill it cannot read. Said here, at the moment the names
+            are chosen, because the fix (write the procedure in Skills) is now a
+            real thing somebody can go and do. */}
+        {(() => {
+          const dangling = unresolvedSkillTokens(parseSkillTokens(skills), skillEntries);
+          if (dangling.length === 0) return null;
+          return (
+            <FieldDescription className="text-amber-600 dark:text-amber-500">
+              {dangling.length === 1
+                ? <>No procedure exists for <code className="font-mono">{dangling[0]}</code> — the agent will claim the name without being able to read it. Write it in Skills, or connect a machine that has it.</>
+                : <>No procedure exists for {dangling.length} of these ({dangling.slice(0, 4).join(', ')}{dangling.length > 4 ? '…' : ''}) — the agent will claim those names without being able to read them.</>}
+            </FieldDescription>
+          );
+        })()}
       </Field>
 
       {extraSections}
@@ -1698,6 +1744,7 @@ function AgentDetailPane({
   capabilities,
   runtimeChoices,
   skillSuggestions,
+  skillEntries,
   webhooks,
   connections,
   roster,
@@ -1727,6 +1774,7 @@ function AgentDetailPane({
   runtimeChoices: AgentRuntimeChoice[];
   /** Passed straight through to the Skills field; built once for both forms. */
   skillSuggestions: SkillSuggestion[];
+  skillEntries: SkillEntry[];
   webhooks: AgentWebhook[];
   connections: AgentConnection[];
   /**
@@ -1939,6 +1987,7 @@ function AgentDetailPane({
             runtimeChoices={runtimeChoices}
             capabilities={capabilities}
             skillSuggestions={skillSuggestions}
+            skillEntries={skillEntries}
             onNameChange={setEditName}
             onAvatarChange={(value) => {
               setEditAvatar(value);

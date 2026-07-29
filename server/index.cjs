@@ -21,6 +21,7 @@ const {
 } = require('./flow-integration.cjs');
 const { createAutomations, mountAutomationRoutes } = require('./automations.cjs');
 const { createAgentTemplates, mountAgentTemplateRoutes } = require('./agent-templates-routes.cjs');
+const { createWorkspaceSkills, mountWorkspaceSkillRoutes } = require('./workspace-skills-routes.cjs');
 const { normalizeAgentTemplate, agentToTemplateDraft } = require('../shared/agentTemplates.cjs');
 // Reactions are written through the generic /backend/db/update route as a whole
 // jsonb map, so their flow events come from diffing that map — see the module
@@ -1625,6 +1626,61 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_workspace_agent_templates_workspace_id
       ON workspace_agent_templates(workspace_id);
+
+    -- WORKSPACE-AUTHORED SKILLS. The app-side skill store.
+    --
+    -- Before this table, agent_skill_documents (above) was the only place a
+    -- skill BODY could live, and it is daemon-owned: written by an
+    -- agent_skill_sync push, keyed per agent, read-only in-app, and absent from
+    -- ALLOWED_TABLES entirely. Nothing in the browser could write a skill, so
+    -- two shipped features were bent around the hole — Suggestions accepted a
+    -- proposed skill as a Document in a "Skills" folder, and an agent
+    -- template's skills list exported NAMES that resolved to nothing.
+    --
+    -- SYNC DIRECTION IS UNCHANGED, DELIBERATELY. Skills still flow UP from
+    -- daemons into agent_skill_documents. Nothing here flows DOWN onto anyone's
+    -- disk: an app-side row that wrote a file onto a user's machine would be a
+    -- strictly larger authority than any daemon has today, and the same
+    -- category as host_folders -> --add-dir, which is MANAGE_ONLY. Agents
+    -- reach these bodies at turn time through the read_skill MCP tool, which
+    -- already existed, already fences a body as untrusted data, and already
+    -- reads STORED content — so a skill stays readable when no daemon is up.
+    --
+    -- THE ABSENT COLUMNS ARE THE SECURITY CONTROL, and adding one later is a
+    -- security decision rather than a schema tidy-up. There is deliberately no
+    -- base_url, no credential, no endpoints, no mcp, no code, no path, no
+    -- agent_id, no tools and no permission_mode. A workspace skill carries
+    -- PROSE; it never carries AUTHORITY. The privilege-bearing skill shape
+    -- already has a home — workspace_agents.metadata.sandbox_skills, which is
+    -- MANAGE_ONLY for precisely the reason those fields are absent here: a
+    -- base_url is a host THE SERVER FETCHES with a stored credential attached.
+    -- See shared/workspaceSkills.cjs for the validator and the role argument.
+    CREATE TABLE IF NOT EXISTS workspace_skills (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      -- agentskills.io's name rule (lowercase, digits, single hyphens, <= 64):
+      -- this value is the lookup key for read_skill, the folder name if the
+      -- skill is ever exported, and an element of a template's skills array.
+      name text NOT NULL,
+      title text NOT NULL,
+      summary text DEFAULT '',
+      -- Capped at 64 KiB by the validator, matching SKILL_CONTENT_MAX_BYTES in
+      -- server/skill-content.cjs: the body is read back through the same loader
+      -- that caps a daemon document, so a bigger one would only be truncated.
+      body text NOT NULL,
+      revision integer NOT NULL DEFAULT 1,
+      -- 'authored' (typed here), 'suggested' (accepted from a thread harvest),
+      -- 'imported' (crossed a workspace boundary). Provenance, so "where did
+      -- this procedure come from" has an answer when an agent follows it.
+      source text NOT NULL DEFAULT 'authored',
+      origin jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_by uuid,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      UNIQUE (workspace_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_skills_workspace_id
+      ON workspace_skills(workspace_id);
 
     CREATE TABLE IF NOT EXISTS memory_file_comments (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -7200,6 +7256,10 @@ const {
  onWarn: (message) => console.warn('[thread-harvest]', message),
  enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
  badRequest,
+ // Wrapped in an arrow rather than passed by value because the skill store is
+ // constructed further down this file. Same lazy-binding pattern as `getDb`
+ // above; by the time a human accepts a suggestion, every binding is settled.
+ writeWorkspaceSkill: (...a) => writeWorkspaceSkill(...a),
 });
 
 // Workspace automations — the event-triggered/internal-action cell that
@@ -7239,6 +7299,25 @@ const {
  enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
  normalizeAgentTemplate,
  agentToTemplateDraft,
+});
+
+// The app-side skill store. Same shape and same reasoning as agent templates:
+// the validator is shared/workspaceSkills.cjs, its output is REBUILT from a
+// carried-field list, and the table has no column a privilege-bearing field
+// could land in. `writeSkill` is destructured too because the thread-harvest
+// accept path uses it — accepting a proposed skill must go through the SAME
+// validator and the SAME insert as authoring one by hand, or the store grows a
+// second door with different rules.
+const {
+ listSkills: listWorkspaceSkillRows,
+ createSkill: createWorkspaceSkill,
+ updateSkill: updateWorkspaceSkill,
+ deleteSkill: deleteWorkspaceSkill,
+ writeSkill: writeWorkspaceSkill,
+} = createWorkspaceSkills({
+ getDb: () => getDb(),
+ notifyDbSubscribers: (...a) => notifyDbSubscribers(...a),
+ enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
 });
 
 // Agent jobs hold no in-process state — a job's liveness is a database fact, so
@@ -7655,6 +7734,19 @@ function createApp() {
   ...coreDeps(),
   listAgentTemplates, createAgentTemplate, saveAgentAsTemplate,
   updateAgentTemplate, deleteAgentTemplate,
+ });
+ // The app-side skill store. Authoring is 'write' for the same reason as a
+ // template — a 'write' member can already type prose into an agent's
+ // system_prompt, which the agent obeys as TRUSTED text every turn, while a
+ // skill body reaches an agent FENCED as untrusted reference data. Generic
+ // /backend/db writes on the table are gated to 'manage', so this is the only
+ // door where the validator runs.
+ mountWorkspaceSkillRoutes(app, {
+  ...coreDeps(),
+  listSkills: listWorkspaceSkillRows,
+  createSkill: createWorkspaceSkill,
+  updateSkill: updateWorkspaceSkill,
+  deleteSkill: deleteWorkspaceSkill,
  });
  mountInboxRoutes(app, { ...coreDeps(), INBOX_DEFAULT_LIMIT, INBOX_FILTERS, INBOX_MAX_LIMIT, THREAD_INBOX_DEFAULT_LIMIT, buildInboxSql, buildThreadInboxSql, inboxMentionHandle, inboxMentionPattern, toInboxItem, toThreadInboxItem });
  mountSessionAccessRoutes(app, { ...coreDeps(), revokeRealtimeAccessForMember });
