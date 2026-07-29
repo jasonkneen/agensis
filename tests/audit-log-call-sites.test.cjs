@@ -192,7 +192,7 @@ test('an invite records the email DOMAIN and never the token or the local-part',
 test('a vault write records the key NAME and never the value', async () => {
   // The highest-severity thing this feature could get wrong.
   // MUTATION: put the value into `after` or into detail -> fails.
-  const SECRET = 'sk-live-REALSECRETVALUE-1234567890';
+  const SECRET = 'testkey-live-REALSECRETVALUE-1234567890';
   const db = makeDb();
   __test.setTestDb(db);
   const token = await __test.issueToken(USER, '1');
@@ -209,7 +209,7 @@ test('a vault write records the key NAME and never the value', async () => {
   assert.equal(row.action, 'vault.secret_set');
   assert.equal(row.after_value, 'configured');
   assert.equal(row.serialized.includes(SECRET), false);
-  assert.equal(row.serialized.includes('sk-live'), false);
+  assert.equal(row.serialized.includes('testkey-live'), false);
   assert.equal(row.detail.key, 'STRIPE_KEY', 'the key NAME is what makes the row useful');
   assert.equal(row.detail.configured, true);
 

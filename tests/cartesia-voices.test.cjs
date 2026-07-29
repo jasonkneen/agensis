@@ -23,7 +23,7 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 
-process.env.CARTESIA_API_KEY = process.env.CARTESIA_API_KEY || 'sk_car_test_key';
+process.env.CARTESIA_API_KEY = process.env.CARTESIA_API_KEY || 'testkey_car_test_key';
 const { __test } = require('../server/index.cjs');
 
 const voice = (id, name, language) => ({

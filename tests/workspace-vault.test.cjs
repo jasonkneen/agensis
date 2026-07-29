@@ -225,8 +225,8 @@ test('the vault list shows every namespaced entry, grouped, and no part of any v
     roles: ROLES,
     secrets: {
       [`${WS}:${BOX_KEY}`]: cipher,
-      [`${WS}:STRIPE_TOKEN`]: await __test.encryptVaultSecret('sk_live_something'),
-      [`${WS}:ANTHROPIC_API_KEY`]: await __test.encryptVaultSecret('sk-ant-workspace'),
+      [`${WS}:STRIPE_TOKEN`]: await __test.encryptVaultSecret('testkey_live_something'),
+      [`${WS}:ANTHROPIC_API_KEY`]: await __test.encryptVaultSecret('testkey-ant-workspace'),
       // Another workspace's row, in the same table. It must not appear.
       [`${OTHER_WS}:${BOX_KEY}`]: await __test.encryptVaultSecret('other-workspace-key'),
     },
@@ -504,7 +504,7 @@ test('the managed-secret list reports state, never a preview of the platform key
   const db = makeVaultDb({ roles: ROLES });
   __test.setTestDb(db);
   const previous = process.env.ANTHROPIC_API_KEY;
-  process.env.ANTHROPIC_API_KEY = 'sk-ant-platform-fallback-key';
+  process.env.ANTHROPIC_API_KEY = 'testkey-ant-platform-fallback-key';
   try {
     const keys = await __test.listManagedSecrets(WS);
     assert.equal(keys[0].key, 'ANTHROPIC_API_KEY');
@@ -513,7 +513,7 @@ test('the managed-secret list reports state, never a preview of the platform key
     assert.equal('preview' in keys[0], false);
     // The leak this closes: the preview was of the PLATFORM key, shown to every
     // workspace owner.
-    assertNoSecret(keys, 'the managed-secret list', 'sk-ant-platform-fallback-key');
+    assertNoSecret(keys, 'the managed-secret list', 'testkey-ant-platform-fallback-key');
   } finally {
     if (previous === undefined) delete process.env.ANTHROPIC_API_KEY;
     else process.env.ANTHROPIC_API_KEY = previous;
@@ -837,7 +837,7 @@ test('the Netlify lane refuses a vault write when its key material is not synced
     const managed = await handler(new Request('https://app.test/backend/settings/secrets', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspaceId: WS, ANTHROPIC_API_KEY: 'sk-ant-through-the-mirror' }),
+      body: JSON.stringify({ workspaceId: WS, ANTHROPIC_API_KEY: 'testkey-ant-through-the-mirror' }),
     }));
     assert.equal(managed.status, 503, 'the managed-secret write is the same hazard');
   } finally {

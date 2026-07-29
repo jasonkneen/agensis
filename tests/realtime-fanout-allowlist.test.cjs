@@ -269,7 +269,7 @@ test('channel_bridges config is stripped from the realtime fanout', () => {
     workspace_id: 'ws-1',
     provider: 'slack',
     status: 'connected',
-    config: { botToken: 'xoxb-live-token', signingSecret: 'shhh' },
+    config: { botToken: 'testslack-b-live-token', signingSecret: 'shhh' },
   });
   assert.equal('config' in stripped, false, 'sanitizeRealtimeRow must drop channel_bridges.config');
   assert.equal(stripped.provider, 'slack', 'the rest of the row must survive');

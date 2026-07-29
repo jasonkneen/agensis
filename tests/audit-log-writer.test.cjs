@@ -98,7 +98,7 @@ test('entry_hash is 64 hex chars and covers the row content', async () => {
 
 test('a vault entry carries the key NAME and no value anywhere in the params', async () => {
   // MUTATION: pass the secret through in detail (or in after) -> this fails.
-  const SECRET = 'sk-ant-api03-REALKEYMATERIAL-do-not-log';
+  const SECRET = 'testkey-ant-api03-REALKEYMATERIAL-do-not-log';
   const db = makeDb();
   await recordAuditEntry({
     db,
@@ -111,7 +111,7 @@ test('a vault entry carries the key NAME and no value anywhere in the params', a
   });
   const all = serialized(db);
   assert.equal(all.includes(SECRET), false);
-  assert.equal(all.includes('sk-ant'), false);
+  assert.equal(all.includes('testkey-ant'), false);
   assert.equal(all.includes('ANTHROPIC_API_KEY'), true, 'the key NAME is the useful part and must survive');
 });
 
