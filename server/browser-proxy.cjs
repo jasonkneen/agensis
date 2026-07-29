@@ -55,17 +55,19 @@ function unpackHeaders(raw) {
 /**
  * @param app               express app
  * @param requireAuth       the app's auth middleware — never mount this unauthenticated
- * @param rateLimiter       a createRateLimiter() result. NOT express middleware: it is
- *                          `{ check, reset }`, so it is consulted inside the handler via
- *                          rateLimitBlocked, the same way every other route here does it.
- *                          Passing it as a middleware argument throws
- *                          "argument handler must be a function" at mount time.
- * @param rateLimitBlocked  writes the 429 and returns true when over budget
+ * @param rateLimiter       a createRateLimiter() instance. NOT express middleware:
+ *                          limiters in this codebase are objects with .check(key),
+ *                          applied through rateLimitBlocked. Passing one straight
+ *                          into app.post throws "argument handler must be a
+ *                          function" at mount time, which takes down createApp and
+ *                          therefore the whole backend.
+ * @param rateLimitBlocked  the shared limiter applier
+ * @param clientIpFromReq   resolves the caller's IP behind the proxy
  */
-function installBrowserProxy(app, { requireAuth, rateLimiter, rateLimitBlocked }) {
+function installBrowserProxy(app, { requireAuth, rateLimiter, rateLimitBlocked, clientIpFromReq }) {
  app.post('/backend/browser/fetch', requireAuth, async (req, res) => {
-  if (rateLimitBlocked(res, rateLimiter, req.userId)) return;
-
+  // Without a limit this is an open relay that happens to require a login.
+  if (rateLimitBlocked(res, rateLimiter, clientIpFromReq(req))) return;
   let url;
   try {
    url = await assertSafeBrowsingUrl(decodeURIComponent(req.get('x-relay-url') || ''));
