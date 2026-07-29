@@ -19,6 +19,7 @@ const HUDDLE: Huddle = {
   started_by: 'user-a',
   started_at: '2026-07-25T10:00:00.000Z',
   ended_at: null,
+  notes: '',
 };
 
 let nextSeq = 0;
