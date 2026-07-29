@@ -95,6 +95,14 @@ const ALLOWED_TABLES = new Set([
  // event, available to anyone who could reach /backend/db/insert.
  'automations',
  'automation_runs',
+ // Agent templates ("persona packs"). Readable at 'read' and writable at
+ // 'write' through the generic path, because a template is prose: a 'write'
+ // member can already type a system prompt straight into an agent, so authoring
+ // one grants nothing new. What makes that safe is the SHAPE — the table has no
+ // column for permission_mode, metadata, sandbox_config or a connect token, so
+ // there is nothing privileged for a generic write to reach. See the DDL
+ // comment in server/index.cjs and shared/agentTemplates.cjs.
+ 'workspace_agent_templates',
 ]);
 
 // F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
@@ -135,6 +143,7 @@ const JSON_COLUMNS_BY_TABLE = {
  // reused as-is for tasks since the column is generic.
  tasks: new Set(['attachments']),
  feedback_reports: new Set(['page', 'selections', 'diagnostics']),
+ workspace_agent_templates: new Set(['tools', 'skills', 'origin']),
  automations: new Set(['definition']),
  automation_runs: new Set(['payload', 'steps']),
 };
@@ -179,6 +188,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  'huddles', 'huddle_events', 'feedback_reports', 'orb_deliveries',
  'agent_permission_requests', 'thread_harvests',
  'automations', 'automation_runs',
+ 'workspace_agent_templates',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -210,6 +220,11 @@ const DB_TABLE_ACCESS = {
  tasks: DEFAULT_TABLE_ACCESS,
  document_versions: DEFAULT_TABLE_ACCESS,
  workspace_agents: DEFAULT_TABLE_ACCESS,
+ // Same capabilities as workspace_agents itself, and for the same reason:
+ // authoring a template is no more privileged than typing the prompt it holds,
+ // which 'write' can already do directly on an agent. The control is the
+ // table's SHAPE, not its capability row — it has no privilege-bearing column.
+ workspace_agent_templates: DEFAULT_TABLE_ACCESS,
  agent_connections: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
  cursorbuddy_connection_keys: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_jobs: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
@@ -286,6 +301,14 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
   'connect_token_hash',
   'connect_token',
   'permission_mode',
+ ]),
+ // Provenance, written only by the dedicated routes. A generic write that could
+ // set source='authored' on an imported template, or rewrite `origin`, would
+ // erase the only record of where an attacker-influenced system prompt came
+ // from — which is the question someone will ask when an agent misbehaves.
+ workspace_agent_templates: new Set([
+  'source',
+  'origin',
  ]),
  uploaded_files: new Set([
   'storage_path',

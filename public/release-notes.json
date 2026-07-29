@@ -1,5 +1,18 @@
 [
   {
+    "version": "agent-templates",
+    "date": "2026-07-30",
+    "title": "Save an agent you have tuned, and start the next one from it",
+    "summary": "The starter templates in the new-agent gallery were fixed: fifteen of them, written into the app, changeable only by us. If you spent an afternoon getting an agent's instructions right, there was no way to keep that shape for the next one, and no way to hand it to a colleague's workspace. Now a workspace can have its own. Open any agent and choose Save as template, and it joins the gallery alongside the built-in ones, ready to start the next agent from. Your own templates come first, and one that shares a name with a built-in replaces it, so an edit you made is the one you get. What a template copies is deliberately limited: the wording, the model, the tool and skill lists. It does not copy the agent's permissions, the folders it can reach on your machine, or its connection token. Those are decisions someone makes about one agent on purpose, and they are not the kind of thing that should travel quietly inside something you pass around.",
+    "highlights": [
+      "Save any agent as a reusable template from its detail panel",
+      "Your workspace's templates appear in the gallery next to the built-in ones",
+      "A template of yours with the same name as a built-in one replaces it",
+      "Templates copy wording, model, tools and skills — never permissions, folder access or connection tokens",
+      "The built-in templates keep working exactly as before"
+    ]
+  },
+  {
     "version": "automations",
     "date": "2026-07-30",
     "title": "Rules that run themselves, without asking an agent",
@@ -11,6 +24,19 @@
       "A rule can only post a message, so it can never start an agent or spend tokens",
       "A rule that fires too often is switched off automatically and says why",
       "Only admins can create or change one, and every change is recorded"
+    ]
+  },
+  {
+    "version": "thread-counts-tell-the-truth",
+    "date": "2026-07-29",
+    "title": "Thread reply counts stopped counting the agent's tool calls",
+    "summary": "A thread in the sidebar said 98 replies. The same thread, open in the channel, said 14. The sidebar was counting every tool call the agent made along the way as a reply, and the channel was not — so the two numbers on one screen had never agreed. The sidebar now counts what was said, and names the tool work separately, so \"14 replies, 84 tool calls\" tells you both things instead of hiding one inside the other. The preview line under a thread also stopped showing a tool step where the agent's actual answer should be. Alongside that, the agent activity line in the sidebar — the one meant to say what an agent is doing right now rather than just that it is busy — turned out never to have worked at all, and now does.",
+    "highlights": [
+      "The sidebar and the channel finally agree on how many replies a thread has",
+      "Tool calls are counted and shown separately instead of inflating the reply count",
+      "A thread the agent is still working in says so, rather than reading as empty",
+      "The preview under a thread shows what was said, not the last tool that ran",
+      "The live agent activity line works — it had been waiting for an update that could never arrive"
     ]
   },
   {

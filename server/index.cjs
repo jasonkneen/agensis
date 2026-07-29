@@ -20,6 +20,8 @@ const {
  FLOW_EVENTS,
 } = require('./flow-integration.cjs');
 const { createAutomations, mountAutomationRoutes } = require('./automations.cjs');
+const { createAgentTemplates, mountAgentTemplateRoutes } = require('./agent-templates-routes.cjs');
+const { normalizeAgentTemplate, agentToTemplateDraft } = require('../shared/agentTemplates.cjs');
 // Reactions are written through the generic /backend/db/update route as a whole
 // jsonb map, so their flow events come from diffing that map — see the module
 // header. Shared with netlify/functions/backend.mjs; the two lanes differ only
@@ -1328,6 +1330,9 @@ async function ensureRuntimeSchema() {
     -- agent-authored task comment (task_comments.agent_id).
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS source_task_id uuid;
     CREATE INDEX IF NOT EXISTS idx_messages_source_task_id ON messages(session_id, source_task_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_source_task_root
+      ON messages(source_task_id)
+      WHERE source_task_id IS NOT NULL AND thread_parent_id IS NULL;
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS agent_id uuid;
 
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS memory_dir text DEFAULT '';
@@ -1373,6 +1378,66 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_workspace_id ON agent_skill_documents(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_agent_id ON agent_skill_documents(agent_id);
+
+    -- Agent templates ("persona packs") as DATA rather than code. The 15
+    -- bundled templates live in a frontend array and can only be changed by a
+    -- deploy; this table lets a workspace author its own and save a tuned agent
+    -- as a starting point for the next one. See shared/agentTemplates.cjs for
+    -- the validator and server/agent-templates-routes.cjs for the routes.
+    --
+    -- THE ABSENT COLUMNS ARE THE SECURITY CONTROL, and adding one later is a
+    -- security decision rather than a schema tidy-up.
+    --
+    -- There is deliberately no permission_mode, no metadata, no
+    -- sandbox_provider, no sandbox_config, no connect_token_hash, no
+    -- mcp_approved, no memory_dir and no identity. A template carries prose and
+    -- requests; it never carries authority. metadata is the one that looks
+    -- harmless and is not: it holds host_folders, which the daemon turns into
+    -- an --add-dir argument on somebody's actual machine, and sandbox_skills, whose
+    -- definitions carry a baseUrl the server will fetch and a credential naming
+    -- a workspace-vault key. permission_mode is 'yolo', which is unrestricted
+    -- shell on the daemon host. Both are guarded on workspace_agents itself
+    -- (PRIVILEGED_DB_COLUMNS_BY_TABLE / MANAGE_ONLY_DB_COLUMNS_BY_TABLE), and a
+    -- template that could carry them would be a way around those guards.
+    --
+    -- Instantiating a template prefills the existing Agents window form; the
+    -- write still goes through the generic /backend/db/insert where those guards
+    -- apply. This feature adds NO new write path to workspace_agents.
+    CREATE TABLE IF NOT EXISTS workspace_agent_templates (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      slug text NOT NULL,
+      name text NOT NULL,
+      category text NOT NULL DEFAULT 'Custom',
+      description text DEFAULT '',
+      handle_hint text DEFAULT '',
+      system_prompt text DEFAULT '',
+      soul text DEFAULT '',
+      instructions text DEFAULT '',
+      -- Both string[] and both jsonb. skills MUST stay string[]: the Agents
+      -- window round-trips it through a comma-separated text input, so an object
+      -- in that array renders '[object Object]' and is saved back over the real
+      -- definition on the next unrelated edit.
+      tools jsonb NOT NULL DEFAULT '[]'::jsonb,
+      skills jsonb NOT NULL DEFAULT '[]'::jsonb,
+      model text NOT NULL DEFAULT 'auto',
+      run_mode text NOT NULL DEFAULT 'builtin',
+      runtime text DEFAULT '',
+      avatar text DEFAULT '',
+      accent_color text DEFAULT '',
+      revision integer NOT NULL DEFAULT 1,
+      -- 'authored' (typed here), 'derived' (saved from an agent), 'imported'
+      -- (crossed a workspace boundary). Provenance, so "where did this prompt
+      -- come from" has an answer when an agent later behaves oddly.
+      source text NOT NULL DEFAULT 'authored',
+      origin jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_by uuid,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      UNIQUE (workspace_id, slug)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_agent_templates_workspace_id
+      ON workspace_agent_templates(workspace_id);
 
     CREATE TABLE IF NOT EXISTS memory_file_comments (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -6909,6 +6974,20 @@ const {
  onWarn: (message) => console.warn('[automations]', message),
 });
 
+// Agent templates ("persona packs"). The validator is shared/agentTemplates.cjs;
+// the security property is that its output is REBUILT from a carried-field list,
+// so no privilege-bearing column can ride into the template table.
+const {
+ listAgentTemplates, createAgentTemplate, saveAgentAsTemplate,
+ updateAgentTemplate, deleteAgentTemplate,
+} = createAgentTemplates({
+ getDb: () => getDb(),
+ notifyDbSubscribers: (...a) => notifyDbSubscribers(...a),
+ enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
+ normalizeAgentTemplate,
+ agentToTemplateDraft,
+});
+
 // Agent jobs hold no in-process state — a job's liveness is a database fact, so
 // a restart cannot lose it. See server/agent-jobs.cjs.
 const agentJobs = createAgentJobs({
@@ -7046,6 +7125,9 @@ const realtime = createRealtime({
  handlePeerListRequest, handlePeerTicketRequest, inferenceBroker,
  logMessageActivity, markAgentConnectionOffline,
  refreshConnectedAgentConfigs, registerAgentConnection, updateAgentHeartbeat,
+ // Lets the agent-status broadcast resolve a row's workspace. `messages` has no
+ // workspace_id column, so without this the broadcast cannot fire at all.
+ resolveWorkspaceIdForSession,
  verifyAgentConnectToken, verifyToken, voiceRelay, voiceStreamRateLimiter,
 });
 const {
@@ -7305,6 +7387,17 @@ function createApp() {
  mountAutomationRoutes(app, {
   ...coreDeps(),
   listAutomations, listAutomationRuns, createAutomation, updateAutomation, deleteAutomation,
+ });
+
+ // Agent templates. Read at 'read', author/edit/delete at 'write' — authoring a
+ // template is no more privileged than typing the prompt it holds, which
+ // 'write' can already do on an agent directly. Note there is deliberately no
+ // create-agent route here: a template prefills the existing form and the write
+ // still goes through the generic insert, where the column guards apply.
+ mountAgentTemplateRoutes(app, {
+  ...coreDeps(),
+  listAgentTemplates, createAgentTemplate, saveAgentAsTemplate,
+  updateAgentTemplate, deleteAgentTemplate,
  });
  mountInboxRoutes(app, { ...coreDeps(), INBOX_DEFAULT_LIMIT, INBOX_FILTERS, INBOX_MAX_LIMIT, THREAD_INBOX_DEFAULT_LIMIT, buildInboxSql, buildThreadInboxSql, inboxMentionHandle, inboxMentionPattern, toInboxItem, toThreadInboxItem });
  mountLinkPreviewsRoutes(app, { ...coreDeps(), LINK_PREVIEW_COLUMNS, LINK_PREVIEW_MAX_PER_REQUEST, fetchLinkPreview, fetchPreviewImage, linkPreviewCacheKey, linkPreviewDbRateLimiter, linkPreviewImageDbRateLimiter, linkPreviewImageRateLimiter, linkPreviewRateLimiter, normalizeUnfurlUrl, publicLinkPreview, upsertLinkPreview });
