@@ -2,8 +2,9 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   decideUpdateState,
   fetchRemoteVersion,
-  readLastSeenBuild,
-  writeLastSeenBuild,
+  latestReleaseId,
+  readLastSeenRelease,
+  writeLastSeenRelease,
 } from '../../src/lib/appVersion';
 
 // A fetch stub that returns a given status + json body.
@@ -15,54 +16,96 @@ function stubFetch(status: number, body: unknown): typeof fetch {
   })) as unknown as typeof fetch;
 }
 
+describe('latestReleaseId', () => {
+  it('is the newest (first) authored note', () => {
+    expect(latestReleaseId([{ version: 'amp-orb' }, { version: 'older' }])).toBe('amp-orb');
+  });
+
+  it('is null with no notes, so nothing can count as unseen', () => {
+    expect(latestReleaseId([])).toBeNull();
+  });
+});
+
 describe('decideUpdateState', () => {
   it('reports "available" when a different build is live', () => {
     expect(
-      decideUpdateState({ current: 'a', remote: 'b', lastSeen: 'a' }),
+      decideUpdateState({
+        current: 'a', remote: 'b', latestRelease: 'n1', lastSeenRelease: 'n1',
+      }),
     ).toBe('available');
   });
 
-  it('prioritises "available" even if lastSeen is also stale', () => {
+  it('prioritises "available" over an unseen note — reload first, recap after', () => {
     expect(
-      decideUpdateState({ current: 'a', remote: 'b', lastSeen: 'z' }),
+      decideUpdateState({
+        current: 'a', remote: 'b', latestRelease: 'n2', lastSeenRelease: 'n1',
+      }),
     ).toBe('available');
   });
 
-  it('reports "updated" when running a build the user has not seen', () => {
+  it('reports "updated" when a note exists that the user has not been shown', () => {
     expect(
-      decideUpdateState({ current: 'b', remote: 'b', lastSeen: 'a' }),
+      decideUpdateState({
+        current: 'b', remote: 'b', latestRelease: 'n2', lastSeenRelease: 'n1',
+      }),
     ).toBe('updated');
   });
 
-  it('reports "current" when lastSeen matches the running build', () => {
+  // THE REGRESSION. This used to return 'updated' because the recap was keyed on
+  // BUILD_ID: any push to main — a skill file, a test, a backend-only change —
+  // minted a new build id and re-showed release notes the user had already read.
+  it('stays "current" when only the build changed and no new note was authored', () => {
     expect(
-      decideUpdateState({ current: 'b', remote: 'b', lastSeen: 'b' }),
+      decideUpdateState({
+        current: 'bdd3e38', remote: 'bdd3e38', latestRelease: 'n1', lastSeenRelease: 'n1',
+      }),
     ).toBe('current');
   });
 
-  it('does not nag a first-ever visitor (lastSeen null)', () => {
+  it('does not nag a first-ever visitor (lastSeenRelease null)', () => {
     expect(
-      decideUpdateState({ current: 'b', remote: 'b', lastSeen: null }),
+      decideUpdateState({
+        current: 'b', remote: 'b', latestRelease: 'n1', lastSeenRelease: null,
+      }),
     ).toBe('current');
     expect(
-      decideUpdateState({ current: 'b', remote: null, lastSeen: null }),
+      decideUpdateState({
+        current: 'b', remote: null, latestRelease: 'n1', lastSeenRelease: null,
+      }),
+    ).toBe('current');
+  });
+
+  // Also the migration landing: a user carrying only the old build key reads as
+  // null here, so they get one silent baseline write instead of a stale recap.
+  it('stays silent when the notes failed to load rather than guessing', () => {
+    expect(
+      decideUpdateState({
+        current: 'b', remote: 'b', latestRelease: null, lastSeenRelease: 'n1',
+      }),
     ).toBe('current');
   });
 
   it('treats a failed remote fetch (null) as "no newer version"', () => {
     expect(
-      decideUpdateState({ current: 'b', remote: null, lastSeen: 'b' }),
+      decideUpdateState({
+        current: 'b', remote: null, latestRelease: 'n1', lastSeenRelease: 'n1',
+      }),
     ).toBe('current');
   });
 });
 
-describe('lastSeen persistence', () => {
+describe('lastSeenRelease persistence', () => {
   beforeEach(() => localStorage.clear());
 
   it('round-trips through localStorage', () => {
-    expect(readLastSeenBuild()).toBeNull();
-    writeLastSeenBuild('build-123');
-    expect(readLastSeenBuild()).toBe('build-123');
+    expect(readLastSeenRelease()).toBeNull();
+    writeLastSeenRelease('amp-orb-runtime');
+    expect(readLastSeenRelease()).toBe('amp-orb-runtime');
+  });
+
+  it('ignores a legacy build key, so an existing user gets no stale recap', () => {
+    localStorage.setItem('agensis:last-seen-build', 'bdd3e38');
+    expect(readLastSeenRelease()).toBeNull();
   });
 });
 

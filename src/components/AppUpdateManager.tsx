@@ -8,8 +8,9 @@ import {
   BUILD_ID,
   decideUpdateState,
   fetchRemoteVersion,
-  readLastSeenBuild,
-  writeLastSeenBuild,
+  latestReleaseId,
+  readLastSeenRelease,
+  writeLastSeenRelease,
 } from '@/lib/appVersion';
 
 // Owns the whole "what's new" update surface. Mount once, near the app root.
@@ -30,6 +31,7 @@ export function AppUpdateManager() {
   const [mode, setMode] = useState<'available' | 'updated'>('available');
   const [notes, setNotes] = useState<ReleaseNote[]>([]);
   const notesLoaded = useRef(false);
+  const notesRef = useRef<ReleaseNote[]>([]);
   const lastCommit = useRef<string | null>(null);
   const swRegistration = useRef<ServiceWorkerRegistration | null>(null);
 
@@ -39,11 +41,15 @@ export function AppUpdateManager() {
     },
   });
 
-  const ensureNotes = useCallback(async () => {
-    if (notesLoaded.current) return;
+  // Returns the notes as well as storing them: the cold-load check has to decide
+  // against the NEWEST NOTE, so it needs the value, not just the state update.
+  const ensureNotes = useCallback(async (): Promise<ReleaseNote[]> => {
+    if (notesLoaded.current) return notesRef.current;
     const loaded = await fetchReleaseNotes();
     notesLoaded.current = true;
+    notesRef.current = loaded;
     setNotes(loaded);
+    return loaded;
   }, []);
 
   const reload = useCallback(async () => {
@@ -95,27 +101,29 @@ export function AppUpdateManager() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const remote = await fetchRemoteVersion();
+      // Notes first: the "what's new" recap is keyed on the newest note, so the
+      // decision can't be made without them. Cheap (a cached static JSON) and it
+      // happens once per cold load.
+      const [remote, loaded] = await Promise.all([fetchRemoteVersion(), ensureNotes()]);
       if (cancelled) return;
+      const latestRelease = latestReleaseId(loaded);
       const state = decideUpdateState({
         current: BUILD_ID,
         remote: remote?.buildId ?? null,
-        lastSeen: readLastSeenBuild(),
+        latestRelease,
+        lastSeenRelease: readLastSeenRelease(),
       });
       if (state === 'available') {
-        await ensureNotes();
-        if (cancelled) return;
         showAvailableToast();
       } else if (state === 'updated') {
-        await ensureNotes();
-        if (cancelled) return;
         setMode('updated');
         setOpen(true);
-        writeLastSeenBuild(BUILD_ID);
-      } else {
-        // 'current' — record the baseline so future updates are detectable and a
-        // brand-new visitor isn't shown an "updated" recap on their next load.
-        writeLastSeenBuild(BUILD_ID);
+        if (latestRelease) writeLastSeenRelease(latestRelease);
+      } else if (latestRelease) {
+        // 'current' — record the baseline so the NEXT authored note is detectable
+        // and a brand-new visitor isn't shown a recap on their next load. This is
+        // also the migration landing for users carrying only the old build key.
+        writeLastSeenRelease(latestRelease);
       }
     })();
     return () => {

@@ -28,39 +28,65 @@ export interface RemoteVersion {
 // 'current'   — nothing to show.
 export type UpdateState = 'available' | 'updated' | 'current';
 
-const LAST_SEEN_KEY = 'agensis:last-seen-build';
+// Keyed on the newest RELEASE NOTE, not on BUILD_ID.
+//
+// It used to be `agensis:last-seen-build`, and that is what made the dialog feel
+// broken: BUILD_ID is the git commit, so every push to main — a skill file, a
+// test, a backend-only change — produced a new build id and re-showed "here's
+// what changed" with release notes the user had already read. The popup fired on
+// deploy frequency; the content only changed when someone authored a note.
+// Keying on the note itself means the recap appears exactly when there is
+// something new to recap.
+//
+// Migration: a user carrying only the old build key reads as `null` here, which
+// is the first-ever-visitor path — one silent baseline write, no popup. That is
+// the intended landing, since by definition they have already seen the newest
+// note that exists today.
+const LAST_SEEN_RELEASE_KEY = 'agensis:last-seen-release';
 
-export function readLastSeenBuild(): string | null {
+export function readLastSeenRelease(): string | null {
   try {
-    return localStorage.getItem(LAST_SEEN_KEY);
+    return localStorage.getItem(LAST_SEEN_RELEASE_KEY);
   } catch {
     return null;
   }
 }
 
-export function writeLastSeenBuild(id: string): void {
+export function writeLastSeenRelease(id: string): void {
   try {
-    localStorage.setItem(LAST_SEEN_KEY, id);
+    localStorage.setItem(LAST_SEEN_RELEASE_KEY, id);
   } catch {
     /* private mode / storage disabled — non-fatal, we just re-nudge next time */
   }
 }
 
+/** The id we track "seen" against: the newest authored note's version slug. */
+export function latestReleaseId(
+  notes: ReadonlyArray<{ version: string }>,
+): string | null {
+  return notes.length ? notes[0].version : null;
+}
+
 // Pure decision so it can be unit-tested without a DOM or network.
-//   current  — the build id compiled into the running bundle (BUILD_ID).
-//   remote   — version.json's buildId, or null if the fetch failed / dev.
-//   lastSeen — the last build the user acknowledged, or null if first ever visit.
+//   current         — the build id compiled into the running bundle (BUILD_ID).
+//   remote          — version.json's buildId, or null if the fetch failed / dev.
+//   latestRelease   — newest authored note's version, or null if none/unfetched.
+//   lastSeenRelease — newest note the user has been shown, null on first visit.
 export function decideUpdateState(opts: {
   current: string;
   remote: string | null;
-  lastSeen: string | null;
+  latestRelease: string | null;
+  lastSeenRelease: string | null;
 }): UpdateState {
-  const { current, remote, lastSeen } = opts;
-  // A different build is live than the one we're running → we're stale.
+  const { current, remote, latestRelease, lastSeenRelease } = opts;
+  // A different build is live than the one we're running → we're stale. This one
+  // IS correctly build-keyed: it's about the bundle in this tab, not the notes.
   if (remote && remote !== current) return 'available';
-  // We're on the latest, but haven't shown notes for this exact build yet.
-  // (lastSeen === null is a first-ever visitor — record silently, don't nag.)
-  if (lastSeen !== null && lastSeen !== current) return 'updated';
+  // We're on the latest bundle, and a note exists that we've never shown.
+  // (lastSeenRelease === null is a first-ever visitor — record silently.)
+  if (latestRelease && lastSeenRelease !== null && lastSeenRelease !== latestRelease) {
+    return 'updated';
+  }
   return 'current';
 }
 
