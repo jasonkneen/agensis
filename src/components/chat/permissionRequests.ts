@@ -99,8 +99,9 @@ const SETTLED_OUTCOMES: ReadonlyArray<{
   status: PermissionRequest['status'];
   scope: PermissionScope | '';
 }> = [
-  // Longest-first within each verb: "Allowed" is a prefix of "Allowed for this
-  // session", so the broader match has to be offered the string first.
+  // "Allowed" is a prefix of "Allowed for this session", but order is not what
+  // separates them: the match below is an EXACT head or one followed by " by ",
+  // so "Allowed for this session by Jason" can never be read as a bare "Allowed".
   { prefix: 'Always allowed', status: 'allowed', scope: 'always' },
   { prefix: 'Allowed for this session', status: 'allowed', scope: 'session' },
   { prefix: 'Allowed', status: 'allowed', scope: 'once' },
