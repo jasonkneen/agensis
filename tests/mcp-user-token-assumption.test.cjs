@@ -168,15 +168,27 @@ test('the agw_ sibling carries a recognisable prefix; a session token cannot', a
 });
 
 test('verifyWorkspaceMcpToken is the manage-gated, revocable alternative', async () => {
-  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS_OLDEST, mcp_auto_approve: true }] }]);
+  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS_OLDEST, mcp_auto_approve: true, user_id: 'owner-1' }] }]);
+  // RESTATED when DMs became private (fix/dm-read-scope). The identity now carries
+  // ownerUserId, and it is load-bearing: mcpSubjectUserId (server/mcp.cjs) reads
+  // PRIVATE sessions as that user, so without it, pointing an MCP client at your
+  // own workspace would stop being able to open your own DMs.
+  //
+  // Not an elevation -- an agw_ token is the workspace's own credential and is
+  // manage-gated to mint, so it already speaks for the workspace. But it IS a
+  // real consequence worth stating out loud: whoever holds an agw_ token can read
+  // the owner's private DMs through MCP. That is the price of the token, and the
+  // reason it is revocable by re-minting.
   assert.deepEqual(
     await verifyWorkspaceMcpToken('agw_x'),
-    { kind: 'workspace', workspaceId: WS_OLDEST, name: 'MCP client', autoApprove: true },
-    'the agw_ identity carries no userId -- it is not anybody\'s login',
+    { kind: 'workspace', workspaceId: WS_OLDEST, ownerUserId: 'owner-1', name: 'MCP client', autoApprove: true },
+    'the agw_ identity reads as the workspace owner, deliberately',
   );
 
-  // The distinction that matters for revocation: this identity has no userId, so
-  // withdrawing it cannot sign a human out. A user identity carries one.
+  // The distinction that matters for revocation: this identity carries no LOGIN,
+  // only the owner it reads as -- so re-minting withdraws it without signing any
+  // human out. Revoking a user token bumps a per-user counter and signs them out
+  // everywhere; that asymmetry is the whole argument for preferring agw_.
   const wsIdentity = await verifyWorkspaceMcpToken('agw_x');
   assert.equal(wsIdentity.userId, undefined);
   assert.equal(wsIdentity.kind, 'workspace');
