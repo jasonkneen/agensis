@@ -3209,6 +3209,7 @@ function CanvasLayerScene({
                 userId={userId}
                 userEmail={userEmail}
                 facts={facts}
+                documents={documents}
                 categories={categories}
                 onAdd={onAddFact}
                 onUpdate={onUpdateFact}

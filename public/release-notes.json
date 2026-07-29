@@ -1,5 +1,18 @@
 [
   {
+    "version": "harvest-review",
+    "date": "2026-07-29",
+    "title": "See what a deleted thread was worth keeping",
+    "summary": "Deleting a chat already triggered a quiet read-through of it, looking for anything the workspace should keep — a procedure worth repeating, a fact that will still be true next month, a decision worth writing down. Until now nobody could see what it found. Memory has a new Harvested tab holding those suggestions: each one says which thread it came from, when that thread was deleted, and exactly where accepting it would save it. Nothing is written until you say so, and there is no accept-everything button, because accepting things nobody read is the one outcome worth avoiding.",
+    "highlights": [
+      "A Harvested tab in Memory shows what was suggested from threads you deleted",
+      "Each suggestion names the thread it came from and when that thread went",
+      "Accept saves it into team memory or as a document; dismiss saves nothing at all",
+      "Suggestions that repeat a fact or page you already have are flagged before you accept them",
+      "Accepting is one at a time on purpose — there is no bulk accept"
+    ]
+  },
+  {
     "version": "approvals-survive-a-blip",
     "date": "2026-07-29",
     "title": "An approval no longer dies when the agent's connection hiccups",
