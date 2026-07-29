@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import type { ReleaseNote } from '@/lib/releaseNotes';
 import { APP_VERSION, BUILD_ID } from '@/lib/appVersion';
 import { FeatureGallery } from '@/components/wireframe/FeatureGallery';
-import { GALLERY_SLIDES } from '@/lib/wireframeScenes';
+import { GALLERY_SLIDES, orderGallerySlides } from '@/lib/wireframeScenes';
 
 // The "larger panel" behind the update toast. Presentational only — open state,
 // notes, and the reload action are owned by useAppUpdate/AppUpdateManager.
@@ -75,8 +75,10 @@ export function UpdateDialog({ open, onOpenChange, notes, mode, onReload }: Upda
           {/* The gallery is the headline: a few features worth knowing, each
               with a demo. It is hand-curated rather than derived from the notes
               below — every slide needs an animation that actually illustrates
-              it, and most notes do not have one. */}
-          <FeatureGallery slides={GALLERY_SLIDES} className="mb-4" />
+              it, and most notes do not have one. Each slide does name the note
+              it illustrates, though, which is what orders them: newest release
+              first, so the gallery cannot silently fall behind the notes. */}
+          <FeatureGallery slides={orderGallerySlides(GALLERY_SLIDES, notes)} className="mb-4" />
 
           {notes.length === 0 ? (
             <p className="py-2 text-sm text-muted-foreground">

@@ -42,10 +42,14 @@ export function FeatureGallery({ slides, className }: FeatureGalleryProps) {
       <Carousel className="w-full" opts={{ loop: true }}>
         <CarouselContent>
           {slides.map(slide => (
-            <CarouselItem key={slide.id}>
+            <CarouselItem key={slide.note}>
               <div className="grid items-center gap-4 @md/gallery:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                 <WireframeDemo scene={slide.scene} className="aspect-[16/10]" />
-                <div className="flex flex-col gap-1.5">
+                {/* pr-9 clears the next-slide arrow, which floats over this
+                    column. Without it a long body runs underneath the button
+                    and the last word of a line is unreadable — the demo can
+                    take an overlay, prose cannot. */}
+                <div className="flex flex-col gap-1.5 pr-9">
                   <h3 className="text-sm font-semibold text-foreground">{slide.title}</h3>
                   <p className="text-sm leading-snug text-muted-foreground">{slide.body}</p>
                 </div>
