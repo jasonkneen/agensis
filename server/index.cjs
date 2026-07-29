@@ -973,6 +973,28 @@ async function ensureRuntimeSchema() {
     -- server processes cost one row rather than two model calls.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_harvests_one_open
       ON thread_harvests(session_id) WHERE status IN ('pending', 'running');
+    -- No suggestion may EXIST for a private conversation.
+    --
+    -- Not a filter — a delete. queueThreadHarvest and the idle sweep both refuse
+    -- to mine a private session, but that only stops NEW rows: deleting a DM
+    -- queued a workspace-visible analysis before that rule existed, and those
+    -- rows are in production. Two read paths reach a row without going through
+    -- listThreadHarvests' privacy clause — the generic /backend/db/select
+    -- (thread_harvests is in ALLOWED_TABLES so its realtime subscription can be
+    -- authorized at all, and a select of all columns hands back the findings
+    -- verbatim), and decideHarvestFinding by id. Column-level allow-lists
+    -- cannot express "not this ROW", so the only way to make those paths safe
+    -- is for the row not to be there.
+    --
+    -- Runs every boot rather than once, which is what makes it an invariant
+    -- instead of a migration: a channel that is turned private LATER has the
+    -- suggestions mined from it removed on the next start. Idempotent by
+    -- construction — the second run matches nothing.
+    DELETE FROM thread_harvests h
+     USING chat_sessions s
+     WHERE s.id = h.session_id
+       AND (COALESCE(s.visibility, 'workspace') = 'private'
+            OR COALESCE(s.folder, '') = 'Direct messages');
 
     -- Workspace automations: "when X happens inside agensis, do Y inside
     -- agensis", without a code change. See server/automations.cjs for the

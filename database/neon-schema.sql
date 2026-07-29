@@ -508,6 +508,39 @@ CREATE TABLE IF NOT EXISTS thread_items (
 CREATE INDEX IF NOT EXISTS idx_thread_items_session ON thread_items(session_id, kind, order_index);
 CREATE INDEX IF NOT EXISTS idx_thread_items_workspace ON thread_items(workspace_id);
 
+-- Suggestions ("Harvested" as the table was originally named). Same omission as
+-- thread_items above: this existed ONLY in the runtime DDL, so a fresh migrate
+-- DB never got it. Placed after chat_sessions and workspaces because it FKs
+-- both, and psql runs this file top to bottom with ON_ERROR_STOP=1.
+--
+-- Proposals mined from a conversation — see server/thread-harvest.cjs for why
+-- they are proposals and never direct writes into memory_facts/documents, and
+-- why the table keeps this name while the product says "Suggestions".
+CREATE TABLE IF NOT EXISTS thread_harvests (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  status text NOT NULL DEFAULT 'pending',
+  reason text NOT NULL DEFAULT 'deleted',
+  requested_by uuid,
+  findings jsonb NOT NULL DEFAULT '[]'::jsonb,
+  error text,
+  -- The watermark: the newest message a COMPLETED analysis has already read, so
+  -- a long conversation is never re-analysed from message 1. Null means "read
+  -- from the start".
+  cursor_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_thread_harvests_pending ON thread_harvests(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_thread_harvests_workspace ON thread_harvests(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_thread_harvests_session ON thread_harvests(session_id, updated_at DESC);
+-- One OPEN suggestion job per conversation: a double delete, or a race between
+-- two server processes on the idle sweep, must cost one row rather than two
+-- model calls.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_harvests_one_open
+  ON thread_harvests(session_id) WHERE status IN ('pending', 'running');
+
 CREATE TABLE IF NOT EXISTS memory_facts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,

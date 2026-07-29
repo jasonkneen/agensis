@@ -10,6 +10,7 @@
       "A long-running channel is only read from where the last reading stopped, never from the first message again.",
       "Anything already suggested to this workspace — accepted, dismissed, or still waiting — is not suggested a second time.",
       "Direct messages are never mined, by either trigger.",
+      "Suggestions taken from a direct message before this change have been deleted, not just hidden.",
       "Each conversation is read at most twice a day however busy it gets."
     ]
   },
