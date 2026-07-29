@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { nextSpeechChunk, normalizeTranscript, speechItemFor, type SpeechItem, type VoiceMessage, pickSpeechVoice } from '../lib/huddleVoice';
+import { nextSpeechChunk, normalizeTranscript, speechItemFor, voiceIdForSpeechItem, type SpeechItem, type VoiceMessage, type VoiceRosterEntry, pickSpeechVoice } from '../lib/huddleVoice';
 import { claimSpeaker, releaseSpeaker, subscribeSpeakerReleases } from '@/lib/speakerClaim';
 import {
   chooseEngines,
@@ -695,13 +695,19 @@ interface PendingCartesia {
  * read aloud while the rest of it is still being written. The 700ms settle
  * survives for one job only: flushing the trailing fragment of a message that
  * never ends in punctuation.
+ *
+ * `roster` is the huddle's agents with their stored voices — NOT a single
+ * "current speaker" voice. Each message picks its own voice off `roster` by
+ * `item.agentId` (see voiceIdForSpeechItem), because the speaker in a huddle
+ * is whoever POSTED the message, not whoever was last active in the strip: an
+ * agent that interrupts must sound like itself, not like the agent it cut off.
  */
 export function useCartesiaSpeechOutput(
   workspaceId: string | null,
   sessionId: string | null,
   enabled: boolean,
   joinedAtMs: number,
-  voiceId: string,
+  roster: readonly VoiceRosterEntry[],
 ): SpeechOutputState {
   const [speakingName, setSpeakingName] = useState('');
   const [playbackEndsAtMs, setPlaybackEndsAtMs] = useState(0);
@@ -711,8 +717,8 @@ export function useCartesiaSpeechOutput(
   const pendingRef = useRef(new Map<string, PendingCartesia>());
   const spokenTextRef = useRef(new Map<string, string>());
   const settleTimerRef = useRef<number | null>(null);
-  const voiceIdRef = useRef(voiceId);
-  voiceIdRef.current = voiceId;
+  const rosterRef = useRef(roster);
+  rosterRef.current = roster;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
 
@@ -753,7 +759,9 @@ export function useCartesiaSpeechOutput(
   // Emit whatever `split` decided is sayable, and remember it as said.
   const emit = useCallback((id: string, item: SpeechItem, split: { speak: string[]; spoken: string }) => {
     spokenTextRef.current.set(id, split.spoken);
-    for (const line of split.speak) speakerRef.current?.speak(line, item.speaker, voiceIdRef.current);
+    // Resolved per MESSAGE, not once per hook — the whole point of the fix.
+    const voiceId = voiceIdForSpeechItem(item, rosterRef.current);
+    for (const line of split.speak) speakerRef.current?.speak(line, item.speaker, voiceId);
   }, []);
 
   const flush = useCallback((id: string) => {
@@ -879,14 +887,16 @@ export function useSpeechInput(
   return NO_INPUT;
 }
 
+const NO_ROSTER: VoiceRosterEntry[] = [];
+
 /** Agent replies -> speech, on whichever engine is available. */
 export function useSpeechOutput(
   sessionId: string | null,
   enabled: boolean,
   joinedAtMs: number,
-  options: { engine?: TtsEngine; workspaceId?: string | null; voiceId?: string } = {},
+  options: { engine?: TtsEngine; workspaceId?: string | null; roster?: readonly VoiceRosterEntry[] } = {},
 ): SpeechOutputState {
-  const { engine = 'browser', workspaceId = null, voiceId = '' } = options;
+  const { engine = 'browser', workspaceId = null, roster = NO_ROSTER } = options;
 
   // ONE speaker per session, app-wide. agensis is a single page of in-page
   // windows, so the same DM can be mounted twice at once; each mount polls the
@@ -916,7 +926,7 @@ export function useSpeechOutput(
   }, [enabled, sessionId, token]);
 
   const browser = useBrowserSpeechOutput(sessionId, audible && enabled && engine === 'browser', joinedAtMs);
-  const hosted = useCartesiaSpeechOutput(workspaceId, sessionId, audible && enabled && engine === 'cartesia', joinedAtMs, voiceId);
+  const hosted = useCartesiaSpeechOutput(workspaceId, sessionId, audible && enabled && engine === 'cartesia', joinedAtMs, roster);
   if (engine === 'cartesia') return hosted;
   if (engine === 'browser') return browser;
   return NO_OUTPUT;
