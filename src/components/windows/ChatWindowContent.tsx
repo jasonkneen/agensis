@@ -2639,6 +2639,10 @@ function ThreadReplySummaryButton({
   const replyParticipants = summary?.participants ?? [];
   const replyOverflow = summary?.overflow ?? 0;
   const lastReplyLabel = formatLastReplyTime(summary?.lastReplyAt, now);
+  // Tool calls the agent made while working this thread — split from replyCount
+  // in threadSummary.ts so a run full of Bash/Edit steps doesn't read as the
+  // agent having said nine things back.
+  const toolCount = summary?.toolCount ?? 0;
 
   return (
     <button
@@ -2682,6 +2686,18 @@ function ThreadReplySummaryButton({
           clock internally, so the tick repaints one <span> and this chip (with
           its avatars + markdown-free labels) is untouched. */}
       <ThreadWorkBadge parentMessageId={parentMessageId} />
+      {toolCount > 0 && (
+        <>
+          <span aria-hidden className="shrink-0 text-muted-foreground/50">·</span>
+          <span
+            className="flex shrink-0 items-center gap-1 text-muted-foreground/70"
+            title={`${toolCount} tool ${toolCount === 1 ? 'call' : 'calls'}`}
+          >
+            <Wrench className="size-3" />
+            {toolCount}
+          </span>
+        </>
+      )}
       {lastReplyLabel && (
         <>
           <span aria-hidden className="shrink-0 text-muted-foreground/50">·</span>
