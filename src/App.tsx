@@ -2461,6 +2461,7 @@ function AppContent() {
                   onCreateSubThread={handleCreateSubThreadFromScene}
                   onSendSubThreadMessage={sendSubThreadMessage}
                   onSplitThread={handleSplitThread}
+                  onTypingChange={itemPresence.setTyping}
                   useWorkspaceCtx={useWorkspaceCtx}
                   onToggleWorkspaceCtx={handleToggleWorkspaceCtx}
                   onHomeSendMessage={handleHomeSendMessage}
@@ -2798,6 +2799,7 @@ function CanvasLayerScene({
   onCreateSubThread: onCreateSubThreadProp,
   onSendSubThreadMessage,
   onSplitThread,
+  onTypingChange,
   useWorkspaceCtx,
   onToggleWorkspaceCtx,
   onHomeSendMessage,
@@ -2894,6 +2896,8 @@ function CanvasLayerScene({
   onCreateSubThread: (messageId: string, agent: WorkspaceAgent) => void;
   onSendSubThreadMessage: (content: string) => void;
   onSplitThread: (source: import('./types').ChatSession) => void;
+  /** useItemPresence().setTyping — see src/lib/typingPresence.ts. */
+  onTypingChange: (type: 'chat' | 'document', itemId: string, typing: boolean) => void;
   useWorkspaceCtx: boolean;
   onToggleWorkspaceCtx: () => void;
   // false = no channel was created, so the composer must keep the draft.
@@ -3077,6 +3081,7 @@ function CanvasLayerScene({
                     onAppSendMessage={onSendMessage}
                     onSetActiveSession={onSetActiveSession}
                     onAppSplitThread={onSplitThread}
+                    onAppTypingChange={onTypingChange}
                     messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : EMPTY_MESSAGES}
                     hasMoreMessages={winSession && activeSession?.id === win.sessionId ? hasMoreMessages : false}
                     loadingEarlier={loadingEarlier}

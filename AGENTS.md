@@ -44,6 +44,61 @@ Streaming agent output works by inserting a `Thinking …` placeholder message,
 then `UPDATE`-ing its content (each update broadcasts). Heavy fields are stripped
 from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bodies.
 
+### Presence: two transports, merged only at the view layer
+
+There are two independent lanes and they must not be joined upstream of the UI.
+
+- **Durable rows fanned out as `db_changes`** — everything that has to survive a
+  reload.
+- **Ephemeral `broadcast` frames** (`relayBroadcast`, `server/realtime.cjs`) —
+  presence, cursors, typing. These touch no storage at all. Do not add a
+  `workspace_presence` table: a value with a six-second lifetime does not belong
+  in Postgres, and a new table would need `ALLOWED_TABLES` + `DB_TABLE_ACCESS`
+  entries kept in sync by hand across two runtimes.
+
+**Every ephemeral signal expires at the RECEIVER.** There is no server-side
+roster, so "the sender went quiet" is the only stop signal you can rely on — a
+force-quit tab, a dead socket and a polite goodbye are indistinguishable. Each
+lane therefore owns a TTL, and the UI's answer to silence is always "the thing
+disappears", never "the last value sticks".
+
+| Signal | Source | Refresh | TTL | On silence |
+|---|---|---|---|---|
+| Human item/window presence | browser broadcast | 2s with peers / 10s alone | 7s | avatar leaves the sidebar row |
+| Human cursor | browser broadcast | <=80ms while moving, off with no peers | 5s | cursor vanishes |
+| Human typing | browser broadcast | <=1 per 4s per target | 6s, sent as a relative `ttlMs` | indicator clears itself; no stop frame is required for correctness |
+| Huddle participant | HTTP heartbeat | 30s | 150s | `reaped_at` set, roster row removed |
+| Agent daemon liveness | WS heartbeat + pings | 15s | ~120s of missed pongs | `status='offline'`, filtered out of the roster |
+| Agent activity chip | placeholder message content | ~1/s | 60s (`ACTIVITY_STALE_MS`) | chip stops claiming the run is live |
+
+Two rules that are easy to get wrong and expensive to get wrong:
+
+1. **Typing frames carry a relative `ttlMs`, never an absolute deadline.** The
+   receiver computes `now + ttlMs` on arrival and clamps it to its own ceiling.
+   `src/lib/activityStatus.ts` had to buy 60s of slack purely to absorb
+   server-vs-browser clock skew; a 6s TTL has no room for that, and sending a
+   duration removes the whole skew class instead of budgeting for it.
+2. **Agents never emit typing, and should not be given it.** A human's typing is
+   a 2-8 second prediction; an agent's equivalent is a multi-minute tool run, and
+   a three-dot animation running for six minutes reads as a hang. Agents already
+   have the right surface with a clock on it — `activityChipLabel()` ->
+   `"Thinking 1m 56s"`, `src/lib/activityStatus.ts`. There is also a hard
+   blocker: an agent-token socket has no `ws.userId`, so
+   `authorizeRealtimeBroadcast` rejects it. Adding agent typing would mean
+   opening a new authorization path for daemon-originated broadcasts to ship a
+   worse version of something that already exists.
+
+`item-presence:<workspaceId>` is workspace-wide and its frames carry item ids,
+so typing is **not** emitted for direct messages. The sidebar's presence
+filtering is a UI convenience, not an access boundary — do not describe it as
+one, and do not widen what rides that channel until the channel grammar can
+carry an item scope (`workspaceIdFromRealtimeChannel` rejects a second colon).
+
+Cost matters on this path: see `plans/012-cut-idle-realtime-chatter.md`. Typing
+is a ~150-byte frame throttled to one per 4s **specifically** so it does not
+undo that work — `setTyping` must never call `sendSnapshot()`, which is a ~2 KB
+window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
+
 ## Recent cross-cutting features (2026-07)
 
 - **Interactive tool approvals** — a daemon agent that hits a tool it isn't

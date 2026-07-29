@@ -1,5 +1,18 @@
 [
   {
+    "version": "typing-indicators",
+    "date": "2026-07-29",
+    "title": "You can see when someone else is typing",
+    "summary": "The sidebar has been able to say \"is typing\" next to a channel for a long time, and it never once did — nothing in the app ever raised the flag, so everyone always read as merely present. It works now: start writing in a channel and the people watching that channel see it against your name. It costs almost nothing to run, because the signal is a tiny message sent at most once every four seconds rather than on every keystroke. It also stops by itself. If your laptop shuts, your connection drops or the tab is killed mid-sentence, the indicator clears within six seconds on its own — it can never get stuck claiming you are still writing something you abandoned. Direct messages deliberately do not send it, and neither do agents: an agent working for four minutes is not typing, and it already tells you what it is doing and for how long.",
+    "highlights": [
+      "Channels show who is typing, not just who is present",
+      "The indicator clears itself within six seconds if the signal stops for any reason",
+      "At most one small update every four seconds while you type, not one per keystroke",
+      "Direct messages do not broadcast typing",
+      "Agents keep their existing activity line with its timer instead"
+    ]
+  },
+  {
     "version": "harvest-review",
     "date": "2026-07-29",
     "title": "See what a deleted thread was worth keeping",
