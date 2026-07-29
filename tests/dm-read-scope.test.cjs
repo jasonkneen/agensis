@@ -74,7 +74,13 @@ function makeDb({ members = [], roles = {} } = {}) {
     return [];
    }
    if (q.startsWith('insert into chat_session_members')) {
-    writes.memberInserts.push({ sql: n, params });
+    // TWO different writers reach this table and they must not be conflated.
+    // The GRANT ROUTE binds four params and names 'grant' inline; the boot-time
+    // migration (server/dm-scope-backfill.cjs) issues parameterless seeding
+    // INSERTs, and ensureRuntimeSchema runs in this harness. Counting both made
+    // "exactly one grant was written" read 4.
+    if (q.includes("values ($1, $2, 'grant'")) writes.memberInserts.push({ sql: n, params });
+    else return [];
     const [sessionId, userId, grantedBy, expiresAt] = params;
     const existing = memberRows.find((r) => r.session_id === sessionId && r.user_id === userId);
     if (existing) {

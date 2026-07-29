@@ -39,6 +39,23 @@ SELECT s.id, w.user_id, 'participant'
    AND NOT EXISTS (SELECT 1 FROM chat_session_members m WHERE m.session_id = s.id)
 ON CONFLICT DO NOTHING;
 
+-- Seed every human who actually SPOKE in a private session. This is what makes
+-- the migration correct by construction rather than by luck: if a second human
+-- ever posted in someone's DM they were participating in it, and the owner-only
+-- inference would take away access they demonstrably used. Returns zero rows
+-- against the dataset this was written for, which is exactly the point.
+-- Mirrors SEED_SPEAKERS_SQL in server/dm-scope-backfill.cjs.
+INSERT INTO chat_session_members (session_id, user_id, source)
+SELECT DISTINCT m.session_id, m.sender_id::uuid, 'participant'
+  FROM messages m
+  JOIN chat_sessions s ON s.id = m.session_id
+ WHERE s.visibility = 'private'
+   AND m.sender_kind = 'user'
+   AND coalesce(m.sender_id, '') <> ''
+   AND m.sender_id ~ '^[0-9a-fA-F-]{36}$'
+   AND m.deleted_at IS NULL
+ON CONFLICT DO NOTHING;
+
 -- Anything derived from a private session inherits its privacy: sub-threads,
 -- splits, huddle transcripts.
 WITH RECURSIVE edges AS (

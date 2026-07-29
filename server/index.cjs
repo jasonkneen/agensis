@@ -124,6 +124,7 @@ const { mountWorkspacesRoutes } = require('./workspaces-routes.cjs');
 const { mountWorkspaceMcpRoutes } = require('./workspace-mcp-routes.cjs');
 const { mountInboxRoutes } = require('./inbox-routes.cjs');
 const { mountSessionAccessRoutes } = require('./session-access-routes.cjs');
+const { runDmScopeBackfill } = require('./dm-scope-backfill.cjs');
 const { mountLinkPreviewsRoutes } = require('./link-previews-routes.cjs');
 const { mountAgentsRoutes } = require('./agents-routes.cjs');
 const { mountJoinPagesRoutes } = require('./join-pages-routes.cjs');
@@ -1876,86 +1877,15 @@ async function ensureRuntimeSchema() {
  // DM read scope — the one-time backfill that turns 'every member can read every
  // session' into 'a private session is readable by its members'.
  //
- // WHY THE WORKSPACE OWNER IS THE RIGHT ANSWER, and not a guess. No DM in this
- // schema has ever recorded a human: findOrCreateDirectSession writes a
- // participants array holding the AGENT alone, so there is no stored answer to
- // "whose DM is this". Checked against production before this was written: all
- // 76 DM rows had zero human participants, 75 of 76 were created at a moment
- // when the workspace owner was the only human who existed in that workspace,
- // and not one DM contains a message authored by a non-owner human. So seeding
- // the owner restores exactly the access people already had and takes none away.
+ // Lives in server/dm-scope-backfill.cjs, not inline here, because its central
+ // claim — that the workspace owner is the right member to seed — is a fact
+ // about TODAY's data rather than a law. Extracted, that claim is executable and
+ // tested: the migration seeds the humans who demonstrably SPOKE in a private
+ // session, and reports loudly (with ids) anything the owner-only story cannot
+ // explain, instead of silently orphaning somebody's DM.
  //
- // SPLIT IN TWO ON PURPOSE. The authorizer treats folder='Direct messages' as
- // private whether or not this column got set, so a failure of the SECOND
- // statement is safe — derived sessions stay as open as they are today. A
- // failure of the FIRST would be the dangerous one: a session that reads as
- // private with no member rows locks its own owner out. Keeping the member
- // insert in the same statement as the marking is what prevents that window.
- try {
-  await db.unsafe(`
-      UPDATE chat_sessions SET visibility = 'private'
-       WHERE folder = 'Direct messages' AND visibility <> 'private';
-
-      INSERT INTO chat_session_members (session_id, user_id, source)
-      SELECT s.id, w.user_id, 'participant'
-        FROM chat_sessions s
-        JOIN workspaces w ON w.id = s.workspace_id
-       WHERE s.visibility = 'private'
-         AND w.user_id IS NOT NULL
-         -- Fill the VOID only. A session that already has members has been
-         -- curated (a grant given, a participant added) and re-running boot must
-         -- never resurrect somebody a revoke removed.
-         AND NOT EXISTS (SELECT 1 FROM chat_session_members m WHERE m.session_id = s.id)
-      ON CONFLICT DO NOTHING;
-    `);
- } catch (error) {
-  console.warn('[backend] chat_sessions DM visibility backfill failed:', error.message || error);
- }
-
- // A session DERIVED from a private one inherits its privacy. Three edges reach
- // one: a sub-thread (parent_message_id -> the message's session), a split
- // (split_parent_id), and a huddle transcript (huddles.transcript_session_id off
- // huddles.session_id). Production had 12 sub-thread sessions hanging off DM
- // messages and 38 huddle sessions carrying a DM roster — scope the 'Direct
- // messages' folder alone and every one of those keeps leaking the conversation
- // it was split out of.
- //
- // `edges` is built non-recursively so the recursive term references `lineage`
- // exactly once, which is all Postgres allows. UNION (not UNION ALL) is what
- // terminates the walk if the split chain ever forms a cycle.
- try {
-  await db.unsafe(`
-      WITH RECURSIVE edges AS (
-        SELECT c.id AS child, c.split_parent_id AS parent
-          FROM chat_sessions c WHERE c.split_parent_id IS NOT NULL
-        UNION ALL
-        SELECT c.id, m.session_id
-          FROM chat_sessions c JOIN messages m ON m.id = c.parent_message_id
-        UNION ALL
-        SELECT h.transcript_session_id, h.session_id
-          FROM huddles h
-         WHERE h.transcript_session_id IS NOT NULL AND h.session_id IS NOT NULL
-      ), lineage AS (
-        SELECT id FROM chat_sessions WHERE visibility = 'private'
-        UNION
-        SELECT e.child FROM edges e JOIN lineage l ON e.parent = l.id
-      )
-      UPDATE chat_sessions s SET visibility = 'private'
-        FROM lineage l
-       WHERE s.id = l.id AND s.visibility <> 'private';
-
-      INSERT INTO chat_session_members (session_id, user_id, source)
-      SELECT s.id, w.user_id, 'participant'
-        FROM chat_sessions s
-        JOIN workspaces w ON w.id = s.workspace_id
-       WHERE s.visibility = 'private'
-         AND w.user_id IS NOT NULL
-         AND NOT EXISTS (SELECT 1 FROM chat_session_members m WHERE m.session_id = s.id)
-      ON CONFLICT DO NOTHING;
-    `);
- } catch (error) {
-  console.warn('[backend] derived-session visibility backfill failed:', error.message || error);
- }
+ // Never throws: a data-shape surprise must not take the schema bootstrap down.
+ await runDmScopeBackfill(sharedDbAdapter);
 
  // In-app feedback -> System workspace.
  //
