@@ -2286,10 +2286,20 @@
    was showing the conversation straight through the widget body. A card's
    frame belongs to the component, not to one theme; the per-family part is
    only how heavy the edge is. */
+/* Non-brutal families (everything except neo): the card used to wear a single
+   1px hairline in --border with no lift, so where it floated over the message
+   list the frame all but vanished and the widget read as loose text on the
+   conversation. It needs to stand out as a distinct panel: a thicker 1.5px edge
+   in a border colour pushed toward the foreground for real contrast, plus a
+   soft drop shadow so it visibly sits ABOVE the messages rather than in them.
+   neo overrides all of this just below with its own hard ink edge. */
 .thread-widget-card {
- border: 1px solid var(--border);
+ border: 1.5px solid color-mix(in srgb, var(--border) 65%, var(--foreground) 35%);
  border-radius: var(--radius-md);
  background: var(--card);
+ box-shadow:
+   0 1px 2px -1px color-mix(in srgb, var(--foreground) 24%, transparent),
+   0 6px 16px -6px color-mix(in srgb, var(--foreground) 20%, transparent);
 }
 
 /* Brutal: every bordered surface in this theme wears a hard 2px ink edge, so
