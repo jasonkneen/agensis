@@ -1004,6 +1004,23 @@ function createAgentJobs(deps = {}) {
     threadParentId = parentRows[0].thread_parent_id || responseMessageId;
    }
   }
+  // The placeholder is GONE, not merely unknown: a segment rotates it every text
+  // block, and clearStrandedPlaceholders removes leftovers, so a long turn spends
+  // real time pointing at a row that no longer exists. Falling flat here dumped
+  // every tool chip into the DM root while the same turn's text sat correctly in
+  // the thread — the work split across two places, and the thread looking idle
+  // while the channel filled with context-free chips.
+  //
+  // metadata.workThreadParentId is the same fallback handleAgentJobSegment has
+  // used all along (see the block above the segment insert); the step path never
+  // got it. Verified against a real row in THIS session before it can reach the
+  // foreign key, so an unknown id still posts flat rather than killing the write.
+  if (!threadParentId) {
+   threadParentId = await verifyThreadParent(
+    metadata.workThreadParentId || metadata.threadParentId || null,
+    job.session_id,
+   );
+  }
   // A tool step is the agent demonstrably doing work, so — unlike a content-free
   // "Thinking Ns" liveness tick — it counts as progress for the stuck-job reaper
   // and sets lastContentAt exactly like a content-bearing delta does. `response` is

@@ -43,7 +43,7 @@ const JOB = {
 
 // Records every query so a test can assert on the SQL and the binds, and hands
 // back the row shape each statement's caller expects.
-function installDb({ job = JOB } = {}) {
+function installDb({ job = JOB, existingMessageIds = ['msg-placeholder', 'msg-work-thread'] } = {}) {
   const calls = [];
   __test.setTestDb({
     async unsafe(sql, params = []) {
@@ -62,6 +62,13 @@ function installDb({ job = JOB } = {}) {
       // messages_thread_parent_id_fkey in production.
       if (n.startsWith('select thread_parent_id from messages')) {
         return params[0] === 'msg-placeholder' ? [{ thread_parent_id: null }] : [];
+      }
+      // verifyThreadParent's existence probe. Only ids that really live in this
+      // session come back, so an unknown fallback still degrades to a flat post.
+      if (n.startsWith('select id from messages where id =')) {
+        return existingMessageIds.includes(params[0]) && params[1] === 'session-1'
+          ? [{ id: params[0] }]
+          : [];
       }
       if (n.startsWith('insert into messages')) {
         return [{
@@ -210,4 +217,75 @@ test('agentStepContent renders one plain line and tolerates a missing half', () 
   const long = agentStepContent({ name: 'Bash', detail: 'x'.repeat(400) });
   assert.ok(long.length <= 167, `expected a clipped single line, got ${long.length} chars`);
   assert.ok(long.endsWith('…'));
+});
+
+// THE PRODUCTION BUG (2026-07-29, observed live in Coder's own DM).
+//
+// A segment rotates the "Thinking …" placeholder on every text block, and
+// clearStrandedPlaceholders removes leftovers — so on a long turn
+// metadata.responseMessageId routinely points at a row that no longer exists.
+// The lookup above then missed, threadParentId stayed null, and EVERY tool chip
+// was posted at the DM's top level while the same turn's text sat correctly in
+// the thread. Confirmed against the live rows: 12 consecutive tool_steps at
+// TOP-LEVEL, interleaved with segments carrying thread_parent_id = the thread.
+// The work was split across two places and the thread looked idle.
+//
+// handleAgentJobSegment has fallen back to metadata.workThreadParentId all
+// along; the step path never got the same fallback.
+test('a step whose placeholder has been rotated away still lands in the work thread', async () => {
+  const calls = installDb({
+    job: {
+      ...JOB,
+      metadata: {
+        mode: 'daemon',
+        // Points at a row that no longer exists — the mock answers [] for it.
+        responseMessageId: 'msg-rotated-away',
+        workThreadParentId: 'msg-work-thread',
+      },
+    },
+  });
+
+  await __test.handleAgentJobStep(agentWs(), {
+    action: 'agent_job_step', jobId: 'job-1', kind: 'tool', name: 'Bash', detail: 'npx vitest run',
+  });
+
+  const insert = calls.find((c) => c.n.startsWith('insert into messages'));
+  assert.ok(insert, 'the step is still written');
+  assert.equal(insert.params[2], 'msg-work-thread', 'the chip belongs in the thread, not the channel root');
+});
+
+test('the work-thread fallback is verified, so an id from another session posts flat', async () => {
+  const calls = installDb({
+    job: {
+      ...JOB,
+      metadata: { mode: 'daemon', responseMessageId: 'msg-rotated-away', workThreadParentId: 'msg-elsewhere' },
+    },
+    existingMessageIds: ['msg-placeholder'], // 'msg-elsewhere' is not in this session
+  });
+
+  await __test.handleAgentJobStep(agentWs(), {
+    action: 'agent_job_step', jobId: 'job-1', kind: 'tool', name: 'Read', detail: 'a.ts',
+  });
+
+  const insert = calls.find((c) => c.n.startsWith('insert into messages'));
+  assert.ok(insert, 'an unverifiable parent must not kill the write');
+  assert.equal(insert.params[2], null, 'degrades to top level rather than dying on the foreign key');
+});
+
+test('a live placeholder still wins over the work-thread fallback', async () => {
+  const calls = installDb({
+    job: {
+      ...JOB,
+      metadata: { mode: 'daemon', responseMessageId: 'msg-placeholder', workThreadParentId: 'msg-work-thread' },
+    },
+  });
+
+  await __test.handleAgentJobStep(agentWs(), {
+    action: 'agent_job_step', jobId: 'job-1', kind: 'tool', name: 'Grep', detail: 'x',
+  });
+
+  const insert = calls.find((c) => c.n.startsWith('insert into messages'));
+  // Row-derived parent wins: the placeholder has no parent of its own, so steps
+  // nest under the placeholder itself exactly as before.
+  assert.equal(insert.params[2], 'msg-placeholder', 'unchanged behaviour when the placeholder is alive');
 });
