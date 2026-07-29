@@ -1806,6 +1806,17 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  // exists to answer. Its sibling agent.connect_token_minted was recorded from
  // the start; this one was not, which is the only reason it is a separate line.
  'workspace.mcp_token_minted',
+ // A human's ORDINARY SESSION TOKEN was used to authenticate at /backend/mcp
+ // (the verifyUserAuthMcpToken tail of verifyMcpToken). Recorded to answer one
+ // question with data instead of a guess — "is anyone actually using this
+ // path?" — before deciding whether to stop accepting login tokens there. See
+ // AGENTS.md "Login tokens at the MCP door".
+ //
+ // MCP AUTH RUNS ON EVERY REQUEST, so this is the one action in this registry
+ // that could flood the table. It does not, because it is emitted at most ONCE
+ // PER USER PER 24h PER PROCESS via createFirstUseWindow below. Never remove
+ // that dedup and leave the call site in place.
+ 'mcp.login_token_used',
  'vault.secret_set',
  'vault.secret_deleted',
  // Authoring an automation is a STANDING grant to write into the workspace
@@ -1821,6 +1832,74 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
 
 /** What an unrecognised action records as, rather than throwing in production. */
 const AUDIT_UNKNOWN_ACTION = 'unknown';
+
+const FIRST_USE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const FIRST_USE_MAX_KEYS = 5000;
+
+/**
+ * First-use-per-key-per-window, so a per-request code path can emit an audit row
+ * WITHOUT flooding the log.
+ *
+ * The audit table is built for rare, human-attributable, privileged actions, and
+ * it is a tamper-evident chain (entry_hash over the previous row). One row per
+ * MCP request would bury the privileged actions it exists for and make the
+ * manage-gated audit view unusable — the log would technically contain more and
+ * answer less.
+ *
+ * So the call site asks this first. `shouldRecord(key)` returns true the first
+ * time it sees a key in a 24h window and false for every repeat, which turns
+ * "every request from this credential" into "this credential appeared today".
+ * That is the signal the question actually needs, and it is the same rate class
+ * as the other actions in the registry.
+ *
+ * Bounded in BOTH directions on purpose:
+ *   - time — an entry expires after `windowMs`, so a key seen once a year
+ *     records once a year rather than never again;
+ *   - memory — at most `maxKeys` entries. Map preserves insertion order, so the
+ *     oldest is evicted in O(1). Worst case when a cap eviction happens is one
+ *     extra row, never unbounded growth.
+ *
+ * PROCESS-LOCAL, like the MCP presence map. On a multi-instance deploy the
+ * ceiling is one row per key per window PER INSTANCE. That is fine for "did this
+ * happen at all", and it is not a counter — do not read row counts as request
+ * volume.
+ *
+ * `now` is injectable so the window can be tested without waiting a day.
+ */
+function createFirstUseWindow({
+ windowMs = FIRST_USE_WINDOW_MS,
+ maxKeys = FIRST_USE_MAX_KEYS,
+ now = Date.now,
+} = {}) {
+ const seen = new Map();
+
+ function shouldRecord(key) {
+  const id = String(key || '');
+  if (!id) return false;
+  const at = now();
+
+  const expiresAt = seen.get(id);
+  if (expiresAt !== undefined) {
+   if (expiresAt > at) return false;
+   // Expired: drop it so the re-insert below lands at the END of the insertion
+   // order. Without this the key keeps its original position and would be
+   // evicted first despite having just been used.
+   seen.delete(id);
+  }
+
+  seen.set(id, at + windowMs);
+
+  // Evict from the front (oldest inserted) until back under the cap.
+  while (seen.size > maxKeys) {
+   const oldest = seen.keys().next();
+   if (oldest.done) break;
+   seen.delete(oldest.value);
+  }
+  return true;
+ }
+
+ return { shouldRecord, size: () => seen.size };
+}
 
 /** Ceilings on what one row may carry. Bounded so a row can never become a dump. */
 const AUDIT_MAX_TEXT = 200;
@@ -2037,6 +2116,8 @@ module.exports = {
  auditEmailDomain,
  auditEntryHash,
  recordAuditEntry,
+ createFirstUseWindow,
+ FIRST_USE_WINDOW_MS,
  sanitizeAuditDetail,
  createTokenVersionCache,
  appendWorkspaceAccessClause,

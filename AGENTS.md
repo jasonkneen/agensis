@@ -628,6 +628,26 @@ manage-gated, minted at `POST /backend/workspaces/:id/mcp-token`, and it is the
 only thing the UI ever produces (`src/lib/mcpConnect.ts`). Nothing in the product
 tells anyone to paste a login token, and nothing should start.
 
+**The door records that this happened, so the decision can rest on data.** A
+`mcp.login_token_used` audit row is written when a `kind: 'user'` identity
+authenticates — workspace, user id and kind, never the token, its hash or any
+fragment. It answers one question: is anyone actually using this path?
+
+MCP auth runs on **every request**, so the row is emitted at most **once per user
+per 24h per process** via `createFirstUseWindow` (`shared/backend-core.cjs`). That
+dedup is what makes the audit log the right home rather than the wrong one: after
+it, the rate is bounded by *distinct humans per day* — the same rate class as
+`invite.created` — instead of by request volume. Without it, a per-request row
+would bury the privileged actions the log exists for and flood a tamper-evident
+chain. **If you ever need the actual call volume, do not reach for this table**;
+that is a metrics counter, and the audit log would answer less by containing
+more. Recording is scoped by a frozen `KINDS_TO_RECORD` set, and rows are never
+awaited, so no DB write is on the MCP hot path.
+
+Read the rows as "this credential appeared today", **not** as a request count —
+the window is process-local, so a multi-instance deploy can produce one row per
+instance.
+
 One thing that is **not** implementable, so nobody spends a day on it: you cannot
 "allow the tools but deny `/backend/db/*`" for a login token used at MCP. It is
 one string, and when it later arrives at `/backend/db/*` nothing marks it as

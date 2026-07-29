@@ -8,7 +8,14 @@ const {
 // NOT array-serialize a raw JS array bound to an untyped $n — it coerces with
 // '' + value, producing `a,b` instead of `{a,b}`. Single-sourced from
 // backend-core (same helper the generic /backend/db path uses).
-const { toPgArrayLiteral } = require('../shared/backend-core.cjs');
+const { toPgArrayLiteral, createFirstUseWindow } = require('../shared/backend-core.cjs');
+
+// Which identity kinds get a "this credential was seen today" audit row. Only
+// the login-token path, because it is the only one with an open question
+// attached (see noteLoginTokenUse). Every other kind is a purpose-built MCP
+// credential whose use is not in doubt, and recording those would add rows
+// without changing any decision.
+const KINDS_TO_RECORD = Object.freeze(new Set(['user']));
 const { normalizeTaskTitle, resolveTaskParentByTitle } = require('../shared/taskTitle.cjs');
 const { normalizeConversationMode } = require('../shared/channelMentions.cjs');
 
@@ -1631,6 +1638,8 @@ function createMcpHandler(deps) {
   rateLimitBlocked,
   runtimeSchemaReady,
   serverVersion = '1.0.0',
+  recordAudit,
+  loginTokenWindow = createFirstUseWindow(),
  } = deps;
 
  const TOOLS = buildTools();
@@ -1638,6 +1647,50 @@ function createMcpHandler(deps) {
 
  function toolsForIdentity(identity) {
   return TOOLS.filter((tool) => toolAllowedForIdentity(tool, identity));
+ }
+
+ /**
+  * MEASUREMENT ONLY — this function authorizes nothing and refuses nothing.
+  *
+  * `verifyMcpToken` ends in `verifyUserAuthMcpToken`, so a human's ordinary
+  * session token authenticates here. Whether it should keep doing so is an open
+  * product decision, and the only missing input is whether anyone actually uses
+  * it. This records that, so the decision rests on data rather than a guess.
+  *
+  * Three properties this must hold, in order of how badly getting them wrong
+  * would hurt:
+  *
+  *   1. It cannot flood the audit log. MCP auth runs on EVERY request; the
+  *      first-use window collapses that to at most one row per user per 24h per
+  *      process. The dedup is checked BEFORE anything else happens.
+  *   2. It records nothing that reconstructs a credential — no token, no hash,
+  *      no prefix, no fragment. Only the workspace, the user id and the kind.
+  *      The user id is here deliberately: without it, several rows cannot be
+  *      told apart from one person retrying, which is the whole question.
+  *   3. It cannot break or slow the request. Nothing is awaited, so no DB write
+  *      is ever on the MCP hot path, and a rejection cannot surface as a failed
+  *      tool call. `recordAudit` already never rejects; the catch is belt and
+  *      braces against that changing.
+  *
+  * KINDS_TO_RECORD is a frozen set rather than an `=== 'user'` test so that
+  * widening it later (say, to compare adoption against the agw_ path) is one
+  * line and visibly the only thing that changes.
+  */
+ function noteLoginTokenUse(identity) {
+  if (!recordAudit || !identity || !KINDS_TO_RECORD.has(identity.kind)) return;
+  if (!identity.userId) return;
+  if (!loginTokenWindow.shouldRecord(`${identity.kind}:${identity.userId}`)) return;
+  try {
+   Promise.resolve(recordAudit({
+    workspaceId: identity.workspaceId || null,
+    actor: { userId: identity.userId },
+    action: 'mcp.login_token_used',
+    target: { type: 'mcp_endpoint', label: 'POST /backend/mcp' },
+    detail: { kind: identity.kind, firstUseInWindowHours: 24 },
+   })).catch(() => {});
+  } catch {
+   // Measurement must never be able to fail an authenticated request.
+  }
  }
 
  async function handleOne(rpc, identity) {
@@ -1707,6 +1760,8 @@ function createMcpHandler(deps) {
     return res.status(401).json(jsonrpcError(null, -32001, 'Unauthorized: valid agent or invite Bearer token required'));
    }
 
+   noteLoginTokenUse(identity);
+
    const rateKey = identity.agentId || identity.inviteId || identity.workspaceId;
    if (rateLimiter && rateLimitBlocked && rateLimitBlocked(res, rateLimiter, `mcp:${rateKey}`)) return;
 
@@ -1747,5 +1802,5 @@ module.exports = {
  listToolSummaries,
  SERVER_INSTRUCTIONS,
  SERVER_NAME,
- __test: { buildTools, ToolError, toolAllowedForIdentity, runToolForIdentity },
+ __test: { buildTools, ToolError, toolAllowedForIdentity, runToolForIdentity, KINDS_TO_RECORD },
 };

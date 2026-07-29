@@ -7433,6 +7433,11 @@ function createApp() {
   rateLimitBlocked,
   runtimeSchemaReady,
   serverVersion: '1.0.0',
+  // Measurement only, and a transport concern rather than a tool one, so it is
+  // injected here rather than through mcpToolDeps(). Lets the door record that a
+  // human's session token was used to authenticate — at most once per user per
+  // 24h — while the decision to keep accepting them is still open.
+  recordAudit,
  });
 
  mountMcpDoorsRoutes(app, { ...coreDeps(), mcpHandler, normalizeBaseUrl, renderSkillMd, requestBaseUrl, skillManifest, skillRateLimiter });
