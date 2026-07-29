@@ -68,7 +68,11 @@ function makeDb() {
       }
       if (n.startsWith('insert into messages')) {
         messageSeq += 1;
-        const row = { id: `m-${messageSeq}`, session_id: params[0], content: params[1], sender_kind: params[3], sender_id: params[4], sender_name: params[5] };
+        const row = {
+          id: `m-${messageSeq}`, session_id: params[0], content: params[1],
+          thread_parent_id: params[2] ?? null, sender_kind: params[3], sender_id: params[4], sender_name: params[5],
+          broadcast_to_channel: params.length > 6 ? Boolean(params[6]) : false,
+        };
         db.inserted.push(row);
         return [row];
       }
@@ -292,6 +296,60 @@ test('dispatch_agent inserts AND fires continueConversation (the trigger path)',
   // It resolves synchronously here, so it has run by the time we assert.
   assert.equal(continueCalls.length, 1, 'dispatch_agent must advance the conversation');
   assert.deepEqual(continueCalls[0], { workspaceId: WS, sessionId: 'ch-1', threadParentId: null });
+});
+
+test('post_message: broadcast_to_channel is ignored on a top-level (non-thread) post', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  await call(handler, {
+    body: rpc('tools/call', {
+      name: 'post_message', arguments: { channel_id: 'ch-1', content: 'flat post', broadcast_to_channel: true },
+    })
+  });
+  assert.equal(db.inserted[0].thread_parent_id, null);
+  assert.equal(db.inserted[0].broadcast_to_channel, false, 'nothing to broadcast OUT of when there is no thread');
+});
+
+test('post_message: broadcast_to_channel true on a thread reply flags it for the channel view', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  await call(handler, {
+    body: rpc('tools/call', {
+      name: 'post_message',
+      arguments: { channel_id: 'ch-1', content: 'need your input on X', thread_parent_id: 'root-1', broadcast_to_channel: true },
+    })
+  });
+  assert.equal(db.inserted[0].thread_parent_id, 'root-1');
+  assert.equal(db.inserted[0].broadcast_to_channel, true);
+});
+
+test('post_message: a thread reply defaults to NOT broadcasting when the flag is omitted', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  await call(handler, {
+    body: rpc('tools/call', {
+      name: 'post_message', arguments: { channel_id: 'ch-1', content: 'routine progress note', thread_parent_id: 'root-1' },
+    })
+  });
+  assert.equal(db.inserted[0].broadcast_to_channel, false);
+});
+
+test('dispatch_agent: broadcast_to_channel true on a thread reply flags it AND still advances the conversation', async () => {
+  const db = makeDb();
+  const { deps, continueCalls } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  await call(handler, {
+    body: rpc('tools/call', {
+      name: 'dispatch_agent',
+      arguments: { channel_id: 'ch-1', content: '@jason can I deploy this?', thread_parent_id: 'root-1', broadcast_to_channel: true },
+    })
+  });
+  assert.equal(db.inserted[0].broadcast_to_channel, true);
+  assert.equal(db.inserted[0].thread_parent_id, 'root-1');
+  assert.equal(continueCalls.length, 1, 'broadcasting a message must not skip advancing the conversation');
 });
 
 test('cross-workspace access is blocked (channel scoping)', async () => {
