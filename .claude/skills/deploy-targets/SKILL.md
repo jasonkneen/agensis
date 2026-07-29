@@ -1,6 +1,6 @@
 ---
 name: deploy-targets
-description: Figure out which of the three separate deploy/restart mechanisms a change actually needs before calling it "live" or "shipped" — Netlify auto-deploy (frontend, src/**), an explicit `fly deploy` (backend, server/index.cjs + server/mcp.cjs + DB schema DDL), or a local daemon restart (agent/agensis-cli, the process running THIS session). Use this before writing "shipped", "live", "deployed", or "will pick this up on next restart" in any status report, after merging a branch, and whenever a change touches server/index.cjs, server/mcp.cjs, ensureRuntimeSchema, or agent/agensis-cli. Getting this wrong is the single most repeated mistake in this repo's history — at least six shipped features were reported done while still inert because the wrong (or no) deploy step had run.
+description: Figure out which of the four separate deploy/restart/publish mechanisms a change actually needs before calling it "live" or "shipped" — Netlify auto-deploy (frontend, src/**), an explicit `fly deploy` (backend, server/index.cjs + server/mcp.cjs + DB schema DDL), a local daemon restart (the agensis-agent repo, the process running THIS session), or an npm publish of @agensis/agensis-agent for every other daemon. Use this before writing "shipped", "live", "deployed", or "will pick this up on next restart" in any status report, after merging a branch, and whenever a change touches server/index.cjs, server/mcp.cjs, ensureRuntimeSchema, or the agensis-agent repo. Getting this wrong is the single most repeated mistake in this repo's history — at least six shipped features were reported done while still inert because the wrong (or no) deploy step had run.
 ---
 
 # Which deploy target does this change need?
@@ -29,11 +29,21 @@ happened repeatedly ([[thread-widget-rail-feature]], [[agent-state-files-feature
    inert in production until someone runs `fly deploy`.
 
 3. **Local daemon — needs a manual restart of the daemon process, not a deploy at all.**
-   `agent/agensis-cli/**` (`agensis.mjs`, `state.mjs`, capability/memory sync,
-   `buildPrompt()`) is the code running the *local* Coder/agent process itself
-   — the one you may be running as right now. It isn't served by Netlify or
-   Fly. New code there only takes effect once the daemon process is stopped
-   and reconnected; there is no auto-deploy for it at all.
+   The daemon source now lives in its **own repo**,
+   `/Users/jkneen/Documents/GitHub/agensis-agent` (`packages/agensis-cli/**` —
+   `agensis.mjs`, `state.mjs`, `connectionExecutors.mjs`, capability/memory
+   sync, `buildPrompt()`). The old `agent/agensis-cli/**` path in this repo is
+   gone. This is the code running the *local* Coder/agent process itself — the
+   one you may be running as right now. It isn't served by Netlify or Fly.
+   `~/.bun/bin/agensis` symlinks into that checkout, so Jason's own daemon picks
+   a change up on **restart alone**; there is no auto-deploy for it at all.
+
+4. **npm — `@agensis/agensis-agent`, needs an explicit publish that YOU run.**
+   Every daemon that is *not* Jason's symlinked checkout — remote VMs, other
+   machines, other people — installs the published minified bundle. A daemon
+   change is not shipped for them until it is bumped, verified, and published.
+   **Do not hand Jason a list of npm commands to run himself**; that is a
+   repeated complaint. Full procedure in the `publish-daemon-npm` skill.
 
 ## The trap: these are not substitutes for each other
 
@@ -45,6 +55,9 @@ happened repeatedly ([[thread-widget-rail-feature]], [[agent-state-files-feature
   does **not** touch the backend.
 - Restarting your own daemon does **not** make a backend or frontend change
   live for the human — it only affects what *this* agent process sees.
+- Restarting your own daemon does **not** ship the daemon change to anyone
+  else, because your checkout is symlinked and theirs is an npm install. The
+  publish is a separate, non-optional step.
 
 ## What to check before claiming "live"
 
