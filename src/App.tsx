@@ -11,6 +11,7 @@ import { FloatingWindowShell } from './components/windows/FloatingWindowShell';
 import { MobileWindowSwitcher } from './components/windows/MobileWindowSwitcher';
 import { pickActiveWindowId } from './lib/mobileWindows';
 import { computeGroupBounds, computeGroupRole } from './lib/windowGroups';
+import { isDesktopShell } from './lib/desktopShell';
 import { tipSurfaceFor } from './lib/pageTips';
 import { DIRECT_MESSAGES_FOLDER } from './lib/onboardingChecklist';
 import { WindowGroupFrame } from './components/windows/WindowGroupFrame';
@@ -1224,6 +1225,10 @@ function AppContent() {
     });
   }, [windows, openWindow, activeLayerId, user?.id]);
 
+  // Probed once per mount: the shell cannot change under a running page, and a
+  // fresh probe per render would create a throwaway <webview> element each time.
+  const [desktopShell] = useState(isDesktopShell);
+
   // Terminals and browsers are NOT singletons like the other window types — you
   // want several open at once, each with its own shell or page. Every press
   // opens a new one; the number keeps the dock and window switcher readable.
@@ -2119,8 +2124,13 @@ function AppContent() {
             onAgentMessage={handleAgentDirectMessage}
             onAgentProfile={handleSidebarAgentProfile}
             onOpenTemplates={handleOpenTemplates}
-            onOpenBrowser={handleOpenBrowser}
-            onOpenTerminal={handleOpenTerminal}
+            // Desktop only. The terminal has no web transport at all — a browser
+            // tab cannot open a shell — and the browser panel is desktop-first,
+            // so neither is offered in a web tab. Both sidebar surfaces (the rail
+            // button and the action tile) already render only when their handler
+            // is present, so withholding it hides both.
+            onOpenBrowser={desktopShell ? handleOpenBrowser : undefined}
+            onOpenTerminal={desktopShell ? handleOpenTerminal : undefined}
             openTaskCount={
               // countOpenTasks, NOT useTasks' openTasks: that list includes
               // subtasks, which are not rows in the Tasks window, so the badge
