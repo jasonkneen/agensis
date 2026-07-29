@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Megaphone, RotateCw, Search, X } from 'lucide-react';
+import { BookOpenCheck, Megaphone, RotateCw, Search, Users, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -29,6 +29,7 @@ import {
   type TenantMeteringWindow,
 } from '../../lib/tenantStats';
 import { CampaignComposer } from './CampaignComposer';
+import { GuideReviewPanel } from './GuideReviewPanel';
 import { TenantDetailPane } from './TenantDetailPane';
 import { TenantRow } from './TenantRow';
 
@@ -100,10 +101,11 @@ function readStoredWidth(): number {
 }
 
 export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
+  const [mode, setMode] = useState<'accounts' | 'guides'>('accounts');
   const {
     accounts, total, truncated, metering, loading, error, refetch,
     detail, detailLoading, detailError, selectedId, select,
-  } = useTenants(true);
+  } = useTenants(mode === 'accounts');
 
   const [query, setQuery] = useState('');
   const [listWidth, setListWidth] = useState(readStoredWidth);
@@ -166,11 +168,21 @@ export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
     );
   }
 
+  if (mode === 'guides') {
+    return (
+      <div className="@container/tenantswin flex h-full min-h-0 flex-col bg-card text-card-foreground">
+        <AdminModeSwitch mode={mode} onChange={setMode} />
+        <div className="min-h-0 flex-1">
+          <GuideReviewPanel />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div
-      ref={rootRef}
-      className="@container/tenantswin flex h-full min-h-0 bg-card text-card-foreground"
-    >
+    <div className="@container/tenantswin flex h-full min-h-0 flex-col bg-card text-card-foreground">
+      <AdminModeSwitch mode={mode} onChange={setMode} />
+      <div ref={rootRef} className="flex min-h-0 flex-1">
       <section
         className={cn(
           'relative flex min-h-0 min-w-0 shrink-0 flex-col border-r border-border/60',
@@ -279,9 +291,45 @@ export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
       ) : (
         <TenantDetailPlaceholder />
       )}
+      </div>
     </div>
   );
 });
+
+// ---------------------------------------------------------------------------
+
+function AdminModeSwitch({
+  mode,
+  onChange,
+}: {
+  mode: 'accounts' | 'guides';
+  onChange: (mode: 'accounts' | 'guides') => void;
+}) {
+  return (
+    <nav aria-label="System administration" className="flex shrink-0 gap-1 border-b border-border/60 px-3 py-2">
+      <Button
+        type="button"
+        variant={mode === 'accounts' ? 'secondary' : 'ghost'}
+        size="sm"
+        onClick={() => onChange('accounts')}
+        aria-current={mode === 'accounts' ? 'page' : undefined}
+      >
+        <Users aria-hidden="true" />
+        Accounts
+      </Button>
+      <Button
+        type="button"
+        variant={mode === 'guides' ? 'secondary' : 'ghost'}
+        size="sm"
+        onClick={() => onChange('guides')}
+        aria-current={mode === 'guides' ? 'page' : undefined}
+      >
+        <BookOpenCheck aria-hidden="true" />
+        Guide reviews
+      </Button>
+    </nav>
+  );
+}
 
 // ---------------------------------------------------------------------------
 

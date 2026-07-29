@@ -24,9 +24,9 @@
 // { owner: false }. Anything else — a DB failure, say — propagates, because a
 // broken check is an error, not "not the owner".
 //
-// Reads are read-only. The one thing this surface can write is an owner
-// broadcast, which carries its own audit trail and cannot change anybody's
-// account — only add a dismissible message to their UI.
+// Reads are read-only. Writes are limited to owner broadcasts and explicit
+// approve/reject decisions for pending community guides. Neither can change an
+// account, workspace membership, or provider configuration.
 
 function mountTenantsRoutes(app, deps = {}) {
  const {
@@ -35,8 +35,10 @@ function mountTenantsRoutes(app, deps = {}) {
   buildSegmentPreview, campaignMessageDbRateLimiter,
   campaignMessageRateLimiter, createCampaign, describeSegment,
   dismissCampaignMessage, getTenantAccount, listCampaigns,
+  listGuideSubmissions,
   listTenantAccounts, listUserCampaignMessages, loadTenantFacts,
   normalizeCampaignInput, normalizeSegment, selectSegmentMatches,
+  reviewGuideSubmission,
   tenantsDbRateLimiter, tenantsRateLimiter,
  } = deps;
 
@@ -54,9 +56,8 @@ function mountTenantsRoutes(app, deps = {}) {
  // own — a curl with a valid non-owner token gets 403 from every one of them.
  //
  // The read routes are read-only: upgrades and credits are still a later pass.
- // The ONE thing this surface can now write is an owner broadcast — see the
- // campaign routes below, which carry their own audit trail and cannot change
- // anybody's account, only add a dismissible message to their UI.
+ // The writes on this surface are owner broadcasts and guide review decisions.
+ // Both are narrow, dedicated routes; neither can change an account.
 
  // Whether the CALLER is the owner. Answers for the caller and nobody else, so
  // it is safe for any signed-in user to ask — it is how the client decides
@@ -87,6 +88,27 @@ function mountTenantsRoutes(app, deps = {}) {
    await assertSystemOwner({ userId: req.userId, db: dbQuery });
    const result = await listTenantAccounts(dbQuery);
    res.json({ data: result, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.get('/backend/tenants/guide-submissions', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   res.json({ data: await listGuideSubmissions(dbQuery), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/tenants/guide-submissions/:id/review', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, tenantsRateLimiter, tenantsDbRateLimiter, req.userId || clientIpFromReq(req))) return;
+   const reviewerId = await assertSystemOwner({ userId: req.userId, db: dbQuery });
+   const guide = await reviewGuideSubmission(dbQuery, req.params.id, reviewerId, req.body);
+   res.json({ data: guide, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }

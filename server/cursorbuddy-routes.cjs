@@ -18,7 +18,12 @@
 
 function mountCursorbuddyRoutes(app, deps = {}) {
  const {
-  requireAuth, jsonError, enforceWorkspaceRole, getDb, notifyDbSubscribers,
+ requireAuth, jsonError, enforceWorkspaceRole, getDb, notifyDbSubscribers,
+  clientIpFromReq, cursorBuddyGuidesDbRateLimiter,
+  cursorBuddyGuidesRateLimiter, dbQuery, dbRateLimitBlocked,
+  createOwnedGuide, deleteOwnedGuide, listCommunityGuides,
+  listOwnedGuides, resolveCommunityGuide, submitOwnedGuide,
+  updateOwnedGuide,
   parseJsonArray, parseJsonObject, agentRuntimePayload,
   buildAgentConnectionCommand, createCursorBuddyConnectionKey,
   ensureCursorBuddyAgentForKey, ensureCursorBuddyProviderAgent,
@@ -26,6 +31,72 @@ function mountCursorbuddyRoutes(app, deps = {}) {
   normalizeCursorBuddyScope, normalizeCursorBuddySurface,
   publicCursorBuddyConnectionKey, requestBaseUrl, shellQuote,
  } = deps;
+
+ app.get('/backend/cursorbuddy/guides/community', async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, clientIpFromReq(req))) return;
+   res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+   res.json({ data: await listCommunityGuides(dbQuery), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.get('/backend/cursorbuddy/guides/resolve', async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, clientIpFromReq(req))) return;
+   const guide = await resolveCommunityGuide(dbQuery, req.query.url);
+   res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+   res.json({ data: guide, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.get('/backend/cursorbuddy/guides', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, req.userId)) return;
+   res.json({ data: await listOwnedGuides(dbQuery, req.userId), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/cursorbuddy/guides', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, req.userId)) return;
+   res.status(201).json({ data: await createOwnedGuide(dbQuery, req.userId, req.body), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.patch('/backend/cursorbuddy/guides/:id', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, req.userId)) return;
+   res.json({ data: await updateOwnedGuide(dbQuery, req.userId, req.params.id, req.body), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.delete('/backend/cursorbuddy/guides/:id', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, req.userId)) return;
+   res.json({ data: await deleteOwnedGuide(dbQuery, req.userId, req.params.id), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/cursorbuddy/guides/:id/submit', requireAuth, async (req, res) => {
+  try {
+   if (await dbRateLimitBlocked(res, cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, req.userId)) return;
+   res.json({ data: await submitOwnedGuide(dbQuery, req.userId, req.params.id), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
 
  app.get('/backend/cursorbuddy/connection-keys', requireAuth, async (req, res) => {
   try {

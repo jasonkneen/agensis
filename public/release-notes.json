@@ -69,6 +69,19 @@
     ]
   },
   {
+    "version": "cursorbuddy-community-guides",
+    "date": "2026-07-29",
+    "title": "CursorBuddy guides can now be reviewed and published",
+    "summary": "CursorBuddy users can keep site guides in their own library and submit the useful ones for everyone. A submitted guide does not become public automatically: the system owner can inspect its site match and complete portable document in the Tenants administration window, then approve and publish it or reject it with notes. The browser extension only resolves approved guides. Account details stay inside the owner-only review surface and are never included in the public guide response.",
+    "highlights": [
+      "A system-owner Guide reviews view beside Accounts in Tenants",
+      "Approve and publish, or reject with notes for the author",
+      "Only approved guides are returned to the public extension resolver",
+      "Private and local-site guides can be saved personally but cannot be published",
+      "The guide document excludes provider keys, credentials, and local project settings"
+    ]
+  },
+  {
     "version": "schedules-and-gateways-go-live",
     "date": "2026-07-29",
     "title": "Schedules and inference gateways update themselves now",

@@ -766,12 +766,16 @@ test('BOTH backends register every tenant route — an admin route on one is a r
  assert.match(serverSource, /app\.get\('\/backend\/tenants\/campaigns\/categories', requireAuth,/);
  assert.match(serverSource, /app\.post\('\/backend\/tenants\/campaigns', requireAuth,/);
  assert.match(serverSource, /app\.post\('\/backend\/tenants\/campaigns\/preview', requireAuth,/);
+ assert.match(serverSource, /app\.get\('\/backend\/tenants\/guide-submissions', requireAuth,/);
+ assert.match(serverSource, /app\.post\('\/backend\/tenants\/guide-submissions\/:id\/review', requireAuth,/);
  assert.match(netlifySource, /pathname === '\/backend\/tenants\/access'/);
  assert.match(netlifySource, /pathname === '\/backend\/tenants'/);
  assert.match(netlifySource, /\\\/backend\\\/tenants\\\/\(\[\^\/\]\+\)\$/);
  assert.match(netlifySource, /pathname === '\/backend\/tenants\/campaigns'/);
  assert.match(netlifySource, /pathname === '\/backend\/tenants\/campaigns\/categories'/);
  assert.match(netlifySource, /pathname === '\/backend\/tenants\/campaigns\/preview'/);
+ assert.match(netlifySource, /pathname === '\/backend\/tenants\/guide-submissions'/);
+ assert.match(netlifySource, /guideReviewMatch/);
  // And the receiving end, which is NOT owner-gated and must exist on both too —
  // present on only one backend means half the deployment never sees a broadcast.
  assert.match(serverSource, /app\.get\('\/backend\/campaign-messages', requireAuth,/);
@@ -839,7 +843,8 @@ test('every tenant route on both backends is rate limited, reusing the existing 
  // One limiter call per tenant path test in the netlify router. Both sides are
  // counted from the source so they cannot drift apart silently.
  const netlifyTenantPaths = (netlifySource.match(/pathname === '\/backend\/tenants[^']*'/g) || []).length
-  + (netlifySource.match(/tenantDetailMatch =/g) || []).length;
+  + (netlifySource.match(/tenantDetailMatch =/g) || []).length
+  + (netlifySource.match(/guideReviewMatch =/g) || []).length;
  assert.equal(
   (netlifySource.match(/dbRateLimitBlock\(tenantsRateLimiter, tenantsDbRateLimiter/g) || []).length,
   netlifyTenantPaths,
@@ -865,12 +870,15 @@ test('the DELIVERY routes are rate limited too, on their own budget', () => {
  }
 });
 
-test('the ONLY tenant writes are the two campaign routes — nothing here can change an account', () => {
- // Upgrades and credits are still a later pass. The surface acquired exactly two
- // write routes, both of which add a dismissible message to somebody's UI and
- // neither of which touches an account row. This test is the allow-list: a third
- // write route fails it, whatever it does.
- const ALLOWED_WRITES = ['/backend/tenants/campaigns', '/backend/tenants/campaigns/preview'];
+test('tenant writes are limited to campaigns and guide review — nothing here can change an account', () => {
+ // Upgrades and credits are still a later pass. Campaign writes add a
+ // dismissible message; guide review records one approve/reject decision.
+ // None touches an account row. This remains an explicit allow-list.
+ const ALLOWED_WRITES = [
+  '/backend/tenants/campaigns',
+  '/backend/tenants/campaigns/preview',
+  '/backend/tenants/guide-submissions/:id/review',
+ ];
 
  const serverWrites = [...serverSource.matchAll(/app\.(post|patch|put|delete)\('(\/backend\/tenants[^']*)'/g)]
   .map((match) => `${match[1]} ${match[2]}`);
@@ -879,28 +887,41 @@ test('the ONLY tenant writes are the two campaign routes — nothing here can ch
   assert.equal(verb, 'post', `server/index.cjs must not expose a ${verb.toUpperCase()} tenant route`);
   assert.ok(ALLOWED_WRITES.includes(pathname), `unexpected tenant write route in server/index.cjs: ${write}`);
  }
- assert.deepEqual([...serverWrites].sort(), ['post /backend/tenants/campaigns', 'post /backend/tenants/campaigns/preview']);
+ assert.deepEqual([...serverWrites].sort(), [
+  'post /backend/tenants/campaigns',
+  'post /backend/tenants/campaigns/preview',
+  'post /backend/tenants/guide-submissions/:id/review',
+ ]);
 
  const netlifyWrites = [...netlifySource.matchAll(/method === '(POST|PATCH|PUT|DELETE)' && pathname === '(\/backend\/tenants[^']*)'/g)]
   .map((match) => `${match[1].toLowerCase()} ${match[2]}`);
- assert.deepEqual([...netlifyWrites].sort(), ['post /backend/tenants/campaigns', 'post /backend/tenants/campaigns/preview']);
+ if (/method === 'POST' && guideReviewMatch/.test(netlifySource)) {
+  netlifyWrites.push('post /backend/tenants/guide-submissions/:id/review');
+ }
+ assert.deepEqual([...netlifyWrites].sort(), [
+  'post /backend/tenants/campaigns',
+  'post /backend/tenants/campaigns/preview',
+  'post /backend/tenants/guide-submissions/:id/review',
+ ]);
 
- // Both write routes run the gate. Not "the file mentions assertSystemOwner" —
+ // Every write route runs the gate. Not "the file mentions assertSystemOwner" —
  // the handler for each one does, within its own body.
- for (const [label, source, splitter] of [
-  ['server/index.cjs', serverSource, /app\.post\('\/backend\/tenants/],
-  ['netlify', netlifySource, /method === 'POST' && pathname === '\/backend\/tenants/],
+ for (const [label, handlers] of [
+  ['server/index.cjs', serverSource.split(/app\.post\('\/backend\/tenants/).slice(1)],
+  ['netlify', [
+   ...netlifySource.split(/method === 'POST' && pathname === '\/backend\/tenants/).slice(1),
+   netlifySource.split(/method === 'POST' && guideReviewMatch/)[1],
+  ].filter(Boolean)],
  ]) {
-  const handlers = source.split(splitter).slice(1);
-  assert.equal(handlers.length, 2, `${label} must have exactly two tenant write handlers`);
+  assert.equal(handlers.length, 3, `${label} must have exactly three tenant write handlers`);
   for (const handler of handlers) {
    assert.match(handler.slice(0, 1200), /assertSystemOwner/, `${label}: a tenant write route without the gate`);
   }
  }
 
- // And shared/tenant-admin.cjs is still write-free: the campaign writes live in
- // shared/tenant-campaigns.cjs, so the module that reads across every account
- // remains something that cannot change one.
+ // And shared/tenant-admin.cjs is still write-free: campaign and guide writes
+ // live in their dedicated modules, so the module that reads across every
+ // account remains something that cannot change one.
  const source = fs.readFileSync(path.join(root, 'shared/tenant-admin.cjs'), 'utf8');
  for (const write of ['insert into', 'update ', 'delete from']) {
   assert.equal(

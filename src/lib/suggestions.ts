@@ -287,7 +287,7 @@ export function formatSuggestionDate(value: string): string {
   if (!value) return 'an unknown date';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'an unknown date';
-  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 /** What an already-answered suggestion reads as. */

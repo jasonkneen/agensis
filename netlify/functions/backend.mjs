@@ -38,6 +38,17 @@ import {
  listTenantAccounts,
  getTenantAccount,
 } from '../../shared/tenant-admin.cjs';
+import {
+ createOwnedGuide,
+ deleteOwnedGuide,
+ listCommunityGuides,
+ listGuideSubmissions,
+ listOwnedGuides,
+ resolveCommunityGuide,
+ reviewGuideSubmission,
+ submitOwnedGuide,
+ updateOwnedGuide,
+} from '../../shared/cursorbuddy-guides.cjs';
 // Cost metering, shared with the Fly lane so both backends write identically
 // shaped rows into one table. FAIL-OPEN by contract — never wrap in try/catch.
 import { recordAnthropicUsage, createAnthropicUsageAccumulator } from '../../shared/usage-metering.cjs';
@@ -114,6 +125,7 @@ const feedbackRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 // so this is what stops an authenticated non-owner turning the 403 into a free
 // query loop.
 const tenantsRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+const cursorBuddyGuidesRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 // Delivery side of owner broadcasts: read by every signed-in session, not by
 // the operator, so it gets its own budget rather than sharing the admin one.
 const campaignMessageRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
@@ -146,6 +158,7 @@ const aiChatDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db:
 const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: query, namespace: 'dispatch' });
 const feedbackDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 5, db: query, namespace: 'feedback' });
 const tenantsDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: query, namespace: 'tenants' });
+const cursorBuddyGuidesDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 120, db: query, namespace: 'cursorbuddy-guides' });
 const campaignMessageDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: query, namespace: 'campaign-messages' });
 
 // Async layered gate: returns a 429 Response when EITHER layer blocks, else null.
@@ -2422,6 +2435,73 @@ async function route(req) {
  if (req.method === 'POST' && pathname === '/backend/cursorbuddy/connection-keys/claim') {
   return handleClaimCursorBuddyConnectionKey(req);
  }
+ if (req.method === 'GET' && pathname === '/backend/cursorbuddy/guides/community') {
+  const blocked = await dbRateLimitBlock(cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, clientIpFromRequest(req));
+  if (blocked) return blocked;
+  return Response.json(
+   { data: await listCommunityGuides(query), error: null },
+   { headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=60, stale-while-revalidate=300' } },
+  );
+ }
+ if (req.method === 'GET' && pathname === '/backend/cursorbuddy/guides/resolve') {
+  const blocked = await dbRateLimitBlock(cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, clientIpFromRequest(req));
+  if (blocked) return blocked;
+  const targetUrl = new URL(req.url).searchParams.get('url');
+  return Response.json(
+   { data: await resolveCommunityGuide(query, targetUrl), error: null },
+   { headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=60, stale-while-revalidate=300' } },
+  );
+ }
+ if (req.method === 'GET' && pathname === '/backend/cursorbuddy/guides') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, userId);
+  if (blocked) return blocked;
+  return json({ data: await listOwnedGuides(query, userId), error: null });
+ }
+ if (req.method === 'POST' && pathname === '/backend/cursorbuddy/guides') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, userId);
+  if (blocked) return blocked;
+  return json({
+   data: await createOwnedGuide(query, userId, await readBody(req), { stringifyJson: true }),
+   error: null,
+  }, 201);
+ }
+ const cursorBuddyGuideMatch = pathname.match(/^\/backend\/cursorbuddy\/guides\/([^/]+)$/);
+ if (req.method === 'PATCH' && cursorBuddyGuideMatch) {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, userId);
+  if (blocked) return blocked;
+  return json({
+   data: await updateOwnedGuide(
+    query,
+    userId,
+    decodeURIComponent(cursorBuddyGuideMatch[1]),
+    await readBody(req),
+    { stringifyJson: true },
+   ),
+   error: null,
+  });
+ }
+ if (req.method === 'DELETE' && cursorBuddyGuideMatch) {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, userId);
+  if (blocked) return blocked;
+  return json({
+   data: await deleteOwnedGuide(query, userId, decodeURIComponent(cursorBuddyGuideMatch[1])),
+   error: null,
+  });
+ }
+ const cursorBuddyGuideSubmitMatch = pathname.match(/^\/backend\/cursorbuddy\/guides\/([^/]+)\/submit$/);
+ if (req.method === 'POST' && cursorBuddyGuideSubmitMatch) {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(cursorBuddyGuidesRateLimiter, cursorBuddyGuidesDbRateLimiter, userId);
+  if (blocked) return blocked;
+  return json({
+   data: await submitOwnedGuide(query, userId, decodeURIComponent(cursorBuddyGuideSubmitMatch[1])),
+   error: null,
+  });
+ }
  if (req.method === 'GET' && pathname === '/backend/agents/connections') {
   return handleAgentConnections(req, await requireUserId(req));
  }
@@ -2493,6 +2573,29 @@ async function route(req) {
   if (blocked) return blocked;
   await assertSystemOwner({ userId, db: query });
   return json({ data: await listTenantAccounts(query), error: null });
+ }
+ if (req.method === 'GET' && pathname === '/backend/tenants/guide-submissions') {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  await assertSystemOwner({ userId, db: query });
+  return json({ data: await listGuideSubmissions(query), error: null });
+ }
+ const guideReviewMatch = pathname.match(/^\/backend\/tenants\/guide-submissions\/([^/]+)\/review$/);
+ if (req.method === 'POST' && guideReviewMatch) {
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(tenantsRateLimiter, tenantsDbRateLimiter, userId || clientIpFromRequest(req));
+  if (blocked) return blocked;
+  const reviewerId = await assertSystemOwner({ userId, db: query });
+  return json({
+   data: await reviewGuideSubmission(
+    query,
+    decodeURIComponent(guideReviewMatch[1]),
+    reviewerId,
+    await readBody(req),
+   ),
+   error: null,
+  });
  }
  // Owner broadcasts. Mirrors server/index.cjs route for route — an admin WRITE
  // route present on one backend and absent on the other is the worst version of

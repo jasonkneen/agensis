@@ -247,6 +247,7 @@ const {
  listTenantAccounts,
  getTenantAccount,
 } = require('../shared/tenant-admin.cjs');
+const cursorBuddyGuides = require('../shared/cursorbuddy-guides.cjs');
 // Cost metering. Every helper here is FAIL-OPEN by contract — see
 // shared/usage-metering.cjs. Call sites deliberately do not try/catch them: a
 // metering write must never be able to fail a turn somebody is paying for.
@@ -1294,6 +1295,27 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_cursorbuddy_connection_keys_workspace ON cursorbuddy_connection_keys(workspace_id, status);
     CREATE INDEX IF NOT EXISTS idx_cursorbuddy_connection_keys_hash ON cursorbuddy_connection_keys(key_hash);
+
+    CREATE TABLE IF NOT EXISTS cursorbuddy_guides (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      owner_user_id uuid NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+      site_url text NOT NULL,
+      host text NOT NULL,
+      path_pattern text NOT NULL DEFAULT '/*',
+      name text NOT NULL,
+      summary text NOT NULL DEFAULT '',
+      manifest jsonb NOT NULL DEFAULT '{}'::jsonb,
+      review_status text NOT NULL DEFAULT 'draft' CHECK (review_status IN ('draft', 'pending', 'approved', 'rejected')),
+      review_notes text NOT NULL DEFAULT '',
+      submitted_at timestamptz,
+      reviewed_at timestamptz,
+      reviewed_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      published_at timestamptz,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_cursorbuddy_guides_owner ON cursorbuddy_guides(owner_user_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_cursorbuddy_guides_public_match ON cursorbuddy_guides(host, review_status, published_at DESC);
 
     CREATE TABLE IF NOT EXISTS agent_jobs (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2531,6 +2553,10 @@ const feedbackRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 // authenticated non-owner turning the 403 into a free query loop. Keyed per
 // caller, and low: the owner browses a list, they do not poll it.
 const tenantsRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+// Guide resolution is public because the extension has no Agensis session on
+// arbitrary sites. Keep one shared budget for public reads and authenticated
+// library writes; 120/minute is comfortably above normal navigation.
+const cursorBuddyGuidesRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 // The DELIVERY side of owner broadcasts — read by EVERY signed-in session on
 // load, not by the operator. Separate budget from tenantsRateLimiter for that
 // reason: one operator browsing an admin list and every user in the deployment
@@ -2567,6 +2593,7 @@ const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, d
 // list. Tight on purpose — nobody files five genuine bug reports a minute.
 const feedbackDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 5, db: dbQuery, namespace: 'feedback' });
 const tenantsDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: dbQuery, namespace: 'tenants' });
+const cursorBuddyGuidesDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 120, db: dbQuery, namespace: 'cursorbuddy-guides' });
 const campaignMessageDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: dbQuery, namespace: 'campaign-messages' });
 // Outbound fetches cost this machine's time and put its IP in someone else's
 // logs, so the unfurl budget is enforced across instances too, not only per warm
@@ -7578,7 +7605,7 @@ function createApp() {
  // have no workspace_id column, so they are scoped via their chat_sessions.
  mountSessionsRoutes(app, { ...coreDeps(), buildAgentConnectionCommand, buildWorkspaceBootstrap, ensurePrimaryDaemonAgent, normalizeAgentBackendBaseUrl, requestBaseUrl, resolveSetupWorkspace, resolveWorkspaceIdForSession });
 
- mountCursorbuddyRoutes(app, { ...coreDeps(), agentRuntimePayload, buildAgentConnectionCommand, createCursorBuddyConnectionKey, ensureCursorBuddyAgentForKey, ensureCursorBuddyProviderAgent, hashAgentToken, normalizeAgentBackendBaseUrl, normalizeCursorBuddyDomain, normalizeCursorBuddyScope, normalizeCursorBuddySurface, publicCursorBuddyConnectionKey, requestBaseUrl, shellQuote });
+ mountCursorbuddyRoutes(app, { ...coreDeps(), ...cursorBuddyGuides, dbQuery, cursorBuddyGuidesDbRateLimiter, cursorBuddyGuidesRateLimiter, agentRuntimePayload, buildAgentConnectionCommand, createCursorBuddyConnectionKey, ensureCursorBuddyAgentForKey, ensureCursorBuddyProviderAgent, hashAgentToken, normalizeAgentBackendBaseUrl, normalizeCursorBuddyDomain, normalizeCursorBuddyScope, normalizeCursorBuddySurface, publicCursorBuddyConnectionKey, requestBaseUrl, shellQuote });
 
  mountInferenceRoutes(app, { ...coreDeps(), authorizeUserOrFarmWorkspace, bindInferenceAbort, createOpenAIInferenceStreamRelay, inferenceBroker, liveSharedModelRoutes, publicInferenceModel });
 
@@ -7615,7 +7642,7 @@ function createApp() {
   normalizeFeedbackSubmission, insertFeedbackReport,
  });
 
- mountTenantsRoutes(app, { ...coreDeps(), dbQuery, CAMPAIGN_CATEGORIES, assertSendable, assertSystemOwner, buildSegmentPreview, campaignMessageDbRateLimiter, campaignMessageRateLimiter, createCampaign, describeSegment, dismissCampaignMessage, getTenantAccount, listCampaigns, listTenantAccounts, listUserCampaignMessages, loadTenantFacts, normalizeCampaignInput, normalizeSegment, selectSegmentMatches, tenantsDbRateLimiter, tenantsRateLimiter });
+ mountTenantsRoutes(app, { ...coreDeps(), ...cursorBuddyGuides, dbQuery, CAMPAIGN_CATEGORIES, assertSendable, assertSystemOwner, buildSegmentPreview, campaignMessageDbRateLimiter, campaignMessageRateLimiter, createCampaign, describeSegment, dismissCampaignMessage, getTenantAccount, listCampaigns, listTenantAccounts, listUserCampaignMessages, loadTenantFacts, normalizeCampaignInput, normalizeSegment, selectSegmentMatches, tenantsDbRateLimiter, tenantsRateLimiter });
  mountSchedulesRoutes(app, { ...coreDeps(), runDueSchedules });
 
  mountAgentsRoutes(app, {
