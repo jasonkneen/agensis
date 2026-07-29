@@ -81,6 +81,22 @@ the agensis-agent checkout, so a restart alone picks up source changes.
 yourself mid-turn.** Say so plainly and let Jason do that one. That is the *only*
 lane you legitimately hand back, and it is a two-second action, not a task.
 
+## A user-visible change writes a release note
+
+If a human would notice the change, add an entry to **`public/release-notes.json`**
+in the same commit. Newest first. Shape:
+`{ version: "<kebab-slug>", date: "YYYY-MM-DD", title, summary, highlights?: [] }`.
+
+Write it for the person using the product, not the person who wrote the code:
+plain English, no file paths, no commit-message voice, no emoji. Group a day's
+work into a few themed entries rather than one per commit.
+
+**Skipping this is why "What's new" felt broken.** The dialog only fires when the
+NEWEST note changes, so on a day with thirty commits and zero authored notes it
+kept re-offering an entry from the previous day. Jason's complaint was never
+"stop telling me things" — it was "stop telling me the same thing". Two rounds
+were spent tuning the trigger when the real gap was that nobody wrote a note.
+
 ## Order matters
 
 **Fly → Netlify → npm → daemon restart.**
