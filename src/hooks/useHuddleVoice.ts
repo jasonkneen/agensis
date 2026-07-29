@@ -532,8 +532,27 @@ export function useBrowserSpeechOutput(
 // Hosted engines: Deepgram Flux in, Cartesia sonic-3.5 out
 // ---------------------------------------------------------------------------
 
+// Which engines a workspace can use rarely changes mid-session (it follows
+// which provider keys are configured, not anything per-huddle) — so the first
+// fetch is cached in memory and every later join in this tab reuses it
+// instantly instead of paying a round trip before the mic can open. A failed
+// fetch is deliberately NOT cached: the backend may just be warming up, and
+// the next join should try again rather than being stuck degraded all tab.
+const capabilitiesCache = new Map<string, VoiceCapabilities>();
+const capabilitiesInflight = new Map<string, Promise<VoiceCapabilities>>();
+
+async function fetchVoiceCapabilities(workspaceId: string): Promise<VoiceCapabilities> {
+  const response = await fetch(apiUrl(`/backend/workspaces/${workspaceId}/voice/capabilities`), {
+    headers: apiAuthHeaders(),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error('voice capabilities request failed');
+  return payload?.data ?? { stt: null, tts: null };
+}
+
 /**
- * What the server can actually do, asked once per huddle.
+ * What the server can actually do, asked once per huddle — or once per tab,
+ * after which it is served from the cache above.
  *
  * Fetched BEFORE a microphone is opened, so a missing key is a sentence on
  * screen and a fallback to the browser engine rather than a mic that lights up
@@ -541,28 +560,38 @@ export function useBrowserSpeechOutput(
  * which is the same graceful path.
  */
 export function useVoiceCapabilities(workspaceId: string | null, enabled: boolean): VoiceCapabilities | null {
-  const [capabilities, setCapabilities] = useState<VoiceCapabilities | null>(null);
+  const [capabilities, setCapabilities] = useState<VoiceCapabilities | null>(
+    () => (workspaceId && capabilitiesCache.has(workspaceId)) ? capabilitiesCache.get(workspaceId)! : null,
+  );
 
   useEffect(() => {
     if (!enabled || !workspaceId) {
       setCapabilities(null);
       return;
     }
+    const cached = capabilitiesCache.get(workspaceId);
+    if (cached) {
+      setCapabilities(cached);
+      return;
+    }
     let cancelled = false;
-    (async () => {
-      try {
-        const response = await fetch(apiUrl(`/backend/workspaces/${workspaceId}/voice/capabilities`), {
-          headers: apiAuthHeaders(),
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (cancelled) return;
-        setCapabilities(response.ok ? (payload?.data ?? { stt: null, tts: null }) : { stt: null, tts: null });
-      } catch {
+    let inflight = capabilitiesInflight.get(workspaceId);
+    if (!inflight) {
+      inflight = fetchVoiceCapabilities(workspaceId);
+      capabilitiesInflight.set(workspaceId, inflight);
+      inflight
+        .then((result) => capabilitiesCache.set(workspaceId, result))
+        .catch(() => { /* not cached — next join retries */ })
+        .finally(() => capabilitiesInflight.delete(workspaceId));
+    }
+    inflight
+      .then((result) => { if (!cancelled) setCapabilities(result); })
+      .catch(() => {
         // The backend is unreachable, which the rest of the app is already
-        // shouting about. Voice just degrades.
+        // shouting about. Voice just degrades, and nothing is cached so the
+        // next join tries fresh.
         if (!cancelled) setCapabilities({ stt: null, tts: null });
-      }
-    })();
+      });
     return () => { cancelled = true; };
   }, [workspaceId, enabled]);
 

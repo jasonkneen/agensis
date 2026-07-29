@@ -128,6 +128,13 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "agensis uses your microphone for voice huddles.",
+        "NSCameraUsageDescription": "agensis uses your camera for video in huddles."
+      },
       "target": [
         {
           "target": "dmg",
