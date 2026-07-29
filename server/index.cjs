@@ -103,6 +103,7 @@ const { mountFeedbackRoutes } = require('./feedback-routes.cjs');
 const { mountAiChatRoutes } = require('./ai-chat-routes.cjs');
 const { installBrowserProxy } = require('./browser-proxy.cjs');
 const { mountVaultRoutes } = require('./vault-routes.cjs');
+const { mountAuditRoutes } = require('./audit-routes.cjs');
 const { mountTenantsRoutes } = require('./tenants-routes.cjs');
 const { mountSchedulesRoutes } = require('./schedules-routes.cjs');
 const { mountCursorbuddyRoutes } = require('./cursorbuddy-routes.cjs');
@@ -206,6 +207,8 @@ const {
  decryptVaultSecret: coreDecryptVaultSecret,
  getWorkspaceSecretValue: coreGetWorkspaceSecretValue,
  setWorkspaceSecretValue: coreSetWorkspaceSecretValue,
+ auditEmailDomain,
+ recordAuditEntry,
 } = require('../shared/backend-core.cjs');
 const { normalizeTaskTitle } = require('../shared/taskTitle.cjs');
 const { WORKSPACE_MAX_DEPTH } = require('../shared/workspace-tree.cjs');
@@ -1413,6 +1416,70 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS secret_cipher text DEFAULT '';
     ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT '';
   `);
+ // The audit log lives next to workspace_secrets because it is the same
+ // sensitivity: server-written only, manage-gated to read, reachable through no
+ // generic /backend/db/* route (audit_log is absent from ALLOWED_TABLES, so
+ // ensureTable rejects it before any handler runs). See the block above
+ // recordAuditEntry in shared/backend-core.cjs for what this is and is not worth.
+ //
+ // workspace_id is ON DELETE SET NULL, NOT CASCADE, and that is the one line here
+ // worth defending at review. Every other workspace-scoped table cascades.
+ // "Someone deleted the workspace" is the single most audit-worthy action there
+ // is, and CASCADE would erase the evidence of it as a side effect of committing
+ // it. That is also why the column is nullable.
+ //
+ // before_value/after_value are text, not jsonb, so they hold the short scalars
+ // they are for ('editor' -> 'admin', 'default' -> 'yolo') and cannot quietly
+ // become the place someone dumps a whole row — and with it, a secret.
+ await db.unsafe(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      seq bigserial NOT NULL,
+      workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+      actor_user_id uuid,
+      actor_agent_id uuid,
+      actor_label text NOT NULL DEFAULT '',
+      action text NOT NULL,
+      target_type text NOT NULL DEFAULT '',
+      target_id text,
+      target_label text NOT NULL DEFAULT '',
+      before_value text NOT NULL DEFAULT '',
+      after_value text NOT NULL DEFAULT '',
+      detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+      request_ip text NOT NULL DEFAULT '',
+      entry_hash text NOT NULL DEFAULT '',
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_log_workspace_created ON audit_log(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor_user_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_audit_log_seq ON audit_log(seq);
+
+    CREATE OR REPLACE FUNCTION audit_log_refuse_mutation()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+      IF TG_OP = 'UPDATE' THEN
+        RAISE EXCEPTION 'audit_log rows are immutable'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      -- DELETE is permitted only past the retention horizon, so pruning never
+      -- requires dropping this trigger by hand — and a trigger dropped for
+      -- maintenance is a trigger that stays off.
+      IF OLD.created_at > now() - interval '400 days' THEN
+        RAISE EXCEPTION 'audit_log rows younger than the retention horizon cannot be deleted'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN OLD;
+    END $$;
+
+    DROP TRIGGER IF EXISTS trg_audit_log_refuse_mutation ON audit_log;
+    CREATE TRIGGER trg_audit_log_refuse_mutation
+      BEFORE UPDATE OR DELETE ON audit_log
+      FOR EACH ROW
+      EXECUTE FUNCTION audit_log_refuse_mutation();
+  `);
  await reencryptLegacyPlaintextSecrets(db);
  await db.unsafe(`
     CREATE TABLE IF NOT EXISTS gateway_configs (
@@ -1988,6 +2055,27 @@ async function setWorkspaceSecretValue(workspaceId, key, value, userId, descript
 function dbUnsafe(sql, params) {
  return getDb().unsafe(sql, params);
 }
+
+/**
+ * The audit writer, bound to this backend's db handle.
+ *
+ * Injected into the extracted route modules through coreDeps rather than
+ * imported by them, so the audit surface follows the same dependency contract as
+ * auth, RBAC and realtime and cannot drift per module.
+ *
+ * `jsonParam` is left at its default (identity) because every audit call site is
+ * on the Fly/postgres.js side, where binding the OBJECT is the correct half of
+ * the two-driver rule documented on insertFeedbackReport. A Netlify caller would
+ * have to pass JSON.stringify.
+ *
+ * Fire-and-forget: recordAuditEntry never rejects, so no caller needs to await
+ * it defensively and no audit failure can turn a successful role change into a
+ * 500. Awaited at the call sites anyway, so an ordinary failure reaches the log
+ * in order.
+ */
+function recordAudit(entry) {
+ return recordAuditEntry({ ...entry, db: dbUnsafe });
+}
 async function flowSecretKey() {
  const authSecret = await getAuthSecret();
  return crypto.createHash('sha256').update(`agensis-flow-webhook:${authSecret}`).digest();
@@ -2125,6 +2213,10 @@ const skillRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 //     brute-force attempt from being free load on the database.
 const joinLinkRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 const joinRedeemRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
+// The audit log read. Manage-gated already, so this is not an authorization
+// control — it bounds how fast an admin (or a stolen admin session) can page the
+// whole log out, which is the one cheap way to bulk-exfiltrate it.
+const auditReadRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 // Plan 004 — auth hardening: signin is keyed per-email (matches the client's
 // documented "5 attempts" lockout intent); signup is keyed per-IP and looser,
 // to slow down bulk account creation without punishing normal signup retries.
@@ -2865,7 +2957,13 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
 // must be restarted with the new one) and flips run_mode to 'daemon' so a connected
 // daemon takes over from the builtin server runner. Authorization is the caller's
 // responsibility (HTTP route enforces manage role; MCP scopes by workspace token).
-async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle = null, model = null, permissionMode = null, baseUrl = null, profile = null } = {}) {
+// `actorUserId` is threaded in by every caller that has a verified session, for
+// the audit row at the end. It is recorded HERE rather than at the four call
+// sites so a new way to mint a token cannot ship without an audit row — an
+// unattributed mint ('' actor) is still a recorded mint, which is the property
+// that matters. Note the connect token itself is minted in this function and is
+// never, anywhere below, put in the audit row.
+async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle = null, model = null, permissionMode = null, baseUrl = null, profile = null, actorUserId = null } = {}) {
  const id = String(agentId || '').trim();
  if (!id) throw new Error('agentId is required');
  const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [id]);
@@ -2895,6 +2993,19 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
   [id, resolvedHandle, hashAgentToken(token), resolvedModel, resolvedPermissionMode],
  );
  notifyDbSubscribers('workspace_agents', 'UPDATE', updateRows);
+ // A connect token is a real credential: it is the daemon's whole identity, and
+ // this UPDATE also (re)sets permission_mode, so a mint is how an agent can end
+ // up in 'yolo'. Recorded: the agent, its handle, and the RESULTING mode.
+ // Never recorded: the token, and never its hash either.
+ await recordAudit({
+  workspaceId: agent.workspace_id ? String(agent.workspace_id) : null,
+  actor: { userId: actorUserId ? String(actorUserId) : '' },
+  action: 'agent.connect_token_minted',
+  target: { type: 'agent', id, label: resolvedHandle },
+  before: String(agent.permission_mode || ''),
+  after: resolvedPermissionMode,
+  detail: { handle: resolvedHandle, model: resolvedModel, runtime: resolvedRuntime || '' },
+ });
  const resolvedBaseUrl = normalizeAgentBackendBaseUrl(baseUrl)
   || normalizeAgentBackendBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL)
   || '';
@@ -6742,6 +6853,7 @@ const agentPermissions = createAgentPermissions({
  notifyDbSubscribers: (...a) => realtime.notifyDbSubscribers(...a),
  sendWs: (...a) => realtime.sendWs(...a),
  getConnectedAgents: () => agentConnections.connectedAgents,
+ recordAudit: (...a) => recordAudit(...a),
 });
 const {
  decideAgentPermissionRequest, expireConnectionPermissionRequests,
@@ -6971,6 +7083,8 @@ function coreDeps() {
   requireAuth, requireUserOrFarm, enforceWorkspaceRole, enforceDbOperationAccess,
   // Realtime fanout
   notifyDbSubscribers, sendWs,
+  // The audit log's write surface. Never rejects; see recordAudit.
+  recordAudit, auditEmailDomain,
   // Rate limiting (the limiter instances themselves stay per-module)
   rateLimitBlocked, dbRateLimitBlocked, clientIpFromReq,
   // Common value coercion
@@ -7515,6 +7629,10 @@ function createApp() {
   setWorkspaceSecretValue, settingsWorkspaceIdFromRequest,
   workspaceAuthoredProviderSkills,
  });
+
+ // The audit log's only read route. Mounted next to the vault because it is the
+ // same sensitivity and the same gate: manage, user session, Fly only.
+ mountAuditRoutes(app, { ...coreDeps(), auditReadRateLimiter });
 
  // --- Cartesia voices -------------------------------------------------------
  // Two routes, both thin. The browser must never see CARTESIA_API_KEY, so the

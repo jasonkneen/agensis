@@ -394,6 +394,59 @@ export type ActivityEventType =
  | 'join_link_created'
  | 'join_link_redeemed';
 
+/**
+ * The privileged actions the audit log records.
+ *
+ * NOT an activity event, and the distinction is structural rather than stylistic.
+ * `activity_events` rows are written by THIS BUNDLE through the generic
+ * /backend/db/insert route, so a member picks their own event_type, title and
+ * user_id — forgeable and deletable by design, which is fine for a feed.
+ * `audit_log` rows are written only by the server at the action itself, the
+ * table is absent from the client allowlist entirely, and the only way to read
+ * one is the manage-gated GET /backend/workspaces/:id/audit.
+ *
+ * Keep in step with AUDIT_ACTIONS in shared/backend-core.cjs.
+ */
+export type AuditAction =
+ | 'member.role_changed'
+ | 'member.removed'
+ | 'invite.created'
+ | 'invite.revoked'
+ // 'yolo' is unrestricted shell on whatever machine the daemon runs on. This is
+ // the highest-value row in the log.
+ | 'agent.permission_mode_changed'
+ | 'agent.permission_rule_granted'
+ | 'agent.permission_rule_revoked'
+ | 'agent.connect_token_minted'
+ // The key NAME and a configured boolean. Never the value — see the redaction
+ // contract on the vault routes.
+ | 'vault.secret_set'
+ | 'vault.secret_deleted';
+
+/**
+ * One audit row as the read route returns it.
+ *
+ * `request_ip` is stored but deliberately NOT projected, so it is absent here.
+ */
+export interface AuditEntry {
+ id: string;
+ seq: number;
+ workspace_id: string | null;
+ actor_user_id: string | null;
+ actor_agent_id: string | null;
+ actor_label: string;
+ action: AuditAction | 'unknown';
+ target_type: string;
+ target_id: string | null;
+ target_label: string;
+ before_value: string;
+ after_value: string;
+ detail: Record<string, unknown> | null;
+ /** SHA-256 of the row's canonical content. Detects an edit, not a reordering. */
+ entry_hash: string;
+ created_at: string;
+}
+
 export interface ActivityEvent {
  id: string;
  workspace_id: string;

@@ -46,6 +46,53 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
 
 ## Recent cross-cutting features (2026-07)
 
+- **The audit log** (`audit_log`) — a durable, SERVER-AUTHORED record of the
+  privileged actions that previously left no trace anywhere: role changes, member
+  removal, invites, `permission_mode` flips (including `yolo`), permanent tool
+  grants, connect-token mints and vault writes. Written only by
+  `recordAuditEntry` in `shared/backend-core.cjs`; read only through the
+  `manage`-gated `GET /backend/workspaces/:id/audit`
+  (`server/audit-routes.cjs`). Things to know before touching it:
+  - **`audit_log` is deliberately ABSENT from `ALLOWED_TABLES`.** That is the
+    control, not a role check: `ensureTable` rejects it before any
+    `/backend/db/*` handler and before `authorizeRealtimeBinding` consults a
+    capability, so there is no generic read, write or subscribe path to it at
+    all. Do NOT add it "so the panel can use `backendClient.from()`" — the read
+    route does not need it, and adding it silently restores generic INSERT and
+    DELETE on the audit trail. `tests/audit-log-append-only.test.cjs` fails on
+    exactly that mutation.
+  - **`activity_events` is NOT an audit record and must not be promoted into
+    one.** It is client-authored (`src/hooks/useActivity.ts:70` inserts straight
+    from the browser through the generic route, picking its own `event_type`,
+    `title` and `user_id`) and it is `write`-capability insert/update/delete. It
+    is forgeable and erasable by design. That is fine for a feed.
+  - **A row must be strictly less sensitive than the thing it describes.** Vault
+    writes record the key NAME and a `configured` boolean, never the value or the
+    ciphertext. Token mints record the agent and the resulting mode, never the
+    token OR its hash. Invites record the email DOMAIN, never the local-part
+    (400-day retention, different erasure path from the user record).
+    `sanitizeAuditDetail` drops nested objects structurally so `detail: someRow`
+    cannot smuggle a column, and the writer tests assert over the whole param
+    array so a nested key cannot slip through.
+  - **The writer never rejects.** An audit write that threw inside a role-change
+    handler would turn a working privileged action into a 500. It is
+    fire-and-forget with an internal try/catch, matching
+    `logProviderCallActivity`.
+  - **v1 has NO hash chain, on purpose.** Each row carries an `entry_hash`
+    (SHA-256 over its canonical content) and a `bigserial seq` — that detects
+    edits and flags gaps with no lock. A `prev_hash` chain would make every write
+    read the tail under a lock, on paths that must never stall, and would prove
+    nothing while the only available anchor is the same Postgres the operator
+    controls. Revisit only when an anchor exists that the `DATABASE_URL` holder
+    cannot write.
+  - **Say what it is worth.** Tamper-EVIDENT against application-level actors; it
+    is not tamper-PROOF, because the app connects as a role that can drop the
+    immutability trigger. The panel says so in its own copy. Do not let anyone
+    describe it otherwise.
+  - **`workspace_id` is `ON DELETE SET NULL`, not `CASCADE`** — deleting a
+    workspace is the most audit-worthy action there is, and `CASCADE` would erase
+    the evidence of it as a side effect. Those rows become DB-only.
+
 - **Interactive tool approvals** — a daemon agent that hits a tool it isn't
   cleared for now ASKS, in the conversation it is working in, instead of erroring.
   `server/agent-permissions.cjs` owns the table (`agent_permission_requests`),

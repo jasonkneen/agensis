@@ -1,5 +1,19 @@
 [
   {
+    "version": "audit-log",
+    "date": "2026-07-29",
+    "title": "A permanent record of who changed what",
+    "summary": "Until now the actions that matter most left no trace at all. Nobody could answer who put an agent into unrestricted mode, who promoted someone to admin, who issued a connect token or who wrote over a shared key — not because the answer was hard to find, but because it was never written down anywhere. Settings has a new Audit log tab that records those actions from now on, with who did it, when, and what changed from and to. Only people who can manage the workspace can read it, and nobody can write to it, edit it or delete from it through the app — entries come from the server itself at the moment the action happens. It records names, never values: which key was set, never the key itself; which invite went out and to what kind of address, never the invite link. The log starts empty because there was nothing to recover, so an empty log does not mean nothing has ever happened.",
+    "highlights": [
+      "A new Audit log tab in Settings, for people who can manage the workspace",
+      "Records permission mode changes, permanent tool grants, connect tokens, role changes, member removals, invites and vault writes",
+      "Flags the ones that widen access, and calls out unrestricted mode specifically",
+      "Written only by the server — it cannot be created, edited or deleted from the app",
+      "Every row carries a fingerprint, so a later edit to one is detectable",
+      "Never records a secret, a token or the private half of an email address"
+    ]
+  },
+  {
     "version": "harvest-review",
     "date": "2026-07-29",
     "title": "See what a deleted thread was worth keeping",

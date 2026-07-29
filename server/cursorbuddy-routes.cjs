@@ -169,6 +169,11 @@ function mountCursorbuddyRoutes(app, deps = {}) {
     model: req.body?.model || agent.model,
     permissionMode: claim.permissionMode || agent.permission_mode,
     baseUrl,
+    // This route is deliberately unauthenticated — the connection key IS the
+    // credential — so there is no req.userId to attribute the mint to. The
+    // responsible party is whoever MINTED the key, which is the account that
+    // decided a runtime could claim an agent here.
+    actorUserId: record.created_by,
    });
    const metadata = {
     ...parseJsonObject(record.metadata),

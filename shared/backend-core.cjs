@@ -1694,6 +1694,240 @@ async function insertFeedbackReport({ db, jsonParam, userId, sourceWorkspaceId, 
  return { taskId, reportId: reportId || null, systemWorkspaceId };
 }
 
+// ============================================================================
+// The audit log
+// ----------------------------------------------------------------------------
+// A durable, SERVER-AUTHORED record of the privileged actions that previously
+// left no trace anywhere: role changes, member removal, invites, permission-mode
+// flips (including 'yolo', which is unrestricted shell on the daemon host),
+// permanent tool grants, connect-token mints, and vault writes.
+//
+// This is NOT activity_events, and the distinction is structural rather than a
+// matter of taste. activity_events is written by the BROWSER through the generic
+// /backend/db/insert route (src/hooks/useActivity.ts), the client picks its own
+// event_type/title/user_id, and DB_TABLE_ACCESS gives it insert/update/delete at
+// 'write' — so any editor can forge a row and delete a real one. That is fine
+// for a feed and disqualifies it as an audit record permanently.
+//
+// So `audit_log` is deliberately ABSENT from ALLOWED_TABLES and from
+// DB_TABLE_ACCESS. ensureTable() rejects unknown tables before any /backend/db/*
+// handler runs, so there is no generic read, write or realtime-subscribe path to
+// this table at all — a stronger guarantee than {insert:'manage'}, which would
+// still leave a route for a future manage-holder or a bug in the gate to travel.
+// The only doors are recordAuditEntry (in) and the manage-gated
+// GET /backend/workspaces/:id/audit route (out). tests/audit-log-append-only
+// fails if anyone allowlists it.
+//
+// WHAT THIS IS WORTH, stated honestly so nobody over-claims it: entries are
+// attested by the SERVER, not signed by the actor, and the app connects to
+// Postgres as a role that can DROP the immutability trigger. It is tamper-
+// EVIDENT against application-level actors — a member, an agent, a bug, a SQL
+// injection reaching a DELETE. It is not tamper-PROOF against whoever holds
+// DATABASE_URL, and no design available in this architecture would be.
+//
+// v1 stores a per-row `entry_hash` and a bigserial `seq`, and deliberately does
+// NOT chain rows with a prev_hash. A chain's real cost is serialisation: every
+// entry must read the current tail before it can write, turning an independent
+// INSERT into a lock-taking read-modify-write on paths (role changes, token
+// mints, secret writes) that must never stall. And a chain is only evidence if
+// its head is anchored where the adversary cannot reach — agensis has one
+// Postgres and one operator, so a chain written by the operator, anchored in the
+// operator's database, verified by the operator, against the operator, proves
+// nothing. The per-row hash detects EDITS and the sequence flags GAPS, at no
+// lock and two columns. Add prev_hash going forward the day an external anchor
+// exists; do not pretend the historical rows were ever sealed.
+
+/**
+ * Every action this log will record. An `action` outside this set is a typo, and
+ * a typo must not silently produce a row nobody can filter for.
+ */
+const AUDIT_ACTIONS = Object.freeze(new Set([
+ 'member.role_changed',
+ 'member.removed',
+ 'invite.created',
+ 'invite.revoked',
+ 'agent.permission_mode_changed',
+ 'agent.permission_rule_granted',
+ 'agent.permission_rule_revoked',
+ 'agent.connect_token_minted',
+ 'vault.secret_set',
+ 'vault.secret_deleted',
+]));
+
+/** What an unrecognised action records as, rather than throwing in production. */
+const AUDIT_UNKNOWN_ACTION = 'unknown';
+
+/** Ceilings on what one row may carry. Bounded so a row can never become a dump. */
+const AUDIT_MAX_TEXT = 200;
+const AUDIT_MAX_LABEL = 160;
+const AUDIT_MAX_DETAIL_KEYS = 24;
+const AUDIT_MAX_DETAIL_ITEMS = 24;
+
+function auditText(value, max = AUDIT_MAX_TEXT) {
+ if (value === null || value === undefined) return '';
+ return String(value).slice(0, max);
+}
+
+/**
+ * The email DOMAIN, never the local-part.
+ *
+ * "someone invited an external address" is the thing an owner actually needs to
+ * see; who exactly it was is already in the invite row. This log has a 400-day
+ * horizon and a different erasure path from the user record, so a deleted user's
+ * address must not outlive them in here.
+ */
+function auditEmailDomain(email) {
+ const at = String(email || '').lastIndexOf('@');
+ if (at < 0) return '';
+ return auditText(String(email).slice(at + 1).toLowerCase(), 80);
+}
+
+/**
+ * Reduce `detail` to bounded scalars at depth 1.
+ *
+ * This is a STRUCTURAL guard against the highest-severity failure this feature
+ * has: someone writing `detail: agentRow`, which would carry connect_token_hash
+ * into a table with a longer retention than the row it came from. It cannot tell
+ * a secret from a rule string — only the call sites and their tests do that (see
+ * the redaction contract in plans/buzz-packs/audit-hash-chain.md 4.4) — but it
+ * does make "dump the whole row in" impossible rather than merely discouraged.
+ */
+function sanitizeAuditDetail(detail) {
+ if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return {};
+ const out = {};
+ let keys = 0;
+ for (const key of Object.keys(detail).sort()) {
+  if (keys >= AUDIT_MAX_DETAIL_KEYS) break;
+  const value = detail[key];
+  if (value === null || value === undefined) continue;
+  if (typeof value === 'string') out[key] = auditText(value);
+  else if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
+  else if (typeof value === 'boolean') out[key] = value;
+  else if (Array.isArray(value)) {
+   out[key] = value
+    .slice(0, AUDIT_MAX_DETAIL_ITEMS)
+    .filter((item) => typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean')
+    .map((item) => (typeof item === 'string' ? auditText(item) : item));
+  } else continue; // objects and everything else are dropped, not stringified
+  keys += 1;
+ }
+ return out;
+}
+
+/** Key-sorted deep copy, so two equal payloads always hash the same. */
+function auditCanonicalValue(value) {
+ if (value === null || typeof value !== 'object') return value;
+ if (Array.isArray(value)) return value.map(auditCanonicalValue);
+ const out = {};
+ for (const key of Object.keys(value).sort()) out[key] = auditCanonicalValue(value[key]);
+ return out;
+}
+
+/**
+ * SHA-256 over the row's canonical content — no prev_hash, no read of the tail,
+ * no lock. Detects an EDIT to a stored row; says nothing about ordering.
+ *
+ * created_at is part of the hash and is generated in JS by the writer, so the
+ * hash covers the same instant the row stores (now() would be a different one).
+ */
+function auditEntryHash(row = {}) {
+ const payload = JSON.stringify([
+  String(row.workspace_id || ''),
+  String(row.actor_user_id || ''),
+  String(row.actor_agent_id || ''),
+  String(row.action || ''),
+  String(row.target_type || ''),
+  String(row.target_id || ''),
+  String(row.before_value || ''),
+  String(row.after_value || ''),
+  auditCanonicalValue(row.detail || {}),
+  String(row.created_at || ''),
+ ]);
+ return crypto.createHash('sha256').update(payload, 'utf8').digest('hex');
+}
+
+/**
+ * Write one audit entry. Returns the row's { id, seq, entry_hash } or null.
+ *
+ * FIRE-AND-FORGET, in the same sense as logProviderCallActivity: awaited so an
+ * ordinary failure reaches the server log, but it NEVER rejects. An audit write
+ * that throws inside a role-change handler would turn a working privileged
+ * action into a 500 — the log must not be able to break the thing it observes.
+ *
+ * `actor` is { userId, agentId, label }. A user action sets actor_user_id from
+ * the VERIFIED session (req.userId), never from a request body; an agent-
+ * initiated one sets actor_agent_id from the token-resolved agent. Never both.
+ *
+ * `jsonParam` is the two-driver seam described on insertFeedbackReport above. It
+ * defaults to identity, which is correct for postgres.js on Fly, where every v1
+ * call site lives. A Netlify caller must pass JSON.stringify.
+ */
+async function recordAuditEntry({
+ db,
+ workspaceId = null,
+ actor = {},
+ action,
+ target = {},
+ before = '',
+ after = '',
+ detail = {},
+ requestIp = '',
+ jsonParam = (value) => value,
+} = {}) {
+ try {
+  if (typeof db !== 'function') throw new Error('recordAuditEntry requires a db function');
+  let resolvedAction = String(action || '').trim();
+  if (!AUDIT_ACTIONS.has(resolvedAction)) {
+   // Loud in development so a typo is caught at the desk; recorded as 'unknown'
+   // in production so the ACTION still leaves a row even when its name is wrong.
+   if (process.env.NODE_ENV !== 'production') {
+    throw new Error(`recordAuditEntry: unknown action ${JSON.stringify(resolvedAction)}`);
+   }
+   resolvedAction = AUDIT_UNKNOWN_ACTION;
+  }
+
+  const actorUserId = actor?.userId ? String(actor.userId) : null;
+  // Never both: an action has one actor. A user session wins if a caller
+  // somehow supplies each, because req.userId is the verified one.
+  const actorAgentId = !actorUserId && actor?.agentId ? String(actor.agentId) : null;
+
+  const row = {
+   workspace_id: workspaceId ? String(workspaceId) : null,
+   actor_user_id: actorUserId,
+   actor_agent_id: actorAgentId,
+   actor_label: auditText(actor?.label, AUDIT_MAX_LABEL),
+   action: resolvedAction,
+   target_type: auditText(target?.type, 60),
+   target_id: target?.id ? auditText(target.id, 120) : null,
+   target_label: auditText(target?.label, AUDIT_MAX_LABEL),
+   before_value: auditText(before),
+   after_value: auditText(after),
+   detail: sanitizeAuditDetail(detail),
+   request_ip: auditText(requestIp, 60),
+   created_at: new Date().toISOString(),
+  };
+  row.entry_hash = auditEntryHash(row);
+
+  const inserted = await db(
+   `insert into audit_log
+        (workspace_id, actor_user_id, actor_agent_id, actor_label, action,
+         target_type, target_id, target_label, before_value, after_value,
+         detail, request_ip, entry_hash, created_at)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
+      returning id, seq, entry_hash`,
+   [
+    row.workspace_id, row.actor_user_id, row.actor_agent_id, row.actor_label, row.action,
+    row.target_type, row.target_id, row.target_label, row.before_value, row.after_value,
+    jsonParam(row.detail), row.request_ip, row.entry_hash, row.created_at,
+   ],
+  );
+  return inserted?.[0] ?? null;
+ } catch (error) {
+  console.error('recordAuditEntry failed', error);
+  return null;
+ }
+}
+
 module.exports = {
  verifyAuthToken,
  issueAuthToken,
@@ -1731,6 +1965,14 @@ module.exports = {
  listWorkspaceSecretMeta,
  listWorkspaceVaultEntries,
  storagePathBelongsToWorkspace,
+ // The audit log. Note what is NOT here: audit_log appears in neither
+ // ALLOWED_TABLES nor DB_TABLE_ACCESS, on purpose — see the block above.
+ AUDIT_ACTIONS,
+ AUDIT_UNKNOWN_ACTION,
+ auditEmailDomain,
+ auditEntryHash,
+ recordAuditEntry,
+ sanitizeAuditDetail,
  createTokenVersionCache,
  appendWorkspaceAccessClause,
  logMessageActivityIdempotent,

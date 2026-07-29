@@ -127,6 +127,74 @@ ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT 
 
 CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id);
 
+-- The audit log: a durable, SERVER-AUTHORED record of privileged actions (role
+-- changes, member removal, invites, permission-mode flips including 'yolo',
+-- permanent tool grants, connect-token mints, vault writes). Deliberately absent
+-- from ALLOWED_TABLES in shared/backend-core.cjs, so no generic /backend/db/*
+-- route and no realtime subscription can reach it; the only doors are
+-- recordAuditEntry and the manage-gated GET /backend/workspaces/:id/audit.
+--
+-- workspace_id is ON DELETE SET NULL, not CASCADE. Deleting a workspace is the
+-- most audit-worthy action there is; CASCADE would erase the evidence of it as a
+-- side effect of committing it. Hence the nullable column.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  seq bigserial NOT NULL,
+  workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+  actor_user_id uuid,
+  actor_agent_id uuid,
+  actor_label text NOT NULL DEFAULT '',
+  action text NOT NULL,
+  target_type text NOT NULL DEFAULT '',
+  target_id text,
+  target_label text NOT NULL DEFAULT '',
+  -- text, not jsonb: these hold short scalars ('editor' -> 'admin') and must not
+  -- become the place someone dumps a whole row, and with it a secret.
+  before_value text NOT NULL DEFAULT '',
+  after_value text NOT NULL DEFAULT '',
+  detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+  request_ip text NOT NULL DEFAULT '',
+  -- SHA-256 over the row's canonical content. No prev_hash: a chain would make
+  -- every write read the tail under a lock, on paths that must never stall, and
+  -- would prove nothing while the only possible anchor is the same database the
+  -- operator controls. This detects edits; seq gaps suggest deletion.
+  entry_hash text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_workspace_created ON audit_log(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_audit_log_seq ON audit_log(seq);
+
+-- Append-only at the DB layer. This stops app bugs, a SQL injection reaching a
+-- DELETE, and a future contributor allowlisting the table without thinking. It
+-- does NOT stop whoever holds DATABASE_URL, who can drop it in one statement --
+-- and nothing available in this architecture would.
+CREATE OR REPLACE FUNCTION audit_log_refuse_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    RAISE EXCEPTION 'audit_log rows are immutable'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  -- DELETE is permitted only past the retention horizon, so pruning never
+  -- requires dropping this trigger by hand.
+  IF OLD.created_at > now() - interval '400 days' THEN
+    RAISE EXCEPTION 'audit_log rows younger than the retention horizon cannot be deleted'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN OLD;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_audit_log_refuse_mutation ON audit_log;
+CREATE TRIGGER trg_audit_log_refuse_mutation
+  BEFORE UPDATE OR DELETE ON audit_log
+  FOR EACH ROW
+  EXECUTE FUNCTION audit_log_refuse_mutation();
+
 CREATE TABLE IF NOT EXISTS gateway_configs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

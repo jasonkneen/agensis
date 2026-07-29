@@ -150,6 +150,9 @@ function createAgentPermissions(deps = {}) {
   notifyDbSubscribers,
   parseJsonObject,
   sendWs,
+  // The audit writer (server/index.cjs recordAudit). Never rejects. Optional so
+  // the existing unit tests can construct this factory without one.
+  recordAudit = async () => null,
  } = deps;
 
  /** The shape any route hands back — never a raw row, so a column added later is a deliberate exposure. */
@@ -306,7 +309,7 @@ function createAgentPermissions(deps = {}) {
   * merged here rather than patched: another key (host_folders, sandbox_skills)
   * living in the same column must survive a permission grant untouched.
   */
- async function grantPermanentRules({ workspaceId, agentId, rules }) {
+ async function grantPermanentRules({ workspaceId, agentId, rules, actorUserId = '' }) {
   if (!rules.length) return [];
   const agentRows = await getDb().unsafe(
    'select metadata from workspace_agents where id = $1 and workspace_id = $2 limit 1',
@@ -324,6 +327,19 @@ function createAgentPermissions(deps = {}) {
    [agentId, workspaceId, { ...metadata, permission_rules: merged }],
   );
   notifyDbSubscribers('workspace_agents', 'UPDATE', updated);
+  // The rules NEWLY added, not the whole merged list: the audit answer to "what
+  // did this grant widen" is the delta, and re-listing rules granted months ago
+  // on every row would bury it. The rule strings themselves are recorded because
+  // they ARE the grant — they are the exact strings the human saw on the button.
+  const granted = merged.filter((rule) => !existing.includes(rule));
+  await recordAudit({
+   workspaceId: String(workspaceId || ''),
+   actor: { userId: String(actorUserId || '') },
+   action: 'agent.permission_rule_granted',
+   target: { type: 'agent', id: String(agentId || ''), label: String(updated[0]?.handle || updated[0]?.name || '') },
+   after: granted.join(', '),
+   detail: { rules: granted, rule_count: granted.length },
+  });
   return merged;
  }
 
@@ -387,6 +403,7 @@ function createAgentPermissions(deps = {}) {
     workspaceId: request.workspace_id,
     agentId: request.agent_id,
     rules: request.rules.map(String),
+    actorUserId: String(userId || ''),
    });
   }
 
@@ -549,13 +566,34 @@ function createAgentPermissions(deps = {}) {
    throw badRequest('permission_mode must be default, accept_edits, or yolo');
   }
   await enforceWorkspaceRole(userId, workspaceId, 'manage');
+  // The pre-update mode, read in the same statement rather than by a preceding
+  // SELECT: the audit row's whole value is "from WHAT to what", and a separate
+  // read could observe a different value than the one this UPDATE overwrote.
   const rows = await getDb().unsafe(
-   `update workspace_agents set permission_mode = $3, updated_at = now()
-      where id = $1 and workspace_id = $2 returning *`,
+   `update workspace_agents a set permission_mode = $3, updated_at = now()
+      from (select id, permission_mode from workspace_agents where id = $1 and workspace_id = $2) prev
+      where a.id = prev.id
+      returning a.*, prev.permission_mode as audit_previous_permission_mode`,
    [String(agentId || ''), String(workspaceId || ''), mode],
   );
   if (!rows.length) throw Object.assign(new Error('Agent was not found'), { status: 404 });
-  notifyDbSubscribers('workspace_agents', 'UPDATE', rows);
+  const previousMode = String(rows[0].audit_previous_permission_mode || '');
+  // The joined-in audit column must not ride the realtime fanout or land in a
+  // client's agent row — it exists only for the line below.
+  const publicRows = rows.map(({ audit_previous_permission_mode: _prev, ...agent }) => agent);
+  notifyDbSubscribers('workspace_agents', 'UPDATE', publicRows);
+  // THE highest-value row in this log. 'yolo' is unrestricted shell on whatever
+  // machine the daemon runs on; PRIVILEGED_DB_COLUMNS_BY_TABLE exists so a
+  // `write` holder cannot reach this column at all. When an admin legitimately
+  // does it, this is the only place that records who, and when.
+  await recordAudit({
+   workspaceId: String(workspaceId || ''),
+   actor: { userId: String(userId || '') },
+   action: 'agent.permission_mode_changed',
+   target: { type: 'agent', id: String(agentId || ''), label: String(rows[0].handle || rows[0].name || '') },
+   before: previousMode,
+   after: mode,
+  });
   return mode;
  }
 
@@ -579,6 +617,14 @@ function createAgentPermissions(deps = {}) {
    [String(agentId), String(workspaceId), { ...metadata, permission_rules: next }],
   );
   notifyDbSubscribers('workspace_agents', 'UPDATE', updated);
+  await recordAudit({
+   workspaceId: String(workspaceId || ''),
+   actor: { userId: String(userId || '') },
+   action: 'agent.permission_rule_revoked',
+   target: { type: 'agent', id: String(agentId || ''), label: String(updated[0]?.handle || updated[0]?.name || '') },
+   before: target,
+   detail: { rules: [target], rule_count: 1 },
+  });
   return next;
  }
 

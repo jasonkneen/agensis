@@ -157,6 +157,7 @@ function mountSessionsRoutes(app, deps = {}) {
     permissionMode: req.body?.permissionMode || req.body?.permission_mode || agent.permission_mode,
     baseUrl,
     profile: false,
+    actorUserId: req.userId,
    });
    const daemonArgs = {
     command: 'connect',
