@@ -91,6 +91,98 @@ function optInt(value, fallback, max) {
  return max ? Math.min(Math.floor(n), max) : Math.floor(n);
 }
 
+// ---------------------------------------------------------------------------
+// KEYSET PAGINATION
+//
+// Every list tool here orders by a timestamp descending and stops at a limit.
+// Without a cursor the rows past that limit were simply unreachable, and — the
+// worse half — the caller could not tell. A page of exactly 50 looks identical
+// whether the workspace has 50 rows or 5,000.
+//
+// KEYSET, NOT OFFSET, and the reason is correctness rather than speed. These
+// tables are written to constantly: `order by updated_at desc offset 50` re-runs
+// the sort at request time, so a channel that received a message between page 1
+// and page 2 moves to the top and pushes a row it had already displaced down
+// across the page boundary — the reader sees one row twice and never sees
+// another. A keyset says "everything strictly older than this exact row", which
+// is stable under concurrent writes because it names a position in the data
+// rather than a count of rows that have shifted.
+//
+// THE TIEBREAK IS NOT OPTIONAL. `updated_at` is not unique — two rows written in
+// the same millisecond (a bulk insert, a backfill) share it, and `< at` would
+// skip the second while `<= at` would repeat the first. The comparison is on the
+// PAIR (timestamp, id), which is total because id is unique. Any tool paginated
+// here must order by both, or its cursor silently loses rows.
+//
+// The cursor is OPAQUE by intent, not by obscurity: base64url over JSON, no
+// signature, and it carries nothing the caller could not already see in the row
+// it came from. It is not an authorization token — every paginated query still
+// carries its own workspace and session-scope predicates, so replaying a cursor
+// from another workspace filters to nothing rather than reading across a tenant
+// boundary. Do not start trusting it for anything.
+// ---------------------------------------------------------------------------
+
+/** The shape every paginated tool advertises. Same wording everywhere. */
+const CURSOR_PROPERTY = Object.freeze({
+ type: 'string',
+ description: 'Continue from a previous page: pass the next_cursor the last call returned.',
+});
+
+function encodeCursor(row, field) {
+ const at = row?.[field];
+ const id = row?.id;
+ if (at === undefined || at === null || id === undefined || id === null) return null;
+ const iso = at instanceof Date ? at.toISOString() : String(at);
+ return Buffer.from(JSON.stringify({ at: iso, id: String(id) }), 'utf8').toString('base64url');
+}
+
+/**
+ * Read a cursor back. Returns null for anything malformed rather than throwing.
+ *
+ * A bad cursor yields the FIRST page, which is the behaviour a caller can
+ * recover from — throwing would turn a truncated copy-paste into a dead end,
+ * and the cursor grants nothing, so there is nothing to protect by refusing.
+ */
+function decodeCursor(value) {
+ if (typeof value !== 'string' || !value.trim()) return null;
+ try {
+  const parsed = JSON.parse(Buffer.from(value.trim(), 'base64url').toString('utf8'));
+  const at = String(parsed?.at || '');
+  const id = String(parsed?.id || '');
+  if (!at || !id || Number.isNaN(Date.parse(at))) return null;
+  return { at, id };
+ } catch {
+  return null;
+ }
+}
+
+/**
+ * The `and (field, id) < ($n, $n+1)` clause, pushing both binds onto `params`.
+ * Returns '' when there is no cursor, so the caller interpolates unconditionally
+ * without shifting its own parameter numbering.
+ *
+ * `column` is a QUALIFIED column name chosen by the CALL SITE (e.g.
+ * 'm.created_at'), never anything derived from `args` — nothing user-supplied
+ * reaches this string. The cursor's values are BINDS.
+ */
+function keysetClause(cursor, column, params, idColumn = 'id') {
+ if (!cursor) return '';
+ params.push(cursor.at, cursor.id);
+ return `and (${column}, ${idColumn}) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+}
+
+/**
+ * `next_cursor` for a page, or null when this was the last one.
+ *
+ * A cursor is offered only when the page came back FULL. A short page cannot
+ * have more behind it, and handing one out there would invite a request that
+ * always returns nothing — which reads as an error rather than as the end.
+ */
+function nextCursor(rows, limit, field) {
+ if (!Array.isArray(rows) || rows.length < limit) return null;
+ return encodeCursor(rows[rows.length - 1], field);
+}
+
 // Max parent links we will walk when checking for a cycle. Guards against an
 // unbounded loop if the table ALREADY contains a cycle (written by some other
 // path); a legitimate task tree is never this deep.
@@ -299,12 +391,14 @@ function buildTools() {
    type: 'object',
    properties: {
     limit: { type: 'integer', description: 'Max channels to return (default 50, max 200).' },
+    cursor: CURSOR_PROPERTY,
     include_archived: { type: 'boolean', description: 'Include archived channels (default false).' },
    },
    additionalProperties: false,
   },
   async run(args, { db, identity }) {
    const limit = optInt(args?.limit, 50, 200);
+   const cursor = decodeCursor(args?.cursor);
    const includeArchived = args?.include_archived === true;
    if (identity.kind === 'integration' && identity.channelId) {
     const rows = await db.unsafe(
@@ -314,24 +408,27 @@ function buildTools() {
             limit 1`,
      [identity.workspaceId, identity.channelId],
     );
-    return { channels: rows };
+    // A pinned integration sees exactly one channel, so there is never a
+    // second page. Saying so explicitly beats leaving next_cursor undefined.
+    return { channels: rows, next_cursor: null };
    }
    // Enumerating channels leaks a private conversation's existence and title
    // without reading a message, so the scope predicate belongs here too — not
    // only on the tools that return content.
    const params = [identity.workspaceId];
    const scope = mcpSessionScopeSql(identity, 'chat_sessions', params);
+   const keyset = keysetClause(cursor, 'updated_at', params);
    params.push(limit);
    const rows = await db.unsafe(
     `select id, title, folder, model, conversation_mode, participants, visibility, archived_at, updated_at
            from chat_sessions
           where workspace_id = $1 ${includeArchived ? '' : 'and archived_at is null'}
-            and ${scope}
-          order by updated_at desc
+            and ${scope} ${keyset}
+          order by updated_at desc, id desc
           limit $${params.length}`,
     params,
    );
-   return { channels: rows };
+   return { channels: rows, next_cursor: nextCursor(rows, limit, 'updated_at') };
   },
  });
 
@@ -343,6 +440,7 @@ function buildTools() {
    properties: {
     channel_id: { type: 'string', description: 'The chat session id (from list_channels).' },
     limit: { type: 'integer', description: 'Max messages (default 50, max 200).' },
+    cursor: CURSOR_PROPERTY,
     thread_parent_id: { type: 'string', description: 'If set, read the thread under this message id.' },
    },
    required: ['channel_id'],
@@ -351,29 +449,38 @@ function buildTools() {
   async run(args, { db, identity }) {
    const channelId = requireString(args, 'channel_id');
    const limit = optInt(args?.limit, 50, 200);
+   const cursor = decodeCursor(args?.cursor);
    const threadParentId = typeof args?.thread_parent_id === 'string' && args.thread_parent_id.trim()
     ? args.thread_parent_id.trim() : null;
    await assertChannelInWorkspace(db, channelId, identity);
-   const rows = threadParentId
-    ? await db.unsafe(
-     `select id, role, content, sender_kind, sender_id, sender_name, thread_parent_id, broadcast_to_channel, created_at
-               from messages
-              where session_id = $1 and (id = $2 or thread_parent_id = $2)
-              order by created_at desc limit $3`,
-     [channelId, threadParentId, limit],
-    )
+   const params = [channelId];
+   let where;
+   if (threadParentId) {
+    params.push(threadParentId);
+    where = 'session_id = $1 and (id = $2 or thread_parent_id = $2)';
+   } else {
     // Channel scope is "top level OR broadcast to the channel" — the same predicate
     // the UI and loadChannelMessages use. An agent now WORKS in a thread and only
     // broadcasts its answer, so a top-level-only read would show this client the
     // humans' messages and none of the replies.
-    : await db.unsafe(
-     `select id, role, content, sender_kind, sender_id, sender_name, thread_parent_id, broadcast_to_channel, created_at
-               from messages
-              where session_id = $1 and (thread_parent_id is null or broadcast_to_channel)
-              order by created_at desc limit $2`,
-     [channelId, limit],
-    );
-   return { channel_id: channelId, messages: rows.reverse() };
+    where = 'session_id = $1 and (thread_parent_id is null or broadcast_to_channel)';
+   }
+   const keyset = keysetClause(cursor, 'created_at', params);
+   params.push(limit);
+   const rows = await db.unsafe(
+    `select id, role, content, sender_kind, sender_id, sender_name, thread_parent_id, broadcast_to_channel, created_at
+            from messages
+           where ${where} ${keyset}
+           order by created_at desc, id desc
+           limit $${params.length}`,
+    params,
+   );
+   // Computed BEFORE the reverse, from the DESC page's last row — the OLDEST
+   // message returned, which is where the next (older) page starts. Taking it
+   // after the reverse would point at the NEWEST message, and every "next page"
+   // would return the same rows forever.
+   const cursorNext = nextCursor(rows, limit, 'created_at');
+   return { channel_id: channelId, messages: rows.reverse(), next_cursor: cursorNext };
   },
  });
 
@@ -385,6 +492,7 @@ function buildTools() {
    properties: {
     query: { type: 'string', description: 'Substring to search for.' },
     limit: { type: 'integer', description: 'Max results (default 30, max 100).' },
+    cursor: CURSOR_PROPERTY,
    },
    required: ['query'],
    additionalProperties: false,
@@ -392,6 +500,7 @@ function buildTools() {
   async run(args, { db, identity }) {
    const query = requireString(args, 'query');
    const limit = optInt(args?.limit, 30, 100);
+   const cursor = decodeCursor(args?.cursor);
    // A substring search is the widest read in the whole MCP surface — it spans
    // every session in the workspace at once. Before this it returned matches
    // out of other people's DMs, which is the single worst shape this bug had.
@@ -403,6 +512,8 @@ function buildTools() {
     channelClause = `and s.id = $${params.length}`;
    }
    const scope = mcpSessionScopeSql(identity, 's', params);
+   // Qualified on BOTH sides: bare `id` is ambiguous across this join.
+   const keyset = keysetClause(cursor, 'm.created_at', params, 'm.id');
    params.push(limit);
    const rows = await db.unsafe(
     `select m.id, m.session_id, s.title as channel_title, m.role, m.content,
@@ -411,11 +522,11 @@ function buildTools() {
            join chat_sessions s on s.id = m.session_id
           where s.workspace_id = $1 and m.content ilike $2
             and m.deleted_at is null and s.deleted_at is null ${channelClause}
-            and ${scope}
-          order by m.created_at desc limit $${params.length}`,
+            and ${scope} ${keyset}
+          order by m.created_at desc, m.id desc limit $${params.length}`,
     params,
    );
-   return { results: rows };
+   return { results: rows, next_cursor: nextCursor(rows, limit, 'created_at') };
   },
  });
 
@@ -581,22 +692,29 @@ function buildTools() {
    properties: {
     folder: { type: 'string', description: 'Filter to a folder.' },
     limit: { type: 'integer', description: 'Max docs (default 50, max 200).' },
+    cursor: CURSOR_PROPERTY,
    },
    additionalProperties: false,
   },
   async run(args, { db, identity }) {
    const limit = optInt(args?.limit, 50, 200);
+   const cursor = decodeCursor(args?.cursor);
    const folder = typeof args?.folder === 'string' && args.folder.trim() ? args.folder.trim() : null;
-   const rows = folder
-    ? await db.unsafe(
-     `select id, title, folder, is_favorite, updated_at from documents
-              where workspace_id = $1 and folder = $2 order by updated_at desc limit $3`,
-     [identity.workspaceId, folder, limit])
-    : await db.unsafe(
-     `select id, title, folder, is_favorite, updated_at from documents
-              where workspace_id = $1 order by updated_at desc limit $2`,
-     [identity.workspaceId, limit]);
-   return { documents: rows };
+   const params = [identity.workspaceId];
+   let folderClause = '';
+   if (folder) {
+    params.push(folder);
+    folderClause = `and folder = $${params.length}`;
+   }
+   const keyset = keysetClause(cursor, 'updated_at', params);
+   params.push(limit);
+   const rows = await db.unsafe(
+    `select id, title, folder, is_favorite, updated_at from documents
+           where workspace_id = $1 ${folderClause} ${keyset}
+           order by updated_at desc, id desc limit $${params.length}`,
+    params,
+   );
+   return { documents: rows, next_cursor: nextCursor(rows, limit, 'updated_at') };
   },
  });
 
@@ -678,6 +796,7 @@ function buildTools() {
    properties: {
     query: { type: 'string', description: 'Substring to match in title or content.' },
     limit: { type: 'integer', description: 'Max results (default 20, max 100).' },
+    cursor: CURSOR_PROPERTY,
    },
    required: ['query'],
    additionalProperties: false,
@@ -685,12 +804,17 @@ function buildTools() {
   async run(args, { db, identity }) {
    const query = requireString(args, 'query');
    const limit = optInt(args?.limit, 20, 100);
+   const cursor = decodeCursor(args?.cursor);
+   const params = [identity.workspaceId, `%${query}%`];
+   const keyset = keysetClause(cursor, 'updated_at', params);
+   params.push(limit);
    const rows = await db.unsafe(
     `select id, title, folder, updated_at from documents
-          where workspace_id = $1 and (title ilike $2 or content ilike $2)
-          order by updated_at desc limit $3`,
-    [identity.workspaceId, `%${query}%`, limit]);
-   return { results: rows };
+          where workspace_id = $1 and (title ilike $2 or content ilike $2) ${keyset}
+          order by updated_at desc, id desc limit $${params.length}`,
+    params,
+   );
+   return { results: rows, next_cursor: nextCursor(rows, limit, 'updated_at') };
   },
  });
 
@@ -704,20 +828,28 @@ function buildTools() {
    properties: {
     status: { type: 'string', enum: ['todo', 'in_progress', 'done', 'cancelled'], description: 'Filter by status.' },
     limit: { type: 'integer', description: 'Max tasks (default 50, max 200).' },
+    cursor: CURSOR_PROPERTY,
    },
    additionalProperties: false,
   },
   async run(args, { db, identity }) {
    const limit = optInt(args?.limit, 50, 200);
+   const cursor = decodeCursor(args?.cursor);
    const status = typeof args?.status === 'string' ? args.status : null;
-   const rows = status
-    ? await db.unsafe(
-     `select * from tasks where workspace_id = $1 and status = $2
-              order by created_at desc limit $3`, [identity.workspaceId, status, limit])
-    : await db.unsafe(
-     `select * from tasks where workspace_id = $1
-              order by created_at desc limit $2`, [identity.workspaceId, limit]);
-   return { tasks: rows };
+   const params = [identity.workspaceId];
+   let statusClause = '';
+   if (status) {
+    params.push(status);
+    statusClause = `and status = $${params.length}`;
+   }
+   const keyset = keysetClause(cursor, 'created_at', params);
+   params.push(limit);
+   const rows = await db.unsafe(
+    `select * from tasks where workspace_id = $1 ${statusClause} ${keyset}
+           order by created_at desc, id desc limit $${params.length}`,
+    params,
+   );
+   return { tasks: rows, next_cursor: nextCursor(rows, limit, 'created_at') };
   },
  });
 
@@ -1894,5 +2026,8 @@ module.exports = {
  listToolSummaries,
  SERVER_INSTRUCTIONS,
  SERVER_NAME,
- __test: { buildTools, ToolError, toolAllowedForIdentity, runToolForIdentity, KINDS_TO_RECORD },
+ __test: {
+  buildTools, ToolError, toolAllowedForIdentity, runToolForIdentity, KINDS_TO_RECORD,
+  encodeCursor, decodeCursor, keysetClause, nextCursor,
+ },
 };
