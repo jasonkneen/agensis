@@ -1218,6 +1218,10 @@ async function ensureRuntimeSchema() {
     -- DB that already has it.
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_id uuid REFERENCES tasks(id) ON DELETE CASCADE;
     CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_id);
+    -- References to uploaded_files rows, same shape and same rules as
+    -- messages.attachments (see JSON_COLUMNS_BY_TABLE / parseMessageAttachments):
+    -- never file bytes, just { id, name, type, size } chips the client renders.
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachments jsonb NOT NULL DEFAULT '[]'::jsonb;
     ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 

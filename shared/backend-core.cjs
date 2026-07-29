@@ -120,6 +120,10 @@ const JSON_COLUMNS_BY_TABLE = {
  agent_jobs: new Set(['metadata']),
  activity_events: new Set(['metadata']),
  messages: new Set(['reactions', 'attachments']),
+ // Same shape and same rule as messages.attachments: references to
+ // uploaded_files rows, never file bytes. See lib/messageAttachments.ts,
+ // reused as-is for tasks since the column is generic.
+ tasks: new Set(['attachments']),
  feedback_reports: new Set(['page', 'selections', 'diagnostics']),
 };
 

@@ -623,6 +623,9 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS parent_id uuid REFERENCES tasks(id) O
 -- Gantt scheduling + dependency graph (added with the List/Kanban/Gantt views).
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_date timestamptz;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[] DEFAULT '{}';
+-- References to uploaded_files rows, same shape as messages.attachments — see
+-- JSON_COLUMNS_BY_TABLE / lib/messageAttachments.ts.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachments jsonb NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_id ON tasks(assignee_id);

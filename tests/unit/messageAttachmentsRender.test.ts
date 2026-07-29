@@ -46,10 +46,10 @@ function attachment(over: Partial<MessageAttachment> & { id: string }): MessageA
   return { name: 'file.bin', type: '', size: 0, ...over };
 }
 
-async function mount(attachments: MessageAttachment[]) {
+async function mount(attachments: MessageAttachment[], onRemove?: (attachment: MessageAttachment) => void) {
   await act(async () => {
     root = createRoot(host);
-    root.render(createElement(MessageAttachmentList, { attachments }));
+    root.render(createElement(MessageAttachmentList, { attachments, onRemove }));
   });
 }
 
@@ -230,6 +230,83 @@ describe('MessageAttachmentList', () => {
       attachment({ id: 'c', name: 'c.png', type: 'image/png' }),
     ]);
     expect(host.querySelectorAll('button')).toHaveLength(3);
+  });
+});
+
+// Chat never passes onRemove — a sent message's attachments are history. The
+// one caller that owns its list (a task editing its own attachments) does, and
+// needs a second control alongside the download button without breaking the
+// download button itself.
+describe('remove control (onRemove)', () => {
+  it('adds no extra control when onRemove is omitted — the chat path is untouched', async () => {
+    await mount([attachment({ id: 'file-7', name: 'plan.pdf', type: 'application/pdf', size: 10 })]);
+    expect(host.querySelectorAll('button')).toHaveLength(1);
+  });
+
+  it('renders a second control per chip once a caller passes onRemove', async () => {
+    const onRemove = vi.fn();
+    await mount([attachment({ id: 'file-8', name: 'plan.pdf', type: 'application/pdf', size: 10 })], onRemove);
+    expect(host.querySelectorAll('button')).toHaveLength(2);
+  });
+
+  it('clicking remove calls back with the attachment and never downloads', async () => {
+    const onRemove = vi.fn();
+    const target = attachment({ id: 'file-9', name: 'plan.pdf', type: 'application/pdf', size: 10 });
+    await mount([target], onRemove);
+
+    const remove = host.querySelector('[aria-label="Remove plan.pdf"]') as HTMLButtonElement;
+    expect(remove).toBeTruthy();
+    await click(remove);
+
+    expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(onRemove).toHaveBeenCalledWith(target);
+    expect(FETCHED).toHaveLength(0);
+  });
+
+  it('the download button still downloads when onRemove is also present', async () => {
+    // jsdom does not implement anchor navigation; the download flow creates a
+    // real <a download> and clicks it, which is exactly what "downloads on
+    // click and never opens a tab" above already patches around.
+    const realClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function patched(this: HTMLAnchorElement) { void this; };
+    try {
+      const onRemove = vi.fn();
+      await mount([attachment({ id: 'file-10', name: 'plan.pdf', type: 'application/pdf', size: 10 })], onRemove);
+
+      const download = host.querySelector('[aria-label="Download plan.pdf"]') as HTMLButtonElement;
+      await click(download);
+
+      expect(FETCHED).toHaveLength(1);
+      expect(onRemove).not.toHaveBeenCalled();
+    } finally {
+      HTMLAnchorElement.prototype.click = realClick;
+    }
+  });
+
+  it('an unavailable attachment can still be removed', async () => {
+    fetchStatus = 404;
+    const onRemove = vi.fn();
+    const target = attachment({ id: 'file-11', name: 'gone.pdf', type: 'application/pdf', size: 10 });
+    await mount([target], onRemove);
+
+    await click(host.querySelector('[aria-label="Download gone.pdf"]') as HTMLButtonElement);
+    expect(host.textContent).toContain('File unavailable');
+
+    await click(host.querySelector('[aria-label="Remove gone.pdf"]') as HTMLButtonElement);
+    expect(onRemove).toHaveBeenCalledWith(target);
+  });
+
+  it('an image thumbnail gets a remove button that does not open the preview', async () => {
+    const onRemove = vi.fn();
+    const target = attachment({ id: 'file-12', name: 'shot.png', type: 'image/png', size: 10 });
+    await mount([target], onRemove);
+
+    const remove = host.querySelector('[aria-label="Remove shot.png"]') as HTMLButtonElement;
+    expect(remove).toBeTruthy();
+    await click(remove);
+
+    expect(onRemove).toHaveBeenCalledWith(target);
+    expect(dialog()).toBeNull();
   });
 });
 

@@ -15,14 +15,16 @@ import {
   Link2,
   List,
   MessageSquare,
+  Paperclip,
   Plus,
   Send,
   Trash2,
+  Upload,
   User,
   UserPlus,
   X,
 } from 'lucide-react';
-import type { AgentConnection, Task, TaskComment, TaskPriority, TaskStatus, WorkspaceAgent } from '../../types';
+import type { AgentConnection, Task, TaskComment, TaskPriority, TaskStatus, UploadedFile, WorkspaceAgent } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { TASK_PANEL_WIDTH_KEY, clampTaskPanelWidth, readStoredTaskPanelWidth } from '../../lib/taskPanelWidth';
@@ -31,6 +33,8 @@ import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useTaskComments } from '../../hooks/useTaskComments';
 import { agentHandle } from '../../lib/agentAccent';
 import { isAssigneeActive, resolveTaskCommentAuthor } from '../../lib/taskAgents';
+import { parseMessageAttachments } from '../../lib/messageAttachments';
+import { MessageAttachmentList } from '../chat/MessageAttachments';
 import {
   DAY_MS,
   applyHideDone,
@@ -118,6 +122,14 @@ interface TasksWindowContentProps {
   focusTaskId?: string;
   /** Called once the focus has been applied, so the caller can clear it. */
   onFocusTaskConsumed?: () => void;
+  /**
+   * Uploads to the SAME workspace file store the chat composer uses (see
+   * useFiles in App.tsx) — a task attachment and a chat attachment are both
+   * just uploaded_files rows referenced by id. Omitted only in contexts that
+   * genuinely cannot upload (none today), in which case the drop zone hides
+   * rather than offering a control that would fail.
+   */
+  onUploadFiles?: (files: File[]) => Promise<UploadedFile[]>;
 }
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -210,6 +222,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   onOpenSession,
   focusTaskId,
   onFocusTaskConsumed,
+  onUploadFiles,
 }: TasksWindowContentProps) {
   const [newTitle, setNewTitle] = useState('');
   const [newPriority, setNewPriority] = useState<TaskPriority>('normal');
@@ -514,6 +527,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                           onAddSubtask={title => onCreateTask({ title, parent_id: task.id, source_type: 'manual' })}
                           onToggleSubtask={sub => onToggleStatus(sub)}
                           onDeleteSubtask={id => onDeleteTask(id)}
+                          onUploadFiles={onUploadFiles}
                         />
                       ))}
                     </ItemGroup>
@@ -571,6 +585,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
               onAddSubtask={title => onCreateTask({ title, parent_id: selectedTask.id, source_type: 'manual' })}
               onToggleSubtask={sub => onToggleStatus(sub)}
               onDeleteSubtask={id => onDeleteTask(id)}
+              onUploadFiles={onUploadFiles}
             />
           )}
         </div>
@@ -603,6 +618,7 @@ function TaskRow({
   onAddSubtask,
   onToggleSubtask,
   onDeleteSubtask,
+  onUploadFiles,
 }: {
   task: Task;
   /** ALL of this task's subtasks — the x/y badge counts the real total. */
@@ -628,6 +644,7 @@ function TaskRow({
   onAddSubtask: (title: string) => void;
   onToggleSubtask: (sub: Task) => void;
   onDeleteSubtask: (id: string) => void;
+  onUploadFiles?: (files: File[]) => Promise<UploadedFile[]>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const done = task.status === 'done';
@@ -756,6 +773,7 @@ function TaskRow({
           onAddSubtask={onAddSubtask}
           onToggleSubtask={onToggleSubtask}
           onDeleteSubtask={onDeleteSubtask}
+          onUploadFiles={onUploadFiles}
         />
       )}
     </div>
@@ -931,6 +949,7 @@ function TaskDetail({
   onAddSubtask,
   onToggleSubtask,
   onDeleteSubtask,
+  onUploadFiles,
 }: {
   task: Task;
   subtasks: Task[];
@@ -949,6 +968,7 @@ function TaskDetail({
   onAddSubtask: (title: string) => void;
   onToggleSubtask: (sub: Task) => void;
   onDeleteSubtask: (id: string) => void;
+  onUploadFiles?: (files: File[]) => Promise<UploadedFile[]>;
 }) {
   const [subInput, setSubInput] = useState('');
   const [commentInput, setCommentInput] = useState('');
@@ -958,6 +978,58 @@ function TaskDetail({
   const [pendingMentionAgent, setPendingMentionAgent] = useState<WorkspaceAgent | null>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
   const { comments, createComment, deleteComment } = useTaskComments(task.id, workspaceId, currentUserId);
+  const [attachmentDragActive, setAttachmentDragActive] = useState(false);
+  const [attachmentUploading, setAttachmentUploading] = useState(false);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
+  const attachments = useMemo(() => parseMessageAttachments(task.attachments), [task.attachments]);
+
+  // Upload through the SAME workspace file store the chat composer uses, then
+  // fold the new refs into the existing list via onChangeDates — attachments is
+  // just another Task field, so it goes through the identical Partial<Task>
+  // updater every other section here already uses. parseMessageAttachments does
+  // the deduping/capping, so a drop that partially overlaps what's already
+  // there (or a double-fire of the same drop event) can't duplicate a chip.
+  const uploadAttachments = async (files: File[]) => {
+    if (!files.length || !onUploadFiles) return;
+    setAttachmentUploading(true);
+    try {
+      const uploaded = await onUploadFiles(files);
+      if (uploaded.length === 0) return;
+      const next = parseMessageAttachments([
+        ...attachments,
+        ...uploaded.map(file => ({ id: file.id, name: file.name, type: file.type, size: file.size })),
+      ]);
+      onChangeDates({ attachments: next });
+    } finally {
+      setAttachmentUploading(false);
+    }
+  };
+
+  const removeAttachment = (attachment: { id: string }) => {
+    onChangeDates({ attachments: attachments.filter(item => item.id !== attachment.id) });
+  };
+
+  const handleAttachmentDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    const files = Array.from(event.dataTransfer?.files || []);
+    setAttachmentDragActive(false);
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void uploadAttachments(files);
+  };
+
+  const handleAttachmentDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer?.types.includes('Files')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!attachmentDragActive) setAttachmentDragActive(true);
+  };
+
+  const handleAttachmentFilePick = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    await uploadAttachments(files);
+  };
 
   const addSub = () => {
     if (!subInput.trim()) return;
@@ -1158,6 +1230,51 @@ function TaskDetail({
           </InputGroupAddon>
         </InputGroup>
       </section>
+
+      {onUploadFiles && (
+        <section className="flex flex-col gap-2">
+          <Marker>
+            <MarkerIcon>
+              <Paperclip />
+            </MarkerIcon>
+            <MarkerContent>Attachments {attachments.length > 0 && `(${attachments.length})`}</MarkerContent>
+          </Marker>
+          <MessageAttachmentList attachments={attachments} onRemove={removeAttachment} className="mt-0" />
+          <div
+            data-testid="task-attachment-dropzone"
+            className={cn(
+              'flex flex-col items-center gap-1.5 rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground transition-colors',
+              attachmentDragActive ? 'border-primary bg-primary/5 text-foreground' : 'border-border',
+            )}
+            onDragOver={handleAttachmentDragOver}
+            onDragLeave={() => setAttachmentDragActive(false)}
+            onDrop={handleAttachmentDrop}
+          >
+            <Upload className="size-4" />
+            {attachmentUploading ? (
+              'Uploading…'
+            ) : (
+              <>
+                Drag files here, or{' '}
+                <button
+                  type="button"
+                  className="font-medium text-foreground underline-offset-2 hover:underline"
+                  onClick={() => attachmentInputRef.current?.click()}
+                >
+                  browse
+                </button>
+              </>
+            )}
+            <input
+              ref={attachmentInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleAttachmentFilePick}
+            />
+          </div>
+        </section>
+      )}
 
       <section className="flex flex-col gap-2">
         <Marker>
@@ -1364,6 +1481,7 @@ function TaskEditPanel({
   onAddSubtask,
   onToggleSubtask,
   onDeleteSubtask,
+  onUploadFiles,
 }: {
   task: Task;
   subtasks: Task[];
@@ -1387,6 +1505,7 @@ function TaskEditPanel({
   onAddSubtask: (title: string) => void;
   onToggleSubtask: (sub: Task) => void;
   onDeleteSubtask: (id: string) => void;
+  onUploadFiles?: (files: File[]) => Promise<UploadedFile[]>;
 }) {
   // Local draft for the free-text fields so typing doesn't round-trip through
   // the backend on every keystroke; commit on blur. Reset when the selection
@@ -1522,6 +1641,7 @@ function TaskEditPanel({
             onAddSubtask={onAddSubtask}
             onToggleSubtask={onToggleSubtask}
             onDeleteSubtask={onDeleteSubtask}
+            onUploadFiles={onUploadFiles}
           />
         </div>
       </ScrollArea>

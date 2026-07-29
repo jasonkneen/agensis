@@ -26,7 +26,7 @@
 // widen a row, nor stretch the dialog.
 
 import { useState } from 'react';
-import { Paperclip, TriangleAlert } from 'lucide-react';
+import { Paperclip, TriangleAlert, X } from 'lucide-react';
 import { apiAuthHeaders, apiUrl } from '../../lib/backendClient';
 import { useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
 import { formatBytes } from './ComposerAddContent';
@@ -59,11 +59,20 @@ const CHIP_CLASS = 'inline-flex max-w-[260px] items-center gap-2 rounded-md bord
 export function MessageAttachmentList({
   attachments,
   className,
+  onRemove,
 }: {
   // Accepts the raw column as well as a parsed list — both go through the
   // parser below, so a caller cannot get this wrong.
   attachments: MessageAttachment[] | null | undefined;
   className?: string;
+  /**
+   * When provided, every attachment gets a small remove control. Omitted by
+   * every chat call site — a sent message's attachments are history, not
+   * something a reader edits. The one caller that DOES own its list (a task's
+   * attachments, added and removed before anyone else has seen them) passes
+   * this instead of hand-rolling a second renderer.
+   */
+  onRemove?: (attachment: MessageAttachment) => void;
 }) {
   // Re-parsed HERE rather than trusted from the caller. Callers already parse
   // (they need the count to decide what text to hide), but sanitisation is what
@@ -75,26 +84,48 @@ export function MessageAttachmentList({
   return (
     <div className={cn('mt-2 flex flex-wrap items-start gap-2', className)} data-testid="message-attachments">
       {items.map(attachment => (
-        <MessageAttachmentItem key={attachment.id} attachment={attachment} />
+        <MessageAttachmentItem key={attachment.id} attachment={attachment} onRemove={onRemove} />
       ))}
     </div>
   );
 }
 
 /** The honest end state: the row this attachment points at is gone. */
-function UnavailableChip({ attachment }: { attachment: MessageAttachment }) {
+function UnavailableChip({ attachment, onRemove }: { attachment: MessageAttachment; onRemove?: (attachment: MessageAttachment) => void }) {
   return (
-    <span className={cn(CHIP_CLASS, 'text-muted-foreground')} title={attachment.name}>
+    <span className={cn(CHIP_CLASS, 'text-muted-foreground', onRemove && 'pr-1')} title={attachment.name}>
       <TriangleAlert className="size-3.5 shrink-0" aria-hidden />
-      <span className="min-w-0">
+      <span className="min-w-0 flex-1">
         <span className="block truncate">{attachment.name}</span>
         <span className="block truncate text-[11px]">{ATTACHMENT_UNAVAILABLE_LABEL}</span>
       </span>
+      {onRemove && <RemoveButton attachment={attachment} onRemove={onRemove} />}
     </span>
   );
 }
 
-function MessageAttachmentItem({ attachment }: { attachment: MessageAttachment }) {
+/** Small "x" used by both attachment shapes once a caller owns the list. */
+function RemoveButton({ attachment, onRemove }: { attachment: MessageAttachment; onRemove: (attachment: MessageAttachment) => void }) {
+  return (
+    <button
+      type="button"
+      className="flex size-4.5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+      title="Remove"
+      aria-label={`Remove ${attachment.name}`}
+      onClick={event => { event.preventDefault(); event.stopPropagation(); onRemove(attachment); }}
+    >
+      <X className="size-3" />
+    </button>
+  );
+}
+
+function MessageAttachmentItem({
+  attachment,
+  onRemove,
+}: {
+  attachment: MessageAttachment;
+  onRemove?: (attachment: MessageAttachment) => void;
+}) {
   const isImage = isImageAttachment(attachment);
   const href = apiUrl(attachmentContentPath(attachment.id));
   // Only images prefetch. A chip costs nothing until it is clicked, so a
@@ -114,7 +145,7 @@ function MessageAttachmentItem({ attachment }: { attachment: MessageAttachment }
   // interaction is worse than telling them what happened.
   const unavailable = error || downloadFailed;
   if (unavailable && !(isImage && previewOpen)) {
-    return <UnavailableChip attachment={attachment} />;
+    return <UnavailableChip attachment={attachment} onRemove={onRemove} />;
   }
 
   // Hand the bytes to the browser as a SAVE, never a navigation: `download`
@@ -159,38 +190,58 @@ function MessageAttachmentItem({ attachment }: { attachment: MessageAttachment }
 
   if (isImage) {
     const state = attachmentPreviewState({ src, loading, error: unavailable });
+    // onRemove is undefined on every chat call site, so this stays a bare
+    // DialogTrigger there — no wrapper, no extra node, identical markup to
+    // before. Only a caller that owns its list (see MessageAttachmentList)
+    // gets the relative wrapper the corner button needs to position against.
+    const trigger = (
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          title={attachment.name}
+          aria-label={`Open preview of ${attachment.name}`}
+          // The box is a STYLE, not a class: it comes from the image's own
+          // dimensions, so there is no finite set of utilities for it.
+          // max-w-full keeps it inside a narrow floating window; the image
+          // letterboxes rather than distorting when that clamp bites.
+          style={{ width: box.width, height: box.height }}
+          className="block max-w-full overflow-hidden rounded-lg border border-border bg-muted/40 transition hover:opacity-90 focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          {state === 'ready' ? (
+            <img
+              src={src}
+              alt={attachment.name}
+              // Intrinsic size is only knowable once the bytes have decoded.
+              onLoad={event => setBox(attachmentThumbnailBox(
+                event.currentTarget.naturalWidth,
+                event.currentTarget.naturalHeight,
+              ))}
+              className="size-full object-contain"
+            />
+          ) : (
+            <span className="flex size-full items-center justify-center px-2 text-center text-[11px] text-muted-foreground">
+              {state === 'loading' ? 'Loading…' : ATTACHMENT_UNAVAILABLE_LABEL}
+            </span>
+          )}
+        </button>
+      </DialogTrigger>
+    );
     return (
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogTrigger asChild>
-          <button
-            type="button"
-            title={attachment.name}
-            aria-label={`Open preview of ${attachment.name}`}
-            // The box is a STYLE, not a class: it comes from the image's own
-            // dimensions, so there is no finite set of utilities for it.
-            // max-w-full keeps it inside a narrow floating window; the image
-            // letterboxes rather than distorting when that clamp bites.
-            style={{ width: box.width, height: box.height }}
-            className="block max-w-full overflow-hidden rounded-lg border border-border bg-muted/40 transition hover:opacity-90 focus-visible:outline-2 focus-visible:outline-ring"
-          >
-            {state === 'ready' ? (
-              <img
-                src={src}
-                alt={attachment.name}
-                // Intrinsic size is only knowable once the bytes have decoded.
-                onLoad={event => setBox(attachmentThumbnailBox(
-                  event.currentTarget.naturalWidth,
-                  event.currentTarget.naturalHeight,
-                ))}
-                className="size-full object-contain"
-              />
-            ) : (
-              <span className="flex size-full items-center justify-center px-2 text-center text-[11px] text-muted-foreground">
-                {state === 'loading' ? 'Loading…' : ATTACHMENT_UNAVAILABLE_LABEL}
-              </span>
-            )}
-          </button>
-        </DialogTrigger>
+        {onRemove ? (
+          <div className="relative inline-block">
+            {trigger}
+            <button
+              type="button"
+              className="absolute -top-1.5 -right-1.5 flex size-4.5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm hover:bg-muted hover:text-foreground"
+              title="Remove"
+              aria-label={`Remove ${attachment.name}`}
+              onClick={event => { event.preventDefault(); event.stopPropagation(); onRemove(attachment); }}
+            >
+              <X className="size-3" />
+            </button>
+          </div>
+        ) : trigger}
         <AttachmentPreviewDialog
           attachment={attachment}
           state={state}
@@ -202,20 +253,47 @@ function MessageAttachmentItem({ attachment }: { attachment: MessageAttachment }
     );
   }
 
+  // No onRemove: unchanged from before this prop existed — a single button,
+  // exactly what every chat call site still renders and every existing test
+  // still finds via querySelector('button'). onRemove only appears for a
+  // caller that owns the list, which needs a second, sibling control — and a
+  // button cannot nest inside a button, hence the span wrapper on that branch
+  // only.
+  if (!onRemove) {
+    return (
+      <button
+        type="button"
+        onClick={download}
+        title={attachment.name}
+        aria-label={`Download ${attachment.name}`}
+        className={cn(CHIP_CLASS, 'hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring')}
+      >
+        <Paperclip className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="min-w-0">
+          <span className="block truncate">{attachment.name}</span>
+          {sizeLabel && <span className="block truncate text-[11px] text-muted-foreground">{sizeLabel}</span>}
+        </span>
+      </button>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      onClick={download}
-      title={attachment.name}
-      aria-label={`Download ${attachment.name}`}
-      className={cn(CHIP_CLASS, 'hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring')}
-    >
-      <Paperclip className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-      <span className="min-w-0">
-        <span className="block truncate">{attachment.name}</span>
-        {sizeLabel && <span className="block truncate text-[11px] text-muted-foreground">{sizeLabel}</span>}
-      </span>
-    </button>
+    <span className={cn(CHIP_CLASS, 'pr-1')}>
+      <button
+        type="button"
+        onClick={download}
+        title={attachment.name}
+        aria-label={`Download ${attachment.name}`}
+        className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+      >
+        <Paperclip className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="min-w-0">
+          <span className="block truncate">{attachment.name}</span>
+          {sizeLabel && <span className="block truncate text-[11px] text-muted-foreground">{sizeLabel}</span>}
+        </span>
+      </button>
+      <RemoveButton attachment={attachment} onRemove={onRemove} />
+    </span>
   );
 }
 
