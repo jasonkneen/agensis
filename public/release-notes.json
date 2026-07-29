@@ -13,6 +13,18 @@
     ]
   },
   {
+    "version": "approvals-survive-a-blip",
+    "date": "2026-07-29",
+    "title": "An approval no longer dies when the agent's connection hiccups",
+    "summary": "When an agent asked to run something, that request was thrown away the instant its connection dropped for even a second — so you would come back to a request that had quietly expired with eight of its ten minutes still left, and the agent would tell you the call could no longer be approved. Agents reconnect within a couple of seconds and carry on working, and the question they asked now survives that with them. If an agent really has gone for good, the request still closes out promptly and says so, rather than leaving you a button that does nothing.",
+    "highlights": [
+      "A brief connection drop no longer expires an approval you were about to answer",
+      "The agent keeps waiting on the same question instead of giving up on it",
+      "An agent that does not come back still closes its requests out, so nothing sits open forever",
+      "Approving still only ever reaches the agent that asked — a request that cannot be delivered is refused rather than shown as approved"
+    ]
+  },
+  {
     "version": "inbox-command-centre",
     "date": "2026-07-29",
     "title": "The inbox now shows the things that were stopping agents",

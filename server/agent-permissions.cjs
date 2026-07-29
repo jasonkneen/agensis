@@ -42,6 +42,13 @@ const PERMISSION_REQUEST_KIND = 'permission_request';
 const PERMISSION_SCOPES = new Set(['once', 'session', 'always']);
 const MAX_RULES_PER_REQUEST = 12;
 const MAX_RULE_LENGTH = 200;
+/**
+ * Ceiling on how many parked request ids a reconnecting daemon may re-assert.
+ * A daemon can only be parked on as many requests as it has concurrent turns,
+ * so this is generous — it exists so an unbounded daemon-supplied array cannot
+ * become an unbounded `= any($4::text[])`.
+ */
+const MAX_RESUMED_REQUESTS = 64;
 /** Ceiling on a daemon-proposed park, so a bad `expiresInMs` cannot pin a row open forever. */
 const MAX_REQUEST_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -437,9 +444,74 @@ function createAgentPermissions(deps = {}) {
  }
 
  /**
+  * Move a reconnecting daemon's still-parked requests onto its new connection.
+  *
+  * A socket blip does NOT mean the daemon stopped: it keeps executing the turn
+  * and reconnects ~2s later on a fresh connection id, exactly like the running
+  * jobs rehomeRunningJobs already re-adopts. Before this, socket close expired
+  * every pending request outright, so a request raised at 07:42:30 with ten
+  * minutes of TTL was dead by 07:43:59 with eight minutes left, and the human's
+  * click landed on an expired row.
+  *
+  * WHY THIS TAKES A LIST OF REQUEST KEYS RATHER THAN MOVING EVERYTHING.
+  * "Same agent reconnected" is not the same claim as "the process still holding
+  * that parked tool call is back". The register frame carries no process
+  * identity, so a daemon RESTART and a daemon BLIP look identical here — and
+  * re-homing blindly would point the row at a process with no memory of the
+  * request. Its `decide()` drops the frame on the floor while the server has
+  * already recorded "Allowed" and rewritten the transcript, which is the exact
+  * "approved under a tool call that never ran" failure deliverDecision exists to
+  * prevent. So the daemon has to NAME the requests it is still parked on, and
+  * only those move. A daemon that re-asserts a key is, by construction, one that
+  * can still act on the answer.
+  *
+  * Fail-closed everywhere: an unknown key matches no row, an old daemon that
+  * re-asserts nothing keeps today's behaviour (everything expires), and a row
+  * already decided or past its TTL is never revived.
+  *
+  * No realtime fanout: `connection_id` is not in publicPermissionRequest, so
+  * nothing a client can see has changed — the card is still the same open
+  * question it was a second ago.
+  */
+ async function rehomePendingPermissionRequests({ workspaceId, agentId, connectionId, requestKeys } = {}) {
+  const keys = [];
+  for (const entry of Array.isArray(requestKeys) ? requestKeys : []) {
+   const key = String(entry == null ? '' : entry).trim();
+   if (key && key.length <= MAX_RULE_LENGTH && !keys.includes(key)) keys.push(key);
+   if (keys.length >= MAX_RESUMED_REQUESTS) break;
+  }
+  if (!workspaceId || !agentId || !connectionId || keys.length === 0) return [];
+  try {
+   // Scoped by workspace AND agent, so the keys a daemon asserts can only ever
+   // reach rows raised by that same agent in that same workspace — the identity
+   // this socket's own token proved at register. A daemon naming another agent's
+   // request key matches nothing.
+   return await getDb().unsafe(
+    `update agent_permission_requests
+       set connection_id = $1, updated_at = now()
+       where workspace_id = $2 and agent_id = $3 and status = 'pending'
+         and (expires_at is null or expires_at > now())
+         and request_key = any($4::text[])
+         and connection_id is distinct from $1
+       returning *`,
+    [connectionId, String(workspaceId), String(agentId), keys],
+   );
+  } catch {
+   // The (connection_id, request_key) unique index is the only realistic
+   // failure, and losing the re-home degrades to the old behaviour: the request
+   // expires and the human is told so. Never the other way round.
+   return [];
+  }
+ }
+
+ /**
   * A disconnecting daemon's parked requests can never be answered — the process
   * that would act on the answer is gone. Called from the same place job failure
   * is handled on socket close.
+  *
+  * Deliberately NOT called inline on close any more: see
+  * scheduleConnectionJobFailure. It runs after the reconnect grace window, or
+  * immediately from a registration that has already re-homed the survivors.
   */
  async function expireConnectionPermissionRequests(connectionId) {
   const id = String(connectionId || '');
@@ -516,6 +588,7 @@ function createAgentPermissions(deps = {}) {
   expireStalePermissionRequests,
   handleAgentPermissionRequest,
   publicPermissionRequest,
+  rehomePendingPermissionRequests,
   revokeAgentPermissionRule,
   setAgentPermissionMode,
   // Exported for tests: the rule/scope normalisation is the part that decides

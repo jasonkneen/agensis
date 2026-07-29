@@ -73,6 +73,34 @@ Strong: "`Sidebar.tsx` had an unrelated in-flight edit from another process
 (undefined `AgentConnectDialog` ref) — left it alone, kept my changes to
 `AgentsWindowContent.tsx` only. Flagging in case that's a live collision."
 
+## Two commands that cause almost all of this
+
+**`git add -A` / `git commit -a` — never, in a shared checkout.** On 2026-07-29
+commit `74bb01e` ("Add tenant inventory, named campaign recipients") carried
+three unrelated agents' work: another loop's tests, two scratch preview files,
+and a `server/thread-harvest.cjs` whose author was still writing it. That put an
+in-progress feature *and its `ensureRuntimeSchema` DDL* on the shared branch,
+where the next unrelated backend deploy would have shipped it. It missed
+production only because that deploy was cut from a clone taken minutes earlier.
+Stage explicit paths, always: `git add src/foo.ts tests/unit/foo.test.ts`.
+
+**`git checkout -- <file>` / `git reset --hard` — never.** These revert to HEAD
+and destroy uncommitted work with no reflog to recover it. An agent used
+`git checkout --` to undo a mutation test on 2026-07-29 and destroyed its own
+in-flight file; in a shared checkout the same command destroys whoever else is
+editing. To undo a deliberate mutation, re-apply the inverse edit by hand — and
+do not restore from a `cp` backup without checking it succeeded, because `cp` is
+frequently aliased to `cp -i` and will silently decline to overwrite.
+
+**The reliable defence is isolation, not discipline.** Six loops ran against one
+checkout that day; the only one with zero collisions worked in its own worktree:
+
+    git worktree add ../agensis-<topic> -b <branch> origin/<base>
+    ln -s /Users/jkneen/Documents/GitHub/agensis/node_modules ../agensis-<topic>/node_modules
+
+(The symlink matters — a fresh worktree has no `node_modules` and a full install
+per loop is wasteful and slow.)
+
 ## Related
 
 - `agensis-daemon-ops` — worktree isolation as the primary defense; this

@@ -11,18 +11,20 @@ description: Figure out which of the four separate deploy/restart/publish mechan
 > need to publish this"; that is the most repeated complaint in this project.
 
 A merged, typechecked, green-tests branch in this repo is not "live" until the
-right one of three *independent* mechanisms has run. They don't overlap and
+right one of four *independent* mechanisms has run. They don't overlap and
 none of them implies another. Confusing them is how "backend+tests done" gets
 reported as shipped while the feature is still inert in production — this has
 happened repeatedly ([[thread-widget-rail-feature]], [[agent-state-files-feature]],
 [[comment-mention-dm-dispatch]], [[thread-split-merge-feature]],
 [[heartbeat-capability-drift-sync]]).
 
-## The three targets
+## The four targets
 
-1. **Frontend — Netlify, auto-deploys on push to `origin/main`.**
+1. **Frontend — Netlify, auto-deploys on push to the production branch.**
+   Check which branch that IS before claiming anything shipped: as of
+   2026-07-29 `main` serves agensis.io and `main-next` builds a PREVIEW.
    Anything under `src/**`, `index.html`, `vite.config.ts`. No manual step —
-   pushing to `origin/main` is the deploy. But "pushed" is not "built and
+   pushing the production branch is the deploy. But "pushed" is not "built and
    live yet"; Netlify still takes a build cycle.
 
 2. **Backend — Fly, needs an explicit `fly deploy`.**
@@ -66,7 +68,7 @@ happened repeatedly ([[thread-widget-rail-feature]], [[agent-state-files-feature
 
 ## What to check before claiming "live"
 
-- Which paths did the diff touch? Match against the three targets above —
+- Which paths did the diff touch? Match against the four targets above —
   a single feature (e.g. thread widgets: new table + new component) often
   needs **two** of the three simultaneously.
 - For frontend: has it actually reached Netlify? `git log origin/main..HEAD`
@@ -75,7 +77,8 @@ happened repeatedly ([[thread-widget-rail-feature]], [[agent-state-files-feature
 - For backend: don't infer from `node --check` or local `npm test` that
   production behaves differently — those only prove the code parses/passes
   locally. State plainly that a **`fly deploy`** is the missing step, and
-  that you likely can't run it yourself (confirm access before promising it).
+  then RUN IT — `fly deploy` from a clean clone of the right branch. You have
+  the credentials; see the `ship` skill.
 - For local daemon: if you edited `agent/agensis-cli/**`, say so explicitly —
   "needs a daemon restart to pick this code up" — rather than letting the
   human assume it's already active in this very session.
@@ -87,7 +90,7 @@ Strong: "Code merged and unit-tested locally. Needs `fly deploy` before the
 new column/endpoint exists in production — nothing has run that yet."
 
 State the target by name, not just "needs a restart" or "needs a deploy" —
-say *which* of the three, since guessing wrong here is what caused this
+say *which* of the four, since guessing wrong here is what caused this
 skill to exist.
 
 ## Related

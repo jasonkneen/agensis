@@ -1,9 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { clampPaneSplit, type PaneSplitBounds } from '../../src/lib/paneSplit';
+import { clampSplitPrimary } from '../../src/lib/splitPane';
 import { MEMORY_SPLIT_BOUNDS, MEMORY_SPLIT_WIDE_PX } from '../../src/lib/memorySplit';
 import { AGENT_SPLIT_BOUNDS, agentSplitGridHeight } from '../../src/lib/agentsView';
 
-// The shared clamp behind every draggable divider in the app.
+// A clamp for a draggable divider.
+//
+// HEADS UP — `src/lib/paneSplit.ts` is NOT the clamp the app runs. It arrived on
+// the superseded half of a duplicated feature (commit 0fa2fad, titled "SUPERSEDED
+// by worktree-memory-pane — do not merge") and landed anyway. The live one is
+// `clampSplitPrimary` in `src/lib/splitPane.ts`, reached through
+// `hooks/useSplitResize.ts` by all four dividers, and covered by
+// `tests/unit/splitPane.test.ts`. Nothing under `src/components/**` imports
+// `paneSplit`, `usePaneSplit` or `memorySplit`; deleting the three of them
+// together with the top two blocks here is a live proposal, not done here
+// because removing source is not this change's job.
 //
 // The failure it exists to prevent is silent: a divider position is persisted,
 // so a size chosen in a big window is restored into a small one, and without a
@@ -131,9 +142,17 @@ describe('the Memory window file list', () => {
 });
 
 describe('the Agents window Both split still goes through the shared clamp', () => {
-  it('agentSplitGridHeight is clampPaneSplit with the grid/map floors', () => {
+  // AGENT_SPLIT_BOUNDS is a `SplitBounds` (minPrimaryPx / minSecondaryPx), so the
+  // shared clamp it delegates to is `clampSplitPrimary` in lib/splitPane.ts — the
+  // one useSplitResize and all four dividers actually run. This assertion used to
+  // name `clampPaneSplit` from lib/paneSplit.ts instead, whose bounds are
+  // minLeading / minTrailing: both floors read as `undefined` and every expected
+  // value was NaN, so the check could never pass. See the note above.
+  it('agentSplitGridHeight is clampSplitPrimary with the grid/map floors', () => {
     for (const [stored, container] of [[null, 800], [620, 420], [4000, 800], [1, 800], [null, 200]] as const) {
-      expect(agentSplitGridHeight(stored, container)).toBe(clampPaneSplit(stored, container, AGENT_SPLIT_BOUNDS));
+      const actual = agentSplitGridHeight(stored, container);
+      expect(Number.isFinite(actual), `${stored}/${container}`).toBe(true);
+      expect(actual).toBe(clampSplitPrimary(stored, container, AGENT_SPLIT_BOUNDS));
     }
   });
 });

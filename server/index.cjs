@@ -6746,7 +6746,8 @@ const agentPermissions = createAgentPermissions({
 const {
  decideAgentPermissionRequest, expireConnectionPermissionRequests,
  expireStalePermissionRequests, handleAgentPermissionRequest,
- publicPermissionRequest, revokeAgentPermissionRule, setAgentPermissionMode,
+ publicPermissionRequest, rehomePendingPermissionRequests,
+ revokeAgentPermissionRule, setAgentPermissionMode,
 } = agentPermissions;
 
 // Task dispatch owns four of the maps resetTestState() clears, and the cadence
@@ -6780,7 +6781,8 @@ const agentConnections = createAgentConnections({
  failConnectionJobs, finalizeStuckJob, forbidden, getDb, inferenceBroker,
  isAgentEnabled, logConnectionActivity, normalizeSkillDocuments, parseJsonObject,
  publicAgentConnection, publicFarmEnrolledAgent, quoteIdent, reachFromMessage,
- rehomeRunningJobs, repairStoredIdentity, sharedModelsFromMessage, slugHandle,
+ rehomePendingPermissionRequests, rehomeRunningJobs, repairStoredIdentity,
+ sharedModelsFromMessage, slugHandle,
  // Forwarded lazily: channelBridges is constructed from agentConnections' own
  // exports, so it does not exist yet at this point in the file.
  resumeDaemonBridges: (...args) => channelBridges.resumeDaemonBridges(...args),
@@ -7812,6 +7814,7 @@ module.exports = {
   decideAgentPermissionRequest,
   expireStalePermissionRequests,
   expireConnectionPermissionRequests,
+  rehomePendingPermissionRequests,
   revokeAgentPermissionRule,
   setAgentPermissionMode,
   publicPermissionRequest,
