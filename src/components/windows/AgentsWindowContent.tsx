@@ -84,6 +84,7 @@ import {
   type AgentVoicePreference,
 } from '../../lib/agentVoice';
 import { useCartesiaVoices } from '../../hooks/useCartesiaVoices';
+import { useAgentTemplates } from '../../hooks/useAgentTemplates';
 
 // 418 English voices in one <select> is a scroll nobody finishes; the search
 // box above it is the real control.
@@ -93,6 +94,8 @@ import { AGENT_AVATAR_CHOICES } from '../../lib/agentAvatars';
 import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAvatarSrc, renderablePetAssetUrl, type OpenPet } from '../../lib/openpets';
 import {
   AGENT_TEMPLATES,
+  mergeTemplateSources,
+  type GalleryTemplate,
   agentMetadataWithRuntime,
   runtimeChoicesFromConnections,
   type AgentExecutionRuntime,
@@ -534,23 +537,44 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     resetNewAgentFields();
     setCreateStep('form');
   };
-  const applyTemplate = (tpl: AgentTemplate) => {
+  // Authored templates merged over the bundled array. The hook falls back to an
+  // empty list when the route is unreachable, so the gallery degrades to exactly
+  // today's behaviour rather than showing an error — that is also the rollback
+  // path if the server is reverted.
+  const { templates: authoredTemplates, saveAgentAsTemplate } = useAgentTemplates(workspaceId);
+  const galleryTemplates = useMemo(
+    () => mergeTemplateSources(AGENT_TEMPLATES, authoredTemplates),
+    [authoredTemplates],
+  );
+
+  const applyTemplate = (tpl: GalleryTemplate | AgentTemplate) => {
     setNewName(tpl.name);
     setNewHandle(tpl.handle);
     setNewDescription(tpl.description);
     setNewSystemPrompt(tpl.systemPrompt);
     setNewTools(tpl.tools.join(', '));
     setNewSkills(tpl.skills.join(', '));
-    setNewModel('auto');
+    const stored = 'stored' in tpl ? tpl.stored : undefined;
+    setNewModel(stored?.model || 'auto');
     setNewRunMode(tpl.runMode);
     setNewRuntime(tpl.runtime || 'claude');
-    setNewMetadata(tpl.metadata || {});
+    // An authored template has no metadata to carry — the table has no column
+    // for it, deliberately (see shared/agentTemplates.cjs). Only a bundled
+    // template, which is reviewed code, can set it.
+    setNewMetadata(stored ? {} : (tpl.metadata || {}));
     setNewAvatar(DEFAULT_AGENT_AVATAR);
     setNewOpenPetAvatarId('');
     setNewAccentColor(agentAccentPaletteColor(agents.length + 1));
-    setNewSoul('');
-    setNewInstructions('');
+    setNewSoul(stored?.soul || '');
+    setNewInstructions(stored?.instructions || '');
     setCreateStep('form');
+  };
+
+  const [templateSavedFor, setTemplateSavedFor] = useState<string | null>(null);
+  const handleSaveAsTemplate = async (id: string) => {
+    const saved = await saveAgentAsTemplate(id);
+    setTemplateSavedFor(saved ? id : null);
+    if (saved) window.setTimeout(() => setTemplateSavedFor(current => (current === id ? null : current)), 3000);
   };
 
   const handleDelete = (id: string) => {
@@ -674,7 +698,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
 
               {(() => {
                 const q = templateQuery.trim().toLowerCase();
-                const filtered = AGENT_TEMPLATES.filter(tpl =>
+                const filtered = galleryTemplates.filter(tpl =>
                   (templateCategory === 'All' || tpl.category === templateCategory) &&
                   (q === '' || `${tpl.name} ${tpl.description} ${tpl.category}`.toLowerCase().includes(q)));
                 if (filtered.length === 0) {
@@ -1047,6 +1071,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                     setEditingId(null);
                   }}
                   onDelete={() => handleDelete(selectedAgent.id)}
+                  onSaveAsTemplate={() => { void handleSaveAsTemplate(selectedAgent.id); }}
+                  templateSaved={templateSavedFor === selectedAgent.id}
                   onToggleEnabled={() => onUpdateAgent(selectedAgent.id, { enabled: selectedAgent.enabled === false })}
                   capabilities={capabilities}
                   runtimeChoices={runtimeChoices}
@@ -1682,6 +1708,8 @@ function AgentDetailPane({
   onToggleWebhook,
   onClose,
   backButtonClass,
+  onSaveAsTemplate,
+  templateSaved,
 }: {
   agent: WorkspaceAgent | null;
   isEditing: boolean;
@@ -1690,6 +1718,10 @@ function AgentDetailPane({
   onCancelEdit: () => void;
   onSave: (updates: Partial<WorkspaceAgent>) => void;
   onDelete: () => void;
+  /** Save this agent's PROSE as a reusable template. Carries no authority. */
+  onSaveAsTemplate: () => void;
+  /** True briefly after a successful save, so the click has a visible result. */
+  templateSaved: boolean;
   onToggleEnabled: () => void;
   capabilities: SystemCapabilities | null;
   runtimeChoices: AgentRuntimeChoice[];
@@ -2030,6 +2062,20 @@ function AgentDetailPane({
               Connect
             </Button>
           )}
+          {/* Copies this agent's PROSE only. permission_mode, metadata
+              (host_folders, sandbox_skills) and the connect token are not
+              fields of a template — the table has no column for them. */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onSaveAsTemplate}
+            disabled={templateSaved}
+            title="Save this agent's prompt, tools and skills as a reusable template. Its permissions, folder access and connect token are not copied."
+          >
+            {templateSaved ? <Check data-icon="inline-start" /> : <Sparkles data-icon="inline-start" />}
+            {templateSaved ? 'Saved as template' : 'Save as template'}
+          </Button>
           <Button
             type="button"
             variant={confirmDelete ? 'destructive' : 'ghost'}

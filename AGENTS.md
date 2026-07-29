@@ -146,6 +146,45 @@ window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
 
 ## Recent cross-cutting features (2026-07)
 
+- **Agent templates / persona packs** (`workspace_agent_templates`) — the 15
+  agent templates used to be CODE in a frontend array, changeable only by a
+  deploy. A workspace can now author its own and save a tuned agent as a
+  starting point. Validator: `shared/agentTemplates.cjs`. Routes:
+  `server/agent-templates-routes.cjs`. Things to know before touching it:
+  - **A template carries PROSE and REQUESTS, never AUTHORITY**, and that is
+    enforced by the SHAPE rather than by a filter: `workspace_agent_templates`
+    has no column for `permission_mode`, `metadata`, `sandbox_provider`,
+    `sandbox_config`, `connect_token_hash`, `mcp_approved`, `memory_dir` or
+    `identity`. You cannot import what the shape cannot hold. **Adding one of
+    those columns is a security decision, not a schema tidy-up** —
+    `tests/agent-template-schema.test.cjs` fails on exactly that, in all three
+    schema places.
+  - **`metadata` is the field that looks harmless and is not.** It carries
+    `host_folders`, which the daemon turns into an `--add-dir` argument on
+    somebody's actual machine, and `sandbox_skills`, whose definitions hold a
+    `baseUrl` the SERVER fetches plus a workspace-vault credential name. It is
+    MANAGE_ONLY on `workspace_agents` for those reasons.
+  - **`normalizeAgentTemplate` REBUILDS its output** from a carried-field list
+    rather than deleting keys from the input, so a field nobody anticipated
+    cannot ride along. `agentToTemplateDraft` PICKS named fields and must never
+    spread the agent row — spreading is the one-line change that would copy a
+    `yolo` agent's permission mode into a shareable artifact.
+  - **There is NO server-side create-agent route, and there must not be one.**
+    A template prefills the existing Agents window form; the write still goes
+    through the generic `/backend/db/insert` where `stripPrivilegedDbValues` and
+    `setsManageOnlyDbColumn` apply. A convenience "create from template" that
+    inserted server-side would step around every column guard at once.
+  - **The bundled `AGENT_TEMPLATES` array must stay.** Onboarding reads it
+    directly and must work before a workspace has authored anything, and it is
+    the fallback that makes reverting the server a no-op for users. The hook
+    falls back to `[]` on any fetch failure rather than rendering an error.
+  - **`skills` must stay `string[]`** — the Agents window round-trips it through
+    a comma-separated text input, so an object renders `[object Object]` and is
+    saved back over the real definition on the next unrelated edit.
+  - **`tools` is advisory and the UI must not imply otherwise.** It gates
+    nothing: on the daemon lane it is interpolated as prompt text, and on the
+    builtin lane the tool list comes from `toolSpecs`, not the column.
+
 - **Workspace automations** (`automations`, `automation_runs`) — "when X happens
   inside agensis, do Y inside agensis", without a code change. Engine:
   `server/automations.cjs`. Evaluator (pure, no db):

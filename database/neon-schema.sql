@@ -560,6 +560,50 @@ CREATE TABLE IF NOT EXISTS agent_skill_documents (
 CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_workspace_id ON agent_skill_documents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_agent_id ON agent_skill_documents(agent_id);
 
+-- Agent templates ("persona packs") as DATA rather than code. Validator:
+-- shared/agentTemplates.cjs. Routes: server/agent-templates-routes.cjs.
+--
+-- THE ABSENT COLUMNS ARE THE SECURITY CONTROL. There is deliberately no
+-- permission_mode, metadata, sandbox_provider, sandbox_config,
+-- connect_token_hash, mcp_approved, memory_dir or identity. A template carries
+-- prose and requests; it never carries authority, and you cannot import what
+-- the shape cannot hold. metadata is the field that looks harmless and is not:
+-- it holds host_folders (which the daemon turns into `--add-dir <path>` on a
+-- real machine) and sandbox_skills (a baseUrl the server fetches plus a vault
+-- credential key). Adding any of them later is a security decision.
+CREATE TABLE IF NOT EXISTS workspace_agent_templates (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  slug text NOT NULL,
+  name text NOT NULL,
+  category text NOT NULL DEFAULT 'Custom',
+  description text DEFAULT '',
+  handle_hint text DEFAULT '',
+  system_prompt text DEFAULT '',
+  soul text DEFAULT '',
+  instructions text DEFAULT '',
+  -- Both string[]. skills MUST stay string[] — the Agents window round-trips it
+  -- through a comma-separated text input, so an object renders '[object Object]'
+  -- and is saved back over the real definition on the next edit.
+  tools jsonb NOT NULL DEFAULT '[]'::jsonb,
+  skills jsonb NOT NULL DEFAULT '[]'::jsonb,
+  model text NOT NULL DEFAULT 'auto',
+  run_mode text NOT NULL DEFAULT 'builtin',
+  runtime text DEFAULT '',
+  avatar text DEFAULT '',
+  accent_color text DEFAULT '',
+  revision integer NOT NULL DEFAULT 1,
+  source text NOT NULL DEFAULT 'authored',
+  origin jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_by uuid,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE (workspace_id, slug)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_agent_templates_workspace_id
+  ON workspace_agent_templates(workspace_id);
+
 CREATE TABLE IF NOT EXISTS uploaded_files (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,
