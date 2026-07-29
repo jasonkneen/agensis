@@ -96,6 +96,7 @@ const { createAgentConnections } = require('./agent-connections.cjs');
 const { createTaskDispatch } = require('./task-dispatch.cjs');
 const { createAgentJobs } = require('./agent-jobs.cjs');
 const { createBuiltinTurn } = require('./builtin-turn.cjs');
+const { createThreadHarvest, isDiscardTransition } = require('./thread-harvest.cjs');
 
 const TASK_MENTION_CLAIM_MS = 5_000;
 const { mountFeedbackRoutes } = require('./feedback-routes.cjs');
@@ -798,6 +799,27 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent_message ON chat_sessions(parent_message_id);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_split_parent ON chat_sessions(split_parent_id);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_deleted ON chat_sessions(workspace_id, deleted_at);
+
+    -- Proposals mined from a discarded thread. See server/thread-harvest.cjs for
+    -- why these are proposals and never direct writes into memory_facts/documents.
+    CREATE TABLE IF NOT EXISTS thread_harvests (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      status text NOT NULL DEFAULT 'pending',
+      reason text,
+      requested_by uuid,
+      findings jsonb NOT NULL DEFAULT '[]'::jsonb,
+      error text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_thread_harvests_pending ON thread_harvests(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_thread_harvests_workspace ON thread_harvests(workspace_id, created_at DESC);
+    -- One OPEN harvest per thread: deleting the same thread twice (two clients, a
+    -- retry) must not stack a second pending row or bill a second model call.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_harvests_one_open
+      ON thread_harvests(session_id) WHERE status IN ('pending', 'running');
 
     ALTER TABLE documents ADD COLUMN IF NOT EXISTS folder text DEFAULT 'General';
     ALTER TABLE documents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
@@ -6667,6 +6689,16 @@ const {
  BUILTIN_TOOL_LOOP_MAX_STEPS, BUILTIN_TOOL_NOTE, BUILTIN_TOOL_RESULT_MAX_CHARS,
 } = builtinTurn;
 
+// Mines a discarded thread for skills/memories/docs worth keeping. Constructed
+// here, after runAnthropicCompletion is bound, because that is the one-shot
+// model call it analyses with.
+const { queueThreadHarvest, runDueThreadHarvests } = createThreadHarvest({
+ getDb: () => getDb(),
+ runAnthropicCompletion: (...a) => runAnthropicCompletion(...a),
+ notifyDbSubscribers: (...a) => notifyDbSubscribers(...a),
+ onWarn: (message) => console.warn('[thread-harvest]', message),
+});
+
 // Agent jobs hold no in-process state — a job's liveness is a database fact, so
 // a restart cannot lose it. See server/agent-jobs.cjs.
 const agentJobs = createAgentJobs({
@@ -7361,6 +7393,18 @@ function createApp() {
    // must not pay for a second query. `.catch(() => [])` because a reaction that
    // saves without an event is a missing signal; a reaction that fails to save
    // because the event machinery could not read is a lost user action.
+   // Same shape and same reason again: "was this thread ALREADY discarded?" is a
+   // before-image question, and the write replaces the column. Only for writes
+   // that actually touch deleted_at, so an ordinary rename pays nothing.
+   let priorSessionRows = [];
+   if (table === 'chat_sessions' && Object.prototype.hasOwnProperty.call(safeValues, 'deleted_at')) {
+    const priorWhere = buildWhereClause(filters, []);
+    priorSessionRows = await getDb().unsafe(
+     `select id, workspace_id, deleted_at from ${tableSql}${priorWhere.clause}`,
+     priorWhere.params,
+    ).catch(() => []);
+   }
+
    let priorReactionRows = [];
    if (table === 'messages' && Object.prototype.hasOwnProperty.call(safeValues, 'reactions')) {
     const priorWhere = buildWhereClause(filters, []);
@@ -7402,6 +7446,22 @@ function createApp() {
    // runs. Fire-and-forget AFTER the row is written and broadcast, so a failed
    // dispatch can never lose the user's edit. dispatchTaskAssignment re-checks
    // everything that matters (agent vs human, disabled, done/cancelled, duplicate).
+   // Discarding a thread is the moment its lessons are most likely to be lost, so
+   // queue a background analysis of what could be gleaned from it. Fire-and-forget
+   // AFTER the row is written and broadcast, and fails open inside: a harvest that
+   // cannot be queued must never cost somebody their delete. Only on the
+   // null -> timestamp EDGE, so a repeat delete or an undelete queues nothing.
+   for (const before of priorSessionRows) {
+    const after = result.find((row) => String(row.id) === String(before.id));
+    if (!after || !isDiscardTransition(before, after)) continue;
+    void queueThreadHarvest({
+     workspaceId: before.workspace_id,
+     sessionId: before.id,
+     reason: 'deleted',
+     requestedBy: req.userId,
+    }).catch((error) => console.error('queueThreadHarvest failed', error));
+   }
+
    for (const before of priorTaskRows) {
     if (String(before.assignee_id || '') === nextAssigneeId) continue;
     void dispatchTaskAssignment({
@@ -7496,7 +7556,7 @@ function startBackendServer(port = DEFAULT_PORT) {
  });
  void reconcileAgentConnectionsAtStartup();
  void reconcileSchedulesAtStartup();
- const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void expireStalePermissionRequests(); void pruneOfflineConnections(); pruneExpiredPeerTickets(); void runDueSchedules(); }, 30_000);
+ const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void expireStalePermissionRequests(); void pruneOfflineConnections(); pruneExpiredPeerTickets(); void runDueSchedules(); void runDueThreadHarvests(); }, 30_000);
  if (jobReaper.unref) jobReaper.unref();
  let flowDeliveryRunning = false;
  const flowDeliveryWorker = setInterval(() => {
