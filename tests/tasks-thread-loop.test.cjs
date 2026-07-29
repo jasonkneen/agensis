@@ -113,15 +113,19 @@ test('postTaskSubthreadMention appends under the existing per-task root', async 
 
 // --- (4) mirror an agent subthread reply back to task comments --------------
 
-function mirrorDb({ sourceTaskId = null, taskWorkspace = 'w1', onCommentInsert } = {}) {
+function mirrorDb({ sourceTaskId = null, taskWorkspace = 'w1', taskStatus = 'todo', onCommentInsert, onTaskUpdate } = {}) {
   return {
     async unsafe(sql, params) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
       if (n.startsWith('select source_task_id from messages where id')) {
         return [{ source_task_id: sourceTaskId }];
       }
-      if (n.startsWith('select workspace_id from tasks where id')) {
-        return [{ workspace_id: taskWorkspace }];
+      if (n.startsWith('select workspace_id, status from tasks where id')) {
+        return [{ workspace_id: taskWorkspace, status: taskStatus }];
+      }
+      if (n.startsWith('update tasks set')) {
+        if (onTaskUpdate) onTaskUpdate({ sql: n, params });
+        return [{ id: params[params.length - 1] }];
       }
       if (n.startsWith('insert into task_comments')) {
         const row = { id: 'c-1', sql: n, params };
@@ -180,3 +184,41 @@ test('mirrorAgentReplyToTaskComment ignores human and placeholder messages', asy
   );
   assert.equal(comment, null, 'neither path inserts a comment');
 });
+
+// A task the agent is demonstrably working — it just posted a reply on it — must
+// not still read 'todo' on the board. Dispatch moves todo -> in_progress, but not
+// every turn arrives through dispatch: a task queued while the agent was mid-turn
+// keeps 'todo' + assignee, and a plain human follow-up in the thread wakes the
+// agent without going near dispatchTaskAssignment.
+test('an agent reply moves a still-todo task into progress', async () => {
+  let update = null;
+  __test.setTestDb(mirrorDb({
+    sourceTaskId: 't-42', taskStatus: 'todo', onTaskUpdate: (u) => { update = u; },
+  }));
+
+  await __test.mirrorAgentReplyToTaskComment({
+    sender_kind: 'agent', sender_id: 'a-coder', thread_parent_id: 'root-existing', content: 'On it.',
+  });
+
+  assert.ok(update, 'the task row is written');
+  assert.match(update.sql, /update tasks set status = \$1/, 'the status is what moved');
+  assert.equal(update.params[0], 'in_progress');
+});
+
+// The same rule as every other transition: only 'todo' moves. Mirroring a reply
+// must never resurrect a finished task or un-finish one.
+for (const [status, label] of [['done', 'finished'], ['cancelled', 'cancelled'], ['in_progress', 'already started']]) {
+  test(`an agent reply leaves a ${label} task's status alone`, async () => {
+    let update = null;
+    __test.setTestDb(mirrorDb({
+      sourceTaskId: 't-42', taskStatus: status, onTaskUpdate: (u) => { update = u; },
+    }));
+
+    await __test.mirrorAgentReplyToTaskComment({
+      sender_kind: 'agent', sender_id: 'a-coder', thread_parent_id: 'root-existing', content: 'More detail.',
+    });
+
+    assert.ok(update, 'updated_at is still bumped so the task resurfaces');
+    assert.doesNotMatch(update.sql, /set status/, `a ${status} task must not be rewritten`);
+  });
+}

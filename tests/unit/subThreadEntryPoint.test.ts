@@ -41,3 +41,40 @@ describe('sub-thread creation has a live entry point', () => {
     expect(chat).toMatch(/onCreateSubThread\(subThreadPickerMessageId, agent/);
   });
 });
+
+// The button was hover-revealed with `opacity-0`, which keeps it in layout. Its
+// wrapper rendered on EVERY message (onCreateSubThread is always supplied), so
+// every message in the timeline carried an invisible ~28px row under it — a
+// large gap with nothing in it unless you happened to hover.
+//
+// The fix puts it on the same line as the reply stats and hides it properly.
+// These assert the two properties that matter; they do not pin exact classes.
+describe('the hover-only sub-thread button costs no layout when hidden', () => {
+  const chat = () => read('src/components/windows/ChatWindowContent.tsx');
+
+  it('is display-hidden, not merely transparent', () => {
+    const btn = chat().slice(chat().indexOf('Sub-thread') - 900, chat().indexOf('Sub-thread'));
+    expect(btn, 'opacity-0 keeps the button in layout — that is the gap').not.toMatch(/\bopacity-0\b/);
+    expect(btn).toMatch(/\bhidden\b/);
+    expect(btn, 'must come back on hover').toMatch(/group-hover:inline-flex/);
+  });
+
+  it('stays reachable on touch, which never fires hover', () => {
+    const btn = chat().slice(chat().indexOf('Sub-thread') - 900, chat().indexOf('Sub-thread'));
+    expect(btn).toMatch(/pointer-coarse:inline-flex/);
+  });
+
+  it('shares one row with the reply stats instead of stacking a second block', () => {
+    const c = chat();
+    // The stats button is rendered INSIDE the same flex row as the chips.
+    const row = c.slice(c.indexOf('{(replyCount && onOpenThread) ||'), c.indexOf('Sub-thread'));
+    expect(row, 'the stats button moved into the shared row').toContain('<ThreadReplySummaryButton');
+    expect(row).toContain('flex flex-wrap items-center');
+  });
+
+  it('does not double the top margin now that the row owns spacing', () => {
+    const c = chat();
+    const decl = c.slice(c.indexOf('function ThreadReplySummaryButton'), c.indexOf('function ThreadReplySummaryButton') + 2600);
+    expect(decl, 'row provides mt-1; the button must not add its own').not.toMatch(/className="mt-1 -ml-1 inline-flex h-7/);
+  });
+});

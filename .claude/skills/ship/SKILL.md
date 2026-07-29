@@ -36,14 +36,26 @@ routinely needs two or three; see the `deploy-targets` skill for the full
 Triggered by `server/**` — especially **DDL inside `ensureRuntimeSchema()`**,
 which only runs when the Fly process boots. Merging does nothing.
 
-    fly deploy                      # from the agensis repo root
-    fly status  --app agensis-backend
-    fly logs    --app agensis-backend | tail -50
+**`fly deploy` ships the LOCAL WORKING DIRECTORY, not a git ref.** In this repo
+several agent loops share one checkout, so at any moment the tree may hold
+someone else's half-finished edits — and a plain `fly deploy` would put them
+straight into production. Deploy from a **clean clone of `origin/main`**, so
+production can only ever match a committed, pushed ref:
 
-`fly deploy` ships the **local directory**, not a git ref — so deploying from a
-worktree puts code live with no git involved. Deploy from the repo root on the
-branch you mean. Always check the logs after: a lagging Fly has hidden broken
-SQL before.
+    D=$(mktemp -d)
+    git clone --depth 1 --branch main https://github.com/jasonkneen/open-hatch.git "$D"
+    cd "$D" && fly deploy --app agensis-backend
+
+Then confirm nothing leaked and the change is really on the machine:
+
+    fly releases --app agensis-backend | head -3
+    fly ssh console --app agensis-backend -C "sh -c 'grep -c <marker> /app/server/<file>.cjs'"
+    fly logs --app agensis-backend | tail -50
+
+This is not theoretical: on 2026-07-29 a committed, tested backend fix sat
+undeployed because the only available deploy would have shipped another loop's
+in-flight `ChatWindowContent.tsx`. The clean-clone deploy unblocked it. A
+lagging Fly has also hidden broken SQL before, so always read the logs after.
 
 ### 2. Frontend → Netlify (`open-hatch` → agensis.io)
 
