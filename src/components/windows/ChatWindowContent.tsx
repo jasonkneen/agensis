@@ -2942,10 +2942,10 @@ function ChatMessageBubble({
             one rendered on EVERY message — `onCreateSubThread` is always set —
             holding an h-6 button at opacity-0. Invisible, but still reserving
             ~28px under every message in the timeline: a large gap with nothing
-            in it until you happened to hover. Sharing the stats row also means
-            revealing the button costs no reflow whenever that row already has
-            content, which is what the opacity trick was protecting against. */}
-        {(replyCount && onOpenThread) || (subThreads && subThreads.length > 0) || onCreateSubThread ? (
+            in it until you happened to hover. Delegate has since moved into the
+            floating action bar entirely, so this row now renders ONLY when there
+            is real content — replies or sub-thread chips — to put in it. */}
+        {(replyCount && onOpenThread) || (subThreads && subThreads.length > 0) ? (
           <div className="mt-1 flex flex-wrap items-center gap-1">
             {replyCount && onOpenThread ? (
               <ThreadReplySummaryButton
@@ -2972,31 +2972,6 @@ function ChatMessageBubble({
                 </button>
               );
             })}
-            {onCreateSubThread && (
-              // `hidden`, NOT opacity-0. Opacity kept the button in layout on every
-              // message, which is the gap this row was collapsing. Hidden means a
-              // message with no replies and no sub-threads contributes an EMPTY
-              // flex row — zero height — instead of a 28px void.
-              //
-              // The reflow that opacity was protecting against is now mostly moot:
-              // on any message that has stats or chips this button appears beside
-              // them and the row's height never changes. On a bare message the row
-              // does grow on hover, which is the honest trade for removing the gap
-              // from every other message in the timeline.
-              //
-              // `pointer-coarse:inline-flex` is the escape hatch: a touch device
-              // never fires hover, so hover-only would mean unreachable (this app
-              // ships a mobile layer). Coarse pointers get it permanently visible
-              // but dimmed, so it stays quiet on desktop where hover works.
-              <button
-                type="button"
-                className="hidden h-6 items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:inline-flex group-hover:inline-flex pointer-coarse:inline-flex pointer-coarse:opacity-70"
-                onClick={onCreateSubThread}
-              >
-                <Plus className="size-3" />
-                Sub-thread
-              </button>
-            )}
           </div>
         ) : null}
         {/* Reaction pills — always visible when reactions exist */}
@@ -3052,6 +3027,17 @@ function ChatMessageBubble({
           {onOpenThread && (
             <Button type="button" variant="ghost" size="icon-xs" onClick={onOpenThread} disabled={isStreaming || actionBusy} aria-label={replyCount ? 'Open thread' : 'Start thread'} title={replyCount ? 'Open thread' : 'Start thread'}>
               <CornerDownRight />
+            </Button>
+          )}
+          {/* "Delegate", not "Sub-thread": this hands the message to an agent as a
+              background task, which is what the picker it opens actually does. It
+              lives in this floating bar with the other per-message actions rather
+              than as a labelled button under the message — that placement is what
+              made it either a permanent 28px gap (opacity-0) or a row that grew on
+              hover. An icon in an existing bar costs no layout at all. */}
+          {onCreateSubThread && (
+            <Button type="button" variant="ghost" size="icon-xs" onClick={onCreateSubThread} disabled={isStreaming || actionBusy} aria-label="Delegate to an agent" title="Delegate to an agent">
+              <UserPlus />
             </Button>
           )}
           {onTogglePin && (
@@ -3158,7 +3144,7 @@ function SubThreadListPanel({
           <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
             <GitBranch className="h-8 w-8 opacity-30" />
             <p className="text-sm">No sub-threads yet</p>
-            <p className="text-center text-xs opacity-70">Start one from any message using the + Sub-thread button</p>
+            <p className="text-center text-xs opacity-70">Delegate any message to an agent using the Delegate action on it</p>
           </div>
         ) : (
           <>
