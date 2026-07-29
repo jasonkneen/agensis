@@ -100,8 +100,13 @@ side logs anything. The surface just stays empty forever.
 
 That is not hypothetical. An audit found **eight** tables broadcast but not
 subscribable, two of them (`agent_schedules`, `gateway_configs`) with live client
-subscriptions that have never once worked — through 1471 backend and 2434
-frontend passing tests, because nothing asserted what the protocol is.
+subscriptions that had never once worked — through 1471 backend and 2434
+frontend passing tests, because nothing asserted what the protocol is. Those two
+are fixed and allowlisted; `tests/schedules-gateways-realtime.test.cjs` walks the
+whole path (the hook's exact binding -> `authorizeRealtimeBinding` -> a real
+fanout -> the frame the client receives) so the two halves can't drift apart
+again silently. The other six are exemptions on purpose, `FANOUT_BROKEN` is empty,
+and empty is the goal state rather than a disabled check.
 
 So every table passed to `notifyDbSubscribers` must be exactly one of:
 
@@ -130,6 +135,23 @@ projection. `channel_bridges.config` is the cautionary tale — the REST routes
 project it away, all four fanout calls pass raw `returning *` rows, and only the
 missing allowlist entry stood between that and a live Slack bot token on every
 subscriber's socket.
+
+Allowlisting `gateway_configs` is the worked example of what that costs, and all
+four parts were needed in the one commit:
+
+- `ALLOWED_TABLES` — otherwise the subscription is refused.
+- `WORKSPACE_SCOPED_TABLES` — **load-bearing, not tidy.**
+  `enforceDbOperationAccess` returns EARLY for any table outside that Set, so an
+  `ALLOWED_TABLES` entry without it has *no row scoping at all* and one signed-in
+  user reads every tenant's rows.
+- `SELECTABLE_COLUMNS_BY_TABLE` — `columns: '*'` on the generic select would
+  otherwise return `api_key_cipher`, which the dedicated route reduces to a
+  `has_key` boolean on purpose. The rule of thumb: **the generic path must never
+  return more than the dedicated route does at the same capability.**
+- `PRIVILEGED_DB_COLUMNS_BY_TABLE` — a generic write must not set the columns the
+  dedicated route exists to validate. `base_url` is checked by
+  `assertSafeOutboundUrl` on POST/PATCH and nowhere else, so leaving it writable
+  through `/backend/db/insert` would be a way around a live SSRF guard.
 
 ### Presence: two transports, merged only at the view layer
 
@@ -640,6 +662,26 @@ So: **`agw_` is the credential to hand a human or an MCP client.** It is
 manage-gated, minted at `POST /backend/workspaces/:id/mcp-token`, and it is the
 only thing the UI ever produces (`src/lib/mcpConnect.ts`). Nothing in the product
 tells anyone to paste a login token, and nothing should start.
+
+**The door records that this happened, so the decision can rest on data.** A
+`mcp.login_token_used` audit row is written when a `kind: 'user'` identity
+authenticates — workspace, user id and kind, never the token, its hash or any
+fragment. It answers one question: is anyone actually using this path?
+
+MCP auth runs on **every request**, so the row is emitted at most **once per user
+per 24h per process** via `createFirstUseWindow` (`shared/backend-core.cjs`). That
+dedup is what makes the audit log the right home rather than the wrong one: after
+it, the rate is bounded by *distinct humans per day* — the same rate class as
+`invite.created` — instead of by request volume. Without it, a per-request row
+would bury the privileged actions the log exists for and flood a tamper-evident
+chain. **If you ever need the actual call volume, do not reach for this table**;
+that is a metrics counter, and the audit log would answer less by containing
+more. Recording is scoped by a frozen `KINDS_TO_RECORD` set, and rows are never
+awaited, so no DB write is on the MCP hot path.
+
+Read the rows as "this credential appeared today", **not** as a request count —
+the window is process-local, so a multi-instance deploy can produce one row per
+instance.
 
 One thing that is **not** implementable, so nobody spends a day on it: you cannot
 "allow the tools but deny `/backend/db/*`" for a login token used at MCP. It is

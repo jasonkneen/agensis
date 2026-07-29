@@ -103,6 +103,29 @@ const ALLOWED_TABLES = new Set([
  // there is nothing privileged for a generic write to reach. See the DDL
  // comment in server/index.cjs and shared/agentTemplates.cjs.
  'workspace_agent_templates',
+ // Scheduled agent runs. READ through the generic /db path for one reason: a
+ // client cannot subscribe to a table it cannot select (authorizeRealtimeBinding
+ // -> ensureTable -> enforceDbOperationAccess('select')), and
+ // src/hooks/useSchedules.ts has subscribed to agent_schedules since the day it
+ // was written. Without this line that subscription is refused and the error
+ // frame is dropped by backendClient, so the schedules list never went live.
+ // Every WRITE is gated to 'manage' below and goes through
+ // /backend/workspaces/:id/schedules — the only place agent_id and session_id are
+ // checked to belong to this workspace and the interval is clamped. A schedule is
+ // a standing "run this agent on a timer" grant, so a forged row is strictly
+ // stronger than the 'run_agents' capability its dedicated route asks for.
+ 'agent_schedules',
+ // Workspace inference gateways. Same reason as agent_schedules: src/hooks/
+ // useGateways.ts has always subscribed and always been refused. Three
+ // protections ride WITH this line and are not optional:
+ //   - WORKSPACE_SCOPED_TABLES below (without it enforceDbOperationAccess returns
+ //     early and ANY signed-in user reads EVERY workspace's gateway rows),
+ //   - SELECTABLE_COLUMNS_BY_TABLE, which keeps api_key_cipher and the
+ //     credential-bearing `headers` off the generic select, and
+ //   - PRIVILEGED_DB_COLUMNS_BY_TABLE, which keeps base_url off generic writes so
+ //     the assertSafeOutboundUrl SSRF guard on the dedicated routes cannot be
+ //     stepped around by POSTing to /backend/db/insert.
+ 'gateway_configs',
 ]);
 
 // F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
@@ -189,6 +212,13 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  'agent_permission_requests', 'thread_harvests',
  'automations', 'automation_runs',
  'workspace_agent_templates',
+ // Load-bearing, not tidy. enforceDbOperationAccess returns EARLY for any table
+ // that is not in this set (`if (!WORKSPACE_SCOPED_TABLES.has(table) && table !==
+ // 'messages') return;`) — so a table that is in ALLOWED_TABLES but missing here
+ // has NO row scoping at all, and one signed-in user reads every other tenant's
+ // rows. gateway_configs rows carry an encrypted provider API key, so that would
+ // be a cross-tenant leak, not a cosmetic one.
+ 'gateway_configs',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -242,6 +272,16 @@ const DB_TABLE_ACCESS = {
  // run_agents path can't bypass that validation; runs are written by the runner only.
  agent_schedules: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_schedule_runs: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // SELECT is 'read' to MATCH the dedicated route: GET /backend/workspaces/:id/
+ // gateways is gated at 'read', and every member who can pick a model in chat
+ // needs the list. Nothing is given away by the match, because
+ // SELECTABLE_COLUMNS_BY_TABLE projects the generic select down to STRICTLY LESS
+ // than that route returns (no api_key_cipher, and no `headers` either — the REST
+ // projection does pass headers through, this one does not).
+ // Every WRITE is 'manage', matching POST/PATCH/DELETE .../gateways, and the
+ // privileged-column strip below removes the columns those routes VALIDATE, so
+ // 'manage' here is strictly weaker than 'manage' there rather than a way around.
+ gateway_configs: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  // Orb deliveries are written ONLY by the trigger route (which is where the
  // dedupe gate lives): a client-forged row would let an attacker pre-claim a
  // delivery id and make the next real delivery look like a duplicate, and a
@@ -326,6 +366,26 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
   'mcp_token_hash',
   'mcp_auto_approve',
  ]),
+ // The three columns the dedicated gateway routes exist to VALIDATE or PROTECT.
+ // Allowlisting gateway_configs opens /backend/db/insert|update on it, and those
+ // routes do not run route-level validation — so without this strip:
+ //   base_url        would be settable without assertSafeOutboundUrl, which is the
+ //                   live SSRF guard (tests/gateway-ssrf.test.cjs). The row is
+ //                   later fetched server-side by the ai-chat gateway branch, so an
+ //                   unvalidated base_url is a request from the Fly machine to
+ //                   whatever the writer chose — 169.254.169.254 included.
+ //   api_key_cipher  would be settable to attacker-chosen ciphertext, and readable
+ //                   back only through the vault decryptor — a way to make the
+ //                   server hand a chosen credential to a chosen base_url.
+ //   headers         is where an Authorization header lives.
+ // Stripped rather than refused, matching every other entry here: a generic write
+ // that mentions one of these still succeeds, it just cannot set it. The dedicated
+ // routes remain the only door, which is the property the SSRF fix depends on.
+ gateway_configs: new Set([
+  'base_url',
+  'api_key_cipher',
+  'headers',
+ ]),
 };
 
 // Columns a generic /backend/db write MAY still set, but only for a caller who
@@ -374,6 +434,23 @@ function setsManageOnlyDbColumn(table, values) {
 // (M7, 2026-07 review).
 const SELECTABLE_COLUMNS_BY_TABLE = {
  app_users: ['id', 'email', 'display_name', 'accent_color', 'created_at'],
+ // gateway_configs became selectable so its realtime subscription could work at
+ // all (authorizeRealtimeBinding authorizes a db_changes binding as a SELECT), and
+ // `columns: '*'` would otherwise hand back api_key_cipher — the encrypted
+ // provider key the dedicated route deliberately reduces to a `has_key` boolean,
+ // because "the API key is NEVER returned to the client" is the stated contract in
+ // server/workspaces-routes.cjs.
+ //
+ // `headers` is off this list too, and that is a DEPARTURE from publicGatewayConfig
+ // rather than a copy of it: the REST projection passes headers through verbatim,
+ // and an operator can put an `Authorization: Bearer …` in there. The generic path
+ // is new surface with no consumer that needs the value (useGateways refetches over
+ // REST and never reads the realtime row), so it gets the smaller set. Same rule as
+ // channel_bridges.config: strip the whole column, so a header nobody has thought
+ // of yet is excluded by default rather than by review.
+ gateway_configs: [
+  'id', 'workspace_id', 'name', 'base_url', 'model', 'protocol', 'created_at', 'updated_at',
+ ],
 };
 
 /**
@@ -1806,6 +1883,17 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  // exists to answer. Its sibling agent.connect_token_minted was recorded from
  // the start; this one was not, which is the only reason it is a separate line.
  'workspace.mcp_token_minted',
+ // A human's ORDINARY SESSION TOKEN was used to authenticate at /backend/mcp
+ // (the verifyUserAuthMcpToken tail of verifyMcpToken). Recorded to answer one
+ // question with data instead of a guess — "is anyone actually using this
+ // path?" — before deciding whether to stop accepting login tokens there. See
+ // AGENTS.md "Login tokens at the MCP door".
+ //
+ // MCP AUTH RUNS ON EVERY REQUEST, so this is the one action in this registry
+ // that could flood the table. It does not, because it is emitted at most ONCE
+ // PER USER PER 24h PER PROCESS via createFirstUseWindow below. Never remove
+ // that dedup and leave the call site in place.
+ 'mcp.login_token_used',
  'vault.secret_set',
  'vault.secret_deleted',
  // Authoring an automation is a STANDING grant to write into the workspace
@@ -1821,6 +1909,74 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
 
 /** What an unrecognised action records as, rather than throwing in production. */
 const AUDIT_UNKNOWN_ACTION = 'unknown';
+
+const FIRST_USE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const FIRST_USE_MAX_KEYS = 5000;
+
+/**
+ * First-use-per-key-per-window, so a per-request code path can emit an audit row
+ * WITHOUT flooding the log.
+ *
+ * The audit table is built for rare, human-attributable, privileged actions, and
+ * it is a tamper-evident chain (entry_hash over the previous row). One row per
+ * MCP request would bury the privileged actions it exists for and make the
+ * manage-gated audit view unusable — the log would technically contain more and
+ * answer less.
+ *
+ * So the call site asks this first. `shouldRecord(key)` returns true the first
+ * time it sees a key in a 24h window and false for every repeat, which turns
+ * "every request from this credential" into "this credential appeared today".
+ * That is the signal the question actually needs, and it is the same rate class
+ * as the other actions in the registry.
+ *
+ * Bounded in BOTH directions on purpose:
+ *   - time — an entry expires after `windowMs`, so a key seen once a year
+ *     records once a year rather than never again;
+ *   - memory — at most `maxKeys` entries. Map preserves insertion order, so the
+ *     oldest is evicted in O(1). Worst case when a cap eviction happens is one
+ *     extra row, never unbounded growth.
+ *
+ * PROCESS-LOCAL, like the MCP presence map. On a multi-instance deploy the
+ * ceiling is one row per key per window PER INSTANCE. That is fine for "did this
+ * happen at all", and it is not a counter — do not read row counts as request
+ * volume.
+ *
+ * `now` is injectable so the window can be tested without waiting a day.
+ */
+function createFirstUseWindow({
+ windowMs = FIRST_USE_WINDOW_MS,
+ maxKeys = FIRST_USE_MAX_KEYS,
+ now = Date.now,
+} = {}) {
+ const seen = new Map();
+
+ function shouldRecord(key) {
+  const id = String(key || '');
+  if (!id) return false;
+  const at = now();
+
+  const expiresAt = seen.get(id);
+  if (expiresAt !== undefined) {
+   if (expiresAt > at) return false;
+   // Expired: drop it so the re-insert below lands at the END of the insertion
+   // order. Without this the key keeps its original position and would be
+   // evicted first despite having just been used.
+   seen.delete(id);
+  }
+
+  seen.set(id, at + windowMs);
+
+  // Evict from the front (oldest inserted) until back under the cap.
+  while (seen.size > maxKeys) {
+   const oldest = seen.keys().next();
+   if (oldest.done) break;
+   seen.delete(oldest.value);
+  }
+  return true;
+ }
+
+ return { shouldRecord, size: () => seen.size };
+}
 
 /** Ceilings on what one row may carry. Bounded so a row can never become a dump. */
 const AUDIT_MAX_TEXT = 200;
@@ -2037,6 +2193,8 @@ module.exports = {
  auditEmailDomain,
  auditEntryHash,
  recordAuditEntry,
+ createFirstUseWindow,
+ FIRST_USE_WINDOW_MS,
  sanitizeAuditDetail,
  createTokenVersionCache,
  appendWorkspaceAccessClause,
