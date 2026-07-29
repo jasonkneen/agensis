@@ -39,12 +39,17 @@ which only runs when the Fly process boots. Merging does nothing.
 **`fly deploy` ships the LOCAL WORKING DIRECTORY, not a git ref.** In this repo
 several agent loops share one checkout, so at any moment the tree may hold
 someone else's half-finished edits — and a plain `fly deploy` would put them
-straight into production. Deploy from a **clean clone of `origin/main`**, so
-production can only ever match a committed, pushed ref:
+straight into production. Deploy from a **clean clone of the branch you mean**,
+so production can only ever match a committed, pushed ref:
 
     D=$(mktemp -d)
-    git clone --depth 1 --branch main https://github.com/jasonkneen/open-hatch.git "$D"
+    git clone --depth 1 --branch "$BRANCH" https://github.com/jasonkneen/open-hatch.git "$D"
     cd "$D" && fly deploy --app agensis-backend
+
+**Check `$BRANCH` — do not assume `main`.** As of 2026-07-29 the working branch
+is **`main-next`** (PR + preview deploys); `main` is what production serves.
+Cloning the wrong one ships the wrong backend with a perfectly green deploy and
+no error anywhere. Confirm with `git rev-parse --abbrev-ref HEAD` first.
 
 Then confirm nothing leaked and the change is really on the machine:
 
@@ -59,8 +64,11 @@ lagging Fly has also hidden broken SQL before, so always read the logs after.
 
 ### 2. Frontend → Netlify (`open-hatch` → agensis.io)
 
-Triggered by `src/**`, `index.html`, `vite.config.ts`, `public/**`. **Pushing to
-`origin/main` IS the deploy** — no manual step. But "pushed" ≠ "live"; Netlify
+Triggered by `src/**`, `index.html`, `vite.config.ts`, `public/**`. **Pushing the
+production branch IS the deploy** — no manual step. Today `main` publishes to
+agensis.io and **`main-next` produces a PREVIEW deploy, not production** — so
+"verified live on agensis.io" is the WRONG check for work on main-next; verify
+against the preview URL instead. "Pushed" is never "live" either way; Netlify
 still needs a build cycle. Confirm rather than assume:
 
     netlify status
@@ -114,7 +122,7 @@ host`. Flushing needs sudo we don't have. Don't report this as "the network is
 down":
 
     IP=$(nslookup github.com 1.1.1.1 | awk '/^Address: /{print $2; exit}')
-    git -c http.curloptResolve="github.com:443:$IP" push origin main
+    git -c http.curloptResolve="github.com:443:$IP" push origin "$BRANCH"
 
 Bash calls that touch the network also need `dangerouslyDisableSandbox: true`.
 
