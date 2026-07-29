@@ -432,7 +432,12 @@ export type AuditAction =
  // The key NAME and a configured boolean. Never the value — see the redaction
  // contract on the vault routes.
  | 'vault.secret_set'
- | 'vault.secret_deleted';
+ | 'vault.secret_deleted'
+ // Letting somebody read a private conversation they are not a member of. The
+ // REFUSAL of a read is deliberately not recorded — it fires on ordinary
+ // sidebar rendering — so an empty log does not mean nobody tried.
+ | 'chat_session.access_granted'
+ | 'chat_session.access_revoked';
 
 /**
  * One audit row as the read route returns it.

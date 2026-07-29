@@ -25,6 +25,8 @@ const ACTION_LABELS: Record<string, string> = {
   'agent.connect_token_minted': 'Connect token issued',
   'vault.secret_set': 'Vault secret set',
   'vault.secret_deleted': 'Vault secret deleted',
+  'chat_session.access_granted': 'Private conversation opened to someone',
+  'chat_session.access_revoked': 'Private conversation access removed',
   unknown: 'Unrecognised action',
 };
 
@@ -39,6 +41,12 @@ const ESCALATING_ACTIONS = new Set([
   'agent.permission_rule_granted',
   'agent.connect_token_minted',
   'member.role_changed',
+  // Reading into a conversation somebody else believed was private is a
+  // widening by any reading of the word, and it is the one an owner scanning
+  // the page most wants to land on. The matching REVOKE is not listed: taking
+  // access back narrows, and marking it would train people to skim past the
+  // marker.
+  'chat_session.access_granted',
 ]);
 
 /** Roles ordered by reach, for deciding whether a role change was a promotion. */

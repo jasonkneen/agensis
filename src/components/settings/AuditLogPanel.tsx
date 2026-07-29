@@ -47,6 +47,8 @@ const FILTERS: Array<{ value: '' | AuditAction; label: string }> = [
   { value: 'invite.revoked', label: 'Invite revoked' },
   { value: 'vault.secret_set', label: 'Vault secret set' },
   { value: 'vault.secret_deleted', label: 'Vault secret deleted' },
+  { value: 'chat_session.access_granted', label: 'Private conversation opened to someone' },
+  { value: 'chat_session.access_revoked', label: 'Private conversation access removed' },
 ];
 
 export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {

@@ -1,5 +1,19 @@
 [
   {
+    "version": "conversation-access",
+    "date": "2026-07-30",
+    "title": "You can now see, and change, who can read a direct message",
+    "summary": "Direct messages became private, and admins were given a way to let someone into one conversation when it was genuinely needed — but that only ever existed as something the server understood, with no screen anywhere in the app. In practice it did not exist: if somebody lost access to a conversation they used to be able to read, there was no way to give it back. There is now. Open a direct message, choose Who can read this from the menu, and you get the list: the people whose conversation it is, anyone who has been let in, and when their access runs out. From the same place you can give a member of the workspace access to that one conversation, with an expiry of a week, a month, three months, or none, and take it back again at any time. Only people already in the workspace can be offered access, and it only ever covers the one conversation. The screen also says what the audit log does and does not record — every grant and withdrawal is written down, but somebody being refused a read is not, so an empty log is not proof that nobody tried.",
+    "highlights": [
+      "Who can read this, in the menu of any direct message",
+      "See who is in the conversation, who has been let in, and when their access expires",
+      "Give a workspace member access to one conversation, with an optional expiry",
+      "Take access back at any time — the people whose conversation it is can never be removed",
+      "Access that has expired is shown as expired, and can be renewed rather than recreated",
+      "Grants and withdrawals now read as plain English in the audit log instead of raw action names"
+    ]
+  },
+  {
     "version": "suggestions",
     "date": "2026-07-30",
     "title": "Suggestions now come from every conversation, not just deleted ones",
