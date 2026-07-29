@@ -429,6 +429,33 @@ window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
   straight through. NOT in the backendClient allowlists — reached only via the
   dedicated `/backend/workspaces/:id/gateways` routes (Fly server only).
 
+### The MCP tool surface is a public contract
+
+`buildTools()` in `server/mcp.cjs` is not an internal list. `listToolSummaries()`
+feeds `/backend/skill` (also `/api/skill`, `/skill`, `/.well-known/agent-skill`),
+which is served with **no authentication** — an IP rate limiter only — so the
+name and description of all 30 tools are public, and the point of publishing them
+is that third parties bind to them. `tools/list` then hands the full JSON Schema
+to any valid bearer.
+
+So **renaming a tool, removing one, or adding a required argument breaks clients
+we cannot see or redeploy.** `tests/mcp-public-surface.test.cjs` pins the exact
+name set and every tool's `required` array. Adding a tool is fine — add the line
+in the same commit; the friction is deliberate, because a new tool joins a public
+surface. Do not delete the test to make it pass.
+
+Two related rules:
+
+- **`additionalProperties: false` on a tool schema is a promise to clients, not a
+  server check.** The dispatcher never validates arguments against `inputSchema`
+  (which is why `call_provider` carries its own by-name `unknownProviderCallArgs`
+  refusal). A schema-driven client rejects unknown flags locally on the strength
+  of that flag, so it has to stay true.
+- **If something needs a capability MCP does not have, add an MCP tool — never a
+  parallel client-only route.** `runToolForIdentity` is the single authorization
+  chokepoint (kinds allowlist, Flows scope, channel pin, invite-role capability
+  checks, 120/min limiter). Anything reached another way is outside all of it.
+
 ## Tests (two runners)
 
 - `npm test` — Node's built-in runner over `tests/*.test.cjs` (backend/integration,
