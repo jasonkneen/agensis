@@ -158,7 +158,27 @@ export function BrowserPanel({
   initialUrl = 'https://duckduckgo.com',
   partition = 'persist:agensis-browser',
 }: BrowserPanelProps) {
-  const [engine, setEngine] = useState<Engine>(() => (supportsWebviewTag() ? 'desktop' : 'proxy'));
+  // WEB DEFAULTS TO 'iframe', NOT 'proxy' — the proxy engine is finished but not
+  // yet usable, and the reason is worth recording because it is not obvious.
+  //
+  // `public/browse/sw.js` is scoped to `/browse/`, so it only sees requests under
+  // that path. A proxied page emits plenty of requests that are NOT under it: a
+  // Next.js site computes its chunk URLs at runtime from `__webpack_public_path__`
+  // and asks for `/_next/static/...` at the ORIGIN ROOT, which the rewriter never
+  // saw in the HTML and the scoped worker never sees on the wire. Those escape to
+  // Netlify, which answers with its own HTML, and the browser refuses every one
+  // for a MIME mismatch. Measured A/B on the same page, changing only the scope:
+  // `/browse/` → unreachable; `/` → renders (1704 nodes, 72 images).
+  //
+  // The fix is a SINGLE root-scope worker doing both jobs — VitePWA switched from
+  // generateSW to injectManifest, scramjet routing for `/browse/*` and Workbox for
+  // the rest. That touches the update flow and the navigateFallbackAllowlist that
+  // fixed the soft-404s, so it is its own change, not a tweak to this one.
+  //
+  // Until then web keeps the behaviour it has always had: a plain iframe that says
+  // so plainly when a site refuses framing. Flip this to 'proxy' when the worker
+  // lands — everything else here is ready.
+  const [engine, setEngine] = useState<Engine>(() => (supportsWebviewTag() ? 'desktop' : 'iframe'));
   const [url, setUrl] = useState(initialUrl);
   const [address, setAddress] = useState(initialUrl);
   const [blocked, setBlocked] = useState(false);
