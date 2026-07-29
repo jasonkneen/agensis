@@ -240,6 +240,10 @@ interface SidebarProps {
  onDirectMessageDelete?: (session: ChatSession) => void;
  onSessionSplit?: (session: ChatSession) => void;
  onSessionMerge?: (session: ChatSession) => void;
+ /** Copy a thread's transcript into an existing channel — "escalate" out of a stranded DM. */
+ onSessionEscalateToChannel?: (session: ChatSession, targetChannelId: string) => void;
+ /** Hand a thread to a different agent: DM them, carry the context in, and dispatch. */
+ onSessionEscalateToAgent?: (session: ChatSession, targetAgent: { id: string; name: string; handle: string | null }) => void;
  onOpenInbox?: () => void;
  /**
   * Put this desktop's open panels away (minimise, never close) so the wallpaper
@@ -314,6 +318,8 @@ export const Sidebar = React.memo(function Sidebar({
  onDirectMessageDelete,
  onSessionSplit,
  onSessionMerge,
+ onSessionEscalateToChannel,
+ onSessionEscalateToAgent,
  onOpenInbox,
  onShowDesktop,
  showingDesktop = false,
@@ -399,6 +405,10 @@ export const Sidebar = React.memo(function Sidebar({
      onDelete={onSessionDelete ? () => onSessionDelete(fork.id) : undefined}
      onSplit={onSessionSplit ? () => onSessionSplit(fork) : undefined}
      onMerge={onSessionMerge ? () => onSessionMerge(fork) : undefined}
+     escalateChannels={escalateChannels}
+     onEscalateToChannel={onSessionEscalateToChannel ? targetId => onSessionEscalateToChannel(fork, targetId) : undefined}
+     escalateAgents={escalateAgents.filter(a => !(fork.participants || []).some(p => p.agent_id === a.id))}
+     onEscalateToAgent={onSessionEscalateToAgent ? targetAgent => onSessionEscalateToAgent(fork, targetAgent) : undefined}
      presenceUsers={chatPresence[fork.id] || []}
     />
     {renderDmForks(fork.id, depth + 1)}
@@ -429,6 +439,21 @@ export const Sidebar = React.memo(function Sidebar({
   void threads;
   return { activeChannelSessions: channels, directSessions: direct };
  }, [uniqueSessions]);
+ // Target list for "Move to channel" — every live (non-archived) channel this
+ // thread could be escalated into. Kept as {id, title} so SessionRow doesn't
+ // need the full ChatSession shape just to render a picker.
+ const escalateChannels = React.useMemo(
+  () => activeChannelSessions.map(channel => ({ id: channel.id, title: channel.title || 'Untitled' })),
+  [activeChannelSessions],
+ );
+ // Target list for "Hand to agent" — every enabled agent this thread could be
+ // handed off to, alongside the channel picker above.
+ const escalateAgents = React.useMemo(
+  () => (agents || [])
+   .filter(agent => agent.enabled !== false)
+   .map(agent => ({ id: agent.id, name: agent.name || agent.handle || 'Agent', handle: agent.handle ?? null })),
+  [agents],
+ );
  const archivedSessions = React.useMemo(() => uniqueSessions.filter(session => Boolean(session.archived_at)), [uniqueSessions]);
  // A split of a DM is itself a DM session (same agent participant), so the
  // per-agent dedup in buildDirectMessageTargets would otherwise swallow it and
@@ -793,6 +818,10 @@ export const Sidebar = React.memo(function Sidebar({
           onSessionDelete={onSessionDelete}
           onSessionSplit={onSessionSplit}
           onSessionMerge={onSessionMerge}
+          escalateChannels={escalateChannels}
+          onSessionEscalateToChannel={onSessionEscalateToChannel}
+          escalateAgents={escalateAgents}
+          onSessionEscalateToAgent={onSessionEscalateToAgent}
          />
         ) : (
          <SidebarFolderGroup
@@ -815,6 +844,10 @@ export const Sidebar = React.memo(function Sidebar({
            onSessionDelete={onSessionDelete}
            onSessionSplit={onSessionSplit}
            onSessionMerge={onSessionMerge}
+           escalateChannels={escalateChannels}
+           onSessionEscalateToChannel={onSessionEscalateToChannel}
+           escalateAgents={escalateAgents}
+           onSessionEscalateToAgent={onSessionEscalateToAgent}
           />
          </SidebarFolderGroup>
         )
@@ -1733,6 +1766,10 @@ function SessionTree({
  onSessionDelete,
  onSessionSplit,
  onSessionMerge,
+ escalateChannels,
+ onSessionEscalateToChannel,
+ escalateAgents,
+ onSessionEscalateToAgent,
 }: {
  sessions: ChatSession[];
  icon?: React.ReactNode;
@@ -1746,6 +1783,10 @@ function SessionTree({
  onSessionDelete?: (id: string) => void;
  onSessionSplit?: (session: ChatSession) => void;
  onSessionMerge?: (session: ChatSession) => void;
+ escalateChannels?: { id: string; title: string }[];
+ onSessionEscalateToChannel?: (session: ChatSession, targetChannelId: string) => void;
+ escalateAgents?: { id: string; name: string; handle: string | null }[];
+ onSessionEscalateToAgent?: (session: ChatSession, targetAgent: { id: string; name: string; handle: string | null }) => void;
 }) {
  const { roots, childrenByParent } = React.useMemo(() => buildSessionTree(sessions), [sessions]);
  const shownRoots = typeof limit === 'number' ? roots.slice(0, limit) : roots;
@@ -1771,6 +1812,10 @@ function SessionTree({
      onDelete={onSessionDelete ? () => onSessionDelete(session.id) : undefined}
      onSplit={onSessionSplit ? () => onSessionSplit(session) : undefined}
      onMerge={onSessionMerge ? () => onSessionMerge(session) : undefined}
+     escalateChannels={(escalateChannels || []).filter(channel => channel.id !== session.id)}
+     onEscalateToChannel={onSessionEscalateToChannel ? targetId => onSessionEscalateToChannel(session, targetId) : undefined}
+     escalateAgents={(escalateAgents || []).filter(a => !(session.participants || []).some(p => p.agent_id === a.id))}
+     onEscalateToAgent={onSessionEscalateToAgent ? targetAgent => onSessionEscalateToAgent(session, targetAgent) : undefined}
      presenceUsers={chatPresence[session.id] || []}
     />
     {kids.map(kid => renderNode(kid, depth + 1, 'SPLIT'))}
@@ -1796,6 +1841,10 @@ function SessionRow({
  onDelete,
  onSplit,
  onMerge,
+ escalateChannels = [],
+ onEscalateToChannel,
+ escalateAgents = [],
+ onEscalateToAgent,
  presenceUsers = [],
 }: {
  session: ChatSession;
@@ -1813,6 +1862,12 @@ function SessionRow({
  onDelete?: () => void;
  onSplit?: () => void;
  onMerge?: () => void;
+ /** Live channels this thread can be escalated (copied) into. */
+ escalateChannels?: { id: string; title: string }[];
+ onEscalateToChannel?: (targetChannelId: string) => void;
+ /** Agents this thread can be handed off to (new/existing DM + dispatch). */
+ escalateAgents?: { id: string; name: string; handle: string | null }[];
+ onEscalateToAgent?: (targetAgent: { id: string; name: string; handle: string | null }) => void;
  presenceUsers?: ItemPresenceUser[];
 }) {
  const actions = (
@@ -1938,6 +1993,36 @@ function SessionRow({
       ))}
      </ContextMenuSubContent>
     </ContextMenuSub>
+    {onEscalateToChannel && escalateChannels.length > 0 && !archived && (
+     <ContextMenuSub>
+      <ContextMenuSubTrigger>
+       <Hash data-icon="inline-start" />
+       Move to channel
+      </ContextMenuSubTrigger>
+      <ContextMenuSubContent>
+       {escalateChannels.map(channel => (
+        <ContextMenuItem key={channel.id} onSelect={() => onEscalateToChannel(channel.id)}>
+         {channel.title}
+        </ContextMenuItem>
+       ))}
+      </ContextMenuSubContent>
+     </ContextMenuSub>
+    )}
+    {onEscalateToAgent && escalateAgents.length > 0 && !archived && (
+     <ContextMenuSub>
+      <ContextMenuSubTrigger>
+       <Bot data-icon="inline-start" />
+       Hand to agent
+      </ContextMenuSubTrigger>
+      <ContextMenuSubContent>
+       {escalateAgents.map(target => (
+        <ContextMenuItem key={target.id} onSelect={() => onEscalateToAgent(target)}>
+         {target.handle ? `@${target.handle}` : target.name}
+        </ContextMenuItem>
+       ))}
+      </ContextMenuSubContent>
+     </ContextMenuSub>
+    )}
     <ContextMenuItem onSelect={onArchive}>
      {archived ? <RotateCcw data-icon="inline-start" /> : <Archive data-icon="inline-start" />}
      {archived ? `Unarchive ${archiveNoun}` : `Archive ${archiveNoun}`}

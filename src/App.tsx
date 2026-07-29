@@ -729,7 +729,7 @@ function AppContent() {
     hasMoreMessages, loadingEarlier, loadEarlierMessages,
     topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
     openThread, closeThread,
-    createSession, splitSession, updateSession, patchSessionLocal, archiveSession, sendMessage, deleteSession, closeAndClearSession, mergeSession,
+    createSession, splitSession, escalateSessionToChannel, updateSession, patchSessionLocal, archiveSession, sendMessage, deleteSession, closeAndClearSession, mergeSession,
   } = useChat(
     activeWorkspaceId,
     user?.email?.split('@')[0] || undefined,
@@ -1753,6 +1753,91 @@ function AppContent() {
     });
   }, [splitSession, openSplitWindow, activeLayerId, user?.id, logEvent]);
 
+  // "Escalate" a thread: copy its transcript into an EXISTING channel so a
+  // conversation stranded in a DM (no share/save/hand-off path — see the
+  // thread-escalation gap) lands somewhere a team can pick it up. Unlike
+  // split, this never creates a new session — it opens the target channel the
+  // human already chose so they land straight on the copy.
+  const handleEscalateToChannel = useCallback(async (source: ChatSession, targetChannelId: string) => {
+    const target = sessions.find(item => item.id === targetChannelId);
+    const pending = toast.loading(`Escalating “${source.title || 'thread'}” to ${target?.title || 'channel'}…`);
+    const ok = await escalateSessionToChannel(source, targetChannelId);
+    if (!ok) {
+      toast.error('Escalate failed — try again', { id: pending });
+      return;
+    }
+    toast.success(`Copied into “${target?.title || 'channel'}”`, { id: pending });
+    if (target) handleSessionOpen(target);
+  }, [sessions, escalateSessionToChannel, handleSessionOpen]);
+
+  // "Hand off" a thread to a different agent: find (or start) a DM with that
+  // agent, copy the source thread's transcript in as context, then actually
+  // send a message so the agent is dispatched and picks it up — a hand-off
+  // that just copied text and left it sitting unread would be no better than
+  // the "no options offered at all" gap this replaces.
+  const handleHandOffToAgent = useCallback(async (
+    source: ChatSession,
+    agent: { id: string; name: string; handle: string | null },
+  ) => {
+    const handle = agent.handle?.trim().replace(/^@+/, '') || '';
+    const title = agent.name?.trim() || (handle ? `@${handle}` : 'Agent');
+    const pending = toast.loading(`Handing “${source.title || 'thread'}” to ${title}…`);
+
+    let target = sessions.find(session => !session.archived_at && isDirectSessionForAgent(session, agent.id, handle));
+    if (!target) {
+      const participant: ChannelParticipant = {
+        id: `agent:${agent.id}`,
+        kind: 'agent',
+        name: title,
+        handle: handle || null,
+        agent_id: agent.id,
+        user_id: null,
+        status: null,
+        direct: true,
+        added_at: new Date().toISOString(),
+      };
+      const { session, failure } = await createSession('auto', {
+        title,
+        folder: 'Direct messages',
+        conversation_mode: 'auto',
+        participants: [participant],
+      });
+      if (!session) {
+        toast.error(`Couldn't start a conversation with ${title}`, { id: pending });
+        reportWriteFailure(`open a conversation with ${title}`, failure);
+        return;
+      }
+      target = session;
+    }
+
+    const copied = await escalateSessionToChannel(source, target.id);
+    if (!copied) {
+      toast.error('Hand-off failed — try again', { id: pending });
+      return;
+    }
+
+    await sendMessage(
+      `This thread was handed to you from “${source.title || 'a DM'}”. The context above is what was said before you joined — please pick it up.`,
+      'auto',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      null,
+      target,
+    );
+
+    toast.success(`Handed off to ${title}`, { id: pending });
+    handleSessionOpen(target);
+    openWindow('chat', { title, sessionId: target.id, canvasId: activeLayerId, ownerUserId: user?.id });
+    logEvent({
+      event_type: 'chat_created',
+      entity_type: 'chat',
+      entity_id: target.id,
+      title: `Handed off thread to ${title}`,
+    });
+  }, [sessions, createSession, escalateSessionToChannel, sendMessage, handleSessionOpen, openWindow, activeLayerId, user?.id, logEvent]);
+
   const handleMergeThread = useCallback(async (fork: ChatSession) => {
     const pending = toast.loading(`Merging “${fork.title || 'split'}” into its parent…`);
     const result = await mergeSession(fork);
@@ -2169,6 +2254,8 @@ function AppContent() {
             onDirectMessageDelete={handleDeleteDm}
             onSessionSplit={handleSplitThread}
             onSessionMerge={handleMergeThread}
+            onSessionEscalateToChannel={handleEscalateToChannel}
+            onSessionEscalateToAgent={handleHandOffToAgent}
             onOpenInbox={handleOpenInbox}
             onShowDesktop={handleShowDesktop}
             showingDesktop={showingDesktop}
@@ -3122,6 +3209,7 @@ function CanvasLayerScene({
                 userId={userId}
                 userEmail={userEmail}
                 facts={facts}
+                documents={documents}
                 categories={categories}
                 onAdd={onAddFact}
                 onUpdate={onUpdateFact}

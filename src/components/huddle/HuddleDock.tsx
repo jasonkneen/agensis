@@ -154,10 +154,12 @@ export function HuddleDock() {
     transcriptSessionId || null,
     !!connection && !outputMuted,
     connection?.joinedAtMs ?? 0,
-    // The ACTIVE agent's voice, not a fixed one — the strip switches who is
-    // speaking mid-call. '' means "none stored"; the speaker derives a default
-    // from the agent id rather than sending an empty voice to Cartesia.
-    { engine: engines.tts, workspaceId, voiceId: activeAgent?.voiceId || '' },
+    // The FULL roster, not the active agent's voice alone: each incoming
+    // message picks its own voice by who POSTED it (messages.sender_id), so an
+    // agent that interrupts or posts a status update while someone else is
+    // "active" in the strip is still heard in its own voice, not the current
+    // speaker's. See voiceIdForSpeechItem in src/lib/huddleVoice.
+    { engine: engines.tts, workspaceId, roster: agents },
   );
 
   // While a reply is playing (and for a moment after), anything the microphone

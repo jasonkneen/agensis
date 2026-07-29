@@ -342,6 +342,55 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     return forked;
   }, [workspaceId]);
 
+  // Escalate a thread into an EXISTING channel: copy its top-level transcript
+  // in as a block, prefixed with a provenance marker, so the work is no longer
+  // stranded in a DM with no path to a channel/agent. Unlike splitSession this
+  // does not create a new session or lineage row — the target already exists
+  // and keeps its own history; the copy is additive.
+  const escalateSessionToChannel = useCallback(async (source: ChatSession, targetChannelId: string): Promise<boolean> => {
+    if (!workspaceId) return false;
+    if (!navigator.onLine) return false;
+
+    const { data: sourceMessages } = await backendClient
+      .from('messages')
+      .select('*')
+      .eq('session_id', source.id)
+      .order('created_at', { ascending: true });
+
+    const topLevel = channelMessages((sourceMessages || []) as Message[]);
+
+    const marker: Record<string, unknown> = {
+      id: crypto.randomUUID(),
+      session_id: targetChannelId,
+      role: 'user',
+      content: `— escalated from "${source.title || 'Untitled'}" —`,
+      created_at: new Date().toISOString(),
+      sender_kind: null,
+      sender_id: null,
+      sender_name: null,
+      attachments: [],
+    };
+    await backendClient.from('messages').insert([marker]);
+
+    if (topLevel.length > 0) {
+      // Same "every copy needs every key" caveat as splitSession above.
+      const copies = topLevel.map(m => ({
+        id: crypto.randomUUID(),
+        session_id: targetChannelId,
+        role: m.role,
+        content: m.content,
+        created_at: m.created_at,
+        sender_kind: m.sender_kind ?? null,
+        sender_id: m.sender_id ?? null,
+        sender_name: m.sender_name ?? null,
+        attachments: m.attachments ?? [],
+      }));
+      await backendClient.from('messages').insert(copies);
+    }
+
+    return true;
+  }, [workspaceId]);
+
   const updateSession = useCallback(async (id: string, updates: Partial<ChatSession>) => {
     const { data } = await backendClient
       .from('chat_sessions')
@@ -1016,6 +1065,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     loadEarlierMessages,
     createSession,
     splitSession,
+    escalateSessionToChannel,
     updateSession,
     patchSessionLocal,
     archiveSession,

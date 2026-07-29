@@ -43,6 +43,7 @@ function createAgentConnections(deps = {}) {
   parseJsonObject,
   publicAgentConnection,
   publicFarmEnrolledAgent,
+  rehomePendingPermissionRequests,
   rehomeRunningJobs,
   quoteIdent,
   reachFromMessage,
@@ -131,7 +132,17 @@ function createAgentConnections(deps = {}) {
   // here (superseded, deactivated, runtime_mismatch) has just told that daemon to
   // stop, and a released daemon treats it as terminal. Its jobs can never report
   // back, so they fail now rather than sitting through the reconnect grace window.
-  for (const entry of taken) await markConnectionOffline(entry.connectionId, { evicted: true });
+  //
+  // Permission requests are the one exception, and only under 'superseded': that
+  // reason means the SAME agent just registered a newer socket, which is what a
+  // half-open drop (laptop sleep, dead tunnel) looks like from here — the daemon
+  // holding those parked calls is very likely the one registering. So they are
+  // left alone for registerAgentConnection to re-home or expire a few lines
+  // later; it runs after this and knows which ones the daemon still holds.
+  const supersede = reason === 'superseded';
+  for (const entry of taken) {
+   await markConnectionOffline(entry.connectionId, { evicted: true, keepPermissionRequests: supersede });
+  }
   // A superseded connection is not merely offline, it has been REPLACED, so its
   // row goes now instead of sitting in the roster as a second copy of the same
   // agent until pruneOfflineConnections catches up 120s later. The other reasons
@@ -260,7 +271,8 @@ function createAgentConnections(deps = {}) {
   return markConnectionOffline(ws.agentConnectionId);
  }
 
- // How long a dropped connection's running jobs are held before they are failed.
+ // How long a dropped connection's running jobs and parked permission requests are
+ // held before they are given up on.
  //
  // A socket drop is not proof the work stopped. The daemon keeps executing the turn
  // and reconnects ~2s later; failing its jobs on the spot threw away turns that were
@@ -273,21 +285,43 @@ function createAgentConnections(deps = {}) {
  // failure for the same agent instead of racing it.
  const pendingJobFailures = new Map();
 
+ // Returns the connection ids whose cleanup was cancelled, because the caller then
+ // owns them: a registration that cancels this timer has taken responsibility for
+ // deciding what on those dead connections survives and what does not.
  function cancelPendingJobFailures(agentKey) {
-  if (!agentKey) return;
+  const cancelled = [];
+  if (!agentKey) return cancelled;
   for (const [connectionId, pending] of pendingJobFailures) {
    if (pending.agentKey !== agentKey) continue;
    clearTimeout(pending.timer);
    pendingJobFailures.delete(connectionId);
+   cancelled.push(connectionId);
   }
+  return cancelled;
  }
 
+ // Arm the grace-window cleanup for a connection that just dropped: fail what it
+ // was running, and expire what it had parked awaiting a human.
+ //
+ // Permission requests ride this timer instead of being expired inline on close,
+ // because close fires BEFORE the reconnect registers — so an inline expiry
+ // guaranteed there was nothing left to re-home by the time the daemon was back.
+ // Observed live: a request raised at 07:42:30 with a ten-minute TTL was dead at
+ // 07:43:59 with eight minutes still on it, purely because the socket blipped.
+ //
+ // They are NOT simply left to their own TTL. A daemon that never returns must
+ // stop offering the human a button reasonably promptly, and 45s is already this
+ // file's answer to "was that a blip?". A click inside the window is safe either
+ // way: deliverDecision only ever sends to the exact connection on the row, that
+ // id is no longer in connectedAgents, so the decision is refused with the
+ // existing 409 rather than being recorded against a daemon that cannot act.
  function scheduleConnectionJobFailure(connectionId, agentKey) {
   const existing = pendingJobFailures.get(connectionId);
   if (existing) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
    pendingJobFailures.delete(connectionId);
    void failConnectionJobs(connectionId, 'the daemon disconnected');
+   void expireConnectionPermissionRequests(connectionId);
   }, JOB_RECONNECT_GRACE_MS);
   timer.unref?.();
   pendingJobFailures.set(connectionId, { timer, agentKey });
@@ -303,7 +337,7 @@ function createAgentConnections(deps = {}) {
  // flip its row offline. Takes the id rather than the socket because a socket that
  // re-registers already points at its NEW connection id — deriving the id from the
  // socket there would offline the wrong (live) row and fail the wrong jobs.
- async function markConnectionOffline(connectionId, { evicted = false } = {}) {
+ async function markConnectionOffline(connectionId, { evicted = false, keepPermissionRequests = false } = {}) {
   if (!connectionId) return;
   const entry = connectedAgents.get(connectionId);
   const agentKey = entry ? `${entry.workspaceId}:${entry.agentId}` : null;
@@ -313,15 +347,19 @@ function createAgentConnections(deps = {}) {
    // Told to stop: nothing is coming back, so don't make the human wait out the
    // grace window for an answer that cannot arrive.
    void failConnectionJobs(connectionId, 'the daemon disconnected');
+   // `keepPermissionRequests` is the SUPERSEDE case only: a registration is in
+   // flight for this same agent right now, and it is about to re-home whatever
+   // that daemon re-asserted and expire the rest. Expiring here would run first
+   // and there would be nothing left for it to save. Every other eviction
+   // (deactivated, runtime_mismatch) really is terminal, so it expires now.
+   if (!keepPermissionRequests) void expireConnectionPermissionRequests(connectionId);
   } else {
    // An unexplained socket loss is NOT proof the work stopped — see
    // JOB_RECONNECT_GRACE_MS. A daemon that reconnects inside the window keeps its
    // turn; one that doesn't gets the same explicit failure it always did, 45s later.
+   // The parked permission requests are on that same timer, for the same reason.
    scheduleConnectionJobFailure(connectionId, agentKey);
   }
-  // The process that would have acted on an approval is gone; a card still
-  // offering Allow/Deny would be a button that does nothing.
-  void expireConnectionPermissionRequests(connectionId);
   try {
    const rows = await getDb().unsafe(
     `update agent_connections
@@ -622,11 +660,33 @@ function createAgentConnections(deps = {}) {
   // and point those still-running rows at the connection that now exists. Order
   // matters: cancel first, so the timer cannot fire between the re-home and the
   // cancel and kill a job we just adopted.
-  cancelPendingJobFailures(`${workspaceId}:${agentId}`);
+  const cancelledConnectionIds = cancelPendingJobFailures(`${workspaceId}:${agentId}`);
   const readopted = await rehomeRunningJobs(workspaceId, agentId, connectionId);
   if (readopted.length > 0) {
    console.log(`[agensis] @${handle} reconnected with ${readopted.length} job(s) still running; kept them alive on connection ${connectionId}`);
   }
+  // The same re-adoption for tool calls parked on a human's answer — but only the
+  // ones this daemon says it is STILL parked on. `permissionRequestIds` is the
+  // daemon's proof that the process holding those promises survived the blip;
+  // "the agent reconnected" on its own is not, because a restarted daemon looks
+  // identical here and would silently drop the decision after the UI recorded it.
+  const resumedRequests = await rehomePendingPermissionRequests({
+   workspaceId,
+   agentId,
+   connectionId,
+   requestKeys: message.permissionRequestIds,
+  });
+  if (resumedRequests.length > 0) {
+   console.log(`[agensis] @${handle} reconnected still parked on ${resumedRequests.length} permission request(s); moved them to connection ${connectionId}`);
+  }
+  // Everything left on the connections this reconnect just took over is
+  // unanswerable and must stop looking like an open question. This runs AFTER the
+  // re-home on purpose: the survivors already point at the live connection, so
+  // they are no longer matched by these connection ids. That ordering is the
+  // whole fix — expiring first is what left nothing to re-home.
+  const staleConnectionIds = new Set([...cancelledConnectionIds, ...superseded.map((entry) => entry.connectionId)]);
+  staleConnectionIds.delete(connectionId);
+  for (const staleId of staleConnectionIds) void expireConnectionPermissionRequests(staleId);
   // A daemon restart loses every live provider socket it was holding — the
   // WhatsApp companion session, the signal-cli process, the OpenClaw client.
   // Nothing else would ever bring them back, so a reconnect re-homes this
@@ -639,7 +699,17 @@ function createAgentConnections(deps = {}) {
     .catch((error) => console.error('resumeDaemonBridges failed', error));
   }
   void logConnectionActivity(connection, 'agent_connected');
-  sendWs(ws, { type: 'agent_registered', connection, agent: auth.agent });
+  // Tell the daemon exactly which of its parked requests survived, so both sides
+  // hold the same belief. A daemon that keeps parking on a request the server has
+  // given up on would hold its turn open until its own 10-minute TTL for an answer
+  // that can no longer arrive; naming the survivors lets it deny the rest at once.
+  // Absent from an older server's reply, which every daemon must read as "none".
+  sendWs(ws, {
+   type: 'agent_registered',
+   connection,
+   agent: auth.agent,
+   resumedPermissionRequests: resumedRequests.map((row) => String(row.request_key || '')).filter(Boolean),
+  });
  }
 
  // The "format we need" gate: stored capabilities must have the three array fields and a
