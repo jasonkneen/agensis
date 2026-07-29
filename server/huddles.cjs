@@ -288,8 +288,15 @@ function formatDuration(ms) {
  * `names` is optional because participant display names live in the event log
  * only when LiveKit's webhook delivered them; with none we still say the true
  * thing about how many people joined.
+ *
+ * `workContinuing` says an agent was still mid-turn when the call was hung up.
+ * Ending a huddle does not cancel its work — the turn runs on and its answer is
+ * carried into this channel when it lands (relayEndedHuddleWorkToChannel in
+ * server/agent-jobs.cjs) — but without saying so, hanging up looks like
+ * throwing the work away. Optional, so an older caller composes the same
+ * sentence it always did.
  */
-function huddleMarkerContent(state, names = []) {
+function huddleMarkerContent(state, names = [], { workContinuing = false } = {}) {
  if (!state) return '';
  const started = timeOf(state.startedAt);
  const ended = state.endedAt ? timeOf(state.endedAt) : 0;
@@ -306,6 +313,9 @@ function huddleMarkerContent(state, names = []) {
  } else if (joined > 0) {
   parts.push(`${joined} ${joined === 1 ? 'person' : 'people'} joined`);
  }
+ // Last, so the durable facts about the call read first and this reads as what
+ // it is: a note about what happens next.
+ if (workContinuing) parts.push('work continuing');
  return parts.join(' · ');
 }
 
@@ -922,7 +932,11 @@ function mountHuddleRoutes(app, deps = {}) {
    const state = foldHuddleState(huddle, events);
    const count = await transcriptMessageCount(huddle.transcript_session_id);
    if (!huddleLeftATrace(state, count)) return null;
-   const content = huddleMarkerContent(state, everJoinedNames(events));
+   // Read AFTER ended_at is set, so this is exactly "still running now that the
+   // call is over" — the state the sentence is describing.
+   const content = huddleMarkerContent(state, everJoinedNames(events), {
+    workContinuing: await agentBusyInHuddle(huddle),
+   });
    if (!content) return null;
    const rows = await getDb().unsafe(
     `insert into messages (session_id, role, content, message_kind, huddle_id, sender_kind, sender_name)

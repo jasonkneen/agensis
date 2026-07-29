@@ -526,9 +526,66 @@ function createAgentJobs(deps = {}) {
   // holds the real reply — which, on the day an agent opens one with "Thinking 5s",
   // would otherwise match the placeholder pattern and be deleted as debris.
   await clearStrandedPlaceholders(job, responseMessageId);
+  // Work asked for in a huddle outlives the call. If the huddle has since been
+  // hung up, this answer landed in a transcript session nobody is watching any
+  // more — so put it where the person who asked for it will actually see it.
+  void relayEndedHuddleWorkToChannel(job, content, senderName);
   void continueConversation({ workspaceId: job.workspace_id, sessionId: job.session_id, threadParentId })
    .catch((error) => console.error('continueConversation (job finalize) failed', error));
   return updatedRows[0] || null;
+ }
+
+ /**
+  * Carry a finished huddle turn back into the channel the huddle was called from.
+  *
+  * A huddle dispatches into its OWN transcript session (huddles.transcript_session_id),
+  * which is only on screen while the call is up. Ending the call therefore used to
+  * strand any turn still running: the job kept going and nothing cancelled it, but
+  * its answer landed in a closed room. The only trace was the channel marker's
+  * "Open transcript" link — so in practice the work was done and never read.
+  *
+  * The answer is copied VERBATIM rather than summarised or linked: it is the work
+  * product, and a pointer the reader has to click is how it got lost in the first
+  * place. `huddle_id` records where it came from; no message_kind, because this is
+  * an ordinary agent message in the channel and should read as one (the marker's
+  * own kind is what the client renders specially).
+  *
+  * Only for ENDED huddles — while the call is live the transcript panel is showing
+  * it already, and copying would double every answer.
+  *
+  * Best-effort: a turn that finished must not fail because its echo could not be
+  * written.
+  */
+ async function relayEndedHuddleWorkToChannel(job, content, senderName) {
+  try {
+   if (!job || !job.session_id || !content) return null;
+   const rows = await getDb().unsafe(
+    `select id, session_id from huddles
+        where transcript_session_id = $1 and ended_at is not null
+        order by ended_at desc limit 1`,
+    [job.session_id],
+   );
+   const huddle = rows[0];
+   // No row means this session is not a huddle transcript, or its huddle is still
+   // live. Either way there is nothing to carry.
+   if (!huddle || !huddle.session_id) return null;
+   // A huddle whose transcript IS its host channel (older huddles had no separate
+   // transcript session) would otherwise get the answer twice in one place.
+   if (huddle.session_id === job.session_id) return null;
+   const inserted = await getDb().unsafe(
+    `insert into messages (session_id, role, content, sender_kind, sender_id, sender_name, huddle_id)
+        values ($1, 'assistant', $2, 'agent', $3, $4, $5) returning *`,
+    [huddle.session_id, content, String(job.agent_id || ''), senderName, huddle.id],
+   );
+   if (inserted[0]) {
+    notifyDbSubscribers('messages', 'INSERT', inserted);
+    void logMessageActivity(inserted);
+   }
+   return inserted[0] || null;
+  } catch (error) {
+   console.warn('[agent-jobs] could not carry huddle work into the channel:', (error && error.message) || error);
+   return null;
+  }
  }
 
  function publicFarmAgentJob(job) {
