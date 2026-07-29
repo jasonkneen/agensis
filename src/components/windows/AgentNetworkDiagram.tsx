@@ -27,7 +27,6 @@ import {
   type MeshSource,
   type Spring,
 } from './agentMeshModel';
-import { AgentMeshMessages } from './AgentMeshMessages';
 
 interface AgentNetworkDiagramProps {
   agents: WorkspaceAgent[];
@@ -35,8 +34,6 @@ interface AgentNetworkDiagramProps {
   sessions?: ChatSession[];
   tasks?: Task[];
   workspaceName?: string;
-  workspaceId?: string | null;
-  currentUserId?: string | null;
   onSelectAgent?: (id: string) => void;
   /** A session node was activated — the window opens its chat beside the map. */
   onSelectSession?: (id: string) => void;
@@ -97,8 +94,6 @@ export function AgentNetworkDiagram({
   sessions = [],
   tasks = [],
   workspaceName = 'agensis',
-  workspaceId = null,
-  currentUserId = null,
   onSelectAgent,
   onSelectSession,
   selectedAgentId = null,
@@ -570,15 +565,6 @@ export function AgentNetworkDiagram({
         )}
       </div>
 
-      {view.popup && (
-        <AgentMeshMessages
-          target={view.popup}
-          workspaceId={workspaceId}
-          userId={currentUserId}
-          agents={agents}
-          onClose={() => goTo(drillOut(path))}
-        />
-      )}
     </div>
   );
 }
