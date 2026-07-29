@@ -13,6 +13,7 @@ import {
   AUTOMATION_EMPTY_NOTE,
   AUTOMATION_PERMISSION_NOTE,
   AUTOMATION_SAFETY_NOTE,
+  AUTOMATION_TASK_NOTE,
   AUTOMATION_UNAVAILABLE_NOTE,
   automationState,
   eventLabel,
@@ -58,6 +59,24 @@ const CONDITION_OPS = [
   { value: 'starts_with', label: 'starts with' },
 ];
 
+type StepAction = 'post_message' | 'create_task';
+
+/**
+ * The two actions, named by what a person gets rather than by the wire value.
+ *
+ * There is no third entry and no "dispatch an agent". Neither this list nor the
+ * server's is the other's authority — AUTOMATION_ACTIONS in
+ * shared/automation-rules.cjs rejects anything it does not know, so an option
+ * added only here fails on save rather than doing something unreviewed.
+ */
+const ACTION_CHOICES: Array<{ value: StepAction; label: string }> = [
+  { value: 'post_message', label: 'Post a message' },
+  { value: 'create_task', label: 'Create a task' },
+];
+
+/** Mirrors MAX_TASK_TITLE_LENGTH in shared/automation-rules.cjs. */
+const MAX_TASK_TITLE_LENGTH = 200;
+
 export function AutomationsWindowContent({ workspaceId, sessions }: AutomationsWindowProps) {
   const {
     automations, runs, loading, unavailable, error,
@@ -70,8 +89,11 @@ export function AutomationsWindowContent({ workspaceId, sessions }: AutomationsW
   const [watchChannelId, setWatchChannelId] = useState('');
   const [conditionOp, setConditionOp] = useState('contains');
   const [conditionValue, setConditionValue] = useState('');
+  const [stepAction, setStepAction] = useState<StepAction>('post_message');
   const [postChannelId, setPostChannelId] = useState('');
   const [postText, setPostText] = useState('');
+  const [taskTitle, setTaskTitle] = useState('');
+  const [taskDescription, setTaskDescription] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -97,26 +119,41 @@ export function AutomationsWindowContent({ workspaceId, sessions }: AutomationsW
     setWatchChannelId('');
     setConditionOp('contains');
     setConditionValue('');
+    setStepAction('post_message');
     setPostChannelId('');
     setPostText('');
+    setTaskTitle('');
+    setTaskDescription('');
     setFormError(null);
   };
 
   const handleCreate = async () => {
     setFormError(null);
     if (!name.trim()) { setFormError('Give the rule a name.'); return; }
-    if (!postChannelId) { setFormError('Choose the channel to post into.'); return; }
-    if (!postText.trim()) { setFormError('Write the message to post.'); return; }
+    if (stepAction === 'post_message') {
+      if (!postChannelId) { setFormError('Choose the channel to post into.'); return; }
+      if (!postText.trim()) { setFormError('Write the message to post.'); return; }
+    } else if (!taskTitle.trim()) {
+      setFormError('Give the task a title.'); return;
+    }
 
     const when: AutomationDefinition['when'] = [];
     if (watchChannelId) when.push({ field: 'channelId', op: 'equals', value: watchChannelId });
     if (conditionValue.trim()) when.push({ field: 'data.content', op: conditionOp, value: conditionValue.trim() });
 
+    // Only the fields the chosen action uses. The server rebuilds the step from
+    // its own allowlist anyway, so sending the other action's fields would just
+    // be dropped — but building the exact step keeps what is stored equal to
+    // what the form showed.
+    const step: AutomationDefinition['steps'][number] = stepAction === 'post_message'
+      ? { action: 'post_message', channelId: postChannelId, text: postText.trim() }
+      : { action: 'create_task', title: taskTitle.trim(), description: taskDescription.trim() };
+
     const definition: AutomationDefinition = {
       version: 1,
       trigger: { event: triggerEvent },
       when,
-      steps: [{ action: 'post_message', channelId: postChannelId, text: postText.trim() }],
+      steps: [step],
     };
 
     setSaving(true);
@@ -225,21 +262,62 @@ export function AutomationsWindowContent({ workspaceId, sessions }: AutomationsW
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <span className="text-xs text-muted-foreground">Then post into</span>
-            <NativeSelect value={postChannelId} onChange={event => setPostChannelId(event.target.value)}>
-              <NativeSelectOption value="">Choose a channel</NativeSelectOption>
-              {channels.map(channel => (
-                <NativeSelectOption key={channel.id} value={channel.id}>{channel.title || 'Untitled'}</NativeSelectOption>
+            <span className="text-xs text-muted-foreground">Then</span>
+            <NativeSelect
+              aria-label="What the rule does"
+              value={stepAction}
+              onChange={event => setStepAction(event.target.value as StepAction)}
+            >
+              {ACTION_CHOICES.map(choice => (
+                <NativeSelectOption key={choice.value} value={choice.value}>{choice.label}</NativeSelectOption>
               ))}
             </NativeSelect>
           </div>
 
-          <Textarea
-            rows={3}
-            placeholder="Heads up — someone reported a failed deploy."
-            value={postText}
-            onChange={event => setPostText(event.target.value)}
-          />
+          {stepAction === 'post_message' ? (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs text-muted-foreground">Post into</span>
+                <NativeSelect value={postChannelId} onChange={event => setPostChannelId(event.target.value)}>
+                  <NativeSelectOption value="">Choose a channel</NativeSelectOption>
+                  {channels.map(channel => (
+                    <NativeSelectOption key={channel.id} value={channel.id}>{channel.title || 'Untitled'}</NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </div>
+
+              <Textarea
+                rows={3}
+                placeholder="Heads up — someone reported a failed deploy."
+                value={postText}
+                onChange={event => setPostText(event.target.value)}
+              />
+            </>
+          ) : (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs text-muted-foreground">Called</span>
+                <Input
+                  placeholder="Look into the failed deploy"
+                  value={taskTitle}
+                  maxLength={MAX_TASK_TITLE_LENGTH}
+                  onChange={event => setTaskTitle(event.target.value)}
+                />
+              </div>
+              <Textarea
+                rows={3}
+                placeholder="What needs doing, and anything useful from the message. Optional."
+                value={taskDescription}
+                onChange={event => setTaskDescription(event.target.value)}
+              />
+              {/* Stated where the choice is made, not only in the panel note.
+                  "It creates a task" invites the assumption that it also gives
+                  it to someone, which is the one thing it deliberately does
+                  not do — an assignee is what starts an agent, and an
+                  automation must not be able to. */}
+              <p className="text-xs text-muted-foreground">{AUTOMATION_TASK_NOTE}</p>
+            </>
+          )}
 
           {formError && <div className="text-xs text-destructive">{formError}</div>}
 

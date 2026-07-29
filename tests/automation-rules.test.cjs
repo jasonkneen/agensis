@@ -28,6 +28,8 @@ const {
  MAX_STEPS,
  MAX_CONDITIONS,
  MAX_INTERPOLATED_LENGTH,
+ MAX_TEXT_LENGTH,
+ MAX_TASK_TITLE_LENGTH,
  readField,
  evaluateConditions,
  interpolate,
@@ -96,10 +98,73 @@ test('the field, op and action allowlists are closed sets', () => {
  // ReDoS primitive.
  assert.equal(AUTOMATION_OPS.has('matches'), false);
  assert.equal(AUTOMATION_OPS.has('regex'), false);
- // v1 has exactly one action, and the absence of dispatch_agent is what makes
- // unbounded agent-job fan-out impossible by construction.
- assert.deepEqual([...AUTOMATION_ACTIONS], ['post_message']);
+ // Two actions, and the ABSENCE of dispatch_agent is what makes unbounded
+ // agent-job fan-out impossible by construction. Both of these write a row and
+ // neither can start a turn, so the set stays free of model calls.
+ assert.deepEqual([...AUTOMATION_ACTIONS], ['post_message', 'create_task']);
  assert.equal(AUTOMATION_ACTIONS.has('dispatch_agent'), false);
+});
+
+test('a create_task step cannot carry an assignee, however it is written', () => {
+ // THE SAFETY PROPERTY OF create_task, and the reason it is a property of the
+ // SHAPE rather than of the runner: validateDefinition REBUILDS each step from
+ // an allowlist, so a definition that names an assignee (or a status, or a
+ // priority) has those keys dropped before anything is stored. Even a runner
+ // that later read `step.assigneeId` would find nothing, because no stored
+ // definition can contain one.
+ //
+ // MUTATION: change the create_task branch to `steps.push({ ...step })` -> the
+ // extra keys survive and this fails.
+ const result = validateDefinition({
+  version: 1,
+  trigger: { event: 'message.created' },
+  steps: [{
+   action: 'create_task',
+   title: 'Look into the failed deploy',
+   description: 'from {{data.content}}',
+   assigneeId: 'agent-1',
+   assignee_id: 'agent-1',
+   status: 'in_progress',
+   priority: 'urgent',
+  }],
+ }, { allowedEvents: ['message.created'] });
+
+ assert.equal(result.ok, true, result.errors.join('; '));
+ assert.deepEqual(result.definition.steps, [{
+  action: 'create_task',
+  title: 'Look into the failed deploy',
+  description: 'from {{data.content}}',
+ }]);
+ assert.deepEqual(Object.keys(result.definition.steps[0]).sort(), ['action', 'description', 'title']);
+});
+
+test('a create_task step needs a title, and the title is capped', () => {
+ const missing = validateDefinition({
+  version: 1,
+  trigger: { event: 'message.created' },
+  steps: [{ action: 'create_task', description: 'no title' }],
+ }, { allowedEvents: ['message.created'] });
+ assert.equal(missing.ok, false);
+ assert.match(missing.errors.join(' '), /steps\[0\]\.title is required/);
+
+ // A whitespace-only title is not a title. Without this, `tasks.title` NOT NULL
+ // is satisfied by "   " and a blank row lands on somebody's board.
+ const blank = validateDefinition({
+  version: 1,
+  trigger: { event: 'message.created' },
+  steps: [{ action: 'create_task', title: '   ' }],
+ }, { allowedEvents: ['message.created'] });
+ assert.equal(blank.ok, false);
+
+ // MAX_TASK_TITLE_LENGTH, not MAX_TEXT_LENGTH: a title is one row in a list.
+ const long = validateDefinition({
+  version: 1,
+  trigger: { event: 'message.created' },
+  steps: [{ action: 'create_task', title: 'x'.repeat(5000) }],
+ }, { allowedEvents: ['message.created'] });
+ assert.equal(long.ok, true, long.errors.join('; '));
+ assert.equal(long.definition.steps[0].title.length, MAX_TASK_TITLE_LENGTH);
+ assert.ok(MAX_TASK_TITLE_LENGTH < MAX_TEXT_LENGTH);
 });
 
 // --- conditions --------------------------------------------------------------

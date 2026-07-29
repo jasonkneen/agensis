@@ -2022,13 +2022,19 @@ async function ensureRuntimeSchema() {
  // CHECK is dropped and re-added rather than altered (Postgres has no ALTER
  // CONSTRAINT for CHECK); the name is deterministic for both an inline column
  // check and this statement, so it stays idempotent across re-runs.
+ //
+ // 'automation' joined it for the automations `create_task` action. Widening a
+ // CHECK is safe on a populated table BECAUSE IT ONLY ADDS a permitted value —
+ // every existing row already satisfies the wider predicate, so the validation
+ // scan Postgres runs on ADD CONSTRAINT cannot fail. Narrowing this list later
+ // is the dangerous direction and would need a data migration first.
  await db.unsafe(`
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_system boolean NOT NULL DEFAULT false;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_workspaces_system ON workspaces (is_system) WHERE is_system;
 
     ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_source_type_check;
     ALTER TABLE tasks ADD CONSTRAINT tasks_source_type_check
-      CHECK (source_type IN ('manual', 'chat', 'document', 'canvas', 'ai', 'feedback'));
+      CHECK (source_type IN ('manual', 'chat', 'document', 'canvas', 'ai', 'feedback', 'automation'));
 
     CREATE TABLE IF NOT EXISTS feedback_reports (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

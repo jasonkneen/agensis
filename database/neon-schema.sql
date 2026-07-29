@@ -1360,12 +1360,16 @@ CREATE INDEX IF NOT EXISTS idx_messages_huddle ON messages(huddle_id) WHERE hudd
 ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_system boolean NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_workspaces_system ON workspaces (is_system) WHERE is_system;
 
--- 'feedback' provenance. Dropped and re-added because Postgres has no ALTER for
--- a CHECK constraint; the name is deterministic (matching the inline column
--- check above), so re-running this file is idempotent.
+-- 'feedback' and 'automation' provenance. Dropped and re-added because Postgres
+-- has no ALTER for a CHECK constraint; the name is deterministic (matching the
+-- inline column check above), so re-running this file is idempotent.
+--
+-- Widening is safe on a populated table because it only ADDS permitted values:
+-- every existing row already satisfies the wider predicate, so the validation
+-- scan on ADD CONSTRAINT cannot fail. Narrowing would need a data migration.
 ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_source_type_check;
 ALTER TABLE tasks ADD CONSTRAINT tasks_source_type_check
-  CHECK (source_type IN ('manual', 'chat', 'document', 'canvas', 'ai', 'feedback'));
+  CHECK (source_type IN ('manual', 'chat', 'document', 'canvas', 'ai', 'feedback', 'automation'));
 
 -- The bulky half of a report. Kept out of `tasks` deliberately: task rows are
 -- fanned out over realtime to every workspace client, and a few hundred console

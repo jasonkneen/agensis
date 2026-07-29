@@ -1,5 +1,18 @@
 [
   {
+    "version": "automations-create-task",
+    "date": "2026-07-30",
+    "title": "A rule can now raise a task, not just post about it",
+    "summary": "Automations could post a message and nothing else, which meant the useful half of \"when a deploy fails, do something about it\" ended as a line in a channel that scrolled away. A rule can now create a task instead. Pick Create a task in the rule form, give it a title and optionally some detail, and every time the rule fires a task appears on the board with the message text filled in wherever you asked for it. The task is created UNASSIGNED and stays that way until a person picks it up or hands it to someone, and that is deliberate rather than unfinished: giving work to an agent is what starts the agent running, so a rule that could assign would be a rule that could spend money on its own. Everything else about automations is unchanged — a rule still cannot wake an agent, start a conversation or cost you anything however often it fires, and a task a rule created can never set another rule off.",
+    "highlights": [
+      "Choose Post a message or Create a task when you write a rule",
+      "The task title and detail can pull in the message that triggered the rule",
+      "Tasks arrive unassigned — a rule cannot give work to an agent, by design",
+      "Still no way for a rule to wake an agent or spend a token",
+      "A task a rule created cannot trigger another rule"
+    ]
+  },
+  {
     "version": "conversation-access",
     "date": "2026-07-30",
     "title": "You can now see, and change, who can read a direct message",

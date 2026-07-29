@@ -53,6 +53,13 @@ const MAX_TEXT_LENGTH = 4000;
  * triggering message into a 20k echo.
  */
 const MAX_INTERPOLATED_LENGTH = 500;
+/**
+ * A task TITLE is a single line in a list, not a body. Capped well below
+ * MAX_TEXT_LENGTH because the tasks board renders titles on one row, and a 4000
+ * character title made from `{{data.content}}` would be a wall of text where a
+ * name should be. The description takes MAX_TEXT_LENGTH like any other body.
+ */
+const MAX_TASK_TITLE_LENGTH = 200;
 
 /**
  * The fields a condition may read, as a Map from the authored string to a reader.
@@ -102,13 +109,23 @@ const AUTOMATION_OPS = new Map([
 const UNARY_OPS = new Set(['is_empty', 'is_not_empty']);
 
 /**
- * Actions. v1 has exactly one, and the omissions are the safety property.
+ * Actions. Two of them, and the OMISSIONS are the safety property.
  *
  * `post_message` inserts a message and notifies subscribers. It does NOT call
  * continueConversation, so it does not advance the conversation and does not
  * wake any agent -- exactly the semantics the MCP `post_message` tool already
  * documents ("Pure speak -- it does NOT trigger other agents to respond").
  * That is what makes an automation run cost zero model calls.
+ *
+ * `create_task` inserts a `tasks` row and notifies subscribers, and it keeps
+ * the same property BY SHAPE rather than by care: THE STEP HAS NO ASSIGNEE
+ * FIELD. Dispatch is triggered by an assignee, and it is triggered in the
+ * /backend/db/insert route -- not by a database trigger -- so an automation
+ * that inserts directly could not dispatch even if it named one. The missing
+ * field is the belt to that braces: a later refactor that moved dispatch onto
+ * the table itself would still find nothing to dispatch to, because no stored
+ * definition can carry an assignee. Do not add one. "Create the task, a human
+ * assigns it" is the whole design.
  *
  * There is deliberately NO `dispatch_agent` here. With no action that can start
  * an agent turn, unbounded agent-job fan-out is impossible BY CONSTRUCTION
@@ -117,7 +134,18 @@ const UNARY_OPS = new Set(['is_empty', 'is_not_empty']);
  * it inherits the one-active-job index, the turn budget and the conversation
  * lock -- and the run-time re-check of the author's role becomes mandatory.
  */
-const AUTOMATION_ACTIONS = new Set(['post_message']);
+const AUTOMATION_ACTIONS = new Set(['post_message', 'create_task']);
+
+/**
+ * `tasks.source_type` for a task an automation made.
+ *
+ * The column has a CHECK constraint, so this string exists in four places that
+ * must agree: here, ensureRuntimeSchema in server/index.cjs, database/
+ * neon-schema.sql, and a migration under supabase/migrations. A value this
+ * module allows but the constraint rejects would fail the INSERT at run time,
+ * where it shows up as a dead-lettered run rather than a validation error.
+ */
+const AUTOMATION_TASK_SOURCE_TYPE = 'automation';
 
 function norm(value) {
  if (value === null || value === undefined) return '';
@@ -269,6 +297,18 @@ function validateDefinition(input, { allowedEvents = [] } = {}) {
     if (!channelId) { fail(errors, `steps[${index}].channelId is required`); return; }
     if (!text.trim()) { fail(errors, `steps[${index}].text is required`); return; }
     steps.push({ action, channelId, text });
+    return;
+   }
+   if (action === 'create_task') {
+    const title = cleanText(step.title, MAX_TASK_TITLE_LENGTH);
+    const description = cleanText(step.description);
+    if (!title.trim()) { fail(errors, `steps[${index}].title is required`); return; }
+    // REBUILT, not spread. Only `title` and `description` survive, so an
+    // `assigneeId` (or a `status`, or a `priority`) typed into the JSON is
+    // dropped here and can never reach the stored definition -- which is what
+    // keeps "an automation cannot wake an agent" a property of the shape
+    // rather than a promise the runner has to keep. See AUTOMATION_ACTIONS.
+    steps.push({ action, title, description });
    }
   });
  }
@@ -343,6 +383,8 @@ function renderDefinitionYaml(definition) {
    lines.push(`  - action: ${yamlScalar(step.action)}`);
    if (step.channelId !== undefined) lines.push(`    channelId: ${yamlScalar(step.channelId)}`);
    if (step.text !== undefined) lines.push(`    text: ${yamlScalar(step.text)}`);
+   if (step.title !== undefined) lines.push(`    title: ${yamlScalar(step.title)}`);
+   if (step.description !== undefined) lines.push(`    description: ${yamlScalar(step.description)}`);
   }
  }
  return `${lines.join('\n')}\n`;
@@ -353,10 +395,12 @@ module.exports = {
  AUTOMATION_FIELDS,
  AUTOMATION_OPS,
  AUTOMATION_ACTIONS,
+ AUTOMATION_TASK_SOURCE_TYPE,
  UNARY_OPS,
  MAX_STEPS,
  MAX_CONDITIONS,
  MAX_TEXT_LENGTH,
+ MAX_TASK_TITLE_LENGTH,
  MAX_INTERPOLATED_LENGTH,
  readField,
  evaluateConditions,
