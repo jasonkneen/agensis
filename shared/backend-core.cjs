@@ -86,6 +86,15 @@ const ALLOWED_TABLES = new Set([
  // 'allowed' via /backend/db/update would show "Approved" under a tool call
  // that never ran.
  'agent_permission_requests',
+ // Workspace automations. READ through the generic /db path so the list and the
+ // run history go live over the same realtime db_changes subscription every
+ // other table uses. Every WRITE is gated to 'manage' below and goes through
+ // /backend/workspaces/:id/automations instead — that route is the only place a
+ // definition is VALIDATED, and an unvalidated row is the whole problem: a
+ // forged automation is a standing grant to write into the workspace on an
+ // event, available to anyone who could reach /backend/db/insert.
+ 'automations',
+ 'automation_runs',
 ]);
 
 // F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
@@ -126,6 +135,8 @@ const JSON_COLUMNS_BY_TABLE = {
  // reused as-is for tasks since the column is generic.
  tasks: new Set(['attachments']),
  feedback_reports: new Set(['page', 'selections', 'diagnostics']),
+ automations: new Set(['definition']),
+ automation_runs: new Set(['payload', 'steps']),
 };
 
 // Columns that are Postgres native arrays (NOT jsonb). The generic /backend/db
@@ -167,6 +178,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  'agent_schedules', 'agent_schedule_runs', 'activity_event_comments',
  'huddles', 'huddle_events', 'feedback_reports', 'orb_deliveries',
  'agent_permission_requests', 'thread_harvests',
+ 'automations', 'automation_runs',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -230,6 +242,19 @@ const DB_TABLE_ACCESS = {
  // from a discarded thread, so a client-forged row would put words a model never
  // produced in front of a human as a suggestion to accept.
  thread_harvests: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // Read-only to the client, and this one is load-bearing rather than tidy. An
+ // automations row is a STANDING grant: whenever its trigger event fires, the
+ // server writes into the workspace on the author's behalf, with no human in
+ // the loop. A client-forged row would therefore be an automation primitive
+ // available to anyone who can reach /backend/db/insert — strictly stronger
+ // than the 'write' capability they hold. Writes go through
+ // /backend/workspaces/:id/automations, which is the only place the definition
+ // is VALIDATED against the field/op/action allowlists.
+ automations: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // Written only by the engine. A client-forged run row would claim an
+ // automation did something it never did; a client DELETE would erase the
+ // record that it did.
+ automation_runs: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  thread_items: DEFAULT_TABLE_ACCESS,
@@ -1752,6 +1777,15 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  'agent.connect_token_minted',
  'vault.secret_set',
  'vault.secret_deleted',
+ // Authoring an automation is a STANDING grant to write into the workspace
+ // whenever an event matches — the same class of thing as an agent_webhook, and
+ // the reason both are manage-gated. "Who turned this on" is a different
+ // question from "who edited it", so enable/disable is its own action.
+ 'automation.created',
+ 'automation.updated',
+ 'automation.deleted',
+ 'automation.enabled',
+ 'automation.disabled',
 ]));
 
 /** What an unrecognised action records as, rather than throwing in production. */

@@ -46,6 +46,65 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
 
 ## Recent cross-cutting features (2026-07)
 
+- **Workspace automations** (`automations`, `automation_runs`) — "when X happens
+  inside agensis, do Y inside agensis", without a code change. Engine:
+  `server/automations.cjs`. Evaluator (pure, no db):
+  `shared/automation-rules.cjs`. **Behind `AGENSIS_AUTOMATIONS=1`; off by
+  default.** Things to know before touching it:
+  - **This is ONE CELL of a matrix, not a fourth engine.** Three automation
+    systems already exist and each hardcodes one axis: `agent_schedules` is
+    time -> wake an agent, `agent_webhooks` is inbound HTTP -> wake an agent,
+    `flow_connections` is workspace event -> POST to an external URL. All three
+    end in a paid model turn or an outbound request. Automations fill the only
+    uncovered cell: event-triggered with an INTERNAL, deterministic action. None
+    of the three is modified, and `flow_connections` is deliberately NOT renamed
+    or absorbed — it is the outbound edge and it already does signed delivery,
+    idempotency, retry classification and an SSRF guard properly.
+  - **The value is determinism, not authoring.** Before this, the only thing in
+    the product that could decide anything was a language model. "If a message
+    here says 'deploy failed', post to #urgent" now costs zero model calls and
+    gives the same answer every time.
+  - **There is no `dispatch_agent` action, on purpose.** v1's only action is
+    `post_message`, which inserts a message and notifies subscribers but never
+    calls `continueConversation` — so it wakes nobody and an automation run
+    cannot spend tokens. That makes unbounded agent-job fan-out impossible BY
+    CONSTRUCTION rather than bounded by a limiter someone could raise. If you
+    add `dispatch_agent`, it MUST go through `continueConversation` (never a
+    direct `agent_jobs` insert) so it inherits the one-active-job index, the
+    turn budget and the conversation lock — and re-checking the author's role at
+    RUN time becomes mandatory, not advisory.
+  - **The cycle brake is carried by the data.** A message an automation produced
+    has `sender_kind='automation'`, and the matcher skips those, so automations
+    cannot chain — including the two-automation cycle (A posts, B fires on A and
+    posts, A fires on B) that a per-automation self-exclusion check would miss.
+    This is why there is no `depth` column on `messages`: a flat "automations do
+    not chain" rule needs no schema change to the hottest table in the product.
+    Relaxing it means adding that column, and the cycle risk comes back with it.
+  - **The drain is BOUNDED per tick** on the shared 30s reaper interval, for the
+    same reason `thread-harvest.cjs` bounds its own: everything on that interval
+    runs serially, so an unbounded drain would stall the job reapers behind it.
+    The bound is the invariant; the number is tuned to what the action costs.
+    Latency is therefore up to 30s — if that becomes a complaint, the fix is a
+    sibling 1s worker like `flowDeliveryWorker`, not removing the bound.
+  - **Definitions are JSON. YAML is rendered, never parsed.** YAML's silent
+    coercions (`on:` -> true, an unquoted `1.0` -> float) do not throw; they
+    produce a different valid document that runs the wrong step. There is no
+    YAML parser in this repo and adding one would mean third-party parsing of
+    `manage`-supplied text on the Fly machine for no capability gain.
+  - **Conditions are not a language and must not become one.** A closed field
+    allowlist (a `Map` to reader functions, never a path walker), seven string
+    ops, no regex (user regex over user content is a ReDoS primitive), no OR, no
+    nesting, no arithmetic. Any addition is a visible diff to one list with a
+    test enumerating it.
+  - **`manage` on every write**, because an automation is a STANDING grant to act
+    without a human — `run_agents` is "you may run something now". Rows are
+    read-only to clients through `/backend/db` (same shape as `agent_schedules`),
+    so the dedicated route stays the only place a definition is validated. Create,
+    update, delete, enable and disable all write to the audit log.
+  - **The flag gates execution, not a button.** The enqueue hook, the worker and
+    the routes all check `AGENSIS_AUTOMATIONS`. A flag that only hid the UI would
+    still run automations.
+
 - **The audit log** (`audit_log`) — a durable, SERVER-AUTHORED record of the
   privileged actions that previously left no trace anywhere: role changes, member
   removal, invites, `permission_mode` flips (including `yolo`), permanent tool

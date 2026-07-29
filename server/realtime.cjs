@@ -31,6 +31,9 @@ function createRealtime(deps = {}) {
   enforceDbOperationAccess,
   enforceWorkspaceRole,
   enqueueFlowWebhookEvents,
+  // Optional so the existing realtime tests can build this without one; the
+  // engine itself no-ops when AGENSIS_AUTOMATIONS is off.
+  enqueueAutomationRuns = async () => [],
   ensureTable,
   forbidden,
   handleAgentCapabilitiesSync,
@@ -227,6 +230,16 @@ function createRealtime(deps = {}) {
 
   void enqueueFlowWebhookEvents(table, eventType, rowList).catch((error) => {
    console.error('[flows] failed to queue webhook event:', error.message || error);
+  });
+
+  // Workspace automations, alongside the outbound webhook enqueue and with the
+  // same failure posture: fire-and-forget, caught and logged. An automation that
+  // cannot be queued must never cost the user the write that triggered it.
+  // Enqueue only ever INSERTS a queue row — execution is the bounded 30s drain
+  // in server/automations.cjs, so this chokepoint (every workspace write in the
+  // product passes through it) stays fast.
+  void enqueueAutomationRuns(table, eventType, rowList).catch((error) => {
+   console.error('[automations] failed to queue run:', error.message || error);
   });
 
   if (table === 'workspace_agents') {

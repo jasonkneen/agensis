@@ -15,7 +15,11 @@ const {
  flowWebhookRetryDecision,
  normalizeFlowWebhookUrl,
  signFlowWebhook,
+ // The event vocabulary. One list, two consumers: outbound webhook connections
+ // ("who wants to know") and automations ("what should happen").
+ FLOW_EVENTS,
 } = require('./flow-integration.cjs');
+const { createAutomations, mountAutomationRoutes } = require('./automations.cjs');
 // Reactions are written through the generic /backend/db/update route as a whole
 // jsonb map, so their flow events come from diffing that map — see the module
 // header. Shared with netlify/functions/backend.mjs; the two lanes differ only
@@ -823,6 +827,74 @@ async function ensureRuntimeSchema() {
     -- retry) must not stack a second pending row or bill a second model call.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_harvests_one_open
       ON thread_harvests(session_id) WHERE status IN ('pending', 'running');
+
+    -- Workspace automations: "when X happens inside agensis, do Y inside
+    -- agensis", without a code change. See server/automations.cjs for the
+    -- engine and shared/automation-rules.cjs for the evaluator.
+    --
+    -- This is the one cell of the trigger/action matrix none of the three
+    -- existing systems cover: agent_schedules is time -> wake an agent,
+    -- agent_webhooks is inbound HTTP -> wake an agent, flow_connections is
+    -- workspace event -> POST to an external URL. All three end in a model call
+    -- or an outbound request. An automation ends in a deterministic internal
+    -- write, which is why it can decide something for zero cost.
+    --
+    -- enabled defaults to FALSE. A definition that starts live means the first
+    -- thing a mistyped condition does is fire on everything, and the author
+    -- finds out from the channel rather than from the form.
+    --
+    -- trigger_event is denormalised out of the definition so the matcher's only
+    -- query is a partial-index lookup rather than a jsonb scan on every write.
+    CREATE TABLE IF NOT EXISTS automations (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      name text NOT NULL DEFAULT '',
+      description text NOT NULL DEFAULT '',
+      enabled boolean NOT NULL DEFAULT false,
+      trigger_event text NOT NULL,
+      definition jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_by uuid,
+      run_count integer NOT NULL DEFAULT 0,
+      fail_count integer NOT NULL DEFAULT 0,
+      last_run_at timestamptz,
+      last_status text NOT NULL DEFAULT '',
+      -- Set by the runaway guard. A tripped automation stays off until a human
+      -- clears it, and this column is why the UI can say WHY it stopped.
+      disabled_reason text NOT NULL DEFAULT '',
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_automations_workspace ON automations(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_automations_trigger ON automations(workspace_id, trigger_event) WHERE enabled;
+
+    -- One row per (automation, triggering event). The QUEUE and the history.
+    CREATE TABLE IF NOT EXISTS automation_runs (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      automation_id uuid NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      -- Stable per triggering row+version, the same shape as the flow webhook
+      -- event id, so a retried write cannot enqueue the same run twice.
+      event_id text NOT NULL,
+      event_type text NOT NULL,
+      status text NOT NULL DEFAULT 'pending',
+      attempt_count integer NOT NULL DEFAULT 0,
+      claim_token uuid,
+      lease_expires_at timestamptz,
+      -- The projected event the run saw, so a run stays readable after the
+      -- source row has changed or been deleted.
+      payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+      steps jsonb NOT NULL DEFAULT '[]'::jsonb,
+      error text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    -- Idempotent enqueue. This index IS the deduplication.
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_runs_event
+      ON automation_runs(automation_id, event_id);
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_pending ON automation_runs(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_workspace ON automation_runs(workspace_id, created_at DESC);
+    -- The per-automation rate window counts rows in an interval.
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_recent ON automation_runs(automation_id, created_at DESC);
 
     ALTER TABLE documents ADD COLUMN IF NOT EXISTS folder text DEFAULT 'General';
     ALTER TABLE documents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
@@ -6812,6 +6884,31 @@ const { queueThreadHarvest, runDueThreadHarvests, listThreadHarvests, decideHarv
  badRequest,
 });
 
+// Workspace automations — the event-triggered/internal-action cell that
+// agent_schedules, agent_webhooks and flow_connections between them leave
+// uncovered. See server/automations.cjs for why it is not a fourth engine.
+//
+// The event vocabulary is INJECTED rather than extracted into a shared module.
+// FLOW_EVENT_BY_CHANGE drives live outbound webhooks for anyone using the Flows
+// integration, and a refactor that silently dropped an entry would stop their
+// automation with nothing failing; passing the same objects in gives both
+// consumers one map at no risk to the shipped path.
+const {
+ enqueueAutomationRuns, runDueAutomations, sweepAutomationRuns,
+ listAutomations, listAutomationRuns,
+ createAutomation, updateAutomation, deleteAutomation,
+} = createAutomations({
+ getDb: () => getDb(),
+ notifyDbSubscribers: (...a) => notifyDbSubscribers(...a),
+ enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
+ flowEventByChange: FLOW_EVENT_BY_CHANGE,
+ flowEvents: FLOW_EVENTS,
+ publicFlowEventRecord: (...a) => publicFlowEventRecord(...a),
+ flowEventLocation: (...a) => flowEventLocation(...a),
+ recordAudit: (...a) => recordAudit(...a),
+ onWarn: (message) => console.warn('[automations]', message),
+});
+
 // Agent jobs hold no in-process state — a job's liveness is a database fact, so
 // a restart cannot lose it. See server/agent-jobs.cjs.
 const agentJobs = createAgentJobs({
@@ -6938,6 +7035,7 @@ const voiceRelay = createVoiceRelay();
 // binding here — see server/realtime.cjs.
 const realtime = createRealtime({
  enforceDbOperationAccess, enforceWorkspaceRole, enqueueFlowWebhookEvents,
+ enqueueAutomationRuns,
  ensureTable, forbidden, agentTokenFromWsRequest, VAULT_SECRET_COLUMNS,
  handleAgentCapabilitiesSync,
  handleAgentJobDelta, handleAgentJobResult, handleAgentJobSegment,
@@ -7199,6 +7297,14 @@ function createApp() {
  // client write, for the same reason thread_harvests is read-only to clients:
  // the request names which proposal, never what gets written into memory.
  mountThreadHarvestRoutes(app, { ...coreDeps(), listThreadHarvests, decideHarvestFinding });
+
+ // Automations. Every write is 'manage' (a standing grant to act without a
+ // human), list and history are 'read'. The routes are behind the same
+ // AGENSIS_AUTOMATIONS flag as the worker, so the feature cannot be half-on.
+ mountAutomationRoutes(app, {
+  ...coreDeps(),
+  listAutomations, listAutomationRuns, createAutomation, updateAutomation, deleteAutomation,
+ });
  mountInboxRoutes(app, { ...coreDeps(), INBOX_DEFAULT_LIMIT, INBOX_FILTERS, INBOX_MAX_LIMIT, THREAD_INBOX_DEFAULT_LIMIT, buildInboxSql, buildThreadInboxSql, inboxMentionHandle, inboxMentionPattern, toInboxItem, toThreadInboxItem });
  mountLinkPreviewsRoutes(app, { ...coreDeps(), LINK_PREVIEW_COLUMNS, LINK_PREVIEW_MAX_PER_REQUEST, fetchLinkPreview, fetchPreviewImage, linkPreviewCacheKey, linkPreviewDbRateLimiter, linkPreviewImageDbRateLimiter, linkPreviewImageRateLimiter, linkPreviewRateLimiter, normalizeUnfurlUrl, publicLinkPreview, upsertLinkPreview });
  mountFeedbackRoutes(app, {
@@ -7682,7 +7788,12 @@ function startBackendServer(port = DEFAULT_PORT) {
  });
  void reconcileAgentConnectionsAtStartup();
  void reconcileSchedulesAtStartup();
- const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void expireStalePermissionRequests(); void pruneOfflineConnections(); pruneExpiredPeerTickets(); void runDueSchedules(); void runDueThreadHarvests(); }, 30_000);
+ // Automations ride the same 30s reaper tick as schedules and thread harvests,
+ // and the drain is BOUNDED per tick for the same reason theirs are: everything
+ // on this interval runs serially, so an unbounded drain would let one backlog
+ // stall the job reapers behind it. sweepAutomationRuns reclaims runs whose
+ // lease expired because the process died mid-run.
+ const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void expireStalePermissionRequests(); void pruneOfflineConnections(); pruneExpiredPeerTickets(); void runDueSchedules(); void runDueThreadHarvests(); void sweepAutomationRuns(); void runDueAutomations(); }, 30_000);
  if (jobReaper.unref) jobReaper.unref();
  let flowDeliveryRunning = false;
  const flowDeliveryWorker = setInterval(() => {

@@ -379,6 +379,64 @@ CREATE TABLE IF NOT EXISTS flow_webhook_deliveries (
 );
 CREATE INDEX IF NOT EXISTS idx_flow_deliveries_due ON flow_webhook_deliveries(status, next_attempt_at);
 
+-- Workspace automations: "when X happens inside agensis, do Y inside agensis",
+-- without a code change. Engine: server/automations.cjs. Evaluator (pure):
+-- shared/automation-rules.cjs.
+--
+-- Distinct from flow_connections directly above, and deliberately a different
+-- word: a flow connection is OUTBOUND (a workspace event POSTed to an external
+-- URL for the Flows product). An automation is INTERNAL -- it ends in a write
+-- back into this workspace, decided by a deterministic evaluator with no model
+-- call. They share the event vocabulary and nothing else.
+CREATE TABLE IF NOT EXISTS automations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL DEFAULT '',
+  description text NOT NULL DEFAULT '',
+  -- OFF by default: a definition that starts live means a mistyped condition
+  -- fires on everything before the author has read it back.
+  enabled boolean NOT NULL DEFAULT false,
+  -- Denormalised out of definition so the matcher is a partial-index lookup
+  -- rather than a jsonb scan on every workspace write.
+  trigger_event text NOT NULL,
+  definition jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_by uuid,
+  run_count integer NOT NULL DEFAULT 0,
+  fail_count integer NOT NULL DEFAULT 0,
+  last_run_at timestamptz,
+  last_status text NOT NULL DEFAULT '',
+  -- Set by the runaway guard; a tripped automation stays off until a human
+  -- clears it, and this is why the UI can say why it stopped.
+  disabled_reason text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_automations_workspace ON automations(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_automations_trigger ON automations(workspace_id, trigger_event) WHERE enabled;
+
+-- One row per (automation, triggering event). The queue AND the history.
+CREATE TABLE IF NOT EXISTS automation_runs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  automation_id uuid NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  event_id text NOT NULL,
+  event_type text NOT NULL,
+  status text NOT NULL DEFAULT 'pending',
+  attempt_count integer NOT NULL DEFAULT 0,
+  claim_token uuid,
+  lease_expires_at timestamptz,
+  payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  steps jsonb NOT NULL DEFAULT '[]'::jsonb,
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+-- Idempotent enqueue. This index IS the deduplication.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_runs_event ON automation_runs(automation_id, event_id);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_pending ON automation_runs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_workspace ON automation_runs(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_recent ON automation_runs(automation_id, created_at DESC);
+
 -- F6 (2026-07 review): thread_items existed ONLY in the runtime DDL
 -- (ensureRuntimeSchema, server/index.cjs) — a fresh migrate DB never got it,
 -- breaking the thread widget rail (create_thread_item / update_thread_item).
