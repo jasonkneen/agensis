@@ -96,7 +96,7 @@ const { createAgentConnections } = require('./agent-connections.cjs');
 const { createTaskDispatch } = require('./task-dispatch.cjs');
 const { createAgentJobs } = require('./agent-jobs.cjs');
 const { createBuiltinTurn } = require('./builtin-turn.cjs');
-const { createThreadHarvest, isDiscardTransition } = require('./thread-harvest.cjs');
+const { createThreadHarvest, isDiscardTransition, mountThreadHarvestRoutes } = require('./thread-harvest.cjs');
 
 const TASK_MENTION_CLAIM_MS = 5_000;
 const { mountFeedbackRoutes } = require('./feedback-routes.cjs');
@@ -6692,11 +6692,13 @@ const {
 // Mines a discarded thread for skills/memories/docs worth keeping. Constructed
 // here, after runAnthropicCompletion is bound, because that is the one-shot
 // model call it analyses with.
-const { queueThreadHarvest, runDueThreadHarvests } = createThreadHarvest({
+const { queueThreadHarvest, runDueThreadHarvests, listThreadHarvests, decideHarvestFinding } = createThreadHarvest({
  getDb: () => getDb(),
  runAnthropicCompletion: (...a) => runAnthropicCompletion(...a),
  notifyDbSubscribers: (...a) => notifyDbSubscribers(...a),
  onWarn: (message) => console.warn('[thread-harvest]', message),
+ enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
+ badRequest,
 });
 
 // Agent jobs hold no in-process state — a job's liveness is a database fact, so
@@ -7077,6 +7079,10 @@ function createApp() {
 
  mountConnectionsRoutes(app, { ...coreDeps(), buildInboxSql, isConnectionSocketLive, publicAgentConnection });
  mountAgentPermissionRoutes(app, { ...coreDeps(), decideAgentPermissionRequest, publicPermissionRequest, revokeAgentPermissionRule, setAgentPermissionMode });
+ // Reviewing what a discarded thread proposed. Accepting is a ROUTE, not a
+ // client write, for the same reason thread_harvests is read-only to clients:
+ // the request names which proposal, never what gets written into memory.
+ mountThreadHarvestRoutes(app, { ...coreDeps(), listThreadHarvests, decideHarvestFinding });
  mountInboxRoutes(app, { ...coreDeps(), INBOX_DEFAULT_LIMIT, INBOX_FILTERS, INBOX_MAX_LIMIT, THREAD_INBOX_DEFAULT_LIMIT, buildInboxSql, buildThreadInboxSql, inboxMentionHandle, inboxMentionPattern, toInboxItem, toThreadInboxItem });
  mountLinkPreviewsRoutes(app, { ...coreDeps(), LINK_PREVIEW_COLUMNS, LINK_PREVIEW_MAX_PER_REQUEST, fetchLinkPreview, fetchPreviewImage, linkPreviewCacheKey, linkPreviewDbRateLimiter, linkPreviewImageDbRateLimiter, linkPreviewImageRateLimiter, linkPreviewRateLimiter, normalizeUnfurlUrl, publicLinkPreview, upsertLinkPreview });
  mountFeedbackRoutes(app, {

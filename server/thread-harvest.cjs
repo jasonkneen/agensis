@@ -164,6 +164,101 @@ function parseHarvestFindings(text) {
   return clean;
 }
 
+// ---------------------------------------------------------------------------
+// Review: what happens when a human answers a proposal.
+//
+// A finding carries its own verdict inside the jsonb array rather than in a
+// second table. There is no id to key a side table on — the model returns an
+// unordered list, and `findings` is only ever written whole by the worker — so
+// the index IS the identity, and the verdict lives on the element it belongs to.
+// ---------------------------------------------------------------------------
+
+const HARVEST_DECISIONS = ['accepted', 'dismissed'];
+
+/** The verdict already recorded on one finding, or '' if nobody has answered. */
+function findingDecision(finding) {
+  const decision = String(finding?.decision || '').trim().toLowerCase();
+  return HARVEST_DECISIONS.includes(decision) ? decision : '';
+}
+
+/**
+ * Where accepting a finding actually writes.
+ *
+ * Only two stores are writable from here, so three kinds map onto two tables:
+ *
+ * - "memory" -> memory_facts, under its own category so a harvested fact is
+ *   distinguishable from one a human typed.
+ * - "doc"    -> documents.
+ * - "skill"  -> documents too, in a Skills folder. THIS IS DELIBERATE: a skill
+ *   in this product is a SKILL.md a daemon owns on its own disk and mirrors up
+ *   into `agent_skill_documents`, which is read-only in-app and keyed per agent.
+ *   There is no app-side skill store to accept into, and attaching a bare name
+ *   to `workspace_agents.skills` would record a claim without the procedure that
+ *   makes it true. A written page is the honest landing place, and the UI says
+ *   so before the click rather than after.
+ */
+function harvestAcceptTarget(finding) {
+  const kind = String(finding?.kind || '').trim().toLowerCase();
+  if (kind === 'memory') {
+    return { table: 'memory_facts', label: 'Team memory', category: 'harvested', folder: '' };
+  }
+  if (kind === 'skill') {
+    return { table: 'documents', label: 'Documents · Skills', category: '', folder: 'Skills' };
+  }
+  if (kind === 'doc') {
+    return { table: 'documents', label: 'Documents · Harvested', category: '', folder: 'Harvested' };
+  }
+  return null;
+}
+
+/**
+ * The body a "doc"/"skill" finding is written as.
+ *
+ * The provenance line is part of the DOCUMENT, not just the review screen: once
+ * accepted, the page outlives the harvest row and the thread it came from is
+ * already deleted, so a reader six months from now has no other way to learn
+ * that a model proposed this and a human waved it through.
+ */
+function harvestDocumentContent(finding, source = {}) {
+  const body = String(finding?.body || '').trim();
+  const title = String(source.threadTitle || '').trim();
+  const when = String(source.discardedAt || '').trim();
+  const parts = ['Harvested from a discarded thread'];
+  if (title) parts.push(`"${title}"`);
+  if (when) parts.push(`(${when.slice(0, 10)})`);
+  parts.push('— proposed by a model, accepted by a person.');
+  return `${body}\n\n---\n\n_${parts.join(' ')}_`;
+}
+
+/**
+ * One finding with a verdict written onto it. Returns a NEW object; the caller
+ * writes exactly this element back, never the whole array (see decideHarvestFinding).
+ */
+function decidedFinding(finding, { decision, userId, userName, targetTable, targetId, now }) {
+  const verdict = String(decision || '').trim().toLowerCase();
+  return {
+    ...finding,
+    decision: HARVEST_DECISIONS.includes(verdict) ? verdict : '',
+    decided_at: now || new Date().toISOString(),
+    decided_by: userId ? String(userId) : null,
+    decided_by_name: String(userName || '').slice(0, 200),
+    ...(targetTable ? { target_table: targetTable } : {}),
+    ...(targetId ? { target_id: String(targetId) } : {}),
+  };
+}
+
+/** How much of a harvest is still waiting on somebody. */
+function harvestReviewCounts(findings) {
+  const list = Array.isArray(findings) ? findings : [];
+  let accepted = 0;
+  let dismissed = 0;
+  for (const finding of list) {
+    const decision = findingDecision(finding);
+    if (decision === 'accepted') accepted += 1;
+    else if (decision === 'dismissed') dismissed += 1;
+  }
+  return { total: list.length, pending: list.length - accepted - dismissed, accepted, dismissed };
+}
 
 /**
  * DB + worker half. A factory taking injected deps, matching every other module
@@ -176,6 +271,10 @@ function createThreadHarvest(deps = {}) {
   runAnthropicCompletion,
   notifyDbSubscribers = () => {},
   onWarn = () => {},
+  // Only the review half needs these. Defaulted so the worker half still
+  // constructs in tests that inject nothing but a fake db and a fake model.
+  enforceWorkspaceRole = async () => {},
+  badRequest = (message) => Object.assign(new Error(message), { status: 400 }),
  } = deps;
 
  /**
@@ -316,17 +415,236 @@ function createThreadHarvest(deps = {}) {
   return done;
  }
 
- return { queueThreadHarvest, loadHarvestSource, runOneThreadHarvest, runDueThreadHarvests };
+ /**
+  * The review queue for one workspace.
+  *
+  * Only harvests that ACTUALLY PROPOSED SOMETHING. A 'skipped' thread (too short
+  * to learn from), an 'error' (the model call failed) and a 'done' harvest that
+  * honestly found nothing are all correct outcomes with nothing to answer, and
+  * listing them would bury the handful that need a person under a wall of rows
+  * whose only content is "nothing here".
+  *
+  * Joins the thread back on so the card can say WHICH conversation this came
+  * from and when it was discarded. LEFT join: the thread may since have been
+  * hard-deleted, and losing the title must not lose the proposals.
+  */
+ async function listThreadHarvests({ workspaceId, limit = 50 } = {}) {
+  const id = String(workspaceId || '').trim();
+  if (!id) throw badRequest('workspace id is required');
+  const capped = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  return getDb().unsafe(
+   `select h.id, h.workspace_id, h.session_id, h.status, h.reason, h.requested_by,
+           h.findings, h.error, h.created_at, h.updated_at,
+           s.title as session_title, s.deleted_at as session_deleted_at
+      from thread_harvests h
+      left join chat_sessions s on s.id = h.session_id
+     where h.workspace_id = $1
+       and h.status = 'done'
+       and jsonb_array_length(h.findings) > 0
+     order by h.created_at desc
+     limit $2`,
+   [id, capped],
+  );
+ }
+
+ /**
+  * A human answers ONE proposal.
+  *
+  * This is the only path that turns a proposal into a real row, and it exists as
+  * a route rather than a client write for the same reason the table is read-only
+  * to clients: the client must not be able to name what gets written into
+  * memory_facts / documents. The body it writes is the body the model produced,
+  * read back out of the database here — the request says only WHICH finding and
+  * accept-or-dismiss.
+  *
+  * Order is claim-then-write, the opposite of the permission-decision route.
+  * There the risk was recording an approval that never reached the agent; here it
+  * is writing the same fact into memory twice because two clicks raced. Claiming
+  * the finding first makes accepting at-most-once, and a failed write rolls the
+  * claim back so the proposal returns to the queue rather than reading "accepted"
+  * with nothing behind it.
+  */
+ async function decideHarvestFinding({ userId, workspaceId, harvestId, index, decision } = {}) {
+  const verdict = String(decision || '').trim().toLowerCase();
+  if (!['accept', 'dismiss'].includes(verdict)) throw badRequest('decision must be accept or dismiss');
+  const id = String(harvestId || '').trim();
+  if (!id) throw badRequest('harvest id is required');
+  const position = Number(index);
+  if (!Number.isInteger(position) || position < 0) throw badRequest('index must be a whole number');
+
+  // 'write' for both verdicts: accepting writes the same two stores that any
+  // editor can already write directly, and dismissing is not the more dangerous
+  // half of the pair — there is no escalation here to gate on 'manage'.
+  await enforceWorkspaceRole(userId, String(workspaceId || ''), 'write');
+
+  const rows = await getDb().unsafe(
+   `select h.*, s.title as session_title, s.deleted_at as session_deleted_at
+      from thread_harvests h
+      left join chat_sessions s on s.id = h.session_id
+     where h.id = $1 and h.workspace_id = $2
+     limit 1`,
+   [id, String(workspaceId || '')],
+  );
+  const harvest = rows[0];
+  if (!harvest) throw Object.assign(new Error('That harvest was not found'), { status: 404 });
+  if (harvest.status !== 'done') {
+   throw Object.assign(new Error(`This harvest is ${harvest.status}, so it has nothing to review`), { status: 409 });
+  }
+
+  const findings = Array.isArray(harvest.findings) ? harvest.findings : [];
+  const finding = findings[position];
+  if (!finding) throw Object.assign(new Error('That proposal was not found'), { status: 404 });
+  const already = findingDecision(finding);
+  if (already) {
+   throw Object.assign(new Error(`This proposal was already ${already}`), { status: 409, code: 'already_decided' });
+  }
+  const target = harvestAcceptTarget(finding);
+  if (verdict === 'accept' && !target) throw badRequest('That proposal has no kind that can be accepted');
+
+  const userRows = await getDb().unsafe('select display_name, email from app_users where id = $1 limit 1', [String(userId)]);
+  const decidedByName = String(userRows[0]?.display_name || userRows[0]?.email || '').trim() || 'A workspace member';
+
+  const claim = await writeFinding(id, position, decidedFinding(finding, {
+   decision: verdict === 'accept' ? 'accepted' : 'dismissed',
+   userId,
+   userName: decidedByName,
+   targetTable: verdict === 'accept' ? target.table : '',
+  }), { requireUndecided: true });
+  if (!claim) {
+   throw Object.assign(new Error('This proposal was already decided'), { status: 409, code: 'already_decided' });
+  }
+
+  if (verdict === 'dismiss') {
+   notifyDbSubscribers('thread_harvests', 'UPDATE', [claim]);
+   return claim;
+  }
+
+  let written;
+  try {
+   written = await writeAcceptedFinding(harvest, finding, target);
+  } catch (error) {
+   // Put it back in the queue. A proposal reading "accepted" with nothing in
+   // memory behind it is the one outcome this feature cannot produce.
+   await writeFinding(id, position, finding, { requireUndecided: false }).catch(() => {});
+   throw error;
+  }
+
+  const settled = await writeFinding(id, position, decidedFinding(finding, {
+   decision: 'accepted',
+   userId,
+   userName: decidedByName,
+   targetTable: target.table,
+   targetId: written.id,
+  }), { requireUndecided: false });
+  const final = settled || claim;
+  notifyDbSubscribers('thread_harvests', 'UPDATE', [final]);
+  return final;
+ }
+
+ /**
+  * Replace exactly ONE element of the findings array.
+  *
+  * jsonb_set rather than writing the whole array back: two people reviewing the
+  * same harvest side by side are answering DIFFERENT proposals, and a read-patch-
+  * write of the full array would silently discard whichever verdict landed first.
+  * With `requireUndecided` the same statement is also the compare-and-set that
+  * makes accepting at-most-once.
+  */
+ async function writeFinding(harvestId, position, finding, { requireUndecided }) {
+  const guard = requireUndecided ? `and coalesce(findings->($2::int)->>'decision', '') = ''` : '';
+  const rows = await getDb().unsafe(
+   `update thread_harvests
+       set findings = jsonb_set(findings, array[$2::text], $3::jsonb, false), updated_at = now()
+     where id = $1 ${guard}
+     returning *`,
+   [harvestId, String(position), finding],
+  );
+  return rows[0] || null;
+ }
+
+ /** The actual write into the store a human trusts. Returns the created row. */
+ async function writeAcceptedFinding(harvest, finding, target) {
+  if (target.table === 'memory_facts') {
+   const rows = await getDb().unsafe(
+    'insert into memory_facts (workspace_id, fact, category) values ($1, $2, $3) returning *',
+    [harvest.workspace_id, String(finding.body || '').slice(0, 4000), target.category],
+   );
+   notifyDbSubscribers('memory_facts', 'INSERT', rows);
+   return rows[0];
+  }
+  const content = harvestDocumentContent(finding, {
+   threadTitle: harvest.session_title,
+   discardedAt: harvest.session_deleted_at ? String(harvest.session_deleted_at) : String(harvest.created_at || ''),
+  });
+  const rows = await getDb().unsafe(
+   'insert into documents (workspace_id, title, content, folder) values ($1, $2, $3, $4) returning *',
+   [harvest.workspace_id, String(finding.title || 'Untitled').slice(0, 200), content, target.folder],
+  );
+  notifyDbSubscribers('documents', 'INSERT', rows);
+  return rows[0];
+ }
+
+ return {
+  queueThreadHarvest,
+  loadHarvestSource,
+  runOneThreadHarvest,
+  runDueThreadHarvests,
+  listThreadHarvests,
+  decideHarvestFinding,
+ };
+}
+
+/**
+ * Routes. Both are workspace-scoped and go through enforceWorkspaceRole, so a
+ * harvest can only ever be read or answered by a member of the workspace whose
+ * thread produced it.
+ */
+function mountThreadHarvestRoutes(app, deps = {}) {
+ const { requireAuth, jsonError, enforceWorkspaceRole, listThreadHarvests, decideHarvestFinding } = deps;
+
+ app.get('/backend/workspaces/:workspaceId/thread-harvests', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.workspaceId || '').trim();
+   if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   const rows = await listThreadHarvests({ workspaceId, limit: req.query?.limit });
+   res.json({ data: rows, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/workspaces/:workspaceId/thread-harvests/:harvestId/findings/:index', requireAuth, async (req, res) => {
+  try {
+   const harvest = await decideHarvestFinding({
+    userId: req.userId,
+    workspaceId: String(req.params.workspaceId || '').trim(),
+    harvestId: String(req.params.harvestId || '').trim(),
+    index: Number(req.params.index),
+    decision: req.body?.decision,
+   });
+   res.json({ data: harvest, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
 }
 
 module.exports = {
   createThreadHarvest,
+  mountThreadHarvestRoutes,
+  decidedFinding,
+  findingDecision,
+  harvestAcceptTarget,
+  harvestDocumentContent,
+  harvestReviewCounts,
   buildHarvestTranscript,
   harvestMessageLine,
   harvestPrompt,
   isDiscardTransition,
   isWorthHarvesting,
   parseHarvestFindings,
+  HARVEST_DECISIONS,
   HARVEST_KINDS,
   HARVEST_MAX_MESSAGES,
   HARVEST_MAX_MESSAGE_CHARS,
