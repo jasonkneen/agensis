@@ -35,6 +35,10 @@ export default tseslint.config(
       'server/**/*.cjs',
       'scripts/**/*.{cjs,mjs}',
       'shared/**/*.{cjs,mjs}',
+      // The operator CLI. It resolves and holds a bearer token and owns the
+      // redaction that keeps it out of stdout, so it belongs with the backend
+      // rather than in the unlinted gap this comment block exists to warn about.
+      'cli/**/*.mjs',
       'netlify/functions/**/*.mjs',
       'electron/**/*.cjs',
       'visual-editor/src/**/*.cjs',
@@ -65,7 +69,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['shared/**/*.mjs', 'scripts/**/*.mjs', 'netlify/functions/**/*.mjs'],
+    files: ['shared/**/*.mjs', 'scripts/**/*.mjs', 'netlify/functions/**/*.mjs', 'cli/**/*.mjs'],
     languageOptions: {
       sourceType: 'module',
     },

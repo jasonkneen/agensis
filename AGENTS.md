@@ -609,6 +609,67 @@ Two related rules:
   chokepoint (kinds allowlist, Flows scope, channel pin, invite-role capability
   checks, 120/min limiter). Anything reached another way is outside all of it.
 
+### Login tokens at the MCP door
+
+`verifyMcpToken` (`server/index.cjs`) tries five verifiers in order, and the last
+is `verifyUserAuthMcpToken`: **a human's ordinary agensis session token
+authenticates at `/backend/mcp`**, resolving to a `kind: 'user'` identity on the
+workspace that user owns. This is **deliberate** — it arrived with the MCP client
+registration approval flow, the order is documented above `verifyMcpToken`, and
+`get_connect_command` carries a per-kind branch that re-checks the `manage` role
+specifically for `kind === 'user'`. Do not "fix" it as a fall-through bug.
+
+Know what it costs before you point anyone at it:
+
+- **It grants nothing the `agw_` workspace token does not.** Both reach the same
+  29 tools — asserted in `tests/mcp-user-token-assumption.test.cjs`, which fails
+  if that ever stops being true.
+- **It is not separately revocable.** Revocation is `token_version` on
+  `app_users`, a per-user counter, so withdrawing a pasted copy signs the human
+  out everywhere. `agw_` is revoked by re-minting and touches MCP clients only.
+- **It has no prefix.** `aga_`/`agw_`/`agx_`/`agf_`/`cbk_` are pattern-matchable,
+  so a redactor can strip them from a log, transcript or screenshot. A session
+  token cannot be recognised by shape — this is why `cli/src/render.mjs` redacts
+  the exact resolved credential as well as the prefixes.
+- **It expires in 14 days** (`DEFAULT_TOKEN_TTL_SEC`), so a working MCP config
+  silently starts returning 401. `agw_` does not expire.
+- **It picks the user's OLDEST owned workspace** (`order by created_at asc limit
+  1`), not the one they are looking at.
+
+So: **`agw_` is the credential to hand a human or an MCP client.** It is
+manage-gated, minted at `POST /backend/workspaces/:id/mcp-token`, and it is the
+only thing the UI ever produces (`src/lib/mcpConnect.ts`). Nothing in the product
+tells anyone to paste a login token, and nothing should start.
+
+One thing that is **not** implementable, so nobody spends a day on it: you cannot
+"allow the tools but deny `/backend/db/*`" for a login token used at MCP. It is
+one string, and when it later arrives at `/backend/db/*` nothing marks it as
+having been used at the MCP door. MCP acceptance does not *grant* that reach
+either — the session token always had it through `requireAuth`. The only lever is
+whether `verifyMcpToken` keeps accepting login tokens at all, and that is a
+product decision: removing it would break anyone who has already pasted one.
+
+### `cli/` is a client for that surface, not a second one
+
+`cli/agensis-ops.mjs` (`npm run ops -- <command>`) is a transport-only wrapper
+over `POST /backend/mcp`, for **humans and CI** — not for agents, which already
+have all 30 tools over MCP inside every job. It ships **zero server routes and
+zero hand-written tool schemas**: `call` builds its flag parser from the
+`inputSchema` the server publishes at runtime, so it cannot drift.
+
+The rule above is enforced here mechanically. `cli/src/rpc.mjs` is the CLI's
+**only** network egress, POSTs to one URL, and will emit only
+`initialize`/`tools/list`/`tools/call` — anything else throws.
+`tests/ops-cli.test.cjs` drives every command while recording every request and
+asserts that URL and method set, so **adding a bespoke CLI route fails a test.**
+If a command needs a capability MCP lacks, add an MCP tool.
+
+Two things to know before editing it: the package is `private: true` so there is
+no publish lane (run it from a checkout), and `cli/**/*.mjs` is listed in
+`eslint.config.js` with `auth.mjs`, `render.mjs` and `rpc.mjs` in
+`tests/lint-coverage.test.cjs` — those three hold the bearer token, the redaction
+and the egress allowlist. Full reference: `cli/README.md`.
+
 ## Tests (two runners)
 
 - `npm test` — Node's built-in runner over `tests/*.test.cjs` (backend/integration,
