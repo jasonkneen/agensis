@@ -147,32 +147,6 @@ export function toolStepParts(message: ChatMessage): ToolStepParts {
   return { name: '', detail: content };
 }
 
-// An absolute path only earns shortening once it is long enough to be mostly
-// machine: four segments or more. `/usr/local/bin` and short repo-relative paths
-// read exactly as they were written.
-//
-// The match must START at a boundary — string start, whitespace, a quote, `=`,
-// `(`, `[` or `,` — which is also what keeps URLs intact: `https://host/a/b/c/d`
-// offers no such boundary after the scheme's colon, so it is never rewritten.
-const LONG_PATH = /(^|[\s"'`=(\[,])((?:~|\.{1,2})?(?:\/[^\s"'`)\],;|&]+){4,})/g;
-
-/**
- * Absolute paths cut down to the part a reader can actually use.
- *
- * A chip is one line, and
- * `/Users/jkneen/Documents/GitHub/agensis-taskcomment/src/components/windows/TasksWindowContent.tsx`
- * spends all of it naming the machine it happens to be checked out on. The last
- * two segments are the part that identifies the file. Callers keep the untouched
- * string in `title`, so nothing is lost — it just stops dominating the row.
- */
-export function shortenToolPaths(detail: string): string {
-  if (!detail || !detail.includes('/')) return detail;
-  return detail.replace(LONG_PATH, (_match, boundary: string, path: string) => {
-    const segments = path.split('/').filter(Boolean);
-    return `${boundary}…/${segments.slice(-2).join('/')}`;
-  });
-}
-
 /** One line per step, for the chip label and its `title` tooltip. */
 export function toolStepLabel(message: ChatMessage): string {
   const { name, detail } = toolStepParts(message);

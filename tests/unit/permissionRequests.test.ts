@@ -10,7 +10,7 @@ import {
   resolvePermissionRequest,
   settledApprovalFromMessage,
 } from '../../src/components/chat/permissionRequests';
-import { buildTranscriptRows, shortenToolPaths } from '../../src/components/chat/toolSteps';
+import { buildTranscriptRows } from '../../src/components/chat/toolSteps';
 import type { Message, PermissionRequest } from '../../src/types';
 
 const BASE: PermissionRequest = {
@@ -131,31 +131,6 @@ describe('permissionOutcomeBadge', () => {
     expect(permissionOutcomeBadge({ status: 'allowed', scope: 'once' })).toBe('Once');
     expect(permissionOutcomeBadge({ status: 'denied', scope: '' })).toBe('Denied');
     expect(permissionOutcomeBadge({ status: 'expired', scope: '' })).toBe('Expired');
-  });
-});
-
-describe('shortenToolPaths', () => {
-  it('cuts a long absolute path down to the part that identifies the file', () => {
-    expect(shortenToolPaths('/Users/jkneen/Documents/GitHub/agensis/src/components/windows/TasksWindowContent.tsx'))
-      .toBe('…/windows/TasksWindowContent.tsx');
-  });
-
-  it('shortens paths embedded in a shell command without touching the rest', () => {
-    expect(shortenToolPaths('cd /Users/jkneen/Documents/GitHub/agensis && npm test'))
-      .toBe('cd …/GitHub/agensis && npm test');
-  });
-
-  it('leaves URLs alone — the host is the informative half', () => {
-    // A URL offers no boundary after the scheme's colon, which is the whole
-    // reason the match has to start at one.
-    expect(shortenToolPaths('git clone https://github.com/jasonkneen/open-hatch/tree/main/src'))
-      .toBe('git clone https://github.com/jasonkneen/open-hatch/tree/main/src');
-  });
-
-  it('leaves short paths exactly as written', () => {
-    expect(shortenToolPaths('/usr/local/bin')).toBe('/usr/local/bin');
-    expect(shortenToolPaths('src/components/chat/toolSteps.ts')).toBe('src/components/chat/toolSteps.ts');
-    expect(shortenToolPaths('git status')).toBe('git status');
   });
 });
 

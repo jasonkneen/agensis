@@ -11,7 +11,7 @@ import {
   permissionOutcomeLabel,
   permissionRequestSummary,
 } from './permissionRequests';
-import { shortenToolPaths } from './toolSteps';
+import { shortenPathsIn } from '../../lib/shortPath';
 
 // Matches ToolStepGroup's rails so a request lines up with the tool chips it
 // interrupts — same indent, same "hanging off the conversation" reading.
@@ -69,7 +69,7 @@ export function PermissionRequestCard({
       <div className={cn('min-w-0 py-1', indent)}>
         <div className="flex min-w-0 items-center gap-2 border-l border-border pl-2.5 text-[11px] text-muted-foreground">
           <Icon className={cn('size-3.5 shrink-0', allowed ? 'text-emerald-500' : '')} aria-hidden />
-          <span className="truncate font-mono" title={summary}>{shortenToolPaths(summary)}</span>
+          <span className="truncate font-mono" title={summary}>{shortenPathsIn(summary)}</span>
           <span
             className={cn('shrink-0 font-medium', allowed ? 'text-emerald-600/90 dark:text-emerald-400/90' : '')}
             title={permissionOutcomeLabel(request)}
