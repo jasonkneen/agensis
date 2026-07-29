@@ -138,3 +138,31 @@ describe('fetchRemoteVersion', () => {
     expect(await fetchRemoteVersion(throwing)).toBeNull();
   });
 });
+
+// The nag: "What's new" was offered on EVERY deploy. Most deploys ship no
+// release note at all — a fix, a test, a skill file — so the button opened
+// notes whose newest entry was days old. On a busy day that is a dozen prompts
+// to re-read the same stale entry. This is the predicate AppUpdateManager uses
+// to decide whether there is anything worth reading.
+describe('offering "What\'s new" on a stale tab', () => {
+  const hasUnseenNotes = (latest: string | null, lastSeen: string | null) =>
+    Boolean(latest) && lastSeen !== latest;
+
+  it('does not offer notes when the deploy authored none', () => {
+    expect(hasUnseenNotes('amp-orb', 'amp-orb')).toBe(false);
+  });
+
+  it('offers them when a note the user has not read exists', () => {
+    expect(hasUnseenNotes('inbox-rework', 'amp-orb')).toBe(true);
+  });
+
+  it('does not offer notes when there are none at all', () => {
+    expect(hasUnseenNotes(null, null)).toBe(false);
+  });
+
+  // A first-ever visitor on a stale tab: nothing recorded yet, but the newest
+  // note is genuinely unread, so it is honest to offer it.
+  it('offers them to someone with no baseline recorded', () => {
+    expect(hasUnseenNotes('amp-orb', null)).toBe(true);
+  });
+});
