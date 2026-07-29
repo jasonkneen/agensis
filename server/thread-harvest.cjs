@@ -829,11 +829,22 @@ function createThreadHarvest(deps = {}) {
   // half of the pair — there is no escalation here to gate on 'manage'.
   await enforceWorkspaceRole(userId, String(workspaceId || ''), 'write');
 
+  // The privacy clause is repeated here, and it is not redundant with the list
+  // query. A suggestion is reached by ID on this path, so hiding it from the
+  // list does not put it out of reach — and the boot-time purge only runs at
+  // boot, which leaves a window for a conversation turned private WHILE a
+  // suggestion mined from it is still sitting in somebody's open tab.
+  // Accepting one of those would copy a private conversation's content into
+  // memory_facts or documents, where the whole workspace reads it. Written as a
+  // join condition rather than a check after the fetch so the row is never
+  // loaded, and cannot be returned by the 404's error path either.
   const rows = await getDb().unsafe(
    `select h.*, s.title as session_title, s.deleted_at as session_deleted_at
       from thread_harvests h
       left join chat_sessions s on s.id = h.session_id
      where h.id = $1 and h.workspace_id = $2
+       and coalesce(s.visibility, 'workspace') <> 'private'
+       and coalesce(s.folder, '') <> 'Direct messages'
      limit 1`,
    [id, String(workspaceId || '')],
   );
