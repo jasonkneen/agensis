@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   decideUpdateState,
@@ -164,5 +166,33 @@ describe('offering "What\'s new" on a stale tab', () => {
   // note is genuinely unread, so it is honest to offer it.
   it('offers them to someone with no baseline recorded', () => {
     expect(hasUnseenNotes('amp-orb', null)).toBe(true);
+  });
+});
+
+// The sign-in page mounts AppUpdateManager so a logged-out visitor still
+// registers the service worker — without it an outdated SW serves the stale
+// shell forever with no update path. But it must not run anything else:
+// "You're on the latest agensis, here's what changed" was appearing ON THE
+// SIGN-IN PAGE, to someone who has not signed in and does not yet know what the
+// product is.
+describe('the update surface is gated behind sign-in', () => {
+  const src = () => readFileSync(join(__dirname, '../../src/components/AppUpdateManager.tsx'), 'utf8');
+  const app = () => readFileSync(join(__dirname, '../../src/App.tsx'), 'utf8');
+
+  it('the logged-out mount is swOnly', () => {
+    // The mount inside the `if (!user)` branch, not the authed one.
+    const loggedOut = app().slice(app().indexOf('if (!user) {'), app().indexOf('if (!user) {') + 1400);
+    expect(loggedOut).toContain('<AppUpdateManager swOnly />');
+  });
+
+  it('the authed mount is NOT swOnly, so the dialog still works after login', () => {
+    expect(app()).toMatch(/<AppUpdateManager \/>/);
+  });
+
+  it('swOnly renders nothing and skips both triggers', () => {
+    const s = src();
+    expect(s, 'must render nothing').toMatch(/if \(swOnly\) return null/);
+    // Both effects bail: the deploy-event subscription and the cold-load check.
+    expect(s.match(/if \(swOnly\) return;/g) || [], 'both triggers must be gated').toHaveLength(2);
   });
 });
