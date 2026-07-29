@@ -129,6 +129,23 @@ export function shouldOpenHuddlePanel(
 }
 
 /**
+ * Should the panel offer a composer at all?
+ *
+ * Chat and Transcript are the same conversation, viewed two ways: Chat is
+ * interactive (you can join in), Transcript is the read-only record — minutes,
+ * not a place to type. So typing is only ever offered in Chat mode, AND only
+ * while the huddle is live and has somewhere of its own to put the words (an
+ * ended huddle, or one predating transcript sessions, has no live composer for
+ * either mode already covered by `hasOwnTranscript`).
+ */
+export function canComposeInHuddle(
+  mode: 'chat' | 'transcript',
+  state: Pick<HuddleState, 'transcriptSessionId' | 'active'> | null | undefined,
+): boolean {
+  return mode === 'chat' && Boolean(state?.active) && hasOwnTranscript(state);
+}
+
+/**
  * The composer placeholder inside the panel.
  *
  * Names the addressee, because a channel huddle dispatches on @mention and

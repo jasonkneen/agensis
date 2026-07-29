@@ -434,6 +434,7 @@ export function HuddleDock() {
                 huddleId={recordHuddleId || state?.id || null}
                 agents={agents}
                 activeAgentId={activeAgent?.id || ''}
+                mode={tab}
               />
             ) : (
               <div className="p-3 text-sm text-muted-foreground">

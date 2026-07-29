@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   HUDDLE_MARKER_KIND,
   HUDDLE_SESSION_FOLDER,
+  canComposeInHuddle,
   hasOwnTranscript,
   huddleComposerPlaceholder,
   huddleMarkerTarget,
@@ -89,6 +90,29 @@ describe('hasOwnTranscript', () => {
     expect(hasOwnTranscript(state())).toBe(true);
     expect(hasOwnTranscript(state({ transcriptSessionId: null }))).toBe(false);
     expect(hasOwnTranscript(null)).toBe(false);
+  });
+});
+
+describe('canComposeInHuddle', () => {
+  it('offers the composer in Chat mode, on a live huddle with its own transcript', () => {
+    expect(canComposeInHuddle('chat', state())).toBe(true);
+  });
+
+  it('never offers it in Transcript mode — that view is read-only, minutes-style', () => {
+    expect(canComposeInHuddle('transcript', state())).toBe(false);
+  });
+
+  it('withholds it in Chat mode once the huddle has ended', () => {
+    expect(canComposeInHuddle('chat', state({ active: false }))).toBe(false);
+  });
+
+  it('withholds it in Chat mode for a legacy huddle with no transcript of its own', () => {
+    expect(canComposeInHuddle('chat', state({ transcriptSessionId: null }))).toBe(false);
+  });
+
+  it('withholds it when there is no huddle at all', () => {
+    expect(canComposeInHuddle('chat', null)).toBe(false);
+    expect(canComposeInHuddle('transcript', null)).toBe(false);
   });
 });
 

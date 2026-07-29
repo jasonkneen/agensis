@@ -27,7 +27,7 @@ import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS } f
 import { useComposerAutosize } from '@/hooks/useComposerAutosize';
 import { useHuddleRecord } from '@/hooks/useHuddle';
 import { useHuddleTranscript } from '@/hooks/useHuddleTranscript';
-import { huddleComposerPlaceholder, hasOwnTranscript } from '@/lib/huddleTranscript';
+import { huddleComposerPlaceholder, hasOwnTranscript, canComposeInHuddle } from '@/lib/huddleTranscript';
 import { withAgentMention, type HuddleAgentOption } from '@/lib/huddleAgents';
 import { isActivityPlaceholderMessage, extractActivityVerb } from '@/lib/activityStatus';
 import { EMPTY_STREAM_RESPONSE } from '@/lib/chatStream';
@@ -59,6 +59,14 @@ interface HuddlePanelProps {
   agents?: HuddleAgentOption[];
   /** Which of them a typed message is addressed to. Mirrors the voice strip. */
   activeAgentId?: string;
+  /**
+   * 'chat' (default) is the interactive view — same content plus a composer to
+   * type into the call. 'transcript' is the read-only record of everything
+   * said and typed, minutes-style, with no composer: the dock's Chat and
+   * Transcript tabs used to render this exact same component and were
+   * genuinely indistinguishable, which is the bug this prop fixes.
+   */
+  mode?: 'chat' | 'transcript';
 }
 
 const NO_AGENTS: HuddleAgentOption[] = [];
@@ -68,6 +76,7 @@ export function HuddlePanel({
   huddleId = null,
   agents = NO_AGENTS,
   activeAgentId = '',
+  mode = 'chat',
 }: HuddlePanelProps) {
   const session = useHuddleSession();
   const current = session?.state ?? null;
@@ -150,9 +159,11 @@ export function HuddlePanel({
                 <PanelNotice
                   title={state.active ? 'Nothing said yet' : 'Nothing was said'}
                   body={state.active
-                    ? (activeAgent
-                      ? `Talk or type — @${activeAgent.handle} is listening.`
-                      : 'Talk or type and it lands here, not in the channel.')
+                    ? (mode === 'transcript'
+                      ? 'This fills in as the call happens.'
+                      : activeAgent
+                        ? `Talk or type — @${activeAgent.handle} is listening.`
+                        : 'Talk or type and it lands here, not in the channel.')
                     : 'This huddle ended without anything being transcribed.'}
                 />
               ) : (
@@ -185,10 +196,12 @@ export function HuddlePanel({
         </div>
       )}
 
-      {/* Typing is offered only while the huddle is live and has somewhere of
-          its own to put the words. A composer over an ended huddle would write
-          into a transcript nobody is reading. */}
-      {state?.active && hasOwnTranscript(state) && (
+      {/* Typing is offered only in Chat mode, while the huddle is live and has
+          somewhere of its own to put the words. A composer over an ended huddle
+          would write into a transcript nobody is reading, and Transcript mode
+          is the read-only minutes view on purpose — that's what makes it a
+          different tab from Chat instead of the same panel twice. */}
+      {canComposeInHuddle(mode, state) && (
         <div className="shrink-0 border-t border-border p-2">
           <InputGroup className={COMPOSER_SHELL_CLASS}>
             <InputGroupTextarea
