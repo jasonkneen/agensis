@@ -256,6 +256,51 @@ test('a permission_mode flip to yolo is recorded with the mode it came from', as
   assert.equal(row.target_label, 'scout');
 });
 
+test('minting the workspace MCP token is recorded, and the token never reaches the row', async () => {
+  // agw_ is the workspace's control-plane secret: a bearer reaches all 29 MCP
+  // tools and can mint an agent's daemon token via get_connect_command. Minting
+  // also ROTATES it, so every MCP client holding the old one breaks at that
+  // moment. Its sibling agent.connect_token_minted was audited from the start;
+  // this call site was not, which is the gap this test closes.
+  const db = makeDb({
+    rows: {
+      'update workspaces set mcp_token_hash': () => [{ id: WORKSPACE, mcp_auto_approve: true }],
+    },
+  });
+  __test.setTestDb(db);
+  const token = await __test.issueToken(USER, '1');
+
+  const body = await withServer(async (baseUrl) => {
+    const res = await call(baseUrl, 'POST', `/backend/workspaces/${WORKSPACE}/mcp-token`, token, {});
+    assert.equal(res.status, 200);
+    return res.json();
+  });
+
+  // The response really does carry a live credential -- that is what makes the
+  // redaction assertion below meaningful rather than trivially true.
+  assert.match(body.data.token, /^agw_/, 'the route returns a live token');
+
+  const row = audit(db, 0);
+  assert.ok(row, 'a mint must write exactly one audit row');
+  assert.equal(row.action, 'workspace.mcp_token_minted');
+  assert.equal(row.actor_user_id, USER, 'the actor comes from the verified session');
+  assert.equal(row.workspace_id, WORKSPACE);
+  assert.equal(row.target_type, 'workspace');
+  assert.equal(row.target_id, WORKSPACE);
+
+  // The redaction contract, over the WHOLE param array: neither the token nor
+  // its hash may appear anywhere in the row, including inside `detail`.
+  assert.ok(!row.serialized.includes(body.data.token), 'the token must never reach the audit row');
+  assert.ok(!/agw_/.test(row.serialized), 'not even a fragment of a token');
+  const hash = require('node:crypto').createHash('sha256').update(body.data.token).digest('hex');
+  assert.ok(!row.serialized.includes(hash), 'nor the hash -- it is a verifier, so it is still a secret');
+
+  // What IS worth recording: whether a bearer of this token registers as an
+  // agent with no approval popup. `detail` is bound as an object (jsonParam
+  // defaults to identity for postgres.js on Fly), not a JSON string.
+  assert.deepEqual(row.detail, { autoApprove: true, rotated: true });
+});
+
 test('the joined-in audit column never rides the realtime fanout', async () => {
   // Both UPDATEs join a `prev` row in to capture the before-value. That extra
   // column must be stripped before notifyDbSubscribers, or every subscribed

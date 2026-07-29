@@ -1798,6 +1798,14 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  'agent.permission_rule_granted',
  'agent.permission_rule_revoked',
  'agent.connect_token_minted',
+ // The workspace MCP token (agw_) is the control-plane secret for the whole
+ // workspace: a bearer reaches all 29 MCP tools, can register_agent, and can
+ // mint an agent's daemon connect token via get_connect_command. Minting it
+ // ROTATES it, which silently breaks every MCP client still holding the old
+ // one — so "who reissued this, and when" is exactly the question this log
+ // exists to answer. Its sibling agent.connect_token_minted was recorded from
+ // the start; this one was not, which is the only reason it is a separate line.
+ 'workspace.mcp_token_minted',
  'vault.secret_set',
  'vault.secret_deleted',
  // Authoring an automation is a STANDING grant to write into the workspace

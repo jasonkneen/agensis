@@ -18,7 +18,7 @@ function mountWorkspaceMcpRoutes(app, deps = {}) {
  const {
   requireAuth, jsonError, enforceWorkspaceRole, getDb, claudeMcpAddCommand,
   configBlock, createWorkspaceMcpToken, decideAgentRegistration,
-  hashAgentToken, mcpEndpoint, normalizeBaseUrl, requestBaseUrl,
+  hashAgentToken, mcpEndpoint, normalizeBaseUrl, requestBaseUrl, recordAudit,
  } = deps;
 
  app.post('/backend/workspaces/:id/mcp-token', requireAuth, async (req, res) => {
@@ -31,6 +31,19 @@ function mountWorkspaceMcpRoutes(app, deps = {}) {
     [workspaceId, hashAgentToken(token)],
    );
    if (!rows[0]) return jsonError(res, 404, new Error('Workspace not found'));
+   // A mint is a credential event, and a ROTATION: the UPDATE above overwrites
+   // mcp_token_hash, so every MCP client still holding the previous token starts
+   // failing at that moment. Recorded: who, which workspace, and whether
+   // auto-approve was on (a bearer of this token registers as an agent with no
+   // popup when it is). NEVER the token, and never its hash either — same rule
+   // as agent.connect_token_minted, whose shape this call mirrors.
+   await recordAudit({
+    workspaceId,
+    actor: { userId: req.userId ? String(req.userId) : '' },
+    action: 'workspace.mcp_token_minted',
+    target: { type: 'workspace', id: workspaceId },
+    detail: { autoApprove: Boolean(rows[0].mcp_auto_approve), rotated: true },
+   });
    const baseUrl = normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || normalizeBaseUrl(req.body?.baseUrl) || requestBaseUrl(req);
    res.json({
     data: {
