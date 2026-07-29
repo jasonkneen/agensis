@@ -459,6 +459,7 @@ function buildTools() {
     channel_id: { type: 'string', description: 'The chat session id to post into.' },
     content: { type: 'string', description: 'The message text (may include @handle mentions).' },
     thread_parent_id: { type: 'string', description: 'If set, post as a reply in that thread.' },
+    broadcast_to_channel: { type: 'boolean', description: 'Only meaningful with thread_parent_id set. An agent working a thread is otherwise invisible on the main channel timeline until its final answer — set this true on a message the human should see NOW even while you keep working: a question, a permission/approval check, or another significant update. Leave false/omitted for routine progress; it stays in the thread.' },
     as: { type: 'string', description: 'Agent handle to speak as (e.g. "forge"). Required for a workspace/user/invite client; ignored for a per-agent token.' },
    },
    required: ['channel_id', 'content'],
@@ -469,9 +470,10 @@ function buildTools() {
    const content = requireString(args, 'content');
    const threadParentId = typeof args?.thread_parent_id === 'string' && args.thread_parent_id.trim()
     ? args.thread_parent_id.trim() : null;
+   const broadcastToChannel = args?.broadcast_to_channel === true;
    const acting = ctx.identity.kind === 'agent' || ctx.identity.kind === 'integration'
     ? null : await resolveActingAgent(ctx.identity, ctx.deps, args?.as);
-   const message = await insertAgentMessage(ctx, channelId, content, threadParentId, acting);
+   const message = await insertAgentMessage(ctx, channelId, content, threadParentId, acting, broadcastToChannel);
    return { posted: true, message };
   },
  });
@@ -486,6 +488,7 @@ function buildTools() {
     channel_id: { type: 'string', description: 'The chat session id to post into.' },
     content: { type: 'string', description: 'The message text. @mention a teammate (e.g. "@scout find X") to direct it.' },
     thread_parent_id: { type: 'string', description: 'If set, dispatch within that thread.' },
+    broadcast_to_channel: { type: 'boolean', description: 'Only meaningful with thread_parent_id set. Set true so this message also shows on the main channel timeline (not just the thread) — use for a question, permission check, or other significant update while work continues in the thread.' },
     as: { type: 'string', description: 'Agent handle to speak as (e.g. "forge"). Required for a workspace/user/invite client; ignored for a per-agent token.' },
    },
    required: ['channel_id', 'content'],
@@ -496,9 +499,10 @@ function buildTools() {
    const content = requireString(args, 'content');
    const threadParentId = typeof args?.thread_parent_id === 'string' && args.thread_parent_id.trim()
     ? args.thread_parent_id.trim() : null;
+   const broadcastToChannel = args?.broadcast_to_channel === true;
    const acting = ctx.identity.kind === 'agent' || ctx.identity.kind === 'integration'
     ? null : await resolveActingAgent(ctx.identity, ctx.deps, args?.as);
-   const message = await insertAgentMessage(ctx, channelId, content, threadParentId, acting);
+   const message = await insertAgentMessage(ctx, channelId, content, threadParentId, acting, broadcastToChannel);
    // Fire-and-forget: the conversation advances in the background as each agent
    // message lands and streams over realtime. Awaiting would hold the HTTP
    // response open for the entire multi-turn chain. Mirrors the dispatch route.
@@ -1587,7 +1591,7 @@ async function assertChannelInWorkspace(db, channelId, workspaceId) {
  if (!rows[0]) throw new ToolError('Channel not found in this workspace');
 }
 
-async function insertAgentMessage(ctx, channelId, content, threadParentId, actingAgent = null) {
+async function insertAgentMessage(ctx, channelId, content, threadParentId, actingAgent = null, broadcastToChannel = false) {
  const { db, identity, deps } = ctx;
  await assertChannelInWorkspace(db, channelId, identity.workspaceId);
  // When a non-agent client (workspace/user/invite) speaks via `as: "<handle>"`,
@@ -1601,10 +1605,15 @@ async function insertAgentMessage(ctx, channelId, content, threadParentId, actin
    ? String(identity.connectionId || '')
    : (identity.agentId ? String(identity.agentId) : null);
  const senderName = actingAgent ? actingAgent.name : identity.name;
+ // broadcast_to_channel only matters for a thread reply — a top-level message is
+ // already on the channel timeline. Forcing it false there keeps the column
+ // meaningful for loadChannelMessages' "top level OR broadcast" predicate rather
+ // than letting every flat post carry a stray `true`.
+ const broadcast = Boolean(threadParentId) && broadcastToChannel === true;
  const rows = await db.unsafe(
-  `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-     values ($1, 'assistant', $2, $3, $4, $5, $6) returning *`,
-  [channelId, content, threadParentId || null, senderKind, senderId, senderName]);
+  `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+     values ($1, 'assistant', $2, $3, $4, $5, $6, $7) returning *`,
+  [channelId, content, threadParentId || null, senderKind, senderId, senderName, broadcast]);
  deps.notifyDbSubscribers('messages', 'INSERT', rows);
  await db.unsafe('update chat_sessions set updated_at = now() where id = $1', [channelId]).catch(() => { });
  return rows[0];
