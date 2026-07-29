@@ -105,7 +105,10 @@ function createAgentTemplates(deps = {}) {
   readTemplateExport,
   templateFingerprint,
   recordAudit,
-  clientIpFromReq,
+  // NOTE: clientIpFromReq is deliberately NOT taken here. This factory never
+  // sees a request — `requestIp` arrives as an argument from the route, which is
+  // the only layer that has one. Destructuring it here would be an unused bind
+  // that reads as though this module could resolve an IP itself.
  } = deps;
 
  async function listAgentTemplates({ userId, workspaceId } = {}) {
