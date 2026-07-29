@@ -2010,7 +2010,7 @@ function auditEmailDomain(email) {
  * has: someone writing `detail: agentRow`, which would carry connect_token_hash
  * into a table with a longer retention than the row it came from. It cannot tell
  * a secret from a rule string — only the call sites and their tests do that (see
- * the redaction contract in plans/buzz-packs/audit-hash-chain.md 4.4) — but it
+ * the audit redaction contract) — but it
  * does make "dump the whole row in" impossible rather than merely discouraged.
  */
 function sanitizeAuditDetail(detail) {

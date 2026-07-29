@@ -46,7 +46,7 @@ const AGENT = {
   model: 'claude-sonnet-4-6',
   run_mode: 'daemon',
 };
-const OTHER_AGENT = { ...AGENT, id: 'agent-2', name: 'Buzz', handle: 'buzz' };
+const OTHER_AGENT = { ...AGENT, id: 'agent-2', name: 'Rowan', handle: 'rowan' };
 const SESSION = { id: 'dm-1', workspace_id: WS, folder: 'Direct messages' };
 
 function taskRow(id, overrides = {}) {
@@ -544,7 +544,7 @@ test('a task reassigned while it waited is never dispatched to the old agent', a
   __test.setTestDb(world.db);
   const { runs, run } = jobRunner(world);
 
-  // t-1 is queued behind nothing, so it goes. Then it is handed to @buzz while
+  // t-1 is queued behind nothing, so it goes. Then it is handed to @rowan while
   // the drain is looking at it.
   world.state.tasks[0].assignee_id = OTHER_AGENT.id;
   const out = await __test.drainAgentTaskQueue({ workspaceId: WS, agentId: AGENT.id, cause: 'test', run });

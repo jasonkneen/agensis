@@ -6,15 +6,15 @@ self-contained; do them one at a time and verify each before starting the next.
 **Done-criteria rule (see [[backend-core-unlinted]]): a plan item is not DONE
 until someone has run the stated command and read its output.**
 
-Three of these come from block/buzz's desktop app (Jason shared screenshots).
-Buzz is checked out at `/Users/jkneen/Documents/GitHub/buzz` — read the real
+Three of these come from a reference desktop app (Jason shared screenshots).
+The reference app is available locally — read the real
 implementation rather than guessing from the screenshots.
 
 ---
 
 ## 1. Accent / theme fade on the app background
 
-**Reference:** buzz sidebar — a soft olive/yellow wash bleeding from the
+**Reference:** the reference app sidebar — a soft olive/yellow wash bleeding from the
 top-left into the dark surface, so the theme accent tints the chrome instead of
 appearing only on controls.
 
@@ -60,7 +60,7 @@ presence pill.
 
 ## 3. Simplify window/channel title bars
 
-**Reference:** buzz — `# general` on the left, then only three compact
+**Reference:** the reference app — `# general` on the left, then only three compact
 controls (members count, huddle, `⋯`). Everything else lives in the overflow.
 
 **Current state:** `FloatingWindowShell.tsx` renders a control cluster of up to
@@ -84,7 +84,7 @@ source — moving a button into a menu can break it), plus `npm run ci`.
 
 ## 4. Reply summary instead of "+ Sub-thread"
 
-**Reference:** buzz — overlapping participant avatars, then
+**Reference:** the reference app — overlapping participant avatars, then
 `6 replies · last reply 24 minutes ago`, as one clickable row under the parent
 message.
 
@@ -98,7 +98,7 @@ and are passed in — the data is there.
 
 **Approach:** when a message has replies, render the summary row (distinct
 participant avatars capped at ~3, count, relative time of the newest reply).
-When it has none, show `+ Sub-thread` only on hover, matching how buzz keeps
+When it has none, show `+ Sub-thread` only on hover, matching how the reference app keeps
 the timeline quiet.
 
 **Done criteria:** `npm run test:unit`, plus a screenshot of a thread with 0, 1

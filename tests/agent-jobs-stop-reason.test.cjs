@@ -1,7 +1,7 @@
 // ============================================================================
 // tests/agent-jobs-stop-reason.test.cjs
 // ----------------------------------------------------------------------------
-// Structured stop reasons (buzz pack 01, item A). The Claude Agent SDK has
+// Structured stop reasons (agent-runtime review, item A). The Claude Agent SDK has
 // always told the daemon WHY a turn ended — stop_reason, terminal_reason,
 // permission_denials, usage, total_cost_usd — and the daemon read only
 // `subtype` and binned the rest, so everything downstream saw one opaque error
