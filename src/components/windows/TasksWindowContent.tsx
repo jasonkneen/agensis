@@ -1531,10 +1531,14 @@ function TaskEditPanel({
     if (description !== (task.description || '')) onChangeDescription(description);
   };
 
+  // min-w-0: as a flex item this otherwise defaults to min-width:auto, i.e. its
+  // min-CONTENT width, which overrides `width` outright — so a single wide child
+  // could push the panel past clampTaskPanelWidth's 720px ceiling and off both
+  // edges of the window. With it, the clamped width below is authoritative.
   return (
     <aside
       ref={panel.asideRef}
-      className="task-edit-panel relative flex shrink-0 flex-col border-l border-border bg-card/55 backdrop-blur-md"
+      className="task-edit-panel relative flex min-w-0 shrink-0 flex-col border-l border-border bg-card/55 backdrop-blur-md"
       style={{ width: panel.width }}
     >
       <div
@@ -1558,7 +1562,15 @@ function TaskEditPanel({
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-4 p-3">
           <div className="flex flex-col gap-2">
-            <Input
+            {/* A textarea, not an Input, purely so a long title WRAPS.
+                Task titles here are routinely a full sentence ("Can't escalate,
+                share or save a thread — no path from a DM to another agent or
+                channel"), and on one un-wrapping line the reader could only ever
+                see the middle of it. A textarea soft-wraps, so its content width
+                never exceeds its box — `field-sizing-content` (see ui/textarea)
+                then grows HEIGHT only, never width. Enter still commits; the
+                field holds a title, not prose, so newlines are not wanted. */}
+            <Textarea
               value={title}
               onChange={e => setTitle(e.target.value)}
               onBlur={commitTitle}
@@ -1566,10 +1578,13 @@ function TaskEditPanel({
                 if (e.key === 'Enter') {
                   e.preventDefault();
                   commitTitle();
+                  e.currentTarget.blur();
                 }
               }}
+              rows={1}
               placeholder="Task title"
               aria-label="Task title"
+              className="min-h-8 resize-none py-1.5 font-medium"
             />
             <Textarea
               value={description}

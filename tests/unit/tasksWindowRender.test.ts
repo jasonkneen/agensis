@@ -373,6 +373,19 @@ const CHAIN: Task[] = [
   makeTask({ id: 'd', title: 'Unrelated D' }),
 ];
 
+// The edit PANEL ("Edit task", with its own title field) only mounts once a task
+// is selected, and the list view has no select affordance — selection comes from
+// the board. Switch to Board, click the card, and the aside appears.
+function openEditPanelViaBoard() {
+  const board = container.querySelector('button[title="Kanban board"]');
+  if (!board) throw new Error('no board toggle');
+  click(board);
+  const card = container.querySelector('[data-task-card]')
+    || Array.from(container.querySelectorAll('div[draggable="true"]'))[0];
+  if (!card) throw new Error('no board card');
+  click(card);
+}
+
 function expandFirstRow() {
   const expand = container.querySelector('button[aria-label="Expand task"]');
   if (!expand) throw new Error('no expand button');
@@ -770,5 +783,50 @@ describe('task editor: attachments', () => {
     expandFirstRow();
     expect(container.querySelectorAll('[onerror]')).toHaveLength(0);
     expect(container.textContent).toContain('<img src=x onerror=alert(1)>.pdf');
+  });
+});
+
+// --- The title has to WRAP ---------------------------------------------------
+// Observed live: a task whose title is a full sentence ("...should have inbox
+// items that are relevant to tasks we've set, e.g. Coder started a task and when
+// I click the task we...") rendered on ONE un-wrapping line in a single-line
+// <input>. The editor panel blew past clampTaskPanelWidth's 720px ceiling and
+// ran off BOTH edges of the window — "In progress" showed as "ress", "Add a
+// description..." as "escription..." — so the reader could only ever see the
+// middle of their own title.
+//
+// A textarea soft-wraps, so its content width can never exceed its box;
+// ui/textarea's `field-sizing-content` then grows height only, never width.
+describe('task editor: the title wraps instead of widening the panel', () => {
+  const LONG = 'We should have inbox items that are relevant to tasks we have set, '
+    + 'e.g. Coder started a task and when I click the task we see the thread';
+
+  it('renders the title in a wrapping textarea, not a single-line input', () => {
+    render([makeTask({ id: 'a', title: LONG })]);
+    openEditPanelViaBoard();
+    const field = container.querySelector('[aria-label="Task title"]');
+    expect(field).toBeTruthy();
+    expect(field!.tagName).toBe('TEXTAREA');
+    expect((field as HTMLTextAreaElement).value).toBe(LONG);
+  });
+
+  it('does not let the textarea scroll sideways or be dragged wider', () => {
+    render([makeTask({ id: 'a', title: LONG })]);
+    openEditPanelViaBoard();
+    const field = container.querySelector('[aria-label="Task title"]') as HTMLTextAreaElement;
+    // `resize-none` — a manually widened title field would reintroduce the blowout.
+    expect(field.className).toContain('resize-none');
+    // Inherited from ui/textarea: height follows content, width never does.
+    expect(field.className).toContain('field-sizing-content');
+  });
+
+  it('keeps the panel itself immune to a wide child', () => {
+    render([makeTask({ id: 'a', title: LONG })]);
+    openEditPanelViaBoard();
+    const panel = container.querySelector('.task-edit-panel');
+    expect(panel).toBeTruthy();
+    // Without min-w-0 a flex item's min-width:auto (its min-CONTENT width)
+    // overrides the clamped `width` outright, which is how it escaped 720px.
+    expect(panel!.className).toContain('min-w-0');
   });
 });
