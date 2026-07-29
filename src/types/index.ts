@@ -519,6 +519,30 @@ export const AI_MODELS: AIModel[] = [
  { id: 'claude-haiku-4-5', label: 'Haiku 4.5', description: 'Fastest model' },
 ];
 
+/**
+ * Models a Codex-runtime daemon agent can be pinned to.
+ *
+ * The daemon has always supported this — `agensis.mjs` pushes `--model <id>`
+ * for any codex command — but the picker offered a single "Codex default"
+ * entry, so choosing Codex silently meant "whatever the host's config.toml
+ * says" with no way to override it from the UI.
+ *
+ * Ids come from codex-cli 0.145.0's own `~/.codex/models_cache.json`, taking
+ * only the `visibility: "list"` entries (`codex-auto-review` is marked "hide" —
+ * it is the internal approval-review model, not something to run an agent on).
+ * Codex accepts any string it recognises, so an id absent from this list still
+ * works; the list is the offered set, not a whitelist.
+ */
+export const CODEX_MODELS: AIModel[] = [
+ { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol', description: 'Latest frontier agentic coding model' },
+ { id: 'gpt-5.6-terra', label: 'GPT-5.6-Terra', description: 'Balanced agentic coding model for everyday work' },
+ { id: 'gpt-5.6-luna', label: 'GPT-5.6-Luna', description: 'Fast and affordable agentic coding model' },
+ { id: 'gpt-5.5', label: 'GPT-5.5', description: 'Frontier model for complex coding, research, and real-world work' },
+ { id: 'gpt-5.4', label: 'GPT-5.4', description: 'Strong model for everyday coding' },
+ { id: 'gpt-5.4-mini', label: 'GPT-5.4-Mini', description: 'Small, fast, and cost-efficient model for simpler coding tasks' },
+ { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3-Codex-Spark', description: 'Ultra-fast coding model' },
+];
+
 export type AgentPermissionMode = 'default' | 'accept_edits' | 'yolo';
 
 /** How long a grant lasts. 'always' is stored on the agent and survives restarts. */

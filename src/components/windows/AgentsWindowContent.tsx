@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { AI_MODELS, type AgentConnection, type AgentPermissionMode, type AgentWebhook, type ChatSession, type Task, type WorkspaceAgent } from '../../types';
 import { apiAuthHeaders, apiBaseUrl, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
+import { CODEX_MODEL_LIST_ID, modelOptionsForRuntime, modelSurvivesRuntimeChange } from '../../lib/runtimeModels';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { AgentNetworkDiagram } from './AgentNetworkDiagram';
@@ -1177,19 +1178,46 @@ function AgentFormActionBar({
           ))}
         </NativeSelect>
       )}
-      <NativeSelect
-        value={model}
-        onChange={e => onModelChange(e.target.value)}
-        size="sm"
-        className="max-w-56"
-        aria-label="Agent model"
-      >
-        {modelChoices.map(option => (
-          <NativeSelectOption key={option.id} value={option.id}>
-            {option.label}
-          </NativeSelectOption>
-        ))}
-      </NativeSelect>
+      {/* Codex takes ANY model id — the daemon passes it straight through as
+          `codex --model <id>` — so a fixed select can only ever be wrong the
+          moment OpenAI ships a new name. It also only ever offered "Codex
+          default", which is what made picking the Codex runtime look like the
+          model list had stopped updating. Free text with suggestions is the
+          honest shape: everything the daemon accepts is reachable, and the ids
+          we do know about are one keystroke away. Blank means "Codex default",
+          which is the 'auto' the rest of the form already speaks. */}
+      {runMode === 'daemon' && runtime === 'codex' ? (
+        <>
+          <Input
+            value={model === 'auto' ? '' : model}
+            onChange={e => onModelChange(e.target.value.trim() || 'auto')}
+            list={CODEX_MODEL_LIST_ID}
+            className="h-8 max-w-56 text-sm"
+            placeholder="Codex default"
+            aria-label="Agent model"
+            spellCheck={false}
+          />
+          <datalist id={CODEX_MODEL_LIST_ID}>
+            {modelChoices
+              .filter(option => option.id !== 'auto')
+              .map(option => <option key={option.id} value={option.id} />)}
+          </datalist>
+        </>
+      ) : (
+        <NativeSelect
+          value={model}
+          onChange={e => onModelChange(e.target.value)}
+          size="sm"
+          className="max-w-56"
+          aria-label="Agent model"
+        >
+          {modelChoices.map(option => (
+            <NativeSelectOption key={option.id} value={option.id}>
+              {option.label}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      )}
       <div className="flex-1" />
       <Button type="button" variant="outline" size="sm" onClick={onCancel}>
         <X data-icon="inline-start" />
@@ -1295,7 +1323,7 @@ function AgentForm({
    */
   extraSections?: React.ReactNode;
 }) {
-  const options = modelOptions(model, runMode, runtime);
+  const options = modelOptionsForRuntime(model, runMode, runtime);
   const canSubmit = Boolean(name.trim());
   const paneRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -1357,7 +1385,12 @@ function AgentForm({
     onRunModeChange,
     onRuntimeChange: (value: AgentExecutionRuntime) => {
       onRuntimeChange(value);
-      if (value !== 'claude' && model !== 'auto') onModelChange('auto');
+      // Was one-directional: it cleared the model on the way OUT of Claude but
+      // not on the way back IN, so Codex -> Claude left a `gpt-…` id selected
+      // and the Claude picker re-offered it as "gpt-5.6-sol (saved)". The rule
+      // is narrow on purpose — it only drops an id that belongs to a different
+      // runtime, so a shared/custom model the user set is left alone.
+      if (!modelSurvivesRuntimeChange(model, value)) onModelChange('auto');
     },
     onModelChange,
     onCancel,
@@ -3169,18 +3202,9 @@ function formatRelativeTime(value?: string | null) {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-function modelOptions(current: string, runMode: 'builtin' | 'daemon' | 'sandbox', runtime: AgentExecutionRuntime) {
-  if (runMode === 'daemon' && runtime !== 'claude') {
-    const defaultOption = { id: 'auto', label: `${runtime === 'amp' ? 'Amp' : 'Codex'} default` };
-    return current && current !== 'auto'
-      ? [{ id: current, label: `${current} (saved)` }, defaultOption]
-      : [defaultOption];
-  }
-  if (!current || AI_MODELS.some(model => model.id === current)) {
-    return AI_MODELS;
-  }
-  return [{ id: current, label: current, description: 'Saved model' }, ...AI_MODELS];
-}
+// Moved to src/lib/runtimeModels.ts so the per-runtime catalog and the
+// "does this model survive a runtime change" rule are testable without
+// mounting this window. See modelOptionsForRuntime.
 
 function AgentAvatarPreview({ value, className }: { value?: string | null; className?: string }) {
   const avatar = value || DEFAULT_AGENT_AVATAR;
