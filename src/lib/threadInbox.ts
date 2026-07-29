@@ -19,6 +19,16 @@ export interface ThreadInboxItem {
   parentPreview: string;
   parentSender: string;
   replyCount: number;
+  /**
+   * Tool steps under this thread, counted separately from replyCount.
+   *
+   * Mirrors ThreadReplySummary.toolCount (src/lib/threadSummary.ts). Both exist
+   * because a tool step is work, not conversation: folding a Bash call into
+   * "N replies" reads as the agent having said more than it did. The server
+   * used to fold them, so the sidebar and the channel showed different numbers
+   * for the same thread — 98 vs 14 on real data.
+   */
+  toolCount: number;
   lastReplyAt: string;
   lastReplyPreview: string;
   lastReplySender: string;
@@ -71,9 +81,17 @@ export function threadRowSource(item: Pick<ThreadInboxItem, 'sessionFolder'>): '
 }
 
 /** "3 replies" / "1 reply". The count is the point of the row. */
-export function threadReplyLabel(replyCount: number): string {
+export function threadReplyLabel(replyCount: number, toolCount = 0): string {
   const n = Math.max(0, Math.trunc(replyCount));
-  return `${n} ${n === 1 ? 'reply' : 'replies'}`;
+  const tools = Math.max(0, Math.trunc(toolCount));
+  const replies = `${n} ${n === 1 ? 'reply' : 'replies'}`;
+  if (!tools) return replies;
+  // Same phrasing as the channel's thread chip (ChatWindowContent), so the two
+  // places that describe one thread describe it the same way.
+  const toolLabel = `${tools} tool ${tools === 1 ? 'call' : 'calls'}`;
+  // A thread whose only replies are tool steps: the agent is working and has
+  // not answered yet. Saying "0 replies" alone would read as nothing happening.
+  return n === 0 ? toolLabel : `${replies}, ${toolLabel}`;
 }
 
 /**

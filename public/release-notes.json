@@ -14,6 +14,19 @@
     ]
   },
   {
+    "version": "thread-counts-tell-the-truth",
+    "date": "2026-07-29",
+    "title": "Thread reply counts stopped counting the agent's tool calls",
+    "summary": "A thread in the sidebar said 98 replies. The same thread, open in the channel, said 14. The sidebar was counting every tool call the agent made along the way as a reply, and the channel was not — so the two numbers on one screen had never agreed. The sidebar now counts what was said, and names the tool work separately, so \"14 replies, 84 tool calls\" tells you both things instead of hiding one inside the other. The preview line under a thread also stopped showing a tool step where the agent's actual answer should be. Alongside that, the agent activity line in the sidebar — the one meant to say what an agent is doing right now rather than just that it is busy — turned out never to have worked at all, and now does.",
+    "highlights": [
+      "The sidebar and the channel finally agree on how many replies a thread has",
+      "Tool calls are counted and shown separately instead of inflating the reply count",
+      "A thread the agent is still working in says so, rather than reading as empty",
+      "The preview under a thread shows what was said, not the last tool that ran",
+      "The live agent activity line works — it had been waiting for an update that could never arrive"
+    ]
+  },
+  {
     "version": "why-an-agent-stopped",
     "date": "2026-07-29",
     "title": "An agent that stops now tells you why",

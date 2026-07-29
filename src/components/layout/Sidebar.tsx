@@ -786,7 +786,7 @@ export const Sidebar = React.memo(function Sidebar({
             </span>
            </span>
            <span className="truncate pl-0 text-xs text-muted-foreground">
-            {thread.sessionTitle ? `${thread.sessionTitle} - ` : ''}{threadReplyLabel(thread.replyCount)}
+            {thread.sessionTitle ? `${thread.sessionTitle} - ` : ''}{threadReplyLabel(thread.replyCount, thread.toolCount)}
            </span>
           </span>
          </button>
