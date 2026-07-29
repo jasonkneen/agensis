@@ -316,13 +316,20 @@ function buildTools() {
     );
     return { channels: rows };
    }
+   // Enumerating channels leaks a private conversation's existence and title
+   // without reading a message, so the scope predicate belongs here too — not
+   // only on the tools that return content.
+   const params = [identity.workspaceId];
+   const scope = mcpSessionScopeSql(identity, 'chat_sessions', params);
+   params.push(limit);
    const rows = await db.unsafe(
-    `select id, title, folder, model, conversation_mode, participants, archived_at, updated_at
+    `select id, title, folder, model, conversation_mode, participants, visibility, archived_at, updated_at
            from chat_sessions
           where workspace_id = $1 ${includeArchived ? '' : 'and archived_at is null'}
+            and ${scope}
           order by updated_at desc
-          limit $2`,
-    [identity.workspaceId, limit],
+          limit $${params.length}`,
+    params,
    );
    return { channels: rows };
   },
@@ -346,7 +353,7 @@ function buildTools() {
    const limit = optInt(args?.limit, 50, 200);
    const threadParentId = typeof args?.thread_parent_id === 'string' && args.thread_parent_id.trim()
     ? args.thread_parent_id.trim() : null;
-   await assertChannelInWorkspace(db, channelId, identity.workspaceId);
+   await assertChannelInWorkspace(db, channelId, identity);
    const rows = threadParentId
     ? await db.unsafe(
      `select id, role, content, sender_kind, sender_id, sender_name, thread_parent_id, broadcast_to_channel, created_at
@@ -385,13 +392,18 @@ function buildTools() {
   async run(args, { db, identity }) {
    const query = requireString(args, 'query');
    const limit = optInt(args?.limit, 30, 100);
-   const channelClause = identity.kind === 'integration' && identity.channelId
-    ? 'and s.id = $3'
-    : '';
-   const params = identity.kind === 'integration' && identity.channelId
-    ? [identity.workspaceId, `%${query}%`, identity.channelId, limit]
-    : [identity.workspaceId, `%${query}%`, limit];
-   const limitParam = identity.kind === 'integration' && identity.channelId ? '$4' : '$3';
+   // A substring search is the widest read in the whole MCP surface — it spans
+   // every session in the workspace at once. Before this it returned matches
+   // out of other people's DMs, which is the single worst shape this bug had.
+   const pinned = identity.kind === 'integration' && identity.channelId;
+   const params = [identity.workspaceId, `%${query}%`];
+   let channelClause = '';
+   if (pinned) {
+    params.push(identity.channelId);
+    channelClause = `and s.id = $${params.length}`;
+   }
+   const scope = mcpSessionScopeSql(identity, 's', params);
+   params.push(limit);
    const rows = await db.unsafe(
     `select m.id, m.session_id, s.title as channel_title, m.role, m.content,
                 m.sender_kind, m.sender_name, m.created_at
@@ -399,7 +411,8 @@ function buildTools() {
            join chat_sessions s on s.id = m.session_id
           where s.workspace_id = $1 and m.content ilike $2
             and m.deleted_at is null and s.deleted_at is null ${channelClause}
-          order by m.created_at desc limit ${limitParam}`,
+            and ${scope}
+          order by m.created_at desc limit $${params.length}`,
     params,
    );
    return { results: rows };
@@ -907,7 +920,7 @@ function buildTools() {
    }
    const content = requireString(args, 'content');
    const kind = ['todo', 'plan', 'blocker'].includes(args?.kind) ? args.kind : 'todo';
-   await assertChannelInWorkspace(db, sessionId, identity.workspaceId);
+   await assertChannelInWorkspace(db, sessionId, identity);
    const ordRows = await db.unsafe(
     'select coalesce(max(order_index), 0) as m from thread_items where session_id = $1 and kind = $2',
     [sessionId, kind]);
@@ -977,7 +990,7 @@ function buildTools() {
   },
   async run(args, { db, identity }) {
    const sessionId = requireString(args, 'session_id');
-   await assertChannelInWorkspace(db, sessionId, identity.workspaceId);
+   await assertChannelInWorkspace(db, sessionId, identity);
    const kind = ['todo', 'plan', 'blocker'].includes(args?.kind) ? args.kind : null;
    const rows = kind
     ? await db.unsafe(
@@ -1591,16 +1604,95 @@ function createBuiltinToolset(deps) {
 
 // --- shared tool internals --------------------------------------------------
 
-async function assertChannelInWorkspace(db, channelId, workspaceId) {
+/**
+ * Which user id, if any, this MCP identity reads private sessions AS.
+ *
+ * `user` is the obvious one. `workspace` is the interesting one: that token is
+ * the workspace's own credential, minted by and for its owner, so it reads as
+ * the owner rather than as a stranger — without this, connecting Claude Code to
+ * your own workspace would stop being able to open your own DMs, which is the
+ * primary way this product is used.
+ *
+ * `invite` and an unpinned `integration` deliberately resolve to nothing. They
+ * are guest and machine credentials; neither is a person with DMs.
+ */
+function mcpSubjectUserId(identity) {
+ if (!identity) return '';
+ if (identity.kind === 'user' && identity.userId) return String(identity.userId);
+ if (identity.kind === 'workspace' && identity.ownerUserId) return String(identity.ownerUserId);
+ return '';
+}
+
+/**
+ * SQL predicate limiting `alias` to sessions this identity may see. Pushes its
+ * own binds onto `params`.
+ *
+ * AN AGENT IS SCOPED BY PARTICIPATION, NOT BY MEMBERSHIP. chat_session_members
+ * holds user ids, and an agent is not a user — so the agent branch asks the
+ * question that actually applies to it: is this agent in the session's roster.
+ * That is what keeps an agent reading and answering in its own DM (the core
+ * product loop) while not opening every other agent's DM to it.
+ */
+function mcpSessionScopeSql(identity, alias, params) {
+ const open = `(coalesce(${alias}.visibility, 'workspace') <> 'private'
+    and coalesce(${alias}.folder, '') <> 'Direct messages')`;
+
+ if (identity?.kind === 'agent' && identity.agentId) {
+  params.push(String(identity.agentId));
+  const agentParam = `$${params.length}`;
+  return `(${open} or exists (
+      select 1 from jsonb_array_elements(
+        case when jsonb_typeof(${alias}.participants) = 'array'
+             then ${alias}.participants else '[]'::jsonb end
+      ) mp
+       where mp->>'agent_id' = ${agentParam}
+    ))`;
+ }
+
+ // An integration pinned to one channel was configured for that channel on
+ // purpose — the pin IS the grant, and it is already the narrowest scope in the
+ // system. Anything else it could reach is excluded by identity.channelId.
+ if (identity?.kind === 'integration' && identity.channelId) return `(true)`;
+
+ const userId = mcpSubjectUserId(identity);
+ if (!userId) return open;
+ params.push(userId);
+ const userParam = `$${params.length}`;
+ return `(${open} or exists (
+      select 1 from chat_session_members csm
+       where csm.session_id = ${alias}.id
+         and csm.user_id = ${userParam}::uuid
+         and (csm.expires_at is null or csm.expires_at > now())
+    ))`;
+}
+
+/**
+ * The channel gate for EVERY MCP tool that names one.
+ *
+ * Takes the whole identity rather than just a workspace id so the private-session
+ * check cannot be omitted by a new caller: there is no signature here that
+ * compiles without it. That matters more than the ergonomics — this repo's MCP
+ * surface is public, and "the tool nobody remembered to gate" is precisely how
+ * the workspace-only read scope survived this long.
+ */
+async function assertChannelInWorkspace(db, channelId, identity) {
+ const workspaceId = identity?.workspaceId;
+ const params = [channelId, workspaceId];
+ const scope = mcpSessionScopeSql(identity, 'chat_sessions', params);
  const rows = await db.unsafe(
-  'select id from chat_sessions where id = $1 and workspace_id = $2 limit 1',
-  [channelId, workspaceId]);
+  `select id from chat_sessions
+     where id = $1 and workspace_id = $2 and ${scope}
+     limit 1`,
+  params);
+ // Deliberately the SAME message as a genuinely missing channel. Telling a
+ // caller "that exists but is private" confirms the conversation exists, which
+ // is most of what is being protected.
  if (!rows[0]) throw new ToolError('Channel not found in this workspace');
 }
 
 async function insertAgentMessage(ctx, channelId, content, threadParentId, actingAgent = null, broadcastToChannel = false) {
  const { db, identity, deps } = ctx;
- await assertChannelInWorkspace(db, channelId, identity.workspaceId);
+ await assertChannelInWorkspace(db, channelId, identity);
  // When a non-agent client (workspace/user/invite) speaks via `as: "<handle>"`,
  // the message must be attributed to that resolved agent, not the raw token —
  // otherwise a workspace-token client could never post AS an agent (the reason

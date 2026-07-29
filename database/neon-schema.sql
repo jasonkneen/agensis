@@ -260,6 +260,17 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   deleted_at timestamptz,
   canvas_id text,
   version integer NOT NULL DEFAULT 1,
+  -- Who may READ this session, one level BELOW the workspace role check:
+  --   'workspace'  every member with `read` — channels, and the default
+  --   'private'    only rows in chat_session_members (plus a manage-granted one)
+  -- DMs and everything derived from a DM (sub-thread splits, huddle transcripts)
+  -- are 'private'. Deliberately a text column and not a boolean: the next
+  -- visibility we need is a private CHANNEL, not a second flag.
+  --
+  -- Read as private ONLY on an exact 'private' match — but the authorizer also
+  -- treats folder='Direct messages' as private regardless, so a new DM-creating
+  -- path that forgets to set this column cannot open a hole. Fail closed.
+  visibility text NOT NULL DEFAULT 'workspace',
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
@@ -269,6 +280,35 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_folder ON chat_sessions(workspace_i
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(workspace_id, archived_at);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_favorite ON chat_sessions(workspace_id, is_favorite);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_canvas ON chat_sessions(workspace_id, canvas_id);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_visibility ON chat_sessions(workspace_id, visibility);
+
+-- Who may read a `visibility='private'` session. Empty for every 'workspace'
+-- session — this table is consulted ONLY after the session is known private, so
+-- channels cost nothing.
+--
+-- DELIBERATELY ABSENT FROM ALLOWED_TABLES in shared/backend-core.cjs, for the
+-- same reason audit_log is: reachable through POST /backend/db/insert, this
+-- table IS a self-grant primitive and the whole feature becomes theatre. The
+-- only doors are the participant writes on the DM-creation paths and the
+-- manage-gated grant/revoke routes. tests/dm-read-scope fails if anyone
+-- allowlists it.
+CREATE TABLE IF NOT EXISTS chat_session_members (
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL,
+  -- 'participant' — intrinsic: opened this DM, or dispatched an agent into it.
+  -- 'grant'       — explicitly given by a member holding `manage`, and audited.
+  -- The distinction is what makes a revoke safe: revoking clears grants and
+  -- must never strip the person whose DM it is.
+  source text NOT NULL DEFAULT 'participant',
+  granted_by uuid,
+  -- NULL = open-ended. A past timestamp reads as no access at all; expiry is
+  -- evaluated in SQL so an expired row cannot be honoured by a stale cache.
+  expires_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (session_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_session_members_user ON chat_session_members(user_id);
 
 -- message_kind/tool_name/tool_detail carry agent tool steps: message_kind
 -- 'tool_step' marks a row the UI renders as a compact chip rather than a full

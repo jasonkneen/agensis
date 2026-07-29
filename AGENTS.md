@@ -39,40 +39,66 @@ Array columns (e.g. `uuid[]`) need
 `ARRAY_COLUMNS_BY_TABLE` + the `toPgArrayLiteral` bind path in BOTH backends —
 postgres.js will not array-serialize a raw JS array bound via `.unsafe`.
 
-## Read authorization has ONE granularity: the workspace
+## Read authorization has TWO granularities: workspace, then session
 
-**Read authorization is workspace-granular. There is no channel-, session- or
-DM-level check anywhere in the codebase.** Every read path resolves a
-`workspace_id` and calls `enforceWorkspaceRole(userId, workspaceId, 'read')`.
-Below that, scoping happens because the SQL narrows to the session the caller
-asked for — not because a permission check said that caller may see it.
+Every read path resolves a `workspace_id` and calls
+`enforceWorkspaceRole(userId, workspaceId, 'read')`. That check is necessary and
+unchanged. **Since 2026-07-30 it is no longer sufficient**: a session marked
+`chat_sessions.visibility = 'private'` is readable only by rows in
+`chat_session_members`.
 
-Concretely, a member holding only `viewer` (the weakest role) can read the full
-transcript of ANY session in the workspace via `GET /backend/sessions/:id/messages`,
-receive any session's live rows by subscribing with `session_id=eq.<id>`, and see
-every session in the bootstrap payload. An agent's MCP identity is workspace-level
-too: `search_messages` and `list_channels` (`server/mcp.cjs`) span every channel
-and every DM in the workspace.
+The rule has exactly ONE spelling, in `shared/backend-core.cjs`:
 
-**DM privacy is not enforced, and no feature may assume it.** The original
-justification is a comment at the DM-creation site — "workspaces are effectively
-single-human, so the DM keys on the agent alone". That was a reasonable
-assumption and it is **already false**: as of 2026-07-29 one workspace has two
-distinct human members and four Direct-message sessions, all readable by both.
-The product has `workspace_members`, five roles, an invite flow and
-`revokeRealtimeAccessForMember`, so it plainly expects multi-human workspaces.
+| helper | use |
+| --- | --- |
+| `isPrivateSessionRow(row)` | is this session members-only? |
+| `enforceSessionReadAccess({userId, sessionId, db})` | row-at-a-time gate; throws 403 |
+| `sessionReadableSql(alias, '$n')` | SQL predicate, for queries spanning many sessions |
+| `appendSessionAccessClause(where, userId, table)` | row filter for generic `chat_sessions`/`messages` selects |
 
-This is a known, deliberate limitation rather than an oversight, and it is pinned
-by `tests/dm-scope-assumption.test.cjs`, which asserts the current answer out
-loud. If you add a per-session read check, that test goes red — update it and this
-section together.
+**Add a read path, use one of those four.** Do not re-spell the predicate — a
+second copy is how this drifts back open.
 
-**Do not fix this partially.** A per-session check on one read path and not the
-others is strictly worse than the current uniform behaviour: it reads as privacy
-while leaving the other paths open. The real fix is a `chat_session_members`
-table, a new capability, a migration for the existing sessions, and a rewrite of
-every read path listed above — a product decision about what a DM means here, not
-a bug fix.
+**A private session is a DM, or anything derived from one.** Sub-thread splits
+(`parent_message_id`), forks (`split_parent_id`) and huddle transcripts
+(`huddles.transcript_session_id`) inherit both `visibility` and the member list
+at creation time. Scoping only `folder = 'Direct messages'` is a partial fix:
+production had 12 sub-thread sessions hanging off DM messages and 38 huddle
+sessions carrying a DM roster.
+
+`isPrivateSessionRow` treats `visibility = 'private'` **OR**
+`folder = 'Direct messages'` as private, on purpose. The folder half is the
+fail-closed backstop: a new DM-creating path that forgets the column cannot
+silently produce a world-readable DM.
+
+**No implicit owner oversight.** A workspace owner is not a member of your DM
+just for owning the workspace. They hold `manage`, so they can GRANT themselves
+access — which writes a `chat_session.access_granted` audit row. Silent reads
+would be the same power with no trace.
+
+**Granting is manage-gated and authorized on the WORKSPACE ROLE, never on the
+grant.** `server/session-access-routes.cjs`. A grant-holder without `manage`
+cannot widen their own access or pass it on; otherwise one grant would compound
+into the whole workspace. Revoke touches `source = 'grant'` rows only, so it can
+never strip the person whose conversation it is.
+
+**`chat_session_members` is deliberately absent from `ALLOWED_TABLES`**, like
+`audit_log`. Reachable through `POST /backend/db/insert` it would be a self-grant
+primitive and the whole feature would be theatre.
+
+**An AGENT is scoped by participation, not membership** (`mcpSessionScopeSql` in
+`server/mcp.cjs`). `chat_session_members` holds user ids and an agent is not a
+user, so the agent branch asks whether the agent is in the session's roster. That
+keeps an agent working in its own DM — the core product loop — without opening
+every other agent's DM to it. A `workspace` MCP token reads as its workspace's
+owner; `invite` and unpinned `integration` tokens get no private sessions at all.
+
+Pinned by `tests/dm-scope-assumption.test.cjs`. If you change any of the above,
+that file goes red — update it and this section together.
+
+What IS still structurally guaranteed, and must stay that way: `messages` has no
+`workspace_id` column, so a message is only reachable through
+`session_id -> chat_sessions.workspace_id`.
 
 What IS structurally guaranteed, and must stay that way: `messages` has no
 `workspace_id` column, so a message is only reachable through

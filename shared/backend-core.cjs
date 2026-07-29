@@ -825,6 +825,136 @@ async function assertWorkspaceRole({ userId, workspaceId, capability, minRole, m
 }
 
 // ----------------------------------------------------------------------------
+// Session read scope — the SECOND granularity, below the workspace.
+//
+// Everything above this line answers "may this user read this WORKSPACE". That
+// was the only question the codebase asked until now, which meant any member
+// holding `read` could read every session in the workspace including other
+// people's Direct messages: the SQL narrowed to one session because the caller
+// asked for it, not because a permission said they may see it.
+//
+// This layer only ever NARROWS. A caller must still pass the workspace check
+// first; a channel (`visibility` anything but 'private') is unaffected and costs
+// one column read that the caller already had in hand.
+// ----------------------------------------------------------------------------
+
+/**
+ * Is this session row one that only its members may read?
+ *
+ * TWO independent signals, ORed, and that is the point. `visibility` is the
+ * column the product sets and the grant routes manage. The folder check is the
+ * backstop: a DM-creating path that forgets to set visibility would otherwise
+ * silently produce a world-readable DM, and this feature is worth nothing if it
+ * can be switched off by omission. Fail closed.
+ *
+ * Takes a ROW, not an id, so callers that already selected the session (the
+ * transcript route, the realtime resolver) do not pay a second query.
+ */
+function isPrivateSessionRow(row) {
+ if (!row) return false;
+ return String(row.visibility || '') === 'private'
+  || String(row.folder || '') === 'Direct messages';
+}
+
+/**
+ * SQL predicate for "user $N may read session `<alias>`", for the aggregate
+ * queries that span many sessions at once (the inbox, thread lists, search).
+ *
+ * Those cannot call the row-at-a-time check without an N+1, and rewriting each
+ * of them by hand is how a path gets missed. `userParam` is a bind placeholder
+ * ($2, $3 …) chosen by the caller — never interpolated user input.
+ *
+ * The expiry comparison lives HERE, in SQL, so an expired grant cannot be
+ * honoured by a row that was read a moment earlier.
+ */
+function sessionReadableSql(alias, userParam) {
+ if (!/^[a-z_][a-z0-9_]*$/i.test(String(alias))) throw new Error(`Invalid alias: ${alias}`);
+ if (!/^\$\d+$/.test(String(userParam))) throw new Error(`Invalid bind: ${userParam}`);
+ // Parenthesised explicitly. `and` binds tighter than `or`, so this reads
+ // correctly without them — but "correct by precedence" is how a later edit
+ // inserts a third condition in the wrong group and quietly opens every DM.
+ return `(
+    (
+      coalesce(${alias}.visibility, 'workspace') <> 'private'
+      and coalesce(${alias}.folder, '') <> 'Direct messages'
+    )
+    or exists (
+      select 1 from chat_session_members csm
+       where csm.session_id = ${alias}.id
+         and csm.user_id = ${userParam}::uuid
+         and (csm.expires_at is null or csm.expires_at > now())
+    )
+  )`;
+}
+
+/**
+ * Enforce that `userId` may read `sessionId`. Throws 403 when they may not.
+ *
+ * Deliberately does NOT do the workspace check — callers have already done it,
+ * and folding it in here would double every membership query on the hottest
+ * read path in the app. This is an ADDITIONAL gate, never a replacement.
+ *
+ * `sessionRow` is an optimisation for callers holding the row already; omit it
+ * and one query fetches what is needed.
+ *
+ * NO IMPLICIT OWNER OVERSIGHT, on purpose. A workspace owner holds `manage`, so
+ * they can grant themselves access to any session — and that leaves an audit
+ * row. Letting them read silently would give the same power with no trace,
+ * which is strictly worse for the person whose DM it is.
+ */
+async function enforceSessionReadAccess({ userId, sessionId, sessionRow = null, db }) {
+ if (!sessionId) return;
+ let row = sessionRow;
+ if (!row) {
+  const rows = await db('select id, visibility, folder from chat_sessions where id = $1 limit 1', [sessionId]);
+  row = rows[0] || null;
+ }
+ // A session that does not exist is not this gate's problem — the caller's own
+ // 404 handling owns that, and throwing 403 here would turn every missing id
+ // into a misleading permission error.
+ if (!row) return;
+ if (!isPrivateSessionRow(row)) return;
+ if (!userId) throw forbidden('This conversation is private');
+ const allowed = await db(
+  `select 1 from chat_session_members
+     where session_id = $1 and user_id = $2
+       and (expires_at is null or expires_at > now())
+     limit 1`,
+  [sessionId, userId],
+ );
+ if (allowed.length > 0) return;
+ throw forbidden('This conversation is private');
+}
+
+/**
+ * Record `userId` as an intrinsic participant of a session.
+ *
+ * Called where a human's own action puts them in a conversation: opening a DM,
+ * assigning a task to an agent, @mentioning one in a comment. That last pair
+ * matters — the dispatch writes into the agent's DM under the actor's name, and
+ * an actor who cannot then read the reply their own action produced would be a
+ * worse bug than the one this feature fixes.
+ *
+ * ON CONFLICT DO NOTHING: never demotes an existing row. Someone who holds a
+ * 'grant' and then dispatches into the session keeps the grant's provenance.
+ * Best-effort — a failure here must not fail the dispatch that triggered it.
+ */
+async function addSessionParticipant({ sessionId, userId, db }) {
+ if (!sessionId || !userId) return false;
+ try {
+  await db(
+   `insert into chat_session_members (session_id, user_id, source)
+      values ($1, $2, 'participant')
+      on conflict (session_id, user_id) do nothing`,
+   [sessionId, userId],
+  );
+  return true;
+ } catch {
+  return false;
+ }
+}
+
+// ----------------------------------------------------------------------------
 // Re-parenting: the write that creates the hierarchy, and the one that can
 // break it. Nothing in the product sets parent_id yet — the only reachable
 // writer is a generic POST /backend/db/update on `workspaces` — so this exists
@@ -1079,7 +1209,50 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   const resolved = await resolveOperationWorkspace(table, { filters: flt }, db);
   if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
   await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
+
+  // The session gate, layered UNDER the workspace one. Only for `select`: this
+  // is a READ-scope feature, and quietly extending it to delete would change
+  // write behaviour nobody asked to change.
+  //
+  // This is also what closes REALTIME, at no extra cost — realtime subscribe
+  // authorizes a binding by calling this same function with op 'select'
+  // (server/realtime.cjs authorizeRealtimeBinding), so a client cannot
+  // subscribe to `session_id=eq.<someone's DM>` either. Single-sourcing the
+  // rule here is the reason there is no second copy to drift.
+  if (op === 'select') {
+   // Any table filtered by session_id inherits its session's privacy — not
+   // just `messages`. thread_items, agent_jobs and the rest hang off a session
+   // and would otherwise be a side channel into a private one.
+   const sessionId = table === 'chat_sessions'
+    ? findFilterValue(flt, 'id')
+    : findFilterValue(flt, 'session_id');
+   if (sessionId) await enforceSessionReadAccess({ userId, sessionId, db });
+  }
  }
+}
+
+// Constrain a SELECT on `chat_sessions` / `messages` to rows in a session the
+// user may read. The sibling of appendWorkspaceAccessClause, and needed for the
+// same reason: enforceDbOperationAccess can only ANSWER "may you", it cannot
+// remove rows from a result set. Without this a select on chat_sessions
+// filtered by workspace_id returns every DM's title and roster, which leaks the
+// existence and subject of a private conversation without reading one message.
+//
+// Both tables route through one subquery alias so the two cases differ only in
+// the join column. Slightly more work than inlining the predicate on
+// chat_sessions itself; worth it because there is then exactly ONE spelling of
+// the readability rule to keep correct.
+function appendSessionAccessClause(where, userId, table) {
+ if (table !== 'chat_sessions' && table !== 'messages') return where;
+ const params = where.params || [];
+ params.push(userId);
+ const userParam = `$${params.length}`;
+ const joinColumn = table === 'chat_sessions' ? `"chat_sessions"."id"` : `"messages"."session_id"`;
+ const accessClause = `EXISTS (SELECT 1 FROM chat_sessions cs WHERE cs.id = ${joinColumn} AND ${sessionReadableSql('cs', userParam)})`;
+ return {
+  clause: where.clause ? `${where.clause} AND ${accessClause}` : ` WHERE ${accessClause}`,
+  params,
+ };
 }
 
 // Constrain a SELECT on `workspaces` to rows the user owns or is a member of.
@@ -1905,6 +2078,12 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  'automation.deleted',
  'automation.enabled',
  'automation.disabled',
+ // Reading into someone else's private conversation. The DENIAL of a read is
+ // deliberately NOT audited — it fires on ordinary sidebar rendering and would
+ // bury the entries that matter. The GRANT is the decision worth keeping: a
+ // silent grant is worse than no grant at all, because it looks like privacy.
+ 'chat_session.access_granted',
+ 'chat_session.access_revoked',
 ]));
 
 /** What an unrecognised action records as, rather than throwing in production. */
@@ -2156,6 +2335,11 @@ module.exports = {
  DEFAULT_TOKEN_TTL_SEC,
  enforceDbOperationAccess,
  assertWorkspaceRole,
+ // Session read scope — the granularity below the workspace.
+ enforceSessionReadAccess,
+ isPrivateSessionRow,
+ sessionReadableSql,
+ addSessionParticipant,
  ALLOWED_TABLES,
  VERSIONED_TABLES,
  JSON_COLUMNS_BY_TABLE,
@@ -2198,6 +2382,7 @@ module.exports = {
  sanitizeAuditDetail,
  createTokenVersionCache,
  appendWorkspaceAccessClause,
+ appendSessionAccessClause,
  logMessageActivityIdempotent,
  createRateLimiter,
  createDbRateLimiter,
