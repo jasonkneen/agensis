@@ -121,12 +121,6 @@ function loadScriptOnce(src: string): Promise<void> {
   return pending;
 }
 
-/**
- * `navigator.serviceWorker.ready` is the WRONG wait here: it resolves for the
- * worker controlling THIS page, which is the app's Workbox PWA worker at scope
- * `/`. It would resolve immediately and we would race the proxy worker's
- * activation. Wait on the registration we actually made.
- */
 async function waitForActive(registration: ServiceWorkerRegistration): Promise<void> {
   if (registration.active) return;
   const worker = registration.installing || registration.waiting;
@@ -140,6 +134,45 @@ async function waitForActive(registration: ServiceWorkerRegistration): Promise<v
     };
     worker.addEventListener('statechange', check);
     check();
+  });
+}
+
+/**
+ * Make sure a ROOT-SCOPE worker carrying the proxy handler is controlling this
+ * page before any proxied frame is created.
+ *
+ * In a build, that worker is the app's own Workbox one: vite.config.ts pulls
+ * `/scramjet-sw.js` into it with `workbox.importScripts`, so there is nothing to
+ * register here — just something to wait for. In dev VitePWA generates no worker
+ * at all, so the same file is registered directly.
+ *
+ * Registering our own worker when the app's already exists would be actively
+ * wrong: only one worker controls a client, so a second root-scope registration
+ * fights the PWA worker instead of adding to it.
+ */
+async function ensureProxyWorker(): Promise<void> {
+  const rootScope = `${window.location.origin}/`;
+  const existing = (await navigator.serviceWorker.getRegistrations()).find(
+    registration => registration.scope === rootScope,
+  );
+
+  const registration = existing ?? (await navigator.serviceWorker.register('/scramjet-sw.js', { scope: '/' }));
+  await waitForActive(registration);
+
+  // Activated is not the same as CONTROLLING. On the very first load the page was
+  // fetched before any worker existed, so it stays uncontrolled until the worker
+  // claims it — and an uncontrolled page means the proxied frame's requests are
+  // never intercepted, which looks exactly like the site failing to load.
+  if (navigator.serviceWorker.controller) return;
+  await new Promise<void>(resolve => {
+    const done = () => {
+      navigator.serviceWorker.removeEventListener('controllerchange', done);
+      resolve();
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', done);
+    // clientsClaim normally lands in milliseconds; do not hang the panel if a
+    // browser policy means it never will.
+    window.setTimeout(done, 3000);
   });
 }
 
@@ -158,27 +191,9 @@ export function BrowserPanel({
   initialUrl = 'https://duckduckgo.com',
   partition = 'persist:agensis-browser',
 }: BrowserPanelProps) {
-  // WEB DEFAULTS TO 'iframe', NOT 'proxy' — the proxy engine is finished but not
-  // yet usable, and the reason is worth recording because it is not obvious.
-  //
-  // `public/browse/sw.js` is scoped to `/browse/`, so it only sees requests under
-  // that path. A proxied page emits plenty of requests that are NOT under it: a
-  // Next.js site computes its chunk URLs at runtime from `__webpack_public_path__`
-  // and asks for `/_next/static/...` at the ORIGIN ROOT, which the rewriter never
-  // saw in the HTML and the scoped worker never sees on the wire. Those escape to
-  // Netlify, which answers with its own HTML, and the browser refuses every one
-  // for a MIME mismatch. Measured A/B on the same page, changing only the scope:
-  // `/browse/` → unreachable; `/` → renders (1704 nodes, 72 images).
-  //
-  // The fix is a SINGLE root-scope worker doing both jobs — VitePWA switched from
-  // generateSW to injectManifest, scramjet routing for `/browse/*` and Workbox for
-  // the rest. That touches the update flow and the navigateFallbackAllowlist that
-  // fixed the soft-404s, so it is its own change, not a tweak to this one.
-  //
-  // Until then web keeps the behaviour it has always had: a plain iframe that says
-  // so plainly when a site refuses framing. Flip this to 'proxy' when the worker
-  // lands — everything else here is ready.
-  const [engine, setEngine] = useState<Engine>(() => (supportsWebviewTag() ? 'desktop' : 'iframe'));
+  // Web goes through the proxy; it falls back to 'iframe' by itself if the proxy
+  // cannot boot (no service worker at all — private windows, enterprise policy).
+  const [engine, setEngine] = useState<Engine>(() => (supportsWebviewTag() ? 'desktop' : 'proxy'));
   const [url, setUrl] = useState(initialUrl);
   const [address, setAddress] = useState(initialUrl);
   const [blocked, setBlocked] = useState(false);
@@ -266,10 +281,7 @@ export function BrowserPanel({
         await controller.init();
         if (disposed) return;
 
-        const registration = await navigator.serviceWorker.register(`${PROXY_PREFIX}sw.js`, {
-          scope: PROXY_PREFIX,
-        });
-        await waitForActive(registration);
+        await ensureProxyWorker();
         if (disposed) return;
 
         const host = proxyHostRef.current;

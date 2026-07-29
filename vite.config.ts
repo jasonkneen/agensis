@@ -220,6 +220,15 @@ export default defineConfig({
         // swap.
         skipWaiting: true,
         clientsClaim: true,
+        // The web browser panel's proxy handler, pulled into THIS worker rather
+        // than registered as its own. A worker scoped to /browse/ was measured
+        // and does not work: a proxied page requests things at the origin root
+        // (Next.js chunk URLs built at runtime) that a scoped worker never sees,
+        // so they escape to Netlify and come back as HTML. A second root-scope
+        // worker is not an option either — only one worker controls a client.
+        // Workbox emits these imports at the top of the generated worker, so the
+        // proxy's fetch listener is registered before Workbox's own.
+        importScripts: ['/scramjet-sw.js'],
         globPatterns: ['index.html', 'assets/{index,vendor-react,vendor-ui}-*.{js,css}', '**/*.{svg,png,woff2}'],
         // Allowlist, not denylist: Workbox matches these against
         // `url.pathname + url.search`, so a denylist entry like /^\/$/ misses
