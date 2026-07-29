@@ -22,7 +22,9 @@ const {
 const { createAutomations, mountAutomationRoutes } = require('./automations.cjs');
 const { createAgentTemplates, mountAgentTemplateRoutes } = require('./agent-templates-routes.cjs');
 const { createWorkspaceSkills, mountWorkspaceSkillRoutes } = require('./workspace-skills-routes.cjs');
-const { normalizeAgentTemplate, agentToTemplateDraft } = require('../shared/agentTemplates.cjs');
+const {
+ normalizeAgentTemplate, agentToTemplateDraft, readTemplateExport, templateFingerprint,
+} = require('../shared/agentTemplates.cjs');
 // Reactions are written through the generic /backend/db/update route as a whole
 // jsonb map, so their flow events come from diffing that map — see the module
 // header. Shared with netlify/functions/backend.mjs; the two lanes differ only
@@ -2078,13 +2080,19 @@ async function ensureRuntimeSchema() {
  // CHECK is dropped and re-added rather than altered (Postgres has no ALTER
  // CONSTRAINT for CHECK); the name is deterministic for both an inline column
  // check and this statement, so it stays idempotent across re-runs.
+ //
+ // 'automation' joined it for the automations `create_task` action. Widening a
+ // CHECK is safe on a populated table BECAUSE IT ONLY ADDS a permitted value —
+ // every existing row already satisfies the wider predicate, so the validation
+ // scan Postgres runs on ADD CONSTRAINT cannot fail. Narrowing this list later
+ // is the dangerous direction and would need a data migration first.
  await db.unsafe(`
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_system boolean NOT NULL DEFAULT false;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_workspaces_system ON workspaces (is_system) WHERE is_system;
 
     ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_source_type_check;
     ALTER TABLE tasks ADD CONSTRAINT tasks_source_type_check
-      CHECK (source_type IN ('manual', 'chat', 'document', 'canvas', 'ai', 'feedback'));
+      CHECK (source_type IN ('manual', 'chat', 'document', 'canvas', 'ai', 'feedback', 'automation'));
 
     CREATE TABLE IF NOT EXISTS feedback_reports (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -7291,7 +7299,7 @@ const {
 // the security property is that its output is REBUILT from a carried-field list,
 // so no privilege-bearing column can ride into the template table.
 const {
- listAgentTemplates, createAgentTemplate, saveAgentAsTemplate,
+ listAgentTemplates, createAgentTemplate, saveAgentAsTemplate, importAgentTemplate,
  updateAgentTemplate, deleteAgentTemplate,
 } = createAgentTemplates({
  getDb: () => getDb(),
@@ -7299,6 +7307,12 @@ const {
  enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
  normalizeAgentTemplate,
  agentToTemplateDraft,
+ readTemplateExport,
+ templateFingerprint,
+ // Import alone is audited, because import alone crosses a workspace boundary.
+ // Authoring is not: a template cannot carry privilege, so writing one is a
+ // non-event and logging it would bury the rows that matter.
+ recordAudit: (...a) => recordAudit(...a),
 });
 
 // The app-side skill store. Same shape and same reasoning as agent templates:
@@ -7732,7 +7746,7 @@ function createApp() {
  // still goes through the generic insert, where the column guards apply.
  mountAgentTemplateRoutes(app, {
   ...coreDeps(),
-  listAgentTemplates, createAgentTemplate, saveAgentAsTemplate,
+  listAgentTemplates, createAgentTemplate, saveAgentAsTemplate, importAgentTemplate,
   updateAgentTemplate, deleteAgentTemplate,
  });
  // The app-side skill store. Authoring is 'write' for the same reason as a

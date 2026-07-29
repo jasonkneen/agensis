@@ -581,3 +581,57 @@ test('everything after -- is passed through, so a message body may contain --jso
   const call = fetchFn.calls.find((c) => c.rpcMethod === 'tools/call');
   assert.equal(call.params.arguments.content, 'build failed: pass --json next time');
 });
+
+// ---------------------------------------------------------------------------
+// Pagination. The tools grew keyset cursors (server/mcp.cjs), so the CLI can
+// now say "there is more, here is how to get it" instead of "raise --limit".
+//
+// THE SILENT CASE IS THE ONE THAT MATTERED. The old warning fired only when
+// --limit was passed, so the ordinary invocation hit the server's default of 50
+// and reported a truncated list as complete.
+// ---------------------------------------------------------------------------
+
+test('a full page WITHOUT --limit is reported, and offers the cursor', async () => {
+  // MUTATION: restore the `if (!Number.isFinite(limit)) return` early exit at
+  // the top of warnIfTruncated -> no note is emitted and this fails.
+  const { runOpsCommand } = await loadCli();
+  const channels = Array.from({ length: 50 }, (_v, i) => ({ id: `id-${i}`, title: `c${i}` }));
+  const fetchFn = makeFetch({
+    'tools/list': toolsListOk,
+    'tools/call': toolOk({ channels, next_cursor: 'eyJhdCI6IngifQ' }),
+  });
+  const io = harness({ fetchFn });
+
+  const code = await runOpsCommand(['channels'], io);
+  assert.equal(code, 0);
+  assert.match(io.errText(), /there is more behind it/);
+  assert.match(io.errText(), /--cursor eyJhdCI6IngifQ/);
+});
+
+test('a LAST page says nothing, however full it looks', async () => {
+  // next_cursor:null is the server saying "that was everything". A row count
+  // equal to the limit must NOT override it — a workspace with exactly 50
+  // channels would otherwise be told forever that there might be more.
+  const { runOpsCommand } = await loadCli();
+  const channels = Array.from({ length: 50 }, (_v, i) => ({ id: `id-${i}` }));
+  const fetchFn = makeFetch({
+    'tools/list': toolsListOk,
+    'tools/call': toolOk({ channels, next_cursor: null }),
+  });
+  const io = harness({ fetchFn });
+  await runOpsCommand(['channels', '--limit', '50'], io);
+  assert.equal(io.errText().includes('there is more'), false);
+  assert.equal(io.errText().includes('hit the requested limit'), false);
+});
+
+test('an older server with no cursor still warns, rather than going quiet', async () => {
+  // The CLI ships independently of the backend. If it only trusted next_cursor,
+  // pointing it at a Fly deploy that predates the cursors would silently lose
+  // the truncation warning the CLI already had.
+  const { runOpsCommand } = await loadCli();
+  const channels = Array.from({ length: 3 }, (_v, i) => ({ id: `id-${i}` }));
+  const fetchFn = makeFetch({ 'tools/list': toolsListOk, 'tools/call': toolOk({ channels }) });
+  const io = harness({ fetchFn });
+  await runOpsCommand(['channels', '--limit', '3'], io);
+  assert.match(io.errText(), /hit the requested limit of 3/);
+});

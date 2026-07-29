@@ -72,6 +72,7 @@ import {
 import { HuddleMarkerRow } from '../huddle/HuddleMarkerRow';
 import { HuddleMarkerGroupRow } from '../huddle/HuddleMarkerGroupRow';
 import { EditChannelDialog } from '../chat/EditChannelDialog';
+import { ConversationAccessDialog } from '../chat/ConversationAccessDialog';
 import { channelIconGlyph, normalizeChannelIcon, type ChannelProfileDraft } from '../../lib/channelProfile';
 import {
   CHANNEL_MENTION_HANDLE,
@@ -1380,6 +1381,14 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
 }
 
   const [editChannelOpen, setEditChannelOpen] = useState(false);
+  const [accessOpen, setAccessOpen] = useState(false);
+
+  // The session the access dialog acts on. `channelMeta.id` FIRST, because
+  // `inferredSessionId` is read off the messages and a direct message with no
+  // messages yet has none — and a fresh DM is exactly the one somebody may need
+  // to be let into. Falls back to the inferred id for the case where the meta
+  // fetch has not landed.
+  const accessSessionId = channelMeta?.id || inferredSessionId || null;
 
   // The dialog's seed. Built from the PERSISTED meta so a reopened dialog shows
   // what is stored, never what a previous cancelled edit left in state.
@@ -1835,6 +1844,18 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                   <DropdownMenuItem onSelect={() => setEditChannelOpen(true)}>
                     <Settings2 data-icon="inline-start" />
                     Edit channel
+                  </DropdownMenuItem>
+                )}
+                {/* DM ONLY, and shown to everyone in the DM rather than to
+                    admins alone: the item is the only place the app says who
+                    can read a private conversation, and hiding it from
+                    non-admins would leave them unable to find out. The routes
+                    behind it are manage-gated and the dialog says so plainly
+                    when they refuse. */}
+                {isDirectMessage && (
+                  <DropdownMenuItem onSelect={() => setAccessOpen(true)}>
+                    <ShieldCheck data-icon="inline-start" />
+                    Who can read this
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuItem onSelect={() => setSidePanel('pins')}>
@@ -2537,6 +2558,14 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
         baseline={channelProfileBaseline}
         onSave={handleSaveChannelProfile}
         status={channelActionStatus}
+      />
+
+      <ConversationAccessDialog
+        open={accessOpen}
+        onOpenChange={setAccessOpen}
+        sessionId={accessSessionId}
+        workspaceId={workspaceId ?? null}
+        title={directAgent?.name || channelTitle || ''}
       />
 
       <Dialog open={addParticipantsOpen} onOpenChange={setAddParticipantsOpen}>

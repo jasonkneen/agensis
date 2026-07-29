@@ -1,5 +1,46 @@
 [
   {
+    "version": "template-export-import",
+    "date": "2026-07-30",
+    "title": "Move a persona between workspaces",
+    "summary": "A template you had written or saved from an agent was stuck in the workspace it was made in. You can now download one as a file and bring it into another workspace. Hover a template you made and there is a download button on the corner; the Import a template control sits above the list. What travels is wording only — the name, the prompt, the soul and instructions, and which tools and skills to ask for. A file cannot carry a permission mode, a sandbox setting, a connect token or an identity, and that is not a filter we run over it: a template has nowhere to keep those things in the first place, so there is nothing in a file to remove. If somebody hand-edits one in anyway, the import is refused and names the field rather than quietly ignoring it. Do read the prompt before you use an imported template, because it becomes the instructions an agent here follows. Importing needs the admin role and is written to the audit log, since the wording came from outside this workspace; writing your own template is unchanged and is not logged.",
+    "highlights": [
+      "Download a template you made as a .agent.json file",
+      "Import a template file into another workspace",
+      "Only wording travels — no permission mode, sandbox, token or identity, ever",
+      "A file that names one of those is refused, with the field named",
+      "Importing needs the admin role and is recorded in the audit log",
+      "Bundled templates cannot be exported, so a shipped persona cannot be forked into a stale copy"
+    ]
+  },
+  {
+    "version": "automations-create-task",
+    "date": "2026-07-30",
+    "title": "A rule can now raise a task, not just post about it",
+    "summary": "Automations could post a message and nothing else, which meant the useful half of \"when a deploy fails, do something about it\" ended as a line in a channel that scrolled away. A rule can now create a task instead. Pick Create a task in the rule form, give it a title and optionally some detail, and every time the rule fires a task appears on the board with the message text filled in wherever you asked for it. The task is created UNASSIGNED and stays that way until a person picks it up or hands it to someone, and that is deliberate rather than unfinished: giving work to an agent is what starts the agent running, so a rule that could assign would be a rule that could spend money on its own. Everything else about automations is unchanged — a rule still cannot wake an agent, start a conversation or cost you anything however often it fires, and a task a rule created can never set another rule off.",
+    "highlights": [
+      "Choose Post a message or Create a task when you write a rule",
+      "The task title and detail can pull in the message that triggered the rule",
+      "Tasks arrive unassigned — a rule cannot give work to an agent, by design",
+      "Still no way for a rule to wake an agent or spend a token",
+      "A task a rule created cannot trigger another rule"
+    ]
+  },
+  {
+    "version": "conversation-access",
+    "date": "2026-07-30",
+    "title": "You can now see, and change, who can read a direct message",
+    "summary": "Direct messages became private, and admins were given a way to let someone into one conversation when it was genuinely needed — but that only ever existed as something the server understood, with no screen anywhere in the app. In practice it did not exist: if somebody lost access to a conversation they used to be able to read, there was no way to give it back. There is now. Open a direct message, choose Who can read this from the menu, and you get the list: the people whose conversation it is, anyone who has been let in, and when their access runs out. From the same place you can give a member of the workspace access to that one conversation, with an expiry of a week, a month, three months, or none, and take it back again at any time. Only people already in the workspace can be offered access, and it only ever covers the one conversation. The screen also says what the audit log does and does not record — every grant and withdrawal is written down, but somebody being refused a read is not, so an empty log is not proof that nobody tried.",
+    "highlights": [
+      "Who can read this, in the menu of any direct message",
+      "See who is in the conversation, who has been let in, and when their access expires",
+      "Give a workspace member access to one conversation, with an optional expiry",
+      "Take access back at any time — the people whose conversation it is can never be removed",
+      "Access that has expired is shown as expired, and can be renewed rather than recreated",
+      "Grants and withdrawals now read as plain English in the audit log instead of raw action names"
+    ]
+  },
+  {
     "version": "skill-store",
     "date": "2026-07-30",
     "title": "You can now write a skill, instead of only naming one",

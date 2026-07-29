@@ -88,6 +88,50 @@ export function useAgentTemplates(workspaceId: string | null) {
     }
   }, [workspaceId]);
 
+  /**
+   * Import a template file. Returns an error MESSAGE (or '' on success) rather
+   * than a boolean, because the server's refusals are the useful part: it names
+   * the offending key when a hand-edited file carries `permissionMode`, and
+   * "import failed" would throw that away.
+   *
+   * Manage-gated server-side, unlike authoring — importing crosses a workspace
+   * boundary. A 403 is reported as what it is.
+   */
+  const importTemplate = useCallback(async (payload: unknown): Promise<string> => {
+    if (!workspaceId) return 'No workspace selected';
+    try {
+      const response = await fetch(
+        apiUrl(`/backend/workspaces/${workspaceId}/agent-templates/import`),
+        {
+          method: 'POST',
+          headers: { ...apiAuthHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ export: payload }),
+        },
+      );
+      const body: { data?: StoredAgentTemplate; error?: { message?: string } | string } | null =
+        await response.json().catch(() => null);
+      if (response.status === 403) {
+        return 'Importing a template needs the manage role on this workspace.';
+      }
+      if (response.status === 404) {
+        return 'This server does not support importing templates yet.';
+      }
+      if (!response.ok) {
+        const error = body?.error;
+        if (typeof error === 'string' && error.trim()) return error;
+        if (error && typeof error === 'object' && error.message) return error.message;
+        return 'Could not import that template';
+      }
+      const saved = body?.data ?? null;
+      if (saved) {
+        setTemplates(prev => [saved, ...prev.filter(entry => entry.slug !== saved.slug)]);
+      }
+      return '';
+    } catch {
+      return 'Could not reach the server';
+    }
+  }, [workspaceId]);
+
   const deleteTemplate = useCallback(async (templateId: string): Promise<boolean> => {
     if (!workspaceId || !templateId) return false;
     try {
@@ -103,5 +147,5 @@ export function useAgentTemplates(workspaceId: string | null) {
     }
   }, [workspaceId]);
 
-  return { templates, loading, unavailable, refresh, saveAgentAsTemplate, deleteTemplate };
+  return { templates, loading, unavailable, refresh, saveAgentAsTemplate, importTemplate, deleteTemplate };
 }

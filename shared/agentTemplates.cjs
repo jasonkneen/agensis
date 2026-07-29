@@ -401,6 +401,117 @@ function personaBudget(template = {}) {
  };
 }
 
+// ---------------------------------------------------------------------------
+// EXPORT / IMPORT
+//
+// The envelope exists so a file that arrives is identifiable before it is
+// trusted: an unmarked JSON blob has to be guessed at, and guessing is how a
+// reader ends up treating some other tool's export as a persona.
+//
+// THE SECURITY PROPERTY IS NOT IN THIS SECTION. It is in the SHAPE, and it was
+// solved before export existed: `workspace_agent_templates` has no column for
+// permission_mode, sandbox config, connect tokens or identity, so a template
+// cannot carry authority and neither can a file made from one. Import does not
+// need to strip anything, because there is nothing here to strip. What it does
+// need to do is REFUSE LOUDLY when a file names one of those fields anyway —
+// normalizeAgentTemplate already does exactly that, naming the offending key —
+// so someone who hand-edited `"permissionMode": "yolo"` into a file learns that
+// it was refused rather than believing it took effect.
+//
+// So: DO NOT ADD A PRIVILEGE-BEARING FIELD HERE to make import "complete". The
+// incompleteness is the feature. An imported persona is prose a teammate's
+// agent will later speak, and nothing more.
+// ---------------------------------------------------------------------------
+
+/** Names the file's kind, so a stranger's JSON cannot be read as a persona. */
+const TEMPLATE_EXPORT_FORMAT = 'agensis.agent-template';
+
+/**
+ * Bumped only for a BREAKING envelope change.
+ *
+ * Adding a carried field is not breaking: an older file simply lacks it and
+ * normalizeAgentTemplate fills the default. Reading a file from the future is
+ * refused, because a v2 field this build does not understand could be one whose
+ * absence changes what the persona means.
+ */
+const TEMPLATE_EXPORT_VERSION = 1;
+
+/**
+ * Build the file. REBUILT from CARRIED_FIELDS, never spread from the row.
+ *
+ * The stored row carries `id`, `workspace_id` and `created_by`; a spread would
+ * put another workspace's identifiers into a file meant to travel, and an
+ * import that trusted them would write across a tenant boundary.
+ */
+function buildTemplateExport(template = {}, { exportedAt = new Date().toISOString() } = {}) {
+ const body = {};
+ for (const field of CARRIED_FIELDS) {
+  const value = template[field];
+  body[field] = Array.isArray(value) ? [...value] : (value ?? '');
+ }
+ return {
+  format: TEMPLATE_EXPORT_FORMAT,
+  formatVersion: TEMPLATE_EXPORT_VERSION,
+  exportedAt,
+  // The body's own hash, so two files can be compared without reading them and
+  // an import can record WHAT it took in. Not a signature and not integrity
+  // protection: anyone editing the file can recompute it. It identifies, it
+  // does not authenticate, and nothing may treat it as though it does.
+  fingerprint: templateFingerprint(body),
+  template: body,
+ };
+}
+
+/**
+ * Read a file back. Returns the same `{ ok, errors, template, rejected }` shape
+ * as normalizeAgentTemplate, because the caller's handling is identical.
+ *
+ * Accepts a BARE template object as well as an envelope. Somebody will paste
+ * just the inner object, and refusing that would teach nothing — the validation
+ * that matters runs either way.
+ */
+function readTemplateExport(raw) {
+ if (typeof raw === 'string') {
+  try {
+   return readTemplateExport(JSON.parse(raw));
+  } catch {
+   return { ok: false, errors: ['that file is not valid JSON'], template: null, rejected: [] };
+  }
+ }
+ if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+  return { ok: false, errors: ['that file does not contain an agent template'], template: null, rejected: [] };
+ }
+
+ const hasEnvelope = Object.prototype.hasOwnProperty.call(raw, 'format')
+  || Object.prototype.hasOwnProperty.call(raw, 'template');
+
+ if (hasEnvelope) {
+  if (String(raw.format || '') !== TEMPLATE_EXPORT_FORMAT) {
+   return {
+    ok: false,
+    errors: [`that file is not an agensis agent template (its format is ${JSON.stringify(String(raw.format || 'missing'))})`],
+    template: null,
+    rejected: [],
+   };
+  }
+  const version = Number(raw.formatVersion);
+  if (!Number.isFinite(version) || version < 1) {
+   return { ok: false, errors: ['that file does not say which format version it is'], template: null, rejected: [] };
+  }
+  if (version > TEMPLATE_EXPORT_VERSION) {
+   return {
+    ok: false,
+    errors: [`that file was written by a newer version of agensis (format ${version}, this one reads ${TEMPLATE_EXPORT_VERSION})`],
+    template: null,
+    rejected: [],
+   };
+  }
+  return normalizeAgentTemplate(raw.template);
+ }
+
+ return normalizeAgentTemplate(raw);
+}
+
 /** SHA-256 over the carried fields, canonicalised. Identifies a template body. */
 function templateFingerprint(template = {}) {
  const canonical = {};
@@ -422,6 +533,10 @@ module.exports = {
  TOOLS_ARE_ADVISORY,
  DAEMON_LEAN_PROMPT_MAX_BYTES,
  MAX_PROSE,
+ TEMPLATE_EXPORT_FORMAT,
+ TEMPLATE_EXPORT_VERSION,
+ buildTemplateExport,
+ readTemplateExport,
  normalizeAgentTemplate,
  agentToTemplateDraft,
  templateToAgentDraft,

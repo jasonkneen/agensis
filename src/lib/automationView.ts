@@ -73,6 +73,10 @@ export function conditionLabel(condition: AutomationCondition): string {
 
 export function stepLabel(step: AutomationStep): string {
   if (step.action === 'post_message') return 'Post a message';
+  // Named "create a task", never "assign a task". An automation cannot name an
+  // assignee — the step has no such field — and a summary that implied
+  // otherwise would describe something the rule cannot do.
+  if (step.action === 'create_task') return 'Create a task';
   return step.action;
 }
 
@@ -168,10 +172,23 @@ export function runCountLabel(automation: Pick<Automation, 'run_count' | 'fail_c
  * cheaper than either a surprised bill or a rule that appears not to work.
  */
 export const AUTOMATION_SAFETY_NOTE =
-  'An automation can post a message, and that is all it can do. It cannot wake '
-  + 'an agent, start a conversation or spend any tokens, so a rule cannot run up '
-  + 'a bill however often it fires. Rules run on the server, so they keep working '
-  + 'whether or not anyone is online.';
+  'An automation can post a message or create a task, and that is all it can do. '
+  + 'It cannot wake an agent, start a conversation or spend any tokens, so a rule '
+  + 'cannot run up a bill however often it fires. Rules run on the server, so they '
+  + 'keep working whether or not anyone is online.';
+
+/**
+ * Shown next to the create-a-task fields, not only in the panel-wide note.
+ *
+ * The omission is the whole safety property and it is invisible: there is no
+ * assignee control to notice the absence of, so someone reasonably assumes the
+ * rule will give the task to somebody. Saying it here is what stops a rule from
+ * being written on that assumption and quietly never being picked up.
+ */
+export const AUTOMATION_TASK_NOTE =
+  'The task is created unassigned, and stays that way until a person picks it up '
+  + 'or gives it to someone. A rule cannot assign work, because assigning work to '
+  + 'an agent is what starts it running.';
 
 /**
  * Stated before someone types a rule they cannot save. The server enforces
@@ -189,4 +206,5 @@ export const AUTOMATION_UNAVAILABLE_NOTE =
 
 export const AUTOMATION_EMPTY_NOTE =
   'No rules yet. A rule watches for something happening in this workspace and '
-  + 'posts a message when it does, with no agent involved and nothing to pay for.';
+  + 'posts a message or creates a task when it does, with no agent involved and '
+  + 'nothing to pay for.';

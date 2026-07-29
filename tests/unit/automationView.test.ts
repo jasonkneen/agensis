@@ -16,6 +16,7 @@ import {
   AUTOMATION_EMPTY_NOTE,
   AUTOMATION_PERMISSION_NOTE,
   AUTOMATION_SAFETY_NOTE,
+  AUTOMATION_TASK_NOTE,
   AUTOMATION_UNAVAILABLE_NOTE,
   automationState,
   conditionLabel,
@@ -111,6 +112,16 @@ describe('ruleSummary', () => {
     expect(ruleSummary({ version: 1, trigger: { event: '' }, when: [], steps: [] })).toBe('');
     expect(() => ruleSummary(undefined as never)).not.toThrow();
   });
+
+  it('summarises a create_task rule', () => {
+    const summary = ruleSummary({
+      version: 1,
+      trigger: { event: 'message.created' },
+      when: [{ field: 'data.content', op: 'contains', value: 'deploy failed' }],
+      steps: [{ action: 'create_task', title: 'Look into the deploy', description: '' }],
+    });
+    expect(summary).toBe('When a message is posted, and the message text contains "deploy failed", create a task.');
+  });
 });
 
 describe('labels', () => {
@@ -119,6 +130,15 @@ describe('labels', () => {
     expect(conditionLabel({ field: 'data.content', op: 'contains', value: 'x' })).toBe('the message text contains "x"');
     expect(conditionLabel({ field: 'data.content', op: 'is_empty' })).toBe('the message text is empty');
     expect(stepLabel({ action: 'post_message' })).toBe('Post a message');
+    expect(stepLabel({ action: 'create_task' })).toBe('Create a task');
+  });
+
+  it('never says a rule ASSIGNS a task, because it cannot', () => {
+    // A rule has no assignee field at all. A summary reading "assign a task"
+    // would describe something the automation cannot do, and would leave
+    // someone waiting for work that is sitting unclaimed.
+    expect(stepLabel({ action: 'create_task' }).toLowerCase()).not.toContain('assign');
+    expect(AUTOMATION_TASK_NOTE.toLowerCase()).toContain('unassigned');
   });
 
   it('falls back to the raw name rather than rendering nothing', () => {
@@ -180,6 +200,19 @@ describe('the window copy', () => {
     // MUTATION: soften this to "automations are lightweight" -> this fails.
     expect(AUTOMATION_SAFETY_NOTE).toMatch(/cannot wake an agent/i);
     expect(AUTOMATION_SAFETY_NOTE).toMatch(/spend any tokens/i);
+    // And it must name BOTH actions. The note used to say "can post a message,
+    // and that is all it can do", which stopped being true the moment
+    // create_task shipped — copy that under-promises still misdescribes.
+    expect(AUTOMATION_SAFETY_NOTE).toMatch(/post a message/i);
+    expect(AUTOMATION_SAFETY_NOTE).toMatch(/create a task/i);
+  });
+
+  it('warns that a rule-made task arrives unassigned', () => {
+    // The omission is invisible: there is no assignee control to notice the
+    // absence of, so the copy is the only thing that prevents a rule being
+    // written on the assumption that somebody will be given the work.
+    expect(AUTOMATION_TASK_NOTE).toMatch(/unassigned/i);
+    expect(AUTOMATION_TASK_NOTE).toMatch(/cannot assign/i);
   });
 
   it('states the admin requirement before someone types a rule', () => {
