@@ -1,5 +1,18 @@
 [
   {
+    "version": "inbox-command-centre",
+    "date": "2026-07-29",
+    "title": "The inbox now shows the things that were stopping agents",
+    "summary": "When an agent needs your permission to run something, it stops and waits — and until now that request only ever appeared inside the one conversation it came from, so if you were looking anywhere else it quietly timed out. Those approvals now sit at the top of your inbox and you can answer them there, without hunting for the chat. Replies in threads you are part of show up alongside them, and opening anything puts the conversation next to your inbox, at the reply you came for.",
+    "highlights": [
+      "Pending approvals appear at the top of the inbox and can be allowed or denied without leaving it",
+      "Approvals sort above everything else, because they are the only thing here that expires",
+      "Replies in threads you are following now land in the inbox, not only in the sidebar",
+      "Opening an item tiles the conversation beside the inbox instead of covering everything",
+      "Opening a thread reply jumps straight to that thread rather than the bottom of the channel"
+    ]
+  },
+  {
     "version": "agents-keep-working",
     "date": "2026-07-29",
     "title": "Agents stop dying halfway through a job",
