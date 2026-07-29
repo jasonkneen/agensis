@@ -37,7 +37,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { AI_MODELS, type AgentConnection, type AgentPermissionMode, type AgentWebhook, type ChatSession, type OrbConfigInput, type OrbProvider, type OrbRouting, type Task, type WorkspaceAgent } from '../../types';
+import { AI_MODELS, type AgentConnection, type AgentPermissionMode, type AgentWebhook, type ChatSession, type Task, type WorkspaceAgent } from '../../types';
 import { apiAuthHeaders, apiBaseUrl, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -107,10 +107,11 @@ import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useSplitResize } from '../../hooks/useSplitResize';
 import {
   AGENT_LAYOUT_VIEW_PREF,
-  AGENT_SPLIT_BOUNDS,
+  AGENT_SPLIT_PREF,
   AGENTS_SPLIT_HIDE_BELOW,
   AGENTS_SPLIT_ONLY_BELOW,
   agentFormBarPlacement,
+  agentSplitGridHeight,
   toggleAgentSelection,
   type AgentLayoutView,
 } from '../../lib/agentsView';
@@ -983,11 +984,11 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 // window resize cannot orphan one either.
                 return (
                   <div className="flex min-h-0 flex-1 flex-col px-1 pt-1.5 pb-2">
-                    <div ref={split.containerRef} className="flex min-h-0 flex-1 flex-col">
+                    <div ref={attachSplit} className="flex min-h-0 flex-1 flex-col">
                       {/* pb-2 is the gutter between the panes, INSIDE the grid
                           pane's own box, so the two heights still sum to the
                           container the clamp was handed. */}
-                      <div className="relative shrink-0 pb-2" style={{ height: `${split.size}px` }}>
+                      <div className="relative shrink-0 pb-2" style={{ height: `${splitGridHeight}px` }}>
                         <div className="h-full overflow-y-auto pr-0.5">{grid}</div>
                         {/* The same invisible grab strip the account list uses,
                             turned on its side: a hairline that only appears
