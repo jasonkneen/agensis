@@ -347,3 +347,65 @@ test('a harvest that is still running has nothing to review', async () => {
     (error) => error.status === 409,
   );
 });
+
+// ---------------------------------------------------------------------------
+// A suggestion mined from a conversation that is private NOW cannot be accepted.
+//
+// listThreadHarvests already hides those rows, but hiding is not reach: this
+// path takes an ID, so the row is reachable whether or not it was listed. The
+// boot-time purge in ensureRuntimeSchema removes rows for private sessions, and
+// that closes the generic /backend/db/select path — but it runs at boot, so a
+// conversation turned private while somebody has the review screen open is
+// still decidable until the next restart. Accepting one copies a private
+// conversation into memory_facts or documents, where the whole workspace reads
+// it, and that is the leak the DM work shipped today exists to prevent.
+// ---------------------------------------------------------------------------
+
+test('the decide fetch refuses a suggestion whose conversation is private', async () => {
+  const { harvestApi, calls } = installReview();
+
+  await harvestApi.decideHarvestFinding({
+    userId: 'u1', workspaceId: 'ws-1', harvestId: 'h1', index: 0, decision: 'accept',
+  });
+
+  const fetched = calls.find((c) => c.n.startsWith('select h.*, s.title'));
+  assert.ok(fetched, 'the decide path loads the row it is about to act on');
+  // Both halves of the test the read authorizer uses: the column, and the folder
+  // that carries the DMs predating it.
+  assert.match(
+    fetched.n,
+    /coalesce\(s\.visibility, 'workspace'\) <> 'private'/,
+    'a private conversation is excluded by the query, not after the fetch',
+  );
+  assert.match(
+    fetched.n,
+    /coalesce\(s\.folder, ''\) <> 'Direct messages'/,
+    'the older folder-shaped DMs are excluded too',
+  );
+});
+
+test('a hard-deleted conversation is still decidable', async () => {
+  // The privacy clause is on a LEFT join, so it must pass when the session row
+  // is gone entirely — coalesce over NULL, not NULL propagating into a refusal.
+  // Losing the thread must not strand the proposals mined from it, which is the
+  // reason the join is LEFT in the first place.
+  const { harvestApi, inserted } = installReview({
+    harvest: {
+      id: 'h1',
+      workspace_id: 'ws-1',
+      session_id: 's-gone',
+      status: 'done',
+      reason: 'deleted',
+      findings: [{ kind: 'memory', title: 'a fact', body: 'the fact itself' }],
+      created_at: '2026-07-29T08:00:00Z',
+      session_title: null,
+      session_deleted_at: null,
+    },
+  });
+
+  await harvestApi.decideHarvestFinding({
+    userId: 'u1', workspaceId: 'ws-1', harvestId: 'h1', index: 0, decision: 'accept',
+  });
+
+  assert.equal(inserted.length, 1, 'the proposal is still acceptable without its source thread');
+});
