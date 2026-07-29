@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   GALLERY_SLIDES,
@@ -7,9 +9,12 @@ import {
   isValidScene,
   isValidShape,
   nextSlideIndex,
+  orderGallerySlides,
   sceneDurationSeconds,
+  type GallerySlide,
   type WireframeScene,
 } from '../../src/lib/wireframeScenes';
+import { parseReleaseNotes } from '../../src/lib/releaseNotes';
 
 // A wireframe demo is authoring DATA. Everything here is a mistake that would
 // otherwise render as a silently blank or clipped diagram that nobody notices
@@ -130,8 +135,13 @@ describe('GALLERY_SLIDES', () => {
     }
   });
 
-  it('slide ids are unique', () => {
-    const ids = GALLERY_SLIDES.map(s => s.id);
+  it('no two slides illustrate the same note', () => {
+    const notes = GALLERY_SLIDES.map(s => s.note);
+    expect(new Set(notes).size).toBe(notes.length);
+  });
+
+  it('no two slides share a scene — a repeated animation says nothing', () => {
+    const ids = GALLERY_SLIDES.map(s => s.scene.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
@@ -143,5 +153,90 @@ describe('GALLERY_SLIDES', () => {
       // it overflows the panel beside the demo.
       expect(slide.body.length).toBeLessThanOrEqual(160);
     }
+  });
+
+  it('stays a highlight reel rather than a changelog', () => {
+    expect(GALLERY_SLIDES.length).toBeGreaterThanOrEqual(3);
+    expect(GALLERY_SLIDES.length).toBeLessThanOrEqual(6);
+  });
+});
+
+// --- the drift guard -------------------------------------------------------
+//
+// The slides are authored in TypeScript and the release notes in JSON, so
+// nothing in the type system stops the gallery advertising features nobody
+// shipped — which is precisely what happened: six slides about tool loops and
+// link previews sat above notes about private DMs and the audit log. These
+// tests are the join between the two files, and they are the reason a slide
+// names its note at all.
+
+// Read from disk rather than imported: the notes are a public/ asset served at
+// runtime, not a module, and importing them would let a bundler decide this
+// test passes. cwd is the repo root under vitest.
+const notesPath = resolve(process.cwd(), 'public/release-notes.json');
+const RELEASE_NOTES = parseReleaseNotes(JSON.parse(readFileSync(notesPath, 'utf8')));
+
+describe('the gallery against the release notes', () => {
+  it('the notes file itself parses — everything below depends on it', () => {
+    expect(RELEASE_NOTES.length).toBeGreaterThan(0);
+  });
+
+  it('every slide illustrates a note that was actually written', () => {
+    const versions = new Set(RELEASE_NOTES.map(n => n.version));
+    for (const slide of GALLERY_SLIDES) {
+      // Fails when a slide outlives its note, or names one that never landed:
+      // an animation for a feature no user was told about.
+      expect(versions.has(slide.note), `no release note with version "${slide.note}"`).toBe(true);
+    }
+  });
+
+  it('the newest release has a slide', () => {
+    // Not every note deserves an animation — but shipping a whole release
+    // without one means the gallery is showing the previous release as news.
+    // Notes are authored newest-first.
+    const newestDate = RELEASE_NOTES[0]?.date;
+    const newest = new Set(RELEASE_NOTES.filter(n => n.date === newestDate).map(n => n.version));
+    const covered = GALLERY_SLIDES.filter(s => newest.has(s.note)).map(s => s.note);
+    expect(covered.length, `no slide for any note dated ${newestDate}`).toBeGreaterThan(0);
+  });
+});
+
+describe('orderGallerySlides', () => {
+  const slide = (note: string) => ({ note, title: note, body: note, scene: {} }) as GallerySlide;
+
+  it('leads with the slide for the newest note', () => {
+    const ordered = orderGallerySlides(
+      [slide('old'), slide('new')],
+      [{ version: 'new' }, { version: 'old' }],
+    );
+    expect(ordered.map(s => s.note)).toEqual(['new', 'old']);
+  });
+
+  it('keeps a slide whose note is missing, at the end and in authored order', () => {
+    // A slide added ahead of its note, or a notes file that failed to load,
+    // must not make the slide vanish — a stale gallery beats an empty one.
+    const ordered = orderGallerySlides(
+      [slide('ghost'), slide('known'), slide('other-ghost')],
+      [{ version: 'known' }],
+    );
+    expect(ordered.map(s => s.note)).toEqual(['known', 'ghost', 'other-ghost']);
+  });
+
+  it('falls back to the authored order when there are no notes at all', () => {
+    const authored = [slide('a'), slide('b'), slide('c')];
+    expect(orderGallerySlides(authored, []).map(s => s.note)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('does not mutate the authored list', () => {
+    const authored = [slide('a'), slide('b')];
+    orderGallerySlides(authored, [{ version: 'b' }]);
+    expect(authored.map(s => s.note)).toEqual(['a', 'b']);
+  });
+
+  it('orders the real gallery by the real notes', () => {
+    const ordered = orderGallerySlides(GALLERY_SLIDES, RELEASE_NOTES);
+    const rank = (note: string) => RELEASE_NOTES.findIndex(n => n.version === note);
+    const ranks = ordered.map(s => rank(s.note));
+    expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
   });
 });
