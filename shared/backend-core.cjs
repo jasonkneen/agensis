@@ -30,6 +30,7 @@ const {
 
 const ALLOWED_TABLES = new Set([
  'app_users',
+ 'thread_harvests',
  'workspaces',
  'documents',
  'chat_sessions',
@@ -165,7 +166,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  'agent_memory_files', 'memory_file_comments', 'thread_items',
  'agent_schedules', 'agent_schedule_runs', 'activity_event_comments',
  'huddles', 'huddle_events', 'feedback_reports', 'orb_deliveries',
- 'agent_permission_requests',
+ 'agent_permission_requests', 'thread_harvests',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -224,6 +225,11 @@ const DB_TABLE_ACCESS = {
  // is where the "did the answer actually reach the agent?" check lives. A
  // client-forged or client-updated row would claim a grant nothing acted on.
  agent_permission_requests: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // Read-only to the client, same reason as agent_permission_requests above: every
+ // row is written by the server's own harvest worker. These are PROPOSALS mined
+ // from a discarded thread, so a client-forged row would put words a model never
+ // produced in front of a human as a suggestion to accept.
+ thread_harvests: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  thread_items: DEFAULT_TABLE_ACCESS,

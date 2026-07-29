@@ -227,6 +227,14 @@ function createThreadHarvest(deps = {}) {
   return { session: sessions[0], messages };
  }
 
+ /**
+  * Settle a claimed harvest.
+  *
+  * Always returns a result, even when the UPDATE matched nothing (the thread and
+  * its harvest were hard-deleted while the model was thinking). The claim already
+  * happened, so this tick DID do work — reporting null here would abort the
+  * drain loop below and leave the rest of a backlog sitting for another 30s.
+  */
  async function finishHarvest(id, patch) {
   const rows = await getDb().unsafe(
    `update thread_harvests
@@ -236,7 +244,7 @@ function createThreadHarvest(deps = {}) {
    [id, patch.status, patch.findings ?? [], patch.error ?? null],
   );
   if (rows.length) notifyDbSubscribers('thread_harvests', 'UPDATE', rows);
-  return rows[0] || null;
+  return rows[0] || { id, status: patch.status, findings: patch.findings ?? [], error: patch.error ?? null };
  }
 
  /**
