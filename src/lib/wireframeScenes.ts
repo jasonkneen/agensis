@@ -67,9 +67,21 @@ export interface WireframeScene {
   shapes: WireframeShape[];
 }
 
-/** One slide of the gallery: a demo on the left, words on the right. */
+/**
+ * One slide of the gallery: a demo on the left, words on the right.
+ *
+ * A slide is IDENTIFIED BY THE RELEASE NOTE IT ILLUSTRATES rather than by a
+ * name of its own. The slides live here in TypeScript and the notes live in
+ * public/release-notes.json, so the two drift apart the moment someone ships a
+ * feature and writes only the note — which is exactly how this gallery came to
+ * be advertising six features nobody had shipped recently. Naming the note
+ * makes that drift checkable: `tests/unit/wireframeScenes.test.ts` reads the
+ * notes file and fails when a slide points at a note nobody wrote, or when the
+ * newest release has no slide at all.
+ */
 export interface GallerySlide {
-  id: string;
+  /** The `version` slug of the release note this illustrates. Also the key. */
+  note: string;
   title: string;
   body: string;
   scene: WireframeScene;
@@ -133,6 +145,10 @@ export function sceneDurationSeconds(scene: WireframeScene): number {
 //
 // One per feature worth illustrating. Authored against a 160x100 box: a rough
 // 16:10, which is why the slide puts the demo left and the prose right.
+//
+// A shape can only ARRIVE — there is no exit motion, and reduced-motion renders
+// the settled frame. So a scene has to be composed as "these things appear",
+// and the final still has to say the feature on its own.
 
 /** A side panel arriving beside a list — used for split-view style features. */
 const splitView: WireframeScene = {
@@ -223,7 +239,116 @@ const showDesktop: WireframeScene = {
   ],
 };
 
+/** A conversation that belongs to the two people in it — private DMs. */
+const dmPrivacy: WireframeScene = {
+  id: 'dm-privacy',
+  alt: 'The rest of the workspace waits outside while a conversation opens holding only its two people and their messages.',
+  shapes: [
+    // The rest of the workspace, pushed to the margin: present, but outside.
+    // Held at x>=16: the carousel's previous-slide arrow floats over the demo's
+    // left edge, and it lands squarely on anything nearer the border.
+    { kind: 'chip', x: 16, y: 18, w: 12, h: 12, tone: 'base', motion: 'fade', delay: 0.1 },
+    { kind: 'chip', x: 16, y: 40, w: 12, h: 12, tone: 'base', motion: 'fade', delay: 0.2 },
+    { kind: 'chip', x: 16, y: 62, w: 12, h: 12, tone: 'base', motion: 'fade', delay: 0.3 },
+    { kind: 'panel', x: 38, y: 10, w: 116, h: 80, tone: 'base', motion: 'slide-left', delay: 0.6 },
+    // Exactly two people inside it — the whole point, so they land last and loud.
+    { kind: 'chip', x: 48, y: 20, w: 14, h: 14, tone: 'accent', motion: 'pop', delay: 0.95 },
+    { kind: 'chip', x: 68, y: 20, w: 14, h: 14, tone: 'accent', motion: 'pop', delay: 1.05 },
+    { kind: 'bar', x: 48, y: 50, w: 82, h: 6, tone: 'muted', motion: 'fade', delay: 1.3 },
+    { kind: 'bar', x: 48, y: 64, w: 62, h: 6, tone: 'muted', motion: 'fade', delay: 1.45 },
+  ],
+};
+
+/** A rule assembled from parts, then firing into a channel — automations. */
+const automationRule: WireframeScene = {
+  id: 'automation-rule',
+  alt: 'A rule is assembled from a trigger, a filter and a destination, then posts its message into a channel.',
+  shapes: [
+    { kind: 'panel', x: 6, y: 8, w: 66, h: 84, tone: 'muted', motion: 'none' },
+    { kind: 'chip', x: 14, y: 18, w: 30, h: 12, tone: 'accent', motion: 'pop', delay: 0.2 },
+    { kind: 'chip', x: 14, y: 36, w: 40, h: 12, tone: 'base', motion: 'pop', delay: 0.5 },
+    { kind: 'chip', x: 14, y: 54, w: 34, h: 12, tone: 'base', motion: 'pop', delay: 0.8 },
+    { kind: 'button', x: 14, y: 72, w: 26, h: 12, tone: 'base', motion: 'pop', delay: 1.05 },
+    { kind: 'panel', x: 84, y: 8, w: 70, h: 84, tone: 'muted', motion: 'none' },
+    { kind: 'row', x: 92, y: 22, w: 48, h: 10, tone: 'muted', motion: 'fade', delay: 0.15 },
+    // The posted message: the only thing a rule can actually do. It travels
+    // rightward, out of the rule and into the channel — a shape that merely
+    // appeared here would leave two unrelated lists side by side.
+    { kind: 'row', x: 92, y: 44, w: 54, h: 12, tone: 'accent', motion: 'slide-right', delay: 1.45 },
+  ],
+};
+
+/** An agent saved into a gallery of starting points — agent templates. */
+const savedTemplate: WireframeScene = {
+  id: 'saved-template',
+  alt: 'A tuned agent is saved with a button and joins the gallery of templates as its new first tile.',
+  shapes: [
+    { kind: 'panel', x: 6, y: 10, w: 58, h: 80, tone: 'muted', motion: 'none' },
+    // The agent you tuned: two lines of wording above the button.
+    { kind: 'bar', x: 14, y: 22, w: 42, h: 6, tone: 'base', motion: 'fade', delay: 0.15 },
+    { kind: 'bar', x: 14, y: 34, w: 32, h: 6, tone: 'base', motion: 'fade', delay: 0.25 },
+    { kind: 'panel', x: 78, y: 10, w: 76, h: 80, tone: 'muted', motion: 'none' },
+    // The gallery that already existed, filling in first.
+    { kind: 'panel', x: 120, y: 20, w: 26, h: 26, tone: 'base', motion: 'fade', delay: 0.35 },
+    { kind: 'panel', x: 86, y: 54, w: 28, h: 26, tone: 'base', motion: 'fade', delay: 0.45 },
+    { kind: 'panel', x: 120, y: 54, w: 26, h: 26, tone: 'base', motion: 'fade', delay: 0.55 },
+    { kind: 'button', x: 14, y: 70, w: 40, h: 12, tone: 'accent', motion: 'pop', delay: 0.8 },
+    { kind: 'panel', x: 86, y: 20, w: 28, h: 26, tone: 'accent', motion: 'pulse', delay: 1.25 },
+  ],
+};
+
+/** Lines appended to a ledger, each naming who — the audit log. */
+const auditLog: WireframeScene = {
+  id: 'audit-log',
+  alt: 'Each change is written as a line naming who made it, and a new line is appended below the last.',
+  shapes: [
+    { kind: 'panel', x: 8, y: 8, w: 144, h: 84, tone: 'muted', motion: 'none' },
+    { kind: 'chip', x: 16, y: 20, w: 12, h: 12, tone: 'base', motion: 'fade', delay: 0.15 },
+    { kind: 'row', x: 34, y: 20, w: 104, h: 12, tone: 'base', motion: 'fade', delay: 0.2 },
+    { kind: 'chip', x: 16, y: 42, w: 12, h: 12, tone: 'base', motion: 'fade', delay: 0.5 },
+    { kind: 'row', x: 34, y: 42, w: 104, h: 12, tone: 'base', motion: 'fade', delay: 0.55 },
+    // Appended, never rewritten: the newest entry lands under the others.
+    { kind: 'chip', x: 16, y: 64, w: 12, h: 12, tone: 'accent', motion: 'pop', delay: 1.0 },
+    { kind: 'row', x: 34, y: 64, w: 104, h: 12, tone: 'accent', motion: 'pulse', delay: 1.05 },
+  ],
+};
+
+/** Three dots filling in below a conversation — typing indicators. */
+const typingDots: WireframeScene = {
+  id: 'typing-dots',
+  alt: 'Below the conversation an avatar appears with three dots filling in one after another.',
+  shapes: [
+    { kind: 'panel', x: 8, y: 10, w: 144, h: 80, tone: 'muted', motion: 'none' },
+    { kind: 'row', x: 16, y: 20, w: 76, h: 10, tone: 'base', motion: 'fade', delay: 0.1 },
+    { kind: 'row', x: 16, y: 36, w: 58, h: 10, tone: 'base', motion: 'fade', delay: 0.25 },
+    { kind: 'chip', x: 16, y: 58, w: 14, h: 14, tone: 'base', motion: 'fade', delay: 0.75 },
+    { kind: 'chip', x: 38, y: 63, w: 7, h: 7, tone: 'accent', motion: 'pop', delay: 1.0 },
+    { kind: 'chip', x: 50, y: 63, w: 7, h: 7, tone: 'accent', motion: 'pop', delay: 1.15 },
+    { kind: 'chip', x: 62, y: 63, w: 7, h: 7, tone: 'accent', motion: 'pop', delay: 1.3 },
+  ],
+};
+
+/** A run that ends early, with the reason attached — agent stop reasons. */
+const stopReason: WireframeScene = {
+  id: 'stop-reason',
+  alt: 'A run of replies ends part-way through, and a labelled badge with a line of explanation appears beneath it.',
+  shapes: [
+    { kind: 'panel', x: 8, y: 10, w: 144, h: 80, tone: 'muted', motion: 'none' },
+    { kind: 'row', x: 16, y: 20, w: 64, h: 9, tone: 'base', motion: 'fade', delay: 0.1 },
+    { kind: 'row', x: 16, y: 33, w: 76, h: 9, tone: 'base', motion: 'fade', delay: 0.3 },
+    // Cut short: the run that did not finish.
+    { kind: 'row', x: 16, y: 46, w: 34, h: 9, tone: 'base', motion: 'fade', delay: 0.5 },
+    { kind: 'chip', x: 16, y: 64, w: 36, h: 13, tone: 'accent', motion: 'pulse', delay: 1.0 },
+    { kind: 'bar', x: 58, y: 67, w: 76, h: 7, tone: 'base', motion: 'fade', delay: 1.25 },
+  ],
+};
+
 export const WIREFRAME_SCENES = {
+  // In the gallery today.
+  dmPrivacy, automationRule, savedTemplate, auditLog, typingDots, stopReason,
+  // Retired from the gallery when their feature stopped being news. Kept as
+  // authored vocabulary — a scene costs nothing and is the reference for how
+  // this format is meant to read.
   splitView, chips, cadence, toolLoop, preview, showDesktop,
 } as const;
 
@@ -232,49 +357,77 @@ export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
 // --- the gallery -----------------------------------------------------------
 
 /**
- * The slides shown above the notes. Hand-authored rather than derived from the
- * release notes: a gallery is a curated "here is what is worth knowing", and
- * every entry needs a demo that actually illustrates it. Notes without a scene
- * are still listed below as bullets — they just do not get a slide.
+ * The slides shown above the notes. Curated, not derived: a gallery is "here
+ * is what is worth knowing", and every entry needs a demo that genuinely
+ * illustrates it — most notes have no such demo and stay bullets below.
+ *
+ * But curated is not the same as free-floating. Each slide names the release
+ * note it illustrates, so a slide can be checked against what actually shipped
+ * instead of quietly outliving it. Retiring a slide is deleting it from here;
+ * its scene stays in WIREFRAME_SCENES.
  */
 export const GALLERY_SLIDES: GallerySlide[] = [
   {
-    id: 'tool-loop',
-    title: 'Agents can use tools',
-    body: 'Built-in agents now call tools and act on the results, instead of describing what they would do.',
-    scene: toolLoop,
+    note: 'private-direct-messages',
+    title: 'Direct messages are private',
+    body: 'A DM is readable only by the people in it. An admin can grant access to one conversation, and every grant is recorded.',
+    scene: dmPrivacy,
   },
   {
-    id: 'skills-chips',
-    title: 'Skills as chips',
-    body: 'Type to search, click to add, and remove with a single x — no more editing a comma-separated line.',
-    scene: chips,
+    note: 'automations-window',
+    title: 'Rules you can set up yourself',
+    body: 'Pick what to watch for, choose where the message goes, and switch the rule on once you have read it back.',
+    scene: automationRule,
   },
   {
-    id: 'cadence',
-    title: 'Replies at a human pace',
-    body: 'Set a channel to social and agents answer across a conversation instead of all in the same second.',
-    scene: cadence,
+    note: 'agent-templates',
+    title: 'Save an agent as a template',
+    body: 'Tune an agent once, save it, and start the next one from it. Your own templates sit alongside the built-in ones.',
+    scene: savedTemplate,
   },
   {
-    id: 'link-previews',
-    title: 'Links unfurl',
-    body: 'Paste a link and it becomes a card. Fetched once by the server, so no site learns who read it.',
-    scene: preview,
+    note: 'audit-log',
+    title: 'A record of who changed what',
+    body: 'Sensitive changes are written to a log you can read back: who did it, what changed, and when.',
+    scene: auditLog,
   },
   {
-    id: 'split-view',
-    title: 'Detail beside the list',
-    body: 'Agents, skills and tenants open their detail next to what you were looking at, not on top of it.',
-    scene: splitView,
+    note: 'typing-indicators',
+    title: 'See when someone is typing',
+    body: 'A dot indicator shows when another person or an agent is part-way through a reply, so you know one is coming.',
+    scene: typingDots,
   },
   {
-    id: 'show-desktop',
-    title: 'Clear the desk',
-    body: 'The Desktop button puts every open window down to the dock, and brings them all back.',
-    scene: showDesktop,
+    note: 'why-an-agent-stopped',
+    title: 'An agent says why it stopped',
+    body: 'A run that ends early now carries its reason, instead of being a reply that just stops mid-sentence.',
+    scene: stopReason,
   },
 ];
+
+/**
+ * The slides in release order — newest note first — so the gallery leads with
+ * the latest thing without anyone remembering to re-sort this file. Slides
+ * whose note is not in the list (a notes file that failed to load, or a slide
+ * added ahead of its note) keep their authored order at the end rather than
+ * disappearing: a gallery is better slightly stale than empty.
+ *
+ * `notes` is taken structurally rather than as a ReleaseNote[] so this file
+ * stays what it is — authoring data with no dependencies.
+ */
+export function orderGallerySlides(
+  slides: readonly GallerySlide[],
+  notes: readonly { version: string }[],
+): GallerySlide[] {
+  const rank = new Map(notes.map((n, i) => [n.version, i]));
+  const place = (s: GallerySlide) => rank.get(s.note) ?? Number.POSITIVE_INFINITY;
+  return slides
+    .map((slide, i) => ({ slide, i }))
+    // Index as the tiebreaker keeps this a stable sort on every engine, which
+    // matters because unplaced slides all share one rank.
+    .sort((a, b) => place(a.slide) - place(b.slide) || a.i - b.i)
+    .map(({ slide }) => slide);
+}
 
 /**
  * Which slide to show for a given index, wrapping. Extracted so the carousel's

@@ -97,4 +97,26 @@ illustrates it, and most release notes do not have one. Notes without a scene
 still appear as bullets below the gallery — they simply do not get a slide.
 
 Keep `body` to one sentence about *what the user can now do*. Not the
-implementation.
+implementation. Four to six slides; it is a highlight reel, not a changelog.
+
+**A slide names the release note it illustrates** — `note` is the `version`
+slug from `public/release-notes.json`, and it is the slide's identity. Slides
+are TypeScript and notes are JSON, so nothing else stops the gallery quietly
+outliving what shipped (it once advertised six features that were months old).
+`tests/unit/wireframeScenes.test.ts` reads the notes file and fails when a
+slide names a note nobody wrote, or when the newest release date has no slide
+at all. `orderGallerySlides` then sorts by note recency at render time, so the
+newest feature leads without anyone re-ordering the array.
+
+Retiring a slide is deleting it from `GALLERY_SLIDES`; leave its scene in
+`WIREFRAME_SCENES`.
+
+## Two things that bite when authoring
+
+- **Shapes only ever arrive.** There is no exit motion, and reduced motion
+  renders the settled frame. "The other windows drop away" is unauthorable —
+  compose it as what appears, and make sure the final still says the feature.
+- **Keep small shapes out of the outer ~16 units.** The carousel's arrows float
+  over the demo — the left one always, the right one once the slide stacks on a
+  narrow dialog. A panel running to the edge under an arrow is fine; an avatar
+  or a badge under one is a shape nobody can see.
