@@ -5,6 +5,7 @@ import { MarkdownContent } from './MarkdownContent';
 import { ToolStepGroup } from './ToolStepGroup';
 import { buildTranscriptRows } from './toolSteps';
 import { usePermissionRequests } from '../../hooks/usePermissionRequests';
+import { resolvePermissionRequest } from './permissionRequests';
 import {
   ComposerAddContent,
   FileChip,
@@ -115,7 +116,7 @@ export function SubThreadPanel({
   const { byId: permissionRequestsById } = usePermissionRequests(session.workspace_id ?? null);
   const messageRows = useMemo(
     () => buildTranscriptRows(messages, undefined, message =>
-      message.permission_request_id ? permissionRequestsById.get(message.permission_request_id) : undefined,
+      resolvePermissionRequest(message, permissionRequestsById),
     ),
     [messages, permissionRequestsById],
   );

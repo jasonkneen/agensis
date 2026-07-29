@@ -6,6 +6,7 @@ import { MarkdownContent } from './MarkdownContent';
 import { ToolStepGroup } from './ToolStepGroup';
 import { buildTranscriptRows } from './toolSteps';
 import { usePermissionRequests } from '../../hooks/usePermissionRequests';
+import { resolvePermissionRequest } from './permissionRequests';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { validAgentAccentColor } from '../../lib/agentAccent';
 import type { AIModel, Document, Message as ChatMessage, WorkspaceAgent } from '../../types';
@@ -125,7 +126,7 @@ export function ChatThreadPanel({
   // "Thinking …" placeholder rides in that same strip rather than as a bubble of
   // its own; three of those stacked in a thread was the whole reason for this.
   const replyRows = buildTranscriptRows(replies, undefined, message =>
-    message.permission_request_id ? permissionRequestsById.get(message.permission_request_id) : undefined,
+    resolvePermissionRequest(message, permissionRequestsById),
   );
 
   useEffect(() => {

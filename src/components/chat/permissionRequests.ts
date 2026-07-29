@@ -72,6 +72,131 @@ export function permissionOutcomeLabel(
   return 'Waiting for a decision';
 }
 
+/**
+ * The same outcome as one word, for a chip that has no room for a sentence.
+ *
+ * Names the SCOPE rather than the person: which grant was made outlives the
+ * conversation, whereas "by Jason" is true of essentially every approval in a
+ * one-admin workspace and was crowding out the tool call it described. The full
+ * sentence stays one hover away.
+ */
+export function permissionOutcomeBadge(
+  request: Pick<PermissionRequest, 'status' | 'scope'>,
+): string {
+  if (request.status === 'allowed') {
+    if (request.scope === 'always') return 'Always';
+    if (request.scope === 'session') return 'Session';
+    return 'Once';
+  }
+  if (request.status === 'denied') return 'Denied';
+  if (request.status === 'expired') return 'Expired';
+  return 'Pending';
+}
+
+/** The settled sentences the server writes over a decided request's `content`. */
+const SETTLED_OUTCOMES: ReadonlyArray<{
+  prefix: string;
+  status: PermissionRequest['status'];
+  scope: PermissionScope | '';
+}> = [
+  // Longest-first within each verb: "Allowed" is a prefix of "Allowed for this
+  // session", so the broader match has to be offered the string first.
+  { prefix: 'Always allowed', status: 'allowed', scope: 'always' },
+  { prefix: 'Allowed for this session', status: 'allowed', scope: 'session' },
+  { prefix: 'Allowed', status: 'allowed', scope: 'once' },
+  { prefix: 'Denied', status: 'denied', scope: '' },
+  { prefix: 'Expired', status: 'expired', scope: '' },
+];
+
+/**
+ * Rebuild a decided request from the transcript row alone.
+ *
+ * The workspace route only returns requests that are still PENDING, so a
+ * decision made before this tab loaded has no row to look up — and the message
+ * then fell through to the ordinary bubble renderer, where the server's settled
+ * sentence ("Always allowed by Jason: Read · /Users/…/Foo.tsx") became a
+ * full-width message that read as something a person had said. The same
+ * approval, decided while the tab was open, folded quietly into a chip. One
+ * event, two shapes, depending only on when you opened the window.
+ *
+ * Everything needed to draw the chip is already on the message: `tool_name` and
+ * `tool_detail` are its own columns, and the outcome is the sentence the server
+ * wrote. So the sentence is parsed back — the summary is stripped off the END
+ * using those columns rather than splitting on the first ": ", so a display name
+ * containing a colon cannot cut it in the wrong place.
+ *
+ * Returns null for anything that is not a settled approval, including a still
+ * pending one (whose content is just `Bash · git clone …`) — those must keep
+ * their card and its buttons.
+ */
+export function settledApprovalFromMessage(
+  message: Pick<ChatMessage, 'id' | 'content' | 'message_kind' | 'tool_name' | 'tool_detail' | 'permission_request_id' | 'session_id' | 'created_at'> | null | undefined,
+): PermissionRequest | null {
+  if (!message || !isPermissionRequestMessage(message)) return null;
+  const content = typeof message.content === 'string' ? message.content.trim() : '';
+  if (!content) return null;
+
+  const toolName = String(message.tool_name ?? '').trim();
+  const toolDetail = String(message.tool_detail ?? '').trim();
+  const summary = toolName && toolDetail ? `${toolName} · ${toolDetail}` : toolName || toolDetail;
+
+  let head = '';
+  if (summary && content.endsWith(`: ${summary}`)) {
+    head = content.slice(0, content.length - summary.length - 2);
+  } else {
+    // Rows written before messages carried tool_name/tool_detail. The verb list
+    // below is what keeps this from claiming any colon-bearing sentence.
+    const cut = content.indexOf(': ');
+    if (cut <= 0) return null;
+    head = content.slice(0, cut);
+  }
+
+  const outcome = SETTLED_OUTCOMES.find(
+    entry => head === entry.prefix || head.startsWith(`${entry.prefix} by `),
+  );
+  if (!outcome) return null;
+
+  return {
+    id: message.permission_request_id || message.id,
+    workspaceId: '',
+    agentId: '',
+    jobId: null,
+    sessionId: message.session_id ?? null,
+    messageId: message.id,
+    toolName,
+    toolDetail,
+    title: '',
+    description: '',
+    // No rule or scope list survives in the transcript, and inventing either
+    // would put buttons on a request nobody can answer any more. Empty is the
+    // honest reading: this is a record, not an open question.
+    rules: [],
+    scopes: [],
+    status: outcome.status,
+    scope: outcome.scope,
+    decidedBy: null,
+    decidedByName: head.startsWith(`${outcome.prefix} by `) ? head.slice(outcome.prefix.length + 4) : '',
+    decidedAt: null,
+    expiresAt: null,
+    createdAt: message.created_at ?? null,
+  };
+}
+
+/**
+ * The request behind one transcript row: the live one when we still hold it,
+ * otherwise the settled one reconstructed from the row itself.
+ *
+ * Live wins, always — only it can still be pending, and only it carries the
+ * rules and scopes a card needs to render buttons.
+ */
+export function resolvePermissionRequest(
+  message: ChatMessage,
+  byId: ReadonlyMap<string, PermissionRequest>,
+): PermissionRequest | undefined {
+  const known = message.permission_request_id ? byId.get(message.permission_request_id) : undefined;
+  return known ?? settledApprovalFromMessage(message) ?? undefined;
+}
+
 /** The one-line description of what is being asked for. */
 export function permissionRequestSummary(
   request: Pick<PermissionRequest, 'toolName' | 'toolDetail' | 'title'>,

@@ -95,7 +95,7 @@ import {
 import { ToolStepGroup } from '../chat/ToolStepGroup';
 import { buildTranscriptRows } from '../chat/toolSteps';
 import { PermissionRequestCard } from '../chat/PermissionRequestCard';
-import { isPermissionRequestMessage } from '../chat/permissionRequests';
+import { isPermissionRequestMessage, resolvePermissionRequest } from '../chat/permissionRequests';
 import { usePermissionRequests } from '../../hooks/usePermissionRequests';
 import { shouldOverlaySidePanel, type ChatSidePanel } from '../chat/sidePanelLayout';
 import { isBroadcastFromThread } from '../chat/channelView';
@@ -937,8 +937,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // so decided approvals stop stacking up as their own rows; still-pending ones stay
   // rows so their card keeps its buttons.
   const resolvePermissionForRow = useCallback(
-    (message: ChatMessage) =>
-      message.permission_request_id ? permissionRequestsById.get(message.permission_request_id) : undefined,
+    (message: ChatMessage) => resolvePermissionRequest(message, permissionRequestsById),
     [permissionRequestsById],
   );
   const shownRows = useMemo(
@@ -1912,9 +1911,12 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                       // waiting for a click, and with no click the tool call is
                       // refused. It gets a card with buttons, not a bubble.
                       if (isPermissionRequestMessage(msg)) {
-                        const request = msg.permission_request_id
-                          ? permissionRequestsById.get(msg.permission_request_id)
-                          : undefined;
+                        // Live row when we still hold it; otherwise the settled
+                        // one read back off the message. Either way this never
+                        // falls through to a bubble for a decided approval — the
+                        // server's sentence was rendering as full-width prose
+                        // that read like something a person had said.
+                        const request = resolvePermissionRequest(msg, permissionRequestsById);
                         if (request) {
                           return (
                             <MessageScrollerItem key={msg.id} id={`chat-msg-${msg.id}`} scrollAnchor={isLastRow}>

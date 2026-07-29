@@ -17,11 +17,12 @@ import {
 import { cn } from '@/lib/utils';
 import { activityChipLabel, activityElapsed, thoughtChipLabel } from '../../lib/activityStatus';
 import type { Message as ChatMessage, PermissionRequest } from '../../types';
-import { permissionOutcomeLabel } from './permissionRequests';
+import { permissionOutcomeBadge, permissionOutcomeLabel } from './permissionRequests';
 import {
   bucketToolSteps,
   rememberThinkingElapsed,
   resolveGroupChips,
+  shortenToolPaths,
   toolStepLabel,
   toolStepParts,
   type ThoughtChip as ThoughtChipData,
@@ -263,6 +264,10 @@ function ThoughtChip({ thought }: { thought: ThoughtChipData }) {
  * One call, shown only once the reader opens a tool bucket. Never wraps internally —
  * the detail truncates and the untruncated text lives in `title`, so four in a row
  * read as four short units rather than four paragraphs of shell.
+ *
+ * Long absolute paths are cut to their last two segments for display. A chip is
+ * one line, and a checkout prefix repeated on every row is the least useful part
+ * of it; `title` still carries the path in full.
  */
 function ToolStepChip({ step, approval }: { step: ChatMessage; approval?: PermissionRequest }) {
   const { name, detail } = toolStepParts(step);
@@ -281,14 +286,16 @@ function ToolStepChip({ step, approval }: { step: ChatMessage; approval?: Permis
     >
       <Icon className="size-3 shrink-0 opacity-70" />
       {name && <span className="shrink-0 font-medium text-foreground/70">{name}</span>}
-      {detail && <span className="truncate opacity-80">{detail}</span>}
-      {/* The call the human unblocked names who unblocked it, right where the
-          folded permission card used to be a whole row of its own. */}
+      {detail && <span className="truncate opacity-80">{shortenToolPaths(detail)}</span>}
+      {/* The call the human unblocked carries its shield here, right where the
+          folded permission card used to be a whole row of its own. One word for
+          the scope granted — WHICH grant is the part that outlives the
+          conversation; who granted it is in the chip's title. */}
       {approval && (
         <>
           <ApprovalIcon className={cn('size-3 shrink-0', allowed ? 'text-emerald-500' : 'text-amber-500')} />
           <span className={cn('shrink-0 font-sans', allowed ? 'text-emerald-600/90 dark:text-emerald-400/90' : 'text-muted-foreground')}>
-            {permissionOutcomeLabel(approval)}
+            {permissionOutcomeBadge(approval)}
           </span>
         </>
       )}

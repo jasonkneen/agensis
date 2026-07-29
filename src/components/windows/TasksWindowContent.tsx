@@ -35,6 +35,7 @@ import { agentHandle } from '../../lib/agentAccent';
 import { isAssigneeActive, resolveTaskCommentAuthor } from '../../lib/taskAgents';
 import { parseMessageAttachments } from '../../lib/messageAttachments';
 import { MessageAttachmentList } from '../chat/MessageAttachments';
+import { TaskActivityChip } from './TaskActivityChip';
 import {
   DAY_MS,
   applyHideDone,
@@ -673,6 +674,11 @@ function TaskRow({
             {task.title}
           </ItemTitle>
           <div className="flex flex-wrap items-center gap-1.5">
+            {/* First in the row on purpose: "is this moving" is the question
+                asked of a task list, and it should not be behind a priority
+                flag and a due date. Renders nothing unless the task is in
+                progress — see TaskActivityChip. */}
+            <TaskActivityChip task={task} sessionId={chatSessionId} />
             {task.priority !== 'normal' && (
               <Badge variant={task.priority === 'urgent' ? 'destructive' : 'secondary'}>
                 <Flag />
@@ -1889,6 +1895,7 @@ function TaskKanban({
                       {task.title}
                     </span>
                     <div className="flex flex-wrap items-center gap-1">
+                      <TaskActivityChip task={task} sessionId={taskChatSessionId(task)} compact />
                       {task.priority !== 'normal' && (
                         <Badge variant={task.priority === 'urgent' ? 'destructive' : 'secondary'}>
                           <Flag />
@@ -2331,6 +2338,20 @@ function TaskGantt({
                         />
                       </span>
                     )}
+                    {/* Activity chip, just past the right edge of the shape.
+                        Outside the bar rather than in it: a bar's width is its
+                        DATE RANGE, so anything put inside a short one is
+                        immediately truncated. Only for rows whose title already
+                        sits in the bar — when the title is alongside, the chip
+                        rides that label instead (below) so the two can't
+                        overlap. pointer-events-auto because the row wrapper
+                        turns them off and the chip carries the tooltip that
+                        says what its number means. */}
+                    {labelInside && (
+                      <span className="pointer-events-auto ml-1.5 flex items-center">
+                        <TaskActivityChip task={task} sessionId={taskChatSessionId(task)} compact />
+                      </span>
+                    )}
                     </span>
                     {/* The name, when the shape is too small to hold it — which
                         is every undated marker. It is `sticky`, so it travels
@@ -2360,6 +2381,9 @@ function TaskGantt({
                         )}
                         {task.title}
                         {assigneeLabel && <span className="text-muted-foreground"> · {assigneeLabel}</span>}
+                        <span className="ml-1.5 inline-flex align-[-1px]">
+                          <TaskActivityChip task={task} sessionId={taskChatSessionId(task)} compact />
+                        </span>
                       </span>
                     )}
                   </div>
