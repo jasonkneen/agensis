@@ -33,6 +33,30 @@ describe('buildThreadReplySummaries', () => {
     expect(summaries.m1.lastReplyAt).toBe('2026-07-24T10:02:00Z');
   });
 
+  it('splits tool-call steps out of count into toolCount', () => {
+    const summaries = buildThreadReplySummaries(
+      [
+        reply({ id: 'r1', created_at: '2026-07-24T10:01:00Z', sender_id: 'a1', sender_name: 'Ada' }),
+        reply({ id: 't1', created_at: '2026-07-24T10:01:30Z', sender_id: 'a1', sender_name: 'Ada', message_kind: 'tool_step' }),
+        reply({ id: 't2', created_at: '2026-07-24T10:01:45Z', sender_id: 'a1', sender_name: 'Ada', message_kind: 'tool_step' }),
+        reply({ id: 'r2', created_at: '2026-07-24T10:02:00Z', sender_id: 'a2', sender_name: 'Bo' }),
+      ],
+      noAvatars,
+    );
+    expect(summaries.m1.count).toBe(2);
+    expect(summaries.m1.toolCount).toBe(2);
+    // The last REAL reply, not the last tool step, even though a step landed later.
+    expect(summaries.m1.lastReplyAt).toBe('2026-07-24T10:02:00Z');
+  });
+
+  it('reports toolCount 0 for a thread with no tool steps', () => {
+    const summaries = buildThreadReplySummaries(
+      [reply({ id: 'r1', created_at: '2026-07-24T10:01:00Z', sender_id: 'a1', sender_name: 'Ada' })],
+      noAvatars,
+    );
+    expect(summaries.m1.toolCount).toBe(0);
+  });
+
   it('dedupes participants and keeps the most recent speakers, oldest-first', () => {
     const summaries = buildThreadReplySummaries(
       [

@@ -6,6 +6,7 @@ import { directAiModel, isSharedModelRoute } from '../lib/chatModelRouting';
 import { cachedFetch } from '../lib/offlineBackend';
 import { WORKSPACE_UNAVAILABLE, classifyWriteFailure, type WriteFailure } from '../lib/writeFeedback';
 import { channelMessages } from '../components/chat/channelView';
+import { isToolStepMessage } from '../components/chat/toolSteps';
 import { allowsUnpromptedReply, mentionsChannel } from '../lib/channelMentions';
 import { isHuddleSession } from '../lib/huddleTranscript';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
@@ -386,11 +387,13 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     ? messages.filter(m => m.thread_parent_id === activeThreadId || m.id === activeThreadId)
     : [], [messages, activeThreadId]);
 
-  // Thread reply counts per parent message
+  // Thread reply counts per parent message. Tool-call steps carry a
+  // thread_parent_id too (that's how they nest under the run), but they are
+  // work, not conversation — see threadSummary.ts's toolCount for those.
   const threadReplyCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     messages.forEach(m => {
-      if (m.thread_parent_id) {
+      if (m.thread_parent_id && !isToolStepMessage(m)) {
         counts[m.thread_parent_id] = (counts[m.thread_parent_id] || 0) + 1;
       }
     });

@@ -110,6 +110,7 @@ import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
 import { channelMessages } from './components/chat/channelView';
+import { isToolStepMessage } from './components/chat/toolSteps';
 import { useChat, type SendMessageResult } from './hooks/useChat';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { useSubThreads } from './hooks/useSubThreads';
@@ -3588,7 +3589,7 @@ function InactiveChatWindow({
   const threadReplyCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     messages.forEach(m => {
-      if (m.thread_parent_id) counts[m.thread_parent_id] = (counts[m.thread_parent_id] || 0) + 1;
+      if (m.thread_parent_id && !isToolStepMessage(m)) counts[m.thread_parent_id] = (counts[m.thread_parent_id] || 0) + 1;
     });
     return counts;
   }, [messages]);

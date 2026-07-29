@@ -1,4 +1,5 @@
 import type { Message } from '../types';
+import { isToolStepMessage } from '../components/chat/toolSteps';
 
 // How many participant avatars a reply summary shows before collapsing the rest
 // into a "+N" chip.
@@ -14,7 +15,10 @@ export type ThreadSummaryParticipant = {
 };
 
 export type ThreadReplySummary = {
+  /** Real replies only — tool-call steps are counted separately in `toolCount`. */
   count: number;
+  /** Tool calls the agent made while working this thread (message_kind 'tool_step'). */
+  toolCount: number;
   /** ISO timestamp of the newest reply, or null when none could be read. */
   lastReplyAt: string | null;
   /** Most recent distinct repliers, capped at THREAD_SUMMARY_AVATAR_CAP, oldest-first. */
@@ -62,7 +66,13 @@ export function buildThreadReplySummaries(
 
   const summaries: Record<string, ThreadReplySummary> = {};
   for (const [parentId, replies] of byParent) {
-    const ordered = [...replies].sort((a, b) => timestamp(a.created_at) - timestamp(b.created_at));
+    // Tool calls are working, not conversation — a chip that folds a Bash step
+    // into "N replies" reads as the agent having said more than it did. Split
+    // them out here so `count` is real messages and `toolCount` is the rest.
+    const toolCount = replies.reduce((total, reply) => total + (isToolStepMessage(reply) ? 1 : 0), 0);
+    const ordered = replies
+      .filter(reply => !isToolStepMessage(reply))
+      .sort((a, b) => timestamp(a.created_at) - timestamp(b.created_at));
     const lastReply = ordered[ordered.length - 1];
 
     // Walk newest → oldest so the avatars shown are the people who spoke most
@@ -85,6 +95,7 @@ export function buildThreadReplySummaries(
     const participants = newestFirst.slice(0, THREAD_SUMMARY_AVATAR_CAP).reverse();
     summaries[parentId] = {
       count: ordered.length,
+      toolCount,
       lastReplyAt: lastReply?.created_at ?? null,
       participants,
       overflow: Math.max(0, newestFirst.length - participants.length),
