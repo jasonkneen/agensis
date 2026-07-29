@@ -365,10 +365,12 @@ function WidgetCard({
       )}
       onDragOver={e => { e.preventDefault(); onDragOver(); }}
     >
-      {/* header — whole row is the drag handle, and the hairline under it is
-          what a card border used to do: say where this widget starts. */}
+      {/* header — whole row is the drag handle. Its hairline used to be what a
+          card border did: say where this widget starts. Now the card has its
+          own real border (see .thread-widget-card), so px-2 keeps the label
+          and icon buttons off that edge instead of sitting flush against it. */}
       <div
-        className="flex shrink-0 cursor-grab items-center gap-1.5 border-b border-border/60 px-1 pt-0.5 pb-1.5 active:cursor-grabbing"
+        className="flex shrink-0 cursor-grab items-center gap-1.5 border-b border-border/60 px-2 pt-1 pb-1.5 active:cursor-grabbing"
         draggable
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
@@ -403,17 +405,18 @@ function WidgetCard({
         </button>
       </div>
 
-      {/* body — px-0 now the frame is gone, so an item's text lines up with the
-          heading above it instead of being inset from a border that isn't
-          there. The rows keep their own px-1 for the hover wash. */}
+      {/* body — the wrapper itself stays unpadded; each row below carries its
+          own px-2 (matching the header) so the hover wash still reaches edge
+          to edge while the TEXT inside it gets real breathing room from the
+          card's border instead of sitting flush against it. */}
       <div className="min-h-0 flex-1 overflow-y-auto pb-1 pt-1">
         {loading && items.length === 0 ? (
-          <p className="px-1 py-2 text-[11px] text-muted-foreground">Loading…</p>
+          <p className="px-2 py-2 text-[11px] text-muted-foreground">Loading…</p>
         ) : items.length === 0 ? (
           // Was muted-foreground/70 — a double discount (already-muted token,
           // then 70% of it) that put the empty state under any reasonable
           // contrast floor. Muted alone is the intended "quiet".
-          <p className="px-1 py-2 text-[11px] text-muted-foreground">{meta.empty}</p>
+          <p className="px-2 py-2 text-[11px] text-muted-foreground">{meta.empty}</p>
         ) : (
           <ul className="flex flex-col gap-0.5">
             {items.map(item => (
@@ -466,7 +469,7 @@ function WidgetItemRow({ item, onToggleDone, onAnswer, onDelete, onJumpToMessage
   };
 
   return (
-    <li className="thread-widget-item-row group/row flex flex-col gap-0.5 rounded-md px-1 py-1 hover:bg-muted/50">
+    <li className="thread-widget-item-row group/row flex flex-col gap-0.5 rounded-md px-2 py-1 hover:bg-muted/50">
       <div className="flex items-start gap-1.5">
         {isBlocker ? (
           <Hand className={cn('mt-0.5 size-3 shrink-0', isAnswered ? 'text-muted-foreground' : 'text-amber-500')} />
