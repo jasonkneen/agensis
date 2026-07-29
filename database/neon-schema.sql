@@ -332,6 +332,16 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS broadcast_to_channel boolean NOT N
 -- per-task subthread; source_task_id ties the thread root back to its task.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS source_task_id uuid;
 CREATE INDEX IF NOT EXISTS idx_messages_source_task_id ON messages(session_id, source_task_id);
+-- taskThreadLastWordAt (server/task-dispatch.cjs) filters `root.source_task_id`
+-- with no session_id, so it cannot use the (session_id, source_task_id) index
+-- above — Postgres has no index skip scan. Partial on both predicates because
+-- that query always pairs source_task_id with `thread_parent_id is null`, and
+-- only thread ROOTS carry source_task_id: 23 of 5493 message rows, a 16 kB index.
+-- Keep the composite index above too: postTaskSubthreadMention queries on both
+-- columns and does use it.
+CREATE INDEX IF NOT EXISTS idx_messages_source_task_root
+  ON messages(source_task_id)
+  WHERE source_task_id IS NOT NULL AND thread_parent_id IS NULL;
 
 -- Trigram GIN indexes so MCP search_messages / search_docs (leading-wildcard
 -- ILIKE '%q%') are index-backed instead of a full sequential scan. Mirrors the

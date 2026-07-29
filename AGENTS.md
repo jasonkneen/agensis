@@ -39,6 +39,48 @@ Array columns (e.g. `uuid[]`) need
 `ARRAY_COLUMNS_BY_TABLE` + the `toPgArrayLiteral` bind path in BOTH backends —
 postgres.js will not array-serialize a raw JS array bound via `.unsafe`.
 
+## Read authorization has ONE granularity: the workspace
+
+**Read authorization is workspace-granular. There is no channel-, session- or
+DM-level check anywhere in the codebase.** Every read path resolves a
+`workspace_id` and calls `enforceWorkspaceRole(userId, workspaceId, 'read')`.
+Below that, scoping happens because the SQL narrows to the session the caller
+asked for — not because a permission check said that caller may see it.
+
+Concretely, a member holding only `viewer` (the weakest role) can read the full
+transcript of ANY session in the workspace via `GET /backend/sessions/:id/messages`,
+receive any session's live rows by subscribing with `session_id=eq.<id>`, and see
+every session in the bootstrap payload. An agent's MCP identity is workspace-level
+too: `search_messages` and `list_channels` (`server/mcp.cjs`) span every channel
+and every DM in the workspace.
+
+**DM privacy is not enforced, and no feature may assume it.** The original
+justification is a comment at the DM-creation site — "workspaces are effectively
+single-human, so the DM keys on the agent alone". That was a reasonable
+assumption and it is **already false**: as of 2026-07-29 one workspace has two
+distinct human members and four Direct-message sessions, all readable by both.
+The product has `workspace_members`, five roles, an invite flow and
+`revokeRealtimeAccessForMember`, so it plainly expects multi-human workspaces.
+
+This is a known, deliberate limitation rather than an oversight, and it is pinned
+by `tests/dm-scope-assumption.test.cjs`, which asserts the current answer out
+loud. If you add a per-session read check, that test goes red — update it and this
+section together.
+
+**Do not fix this partially.** A per-session check on one read path and not the
+others is strictly worse than the current uniform behaviour: it reads as privacy
+while leaving the other paths open. The real fix is a `chat_session_members`
+table, a new capability, a migration for the existing sessions, and a rewrite of
+every read path listed above — a product decision about what a DM means here, not
+a bug fix.
+
+What IS structurally guaranteed, and must stay that way: `messages` has no
+`workspace_id` column, so a message is only reachable through
+`session_id -> chat_sessions.workspace_id`. That makes cross-tenant scoping a
+property of the schema rather than a convention a query can forget — an unscoped
+`messages` select cannot even be expressed through the generic DB route. Keep
+`messages` OUT of `WORKSPACE_SCOPED_TABLES` for the same reason.
+
 ## Realtime
 
 Clients receive live updates via `notifyDbSubscribers(table, eventType, rows)` in

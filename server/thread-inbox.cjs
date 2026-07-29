@@ -79,7 +79,19 @@ function buildThreadInboxSql(limit = THREAD_INBOX_DEFAULT_LIMIT) {
  return `
     with replies as (
       select r.thread_parent_id as parent_id,
-             count(*) as reply_count,
+             -- Tool steps are WORK, not conversation. Both client counters
+             -- already exclude them (src/hooks/useChat.ts, src/lib/threadSummary.ts)
+             -- because "a chip that folds a Bash step into 'N replies' reads as
+             -- the agent having said more than it did". This counter did not,
+             -- so one agent turn with 20 Bash calls showed "21 replies" in the
+             -- sidebar and "1 reply" in the channel — same thread, same screen.
+             count(*) filter (where coalesce(r.message_kind, '') <> 'tool_step') as reply_count,
+             count(*) filter (where coalesce(r.message_kind, '') = 'tool_step') as tool_count,
+             -- DELIBERATELY spans every reply, tool steps included, and is
+             -- deliberately inconsistent with reply_count above. It drives
+             -- ordering and unread, and a thread where the agent is actively
+             -- working IS recent. Adding a filter here is a behaviour change,
+             -- not a consistency fix — tests/thread-inbox.test.cjs pins it.
              max(r.created_at) as last_reply_at,
              -- Whether a person has taken a turn IN the thread. Agent-authored
              -- rows carry sender_kind 'agent'; a human turn is role 'user' and
@@ -87,6 +99,27 @@ function buildThreadInboxSql(limit = THREAD_INBOX_DEFAULT_LIMIT) {
              bool_or(r.role = 'user' and coalesce(r.sender_kind, '') <> 'system'
                      and coalesce(r.sender_kind, '') <> 'agent') as human_replied
         from messages r
+        -- The workspace scope belongs INSIDE the aggregate. The messages table
+        -- carries no workspace_id (that is the point — scoping is structural,
+        -- only reachable through session_id), so without this join GROUP BY builds
+        -- a group for EVERY tenant's thread and the outer join on s.workspace_id
+        -- throws almost all of them away. Postgres cannot push a qualifier on
+        -- chat_sessions through a GROUP BY on messages, so it will not do this
+        -- for us.
+        --
+        -- Measured on production (24 workspaces, 2284 thread replies in 30 days,
+        -- 90.7% of them owned by one tenant): a small tenant's /threads load goes
+        -- from 2.14ms to 0.34ms. The dominant tenant pays about +0.6ms, because
+        -- for it the join filters almost nothing. That is the right trade — the
+        -- cost of the unscoped version grows with TOTAL platform volume while
+        -- every tenant but the largest pays for data it cannot see.
+        --
+        -- Redundant with the outer join on s.workspace_id on purpose. The outer
+        -- one is what the existing tests pin, and both are cheap.
+        join chat_sessions rs
+          on rs.id = r.session_id
+         and rs.workspace_id = $1::uuid
+         and rs.deleted_at is null
        where r.thread_parent_id is not null
          and r.deleted_at is null
          and r.created_at > ${window}
@@ -99,6 +132,7 @@ function buildThreadInboxSql(limit = THREAD_INBOX_DEFAULT_LIMIT) {
            left(coalesce(p.content, ''), ${THREAD_TITLE_CHARS})   as parent_preview,
            coalesce(p.sender_name, '')                  as parent_sender,
            x.reply_count                                as reply_count,
+           x.tool_count                                 as tool_count,
            x.last_reply_at                              as last_reply_at,
            left(coalesce(last_msg.content, ''), ${THREAD_PREVIEW_CHARS}) as last_reply_preview,
            coalesce(last_msg.sender_name, '')           as last_reply_sender,
@@ -119,11 +153,15 @@ function buildThreadInboxSql(limit = THREAD_INBOX_DEFAULT_LIMIT) {
        -- sidebar, and its @mention turns would otherwise flood this list. The
        -- call already has its own marker row in the channel.
        and coalesce(s.folder, '') <> 'huddle'
+      -- Skips tool steps for the same reason reply_count does: the preview is
+      -- meant to be the last thing SAID, and without this it could be a tool
+      -- line (Bash / npm test) instead of the agent's actual answer.
       left join lateral (
         select m.content, m.sender_name
           from messages m
          where m.thread_parent_id = x.parent_id
            and m.deleted_at is null
+           and coalesce(m.message_kind, '') <> 'tool_step'
          order by m.created_at desc
          limit 1
       ) last_msg on true
@@ -152,6 +190,10 @@ function toThreadInboxItem(row) {
   parentPreview: String(row.parent_preview || ''),
   parentSender: String(row.parent_sender || ''),
   replyCount: Number(row.reply_count) || 0,
+  // Tool steps, counted separately rather than folded into replyCount. A thread
+  // whose only replies are tool steps has replyCount 0 and a non-zero toolCount;
+  // it stays in the list, because an agent actively working is worth seeing.
+  toolCount: Number(row.tool_count) || 0,
   lastReplyAt: row.last_reply_at ? new Date(row.last_reply_at).toISOString() : '',
   lastReplyPreview: String(row.last_reply_preview || ''),
   lastReplySender: String(row.last_reply_sender || ''),

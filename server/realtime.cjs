@@ -52,6 +52,10 @@ function createRealtime(deps = {}) {
   markAgentConnectionOffline,
   refreshConnectedAgentConfigs,
   registerAgentConnection,
+  // Resolves a session's workspace. Injected rather than reimplemented: the
+  // caller's resolveWorkspaceIdForSession already owns a bounded LRU, and a
+  // second cache here would be a second thing to keep correct.
+  resolveWorkspaceIdForSession,
   updateAgentHeartbeat,
   verifyAgentConnectToken,
   verifyToken,
@@ -212,6 +216,53 @@ function createRealtime(deps = {}) {
   return copy || row;
  }
 
+ // Broadcast the sidebar's lean agent-status payload for agent-authored rows.
+ //
+ // One workspace lookup per distinct session_id per batch, not per row: a turn
+ // that writes several rows at once resolves once. The lookup is cached by the
+ // injected resolver, so in steady state this costs nothing.
+ //
+ // Best-effort by construction. A failed or missing lookup means no broadcast —
+ // the same outcome as before this worked — and must never reject into the
+ // fanout, which is why the whole body is wrapped and the caller uses `void`.
+ async function emitAgentStatus(rowList, eventType) {
+  try {
+   const agentRows = rowList.filter((row) => row && row.sender_kind === 'agent' && row.sender_id && row.session_id);
+   if (agentRows.length === 0) return;
+   const workspaceBySession = new Map();
+   for (const sessionId of new Set(agentRows.map((row) => String(row.session_id)))) {
+    try {
+     const workspaceId = await resolveWorkspaceIdForSession(sessionId);
+     if (workspaceId) workspaceBySession.set(sessionId, workspaceId);
+    } catch {
+     // Defence in depth, and deliberately UNREACHABLE through the resolver we
+     // inject today: resolveWorkspaceIdForSession catches its own errors and
+     // returns null. It stays because the resolver is an injected dependency
+     // whose contract nothing enforces — if one ever throws, a single bad
+     // session must not silence the whole batch. There is no test pinning this
+     // branch, because through this seam there is no way to reach it; the
+     // reachable failure (a null resolution) is covered.
+    }
+   }
+   for (const row of agentRows) {
+    const workspaceId = workspaceBySession.get(String(row.session_id));
+    if (!workspaceId) continue;
+    // The workspace comes from the row's OWN session, so a message can only
+    // ever reach its own workspace's channel — which authorizeRealtimeBroadcast
+    // already gates with enforceWorkspaceRole(read).
+    relayBroadcast(`agent-status:${workspaceId}`, 'agent_status', {
+     id: row.id,
+     agentId: row.sender_id,
+     senderName: row.sender_name || null,
+     content: typeof row.content === 'string' ? row.content : '',
+     eventType,
+    });
+   }
+  } catch (error) {
+   console.error('[agent-status] broadcast failed:', error?.message || error);
+  }
+ }
+
  function notifyDbSubscribers(table, eventType, rows) {
   const rowList = Array.isArray(rows) ? rows : [];
   if (rowList.length === 0) return;
@@ -228,17 +279,21 @@ function createRealtime(deps = {}) {
   // content — to everyone for one bubble). Emit only the fields the feed needs,
   // only for agent-authored rows, on the workspace-scoped broadcast channel that
   // authorizeRealtimeBroadcast already gates (enforceWorkspaceRole read).
+  //
+  // The workspace is RESOLVED, not read off the row. `messages` has no
+  // workspace_id column and never has — verified against the live database, not
+  // just the DDL — so the guard this replaced (`!row.workspace_id`) short-
+  // circuited on every row and this broadcast had never fired in production.
+  // Its consumer (src/hooks/useAgentStatusFeed.ts) has been waiting for a
+  // payload that could not arrive, which is why the sidebar's activity line sat
+  // on two generic presence strings for a whole job.
+  //
+  // Async, fire-and-forget, exactly like logMessageActivity above:
+  // notifyDbSubscribers is synchronous and holds no DB handle, and enriching the
+  // ~18 call sites that pass `insert ... returning *` rows straight through
+  // would be 18 chances to forget.
   if (table === 'messages' && (eventType === 'INSERT' || eventType === 'UPDATE')) {
-   for (const row of rowList) {
-    if (!row || row.sender_kind !== 'agent' || !row.sender_id || !row.workspace_id) continue;
-    relayBroadcast(`agent-status:${row.workspace_id}`, 'agent_status', {
-     id: row.id,
-     agentId: row.sender_id,
-     senderName: row.sender_name || null,
-     content: typeof row.content === 'string' ? row.content : '',
-     eventType,
-    });
-   }
+   void emitAgentStatus(rowList, eventType);
   }
 
   void enqueueFlowWebhookEvents(table, eventType, rowList).catch((error) => {

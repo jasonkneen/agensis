@@ -8,7 +8,7 @@ import {
 // it. Every rule here is one of the ways that quietly stops being true.
 const item = (over: Partial<ThreadInboxItem>): ThreadInboxItem => ({
   parentId: 'p', sessionId: 's', sessionTitle: 'Coder', sessionFolder: 'General',
-  parentPreview: 'hello', parentSender: 'jason', replyCount: 1,
+  parentPreview: 'hello', parentSender: 'jason', replyCount: 1, toolCount: 0,
   lastReplyAt: '2026-07-26T10:00:00.000Z', lastReplyPreview: 'hi',
   lastReplySender: 'Coder', unread: false, ...over,
 });
@@ -76,6 +76,39 @@ describe('threadReplyLabel', () => {
   it('never renders a negative or fractional count', () => {
     expect(threadReplyLabel(-3)).toBe('0 replies');
     expect(threadReplyLabel(2.7)).toBe('2 replies');
+  });
+
+  // The server used to fold tool steps into replyCount, so this row and the
+  // channel's thread chip disagreed about the same thread — 98 vs 14 on real
+  // data. Now both exclude tool steps, and the sidebar says what the tool work
+  // was rather than hiding it.
+  it('names tool work separately instead of folding it into the reply count', () => {
+    expect(threadReplyLabel(14, 84)).toBe('14 replies, 84 tool calls');
+    expect(threadReplyLabel(1, 1)).toBe('1 reply, 1 tool call');
+  });
+
+  it('a thread with only tool steps reads as work, not as silence', () => {
+    // "0 replies" alone would read as nothing having happened, when in fact the
+    // agent is mid-run. The thread stays in the list for exactly that reason.
+    expect(threadReplyLabel(0, 9)).toBe('9 tool calls');
+    expect(threadReplyLabel(0, 1)).toBe('1 tool call');
+  });
+
+  // DEPLOY-ORDER SAFETY. The server change ships on Fly and this ships on
+  // Netlify, and Netlify auto-deploys on push — so for a window the client can
+  // be newer than the API and `toolCount` arrives undefined. It must degrade to
+  // exactly the old label rather than rendering NaN into the sidebar.
+  it('tolerates a toolCount the API is not sending yet', () => {
+    expect(threadReplyLabel(3, undefined as unknown as number)).toBe('3 replies');
+    expect(threadReplyLabel(3, NaN)).toBe('3 replies');
+    expect(threadReplyLabel(3, null as unknown as number)).toBe('3 replies');
+  });
+
+  it('omits tool work entirely when there is none', () => {
+    expect(threadReplyLabel(3, 0)).toBe('3 replies');
+    expect(threadReplyLabel(3)).toBe('3 replies');
+    expect(threadReplyLabel(3, -2)).toBe('3 replies');
+    expect(threadReplyLabel(3, 1.9)).toBe('3 replies, 1 tool call');
   });
 });
 

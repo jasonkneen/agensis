@@ -1330,6 +1330,9 @@ async function ensureRuntimeSchema() {
     -- agent-authored task comment (task_comments.agent_id).
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS source_task_id uuid;
     CREATE INDEX IF NOT EXISTS idx_messages_source_task_id ON messages(session_id, source_task_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_source_task_root
+      ON messages(source_task_id)
+      WHERE source_task_id IS NOT NULL AND thread_parent_id IS NULL;
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS agent_id uuid;
 
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS memory_dir text DEFAULT '';
@@ -7122,6 +7125,9 @@ const realtime = createRealtime({
  handlePeerListRequest, handlePeerTicketRequest, inferenceBroker,
  logMessageActivity, markAgentConnectionOffline,
  refreshConnectedAgentConfigs, registerAgentConnection, updateAgentHeartbeat,
+ // Lets the agent-status broadcast resolve a row's workspace. `messages` has no
+ // workspace_id column, so without this the broadcast cannot fire at all.
+ resolveWorkspaceIdForSession,
  verifyAgentConnectToken, verifyToken, voiceRelay, voiceStreamRateLimiter,
 });
 const {
