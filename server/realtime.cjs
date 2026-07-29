@@ -66,9 +66,24 @@ function createRealtime(deps = {}) {
  // which fires 'close' → markAgentConnectionOffline → failConnectionJobs, turning
  // what used to be a 240s silent "Thinking…" hang into a fast, explicit failure.
  const LIVENESS_PING_INTERVAL_MS = 15_000;
- // Consecutive missed pongs before a socket is terminated. 2 → a daemon has ~30s
- // to answer before it is declared dead. See the livenessInterval comment.
- const LIVENESS_MAX_MISSED_PONGS = 2;
+ // Consecutive missed pongs before a socket is terminated.
+ //
+ // Was 2 (~30s), which killed HEALTHY daemons mid-turn. A daemon is a Node
+ // process that shells out: `npx vite build`, `npx vitest run`, a long grep. While
+ // it pipes a child's stdout its event loop can stall for far longer than 30s, and
+ // a pong is answered ON that event loop — so "hasn't ponged in 30s" does not mean
+ // "gone", it very often means "busy doing exactly what it was asked to do".
+ //
+ // Terminating fires 'close' → failConnectionJobs → the turn is marked error and
+ // its work is LOST (observed live 2026-07-29: job 4c065aaa killed at 6m07s with
+ // "the daemon disconnected" while the agent was mid-build).
+ //
+ // 8 → ~120s of grace. Still an order of magnitude faster than the 240s silent
+ // "Thinking…" hang this heartbeat replaced, and a genuinely dead socket (laptop
+ // asleep, network gone) is still reaped automatically — just not while a build
+ // is running. Detection latency is the cheap side of this trade; a destroyed
+ // turn is the expensive one.
+ const LIVENESS_MAX_MISSED_PONGS = 8;
 
  // One liveness tick over a set of sockets. Extracted from the interval so the
 // miss-tolerance is testable without standing up a server and waiting 30s.
@@ -601,6 +616,7 @@ function createRealtime(deps = {}) {
   registerTestWebsocketClient,
   sweepLiveness,
   LIVENESS_MAX_MISSED_PONGS,
+  LIVENESS_PING_INTERVAL_MS,
   // Exported for __test in index.cjs: the channel-name parser the realtime
   // authorization tests assert directly.
   workspaceIdFromRealtimeChannel,

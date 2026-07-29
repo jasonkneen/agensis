@@ -244,3 +244,31 @@ test('reconnecting inside the window keeps the turn and re-homes it', async () =
   assert.deepEqual(db.rehomes[0].moved, ['job-1']);
 });
 
+
+// A daemon is a Node process that shells out. While it pipes `npx vite build` or
+// `npx vitest run` stdout its event loop stalls — and a pong is answered ON that
+// loop. At 2 missed pongs (~30s) the server terminated HEALTHY daemons mid-turn,
+// fired failConnectionJobs, and destroyed the work (observed live 2026-07-29:
+// job 4c065aaa, killed at 6m07s with "the daemon disconnected", mid-build).
+//
+// Pinned as a floor, not an exact value: the point is that a busy daemon gets
+// substantially more than half a minute before it is declared dead.
+test('a daemon busy in a long build is not killed inside two minutes', () => {
+  assert.ok(
+    __test.LIVENESS_MAX_MISSED_PONGS * __test.LIVENESS_PING_INTERVAL_MS >= 120_000,
+    `a stalled-but-healthy daemon must get >=120s, got ${
+      (__test.LIVENESS_MAX_MISSED_PONGS * __test.LIVENESS_PING_INTERVAL_MS) / 1000}s`,
+  );
+});
+
+test('a socket that answers even once mid-build resets its whole budget', () => {
+  const ws = livenessSocket('busy-build');
+  // Stall for one tick short of termination…
+  for (let i = 0; i < __test.LIVENESS_MAX_MISSED_PONGS - 1; i += 1) __test.sweepLiveness([ws]);
+  assert.equal(ws.terminated, false, 'not dead yet');
+  // …then the child process finishes and the loop drains the queued ping.
+  ws.pong();
+  __test.sweepLiveness([ws]);
+  assert.equal(ws.missedPongs, 0, 'the budget resets, so back-to-back builds never accumulate');
+  assert.equal(ws.terminated, false);
+});

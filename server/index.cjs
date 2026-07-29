@@ -7629,6 +7629,7 @@ module.exports = {
   // Socket liveness — a daemon must survive a single missed pong.
   sweepLiveness: (...args) => realtime.sweepLiveness(...args),
   LIVENESS_MAX_MISSED_PONGS: realtime.LIVENESS_MAX_MISSED_PONGS,
+  LIVENESS_PING_INTERVAL_MS: realtime.LIVENESS_PING_INTERVAL_MS,
   clearPendingJobFailures,
   // MCP connect-a-client model — exercised against a fake DB.
   verifyInviteToken,
