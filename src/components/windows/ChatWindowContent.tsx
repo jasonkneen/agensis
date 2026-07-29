@@ -2686,10 +2686,13 @@ function ThreadReplySummaryButton({
   // agent having said nine things back.
   const toolCount = summary?.toolCount ?? 0;
 
+  // No `mt-1` on the root below — the shared row this now lives in owns the
+  // spacing, and keeping it here too would double the gap the row exists to
+  // remove.
   return (
     <button
       type="button"
-      className="mt-1 -ml-1 inline-flex h-7 max-w-full items-center gap-1.5 rounded-full px-1 text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+      className="-ml-1 inline-flex h-7 max-w-full items-center gap-1.5 rounded-full px-1 text-xs text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
       onClick={onOpenThread}
       aria-label={lastReplyLabel
         ? `Open thread — ${replyLabel}, last reply ${lastReplyLabel}`
@@ -2934,16 +2937,24 @@ function ChatMessageBubble({
             Streaming
           </div>
         )}
-        {replyCount && onOpenThread ? (
-          <ThreadReplySummaryButton
-            parentMessageId={msg.id}
-            replyCount={replyCount}
-            summary={replySummary}
-            onOpenThread={onOpenThread}
-          />
-        ) : null}
-        {(subThreads && subThreads.length > 0) || onCreateSubThread ? (
+        {/* ONE row: reply stats, sub-thread chips, and the create button all sit
+            on the same line. They used to be two stacked blocks, and the second
+            one rendered on EVERY message — `onCreateSubThread` is always set —
+            holding an h-6 button at opacity-0. Invisible, but still reserving
+            ~28px under every message in the timeline: a large gap with nothing
+            in it until you happened to hover. Sharing the stats row also means
+            revealing the button costs no reflow whenever that row already has
+            content, which is what the opacity trick was protecting against. */}
+        {(replyCount && onOpenThread) || (subThreads && subThreads.length > 0) || onCreateSubThread ? (
           <div className="mt-1 flex flex-wrap items-center gap-1">
+            {replyCount && onOpenThread ? (
+              <ThreadReplySummaryButton
+                parentMessageId={msg.id}
+                replyCount={replyCount}
+                summary={replySummary}
+                onOpenThread={onOpenThread}
+              />
+            ) : null}
             {(subThreads || []).map(session => {
               const agentParticipants = normalizeChannelParticipants(session.participants).filter(p => p.kind === 'agent');
               const label = agentParticipants.length > 0
@@ -2962,17 +2973,24 @@ function ChatMessageBubble({
               );
             })}
             {onCreateSubThread && (
-              // Hover-only: this used to sit under every single message whether or
-              // not it had anything to do with a sub-thread, which made it the
-              // loudest repeated element in the timeline. Opacity (not `hidden`)
-              // so revealing it doesn't reflow the row under the cursor.
-              // `pointer-coarse:opacity-70` is the escape hatch: a touch device
-              // never fires hover, so hover-only here means unreachable (this app
+              // `hidden`, NOT opacity-0. Opacity kept the button in layout on every
+              // message, which is the gap this row was collapsing. Hidden means a
+              // message with no replies and no sub-threads contributes an EMPTY
+              // flex row — zero height — instead of a 28px void.
+              //
+              // The reflow that opacity was protecting against is now mostly moot:
+              // on any message that has stats or chips this button appears beside
+              // them and the row's height never changes. On a bare message the row
+              // does grow on hover, which is the honest trade for removing the gap
+              // from every other message in the timeline.
+              //
+              // `pointer-coarse:inline-flex` is the escape hatch: a touch device
+              // never fires hover, so hover-only would mean unreachable (this app
               // ships a mobile layer). Coarse pointers get it permanently visible
               // but dimmed, so it stays quiet on desktop where hover works.
               <button
                 type="button"
-                className="inline-flex h-6 items-center gap-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-70"
+                className="hidden h-6 items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:inline-flex group-hover:inline-flex pointer-coarse:inline-flex pointer-coarse:opacity-70"
                 onClick={onCreateSubThread}
               >
                 <Plus className="size-3" />
