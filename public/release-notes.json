@@ -27,6 +27,19 @@
     ]
   },
   {
+    "version": "schedules-and-gateways-go-live",
+    "date": "2026-07-29",
+    "title": "Schedules and inference gateways update themselves now",
+    "summary": "Both of these screens have always been built to update the moment something changed — and neither of them ever did. The lists asked the server to keep them posted, the server quietly refused, and the refusal was thrown away without a word, so the only way to see a change was to reload. If a schedule ran, or someone else on your team added a gateway, your screen went on showing the old picture indefinitely. Both are live now: a schedule that fires, gets switched off, or has its timing changed updates in front of you, and a gateway someone adds or removes appears and disappears on everyone's screen at once. The gateway list carries no credentials with it — the stored API key never leaves the server, and neither does anything you put in a gateway's custom headers, so nothing sensitive rides along with the update. Adding, editing or deleting a gateway still needs admin rights, and gateway addresses are still checked before the server will call them.",
+    "highlights": [
+      "Schedules update as they run, get paused, or have their timing changed",
+      "Gateways your teammates add or remove appear and disappear straight away",
+      "No API key and no custom header ever leaves the server with an update",
+      "You can see the lists as any member; changing them still needs admin rights",
+      "One workspace's schedules and gateways are never visible to another"
+    ]
+  },
+  {
     "version": "thread-counts-tell-the-truth",
     "date": "2026-07-29",
     "title": "Thread reply counts stopped counting the agent's tool calls",

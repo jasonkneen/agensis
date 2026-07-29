@@ -100,8 +100,13 @@ side logs anything. The surface just stays empty forever.
 
 That is not hypothetical. An audit found **eight** tables broadcast but not
 subscribable, two of them (`agent_schedules`, `gateway_configs`) with live client
-subscriptions that have never once worked — through 1471 backend and 2434
-frontend passing tests, because nothing asserted what the protocol is.
+subscriptions that had never once worked — through 1471 backend and 2434
+frontend passing tests, because nothing asserted what the protocol is. Those two
+are fixed and allowlisted; `tests/schedules-gateways-realtime.test.cjs` walks the
+whole path (the hook's exact binding -> `authorizeRealtimeBinding` -> a real
+fanout -> the frame the client receives) so the two halves can't drift apart
+again silently. The other six are exemptions on purpose, `FANOUT_BROKEN` is empty,
+and empty is the goal state rather than a disabled check.
 
 So every table passed to `notifyDbSubscribers` must be exactly one of:
 
@@ -130,6 +135,23 @@ projection. `channel_bridges.config` is the cautionary tale — the REST routes
 project it away, all four fanout calls pass raw `returning *` rows, and only the
 missing allowlist entry stood between that and a live Slack bot token on every
 subscriber's socket.
+
+Allowlisting `gateway_configs` is the worked example of what that costs, and all
+four parts were needed in the one commit:
+
+- `ALLOWED_TABLES` — otherwise the subscription is refused.
+- `WORKSPACE_SCOPED_TABLES` — **load-bearing, not tidy.**
+  `enforceDbOperationAccess` returns EARLY for any table outside that Set, so an
+  `ALLOWED_TABLES` entry without it has *no row scoping at all* and one signed-in
+  user reads every tenant's rows.
+- `SELECTABLE_COLUMNS_BY_TABLE` — `columns: '*'` on the generic select would
+  otherwise return `api_key_cipher`, which the dedicated route reduces to a
+  `has_key` boolean on purpose. The rule of thumb: **the generic path must never
+  return more than the dedicated route does at the same capability.**
+- `PRIVILEGED_DB_COLUMNS_BY_TABLE` — a generic write must not set the columns the
+  dedicated route exists to validate. `base_url` is checked by
+  `assertSafeOutboundUrl` on POST/PATCH and nowhere else, so leaving it writable
+  through `/backend/db/insert` would be a way around a live SSRF guard.
 
 ### Presence: two transports, merged only at the view layer
 

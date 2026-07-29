@@ -196,11 +196,34 @@ function createRealtime(deps = {}) {
   // The whole column, not named fields: a new provider added to PROVIDER_FIELDS
   // in server/bridge-admin-routes.cjs would otherwise leak by default.
   channel_bridges: ['config'],
+  // gateway_configs is now subscribable (src/hooks/useGateways.ts), so this one
+  // is live rather than pre-emptive.
+  //
+  // The three dedicated routes in server/workspaces-routes.cjs already map their
+  // fanout through publicGatewayConfig, which drops api_key_cipher — but the
+  // GENERIC /backend/db/update|delete routes fan out raw `returning *` rows, and
+  // allowlisting the table is exactly what opened those. So the encrypted provider
+  // key reaches this function on the generic path and nowhere else strips it.
+  //
+  // `headers` goes too, for the reason publicGatewayConfig does NOT strip it and
+  // should: an operator can put `Authorization: Bearer …` in that jsonb. Nothing
+  // is lost — useGateways ignores the payload and refetches over REST, so the
+  // realtime row is a change notification, not data.
+  gateway_configs: ['api_key_cipher', 'headers'],
   // Nothing broadcasts workspace_join_links today — the mint/list/revoke routes
   // deliberately do not call notifyDbSubscribers. This entry is here for the day
   // someone adds one: workspace_invites IS broadcast, so copying that pattern
   // across is the obvious next edit, and it would put token_hash on the wire.
   workspace_join_links: ['token_hash'],
+  // workspace_invites.token is NAMED token and HOLDS hashAgentToken(token) — the
+  // same value workspace_join_links spells token_hash, under a name that reads
+  // like the raw credential. All five fanout calls in
+  // server/members-invites-routes.cjs pass raw `returning *` rows. Nothing
+  // subscribes (the table is deliberately absent from ALLOWED_TABLES), so this is
+  // pre-emptive in exactly the way the line above it is — and it is the entry that
+  // makes the pair consistent, which is what stops the next reader concluding the
+  // omission was a judgement rather than an oversight.
+  workspace_invites: ['token'],
  };
 
  function sanitizeRealtimeRow(table, row) {
