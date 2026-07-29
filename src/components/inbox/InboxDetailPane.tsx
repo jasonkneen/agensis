@@ -20,6 +20,10 @@ import {
   senderLabel,
   type InboxGroup,
 } from './inboxModel';
+import { inboxOpenTarget } from './inboxSources';
+import { PermissionRequestCard } from '../chat/PermissionRequestCard';
+import type { InboxOpenSession } from './inboxNavigation';
+import type { PermissionRequest, PermissionScope } from '../../types';
 
 // ---------------------------------------------------------------------------
 // The reading pane.
@@ -38,18 +42,27 @@ interface InboxDetailProps {
   now: number;
   /** Container-query class that reveals the back arrow in single-column mode. */
   backButtonClass?: string;
+  /** The live request behind an `approval` row, when it is still answerable. */
+  approval?: PermissionRequest | null;
+  /** True while any decision is in flight — the buttons go quiet, not away. */
+  decidingApproval?: boolean;
   onClose: () => void;
-  onOpenSession?: (sessionId: string) => void;
+  onOpenSession?: InboxOpenSession;
   onResolveBlocker?: (entityId: string, status: 'answered' | 'dismissed', response?: string) => Promise<boolean>;
+  /** Resolves '' on success, or the reason the decision did not land. */
+  onDecideApproval?: (requestId: string, behavior: 'allow' | 'deny', scope: PermissionScope) => Promise<string>;
 }
 
 export function InboxDetail({
   group,
   now,
   backButtonClass,
+  approval = null,
+  decidingApproval = false,
   onClose,
   onOpenSession,
   onResolveBlocker,
+  onDecideApproval,
 }: InboxDetailProps) {
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
@@ -75,7 +88,8 @@ export function InboxDetail({
   const initials = senderInitials(sender);
   const body = inboxPreview(group);
   const earlier = group.items.slice(1);
-  const canOpen = !!group.sessionId && !!onOpenSession;
+  const openTarget = inboxOpenTarget(group);
+  const canOpen = !!openTarget && !!onOpenSession;
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
@@ -103,10 +117,11 @@ export function InboxDetail({
             size="xs"
             variant="ghost"
             className="shrink-0 text-muted-foreground"
-            onClick={() => onOpenSession?.(group.sessionId as string)}
+            onClick={() => onOpenSession?.({ ...(openTarget as NonNullable<typeof openTarget>), beside: true })}
+            title="Opens beside the inbox, focused on this thread where there is one."
           >
             <ExternalLink data-icon="inline-start" />
-            Open chat
+            {openTarget?.threadParentId ? 'Open thread' : 'Open chat'}
           </Button>
         )}
         <Button
@@ -143,11 +158,35 @@ export function InboxDetail({
 
           {/* The question comes BEFORE the answer box. Reading order is the whole
               job of this pane — an answer field above the thing being asked is
-              how you get replies to a question nobody read. */}
-          {body && (
+              how you get replies to a question nobody read.
+
+              Suppressed for an approval, whose card below restates the same
+              summary in full and with the rules attached. */}
+          {body && !approval && (
             <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
               {body}
             </p>
+          )}
+
+          {/* An agent is holding a tool call open on the other end of a socket,
+              and it expires. Answering it HERE is the point of surfacing it
+              here at all — bouncing the reader into the transcript to click the
+              same four buttons would just add a step to a ten-minute fuse.
+              Deliberately the same component the transcript renders, so the two
+              places you can answer from cannot offer different scopes. */}
+          {approval && onDecideApproval && (
+            <PermissionRequestCard
+              request={approval}
+              bare
+              busy={decidingApproval}
+              onDecide={async (behavior, scope) => {
+                const failure = await onDecideApproval(approval.id, behavior, scope);
+                // Thrown, not swallowed: the card catches it and shows the
+                // server's own sentence, which is the only thing that explains
+                // "that agent is no longer connected" or "already decided".
+                if (failure) throw new Error(failure);
+              }}
+            />
           )}
 
           {group.category === 'blocker' && (

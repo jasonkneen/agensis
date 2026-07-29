@@ -406,11 +406,30 @@ export interface ActivityEvent {
  created_at: string;
 }
 
-/** Triage categories, most urgent first. `blocker` is the one an agent raises
- *  when it hits a decision it cannot make — that is what the inbox exists for. */
-export type InboxCategory = 'blocker' | 'comment' | 'mention' | 'error';
+/**
+ * Triage categories, most urgent first.
+ *
+ * `approval` and `blocker` are the two that have an AGENT STOPPED waiting on a
+ * human: a parked tool call (agent_permission_requests, which expires in ten
+ * minutes and then refuses itself) and a question the agent could not answer.
+ * They are the reason this surface exists, and they sort above everything else.
+ *
+ * `thread` is a reply under a message thread the caller follows. It is not
+ * produced by the inbox query — it is merged in client-side from the threads
+ * route, which already knows the follow rule. See components/inbox/inboxSources.
+ */
+export type InboxCategory = 'approval' | 'blocker' | 'error' | 'mention' | 'thread' | 'comment';
 
-export type InboxFilter = 'all' | InboxCategory;
+/**
+ * Deliberately NOT `'all' | InboxCategory`.
+ *
+ * This is the `?filter=` value the INBOX ROUTE accepts, and the server rejects
+ * anything outside its own set with a 400 (INBOX_FILTERS in server/index.cjs).
+ * `approval` and `thread` are merged in on the client from other routes, so
+ * widening this alias to every category would let a caller ask the server for a
+ * filter it has never heard of.
+ */
+export type InboxFilter = 'all' | 'blocker' | 'comment' | 'mention' | 'error';
 
 /**
  * One row in the triage inbox. Aggregated server-side from data that already

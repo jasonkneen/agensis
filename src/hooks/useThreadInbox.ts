@@ -18,7 +18,13 @@ interface ThreadInboxResult {
   items: ThreadInboxItem[];
   unreadCount: number;
   loading: boolean;
-  markThreadRead: (parentId: string) => void;
+  /**
+   * Advance this thread's marker. Resolves TRUE only when the marker is durable
+   * — accepted by the server, or already sent for this context. The sidebar
+   * ignores the result (a failed marker just comes back unread next load); the
+   * inbox does not, because it TELLS the user when a read did not stick.
+   */
+  markThreadRead: (parentId: string) => Promise<boolean>;
   refetch: () => void;
 }
 
@@ -57,32 +63,42 @@ export function useThreadInbox(workspaceId: string | null): ThreadInboxResult {
     return () => { cancelled = true; };
   }, [workspaceId, reloadToken]);
 
-  const markThreadRead = useCallback((parentId: string) => {
-    if (!workspaceId || !parentId) return;
+  const markThreadRead = useCallback(async (parentId: string): Promise<boolean> => {
+    if (!workspaceId || !parentId) return false;
     const contextKey = `msgthread:${parentId}`;
     const target = items.find(item => item.parentId === parentId);
     // Nothing to advance to: an unopened-but-already-read thread should not
-    // move the marker backwards or forwards.
-    if (!target || !target.unread) return;
+    // move the marker backwards or forwards. Already-read is not a failure, so
+    // it reports true — the caller asked for a state that already holds.
+    if (!target) return false;
+    if (!target.unread) return true;
 
     // Optimistic, so the row goes quiet the moment it is opened rather than on
     // the next refetch — the badge and the list move by the same one item.
     setItems(prev => prev.map(item => (item.parentId === parentId ? { ...item, unread: false } : item)));
-    if (sent.current.has(contextKey)) return;
+    // The server's guard is monotonic, so a re-send would be a no-op; skipping
+    // it is an optimisation, and the marker is already durable.
+    if (sent.current.has(contextKey)) return true;
     sent.current.add(contextKey);
 
-    void fetch(apiUrl('/backend/inbox/read'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
-      // The marker is the reply we are acknowledging, never `now()`: using the
-      // clock would also mark replies that land while the thread is open, and
-      // those have not been seen.
-      body: JSON.stringify({ workspaceId, contextKey, readAt: target.lastReplyAt }),
-    }).catch(() => {
+    try {
+      const response = await fetch(apiUrl('/backend/inbox/read'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+        // The marker is the reply we are acknowledging, never `now()`: using the
+        // clock would also mark replies that land while the thread is open, and
+        // those have not been seen.
+        body: JSON.stringify({ workspaceId, contextKey, readAt: target.lastReplyAt }),
+      });
+      if (!response.ok) throw new Error(`Inbox read HTTP ${response.status}`);
+      return true;
+    } catch {
       // A failed write means it comes back unread on the next load, which is
-      // the safe direction — better than silently swallowing a reply.
+      // the safe direction — better than silently swallowing a reply. Reported
+      // as false so a caller that promised the user it stuck can take it back.
       sent.current.delete(contextKey);
-    });
+      return false;
+    }
   }, [workspaceId, items]);
 
   const sorted = useMemo(() => sortThreadInbox(items), [items]);

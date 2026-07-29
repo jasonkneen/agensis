@@ -144,6 +144,8 @@ import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
 import { PresenceRoster } from './components/presence/PresenceRoster';
 import type { ChannelParticipant, Document, ChatSession, MemoryFact, MessageAttachment, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
+import type { InboxOpenTarget } from './components/inbox/inboxSources';
+import type { InboxOpenSession } from './components/inbox/inboxNavigation';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
 
@@ -784,6 +786,7 @@ function AppContent() {
   const {
     windows,
     openWindow,
+    openSessionBeside,
     openSplitWindow,
     closeWindow,
     closeAllWindows,
@@ -952,8 +955,11 @@ function AppContent() {
   );
 
   // Sidebar badge only — the unfiltered count of things waiting on a human. The
-  // inbox window runs its own useInbox with the tab the user picked.
-  const { unreadCount: inboxUnreadCount } = useInbox(activeWorkspaceId || null, 'all');
+  // inbox window runs its own useInbox with the tab the user picked. `agents` is
+  // passed so a pending approval counts (and is named) here exactly as it is in
+  // the window; a badge that ignored parked tool calls would be silent about the
+  // one thing in the inbox that expires.
+  const { unreadCount: inboxUnreadCount } = useInbox(activeWorkspaceId || null, 'all', agents);
 
   const {
     webhooks: agentWebhooks,
@@ -1676,6 +1682,41 @@ function AppContent() {
     if (session) handleSessionOpen(session);
   }, [sessions, handleSessionOpen]);
 
+  /**
+   * An inbox row: open the conversation BESIDE the inbox, focused on the part
+   * the row was about.
+   *
+   * Both halves matter and they are separate mechanisms. `openSessionBeside`
+   * tiles the chat against the inbox window (falling back to a normal open when
+   * there is nothing to tile against), and `openThread` points the chat's thread
+   * panel at the reply — without it the reader lands at the bottom of a channel
+   * with the message they came for somewhere up the scrollback, which is the
+   * whole complaint. Same pair of steps the sidebar's thread rows already use.
+   */
+  const handleOpenInboxItem = useCallback((target: InboxOpenTarget & { beside?: boolean }) => {
+    const session = sessions.find(item => item.id === target.sessionId);
+    if (!session) {
+      // Never a silent no-op: a row that does nothing when clicked reads as a
+      // broken inbox, and "the conversation is gone" is a real answer.
+      toast.error('That conversation is no longer in this workspace.');
+      return;
+    }
+    setActiveSession(session);
+    const opts = {
+      title: session.title,
+      sessionId: session.id,
+      canvasId: activeLayerId,
+      ownerUserId: user?.id,
+    };
+    if (target.beside) openSessionBeside('inbox', opts);
+    else openWindow('chat', opts);
+    // Closing on the way through matters as much as opening: a thread left over
+    // from the previous row would still be on screen next to a message it has
+    // nothing to do with.
+    if (target.threadParentId) openThread(target.threadParentId);
+    else closeThread();
+  }, [sessions, setActiveSession, openSessionBeside, openWindow, openThread, closeThread, activeLayerId, user?.id]);
+
   // A sidebar thread row: open the session it lives in, then focus the thread
   // itself. Both steps are needed — opening only the session drops the person
   // into a channel with the reply they came for somewhere up the scrollback.
@@ -2349,6 +2390,7 @@ function AppContent() {
                   onSendMessage={wrappedSendMessage}
                   onSetActiveSession={setActiveSession}
                   onOpenSessionById={handleSessionOpenById}
+                  onOpenInboxItem={handleOpenInboxItem}
                   onDeleteDocument={handleDeleteDocumentFromScene}
                   onAutoSaveDocument={autoSave}
                   onAddToCanvasApplet={handleCreateDocApp}
@@ -2685,6 +2727,7 @@ function CanvasLayerScene({
   onSendMessage,
   onSetActiveSession,
   onOpenSessionById,
+  onOpenInboxItem,
   onDeleteDocument,
   onAutoSaveDocument,
   onAddToCanvasApplet,
@@ -2783,6 +2826,8 @@ function CanvasLayerScene({
   onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null, broadcastToChannel?: boolean, attachments?: MessageAttachment[]) => Promise<SendMessageResult>;
   onSetActiveSession: (session: ChatSession) => void;
   onOpenSessionById: (sessionId: string) => void;
+  /** Inbox rows carry more than a session id — see components/inbox/inboxNavigation. */
+  onOpenInboxItem: InboxOpenSession;
   onDeleteDocument: (id: string) => void;
   onAutoSaveDocument: (id: string, updates: { title?: string; content?: string }) => void;
   onAddToCanvasApplet: (doc: Document) => void;
@@ -3387,7 +3432,8 @@ function CanvasLayerScene({
               <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
                 <InboxWindowContent
                   workspaceId={workspaceId}
-                  onOpenSession={onOpenSessionById}
+                  agents={agents}
+                  onOpenSession={onOpenInboxItem}
                 />
               </Suspense>
             </FloatingWindowShell>

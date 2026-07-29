@@ -584,6 +584,115 @@ export function useWindows() {
     });
   }, []);
 
+  /**
+   * Open (or surface) a chat session tiled BESIDE a window of `anchorType` —
+   * the anchor keeps the left half, the chat takes the right, and both share a
+   * groupId so the existing tiled-pair move/resize logic treats them as one.
+   *
+   * This is what "click an inbox row and the conversation opens to the side"
+   * is made of. It is deliberately the same mechanism `openSplitWindow` uses
+   * rather than a second one: two ways of tiling a pair would drift, and the
+   * group/restoreBounds bookkeeping is the fiddly part of both.
+   *
+   * Degrades rather than refuses, in this order:
+   *   - no anchor open, full-expand mode, or a viewport too narrow to hold two
+   *     minimum-width tiles  -> a plain full-viewport window (what a normal
+   *     open would have done);
+   *   - the chat already open -> surfaced and, if the anchor is tiled-able,
+   *     moved into the pair.
+   */
+  const openSessionBeside = useCallback((
+    anchorType: FloatingWindowType,
+    opts: { title?: string; sessionId: string; canvasId?: string; ownerUserId?: string | null },
+  ) => {
+    setWindows(prev => {
+      const canvasKey = opts.canvasId || 'base';
+      const existing = prev.find(w => w.sessionId === opts.sessionId && (w.canvasId || 'base') === canvasKey);
+      const anchor = prev
+        .filter(w => w.type === anchorType && !w.minimized && (w.canvasId || 'base') === canvasKey)
+        .sort((a, b) => b.zIndex - a.zIndex)[0];
+
+      const viewport = getFullViewportBounds();
+      // No anchor to sit next to, single-window mode, or not enough room for
+      // two honest halves — all three mean "just open it normally".
+      const canTile = !!anchor
+        && viewModeRef.current !== 'full'
+        && canSplitContainer(viewport, 'left');
+
+      if (!canTile) {
+        nextZIndexRef.current++;
+        if (existing) {
+          return prev.map(w => (w.id === existing.id
+            ? { ...w, minimized: false, zIndex: nextZIndexRef.current }
+            : w));
+        }
+        const solo = getFullViewportBounds();
+        return [...prev, {
+          id: generateId(),
+          type: 'chat' as FloatingWindowType,
+          title: opts.title || 'Untitled',
+          ...solo,
+          zIndex: nextZIndexRef.current,
+          minimized: false,
+          maximized: false,
+          restoreBounds: solo,
+          canvasId: opts.canvasId,
+          sessionId: opts.sessionId,
+          ownerUserId: opts.ownerUserId ?? null,
+          isPrivate: false,
+          locked: false,
+          shared: false,
+          groupId: null,
+        }];
+      }
+
+      // NOT clampToViewport on the complementary half: it is by construction
+      // inside a container that is already on screen, and clamping it has twice
+      // before floored it back up to MIN_WINDOW_WIDTH and produced an overlap.
+      // See maybeSplitPartner for the same note.
+      const leftBounds = clampToViewport(getSplitTile(viewport, 'left'));
+      const rightBounds = getComplementaryTile(viewport, 'left');
+      const groupId = anchor.groupId || existing?.groupId || generateGroupId();
+
+      nextZIndexRef.current++;
+      const tiled = prev.map(w => (w.id === anchor.id
+        ? { ...w, ...leftBounds, minimized: false, maximized: false, restoreBounds: leftBounds, groupId }
+        : w));
+
+      if (existing) {
+        return tiled.map(w => (w.id === existing.id
+          ? {
+            ...w,
+            ...rightBounds,
+            minimized: false,
+            maximized: false,
+            restoreBounds: rightBounds,
+            zIndex: nextZIndexRef.current,
+            groupId,
+          }
+          : w));
+      }
+
+      return [...tiled, {
+        id: generateId(),
+        type: 'chat' as FloatingWindowType,
+        title: opts.title || 'Untitled',
+        ...rightBounds,
+        zIndex: nextZIndexRef.current,
+        minimized: false,
+        maximized: false,
+        restoreBounds: rightBounds,
+        canvasId: opts.canvasId,
+        sessionId: opts.sessionId,
+        ownerUserId: opts.ownerUserId ?? null,
+        isPrivate: false,
+        locked: false,
+        shared: false,
+        groupId,
+      }];
+    });
+  }, []);
+
   // Open a chat window as a side-by-side split of an existing thread's window:
   // the source is tiled to the left half, the fork to the right half, and both
   // share a groupId so the existing tiled-pair move/resize logic treats them as
@@ -801,5 +910,5 @@ export function useWindows() {
     if (viewMode === 'multi' && prefersFullExpandRef.current) setViewMode('full');
   }, [viewMode, hasVisibleWindow]);
 
-  return { windows, openWindow, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, setWindowsMinimized, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, viewMode, enterFullExpand, exitFullExpand, toggleFullExpand };
+  return { windows, openWindow, openSessionBeside, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, setWindowsMinimized, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, viewMode, enterFullExpand, exitFullExpand, toggleFullExpand };
 }

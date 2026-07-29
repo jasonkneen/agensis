@@ -12,7 +12,9 @@ import {
   TEXT_BODY,
   TEXT_META,
 } from './inboxPresentation';
+import { inboxOpenTarget } from './inboxSources';
 import type { InboxRowModel } from './inboxModel';
+import type { InboxOpenSession } from './inboxNavigation';
 
 // ---------------------------------------------------------------------------
 // Three lines of text and a face.
@@ -51,7 +53,7 @@ interface InboxRowProps {
   /** `extend` is a shift-click — range-select from the anchor. */
   onToggleSelect: (key: string, extend: boolean) => void;
   onMarkRead: (key: string) => void;
-  onOpenSession?: (sessionId: string) => void;
+  onOpenSession?: InboxOpenSession;
 }
 
 export const InboxRow = React.memo(function InboxRow({
@@ -67,8 +69,11 @@ export const InboxRow = React.memo(function InboxRow({
   const { group, when, label, sender, initials, preview } = row;
   const unread = group.unreadCount > 0;
   const CategoryIcon = CATEGORY_ICON[group.category];
-  const sessionId = group.sessionId;
-  const canOpen = !!sessionId && !!onOpenSession;
+  // Where this row goes, and how much of the conversation it can point at —
+  // see inboxOpenTarget. Null when the item has no conversation behind it
+  // (a document comment, a memory-file comment).
+  const openTarget = inboxOpenTarget(group);
+  const canOpen = !!openTarget && !!onOpenSession;
   // With nothing to offer, the timestamp must NOT fade on hover — a row that
   // blanks its only metadata and puts nothing in its place just looks broken.
   // In selection mode there is nothing to offer either: the per-row actions are
@@ -250,9 +255,13 @@ export const InboxRow = React.memo(function InboxRow({
             <button
               type="button"
               className={PILL_BUTTON}
-              onClick={() => onOpenSession?.(sessionId as string)}
-              aria-label="Open the chat this came from"
-              title="Open chat"
+              onClick={() => onOpenSession?.({ ...(openTarget as NonNullable<typeof openTarget>), beside: true })}
+              aria-label={
+                openTarget?.threadParentId
+                  ? 'Open this thread beside the inbox'
+                  : 'Open the chat this came from beside the inbox'
+              }
+              title={openTarget?.threadParentId ? 'Open thread beside inbox' : 'Open chat beside inbox'}
             >
               <ExternalLink />
             </button>

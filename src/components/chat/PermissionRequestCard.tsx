@@ -28,6 +28,13 @@ export interface PermissionRequestCardProps {
   canGrantPermanently?: boolean;
   busy?: boolean;
   compact?: boolean;
+  /**
+   * Drop the transcript indent entirely. The two indents above exist to line
+   * the card up with the tool chips it interrupts INSIDE a conversation; in the
+   * inbox's detail pane there is no rail to line up with, and 44px of dead left
+   * margin just reads as a broken layout.
+   */
+  bare?: boolean;
   onDecide: (behavior: 'allow' | 'deny', scope: PermissionScope) => void | Promise<void>;
 }
 
@@ -49,12 +56,13 @@ export function PermissionRequestCard({
   canGrantPermanently = true,
   busy = false,
   compact = false,
+  bare = false,
   onDecide,
 }: PermissionRequestCardProps) {
   const [error, setError] = useState('');
   const open = isPermissionRequestOpen(request);
   const summary = permissionRequestSummary(request);
-  const indent = compact ? COMPACT_INDENT : CHANNEL_INDENT;
+  const indent = bare ? '' : compact ? COMPACT_INDENT : CHANNEL_INDENT;
 
   if (!open) {
     const allowed = request.status === 'allowed';

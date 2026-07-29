@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
+import { usePermissionRequests } from './usePermissionRequests';
+import { useThreadInbox } from './useThreadInbox';
 import {
   applyReadPlan,
   groupInboxItems,
@@ -9,9 +11,22 @@ import {
   revertReadPlan,
   type InboxGroup,
 } from '../components/inbox/inboxModel';
-import type { InboxFilter, InboxItem, ThreadItem } from '../types';
+import {
+  approvalInboxItems,
+  isApprovalContextKey,
+  isThreadContextKey,
+  mergeInboxItems,
+  threadInboxItems,
+  threadParentIdFromKey,
+  unreadItemCount,
+} from '../components/inbox/inboxSources';
+import type {
+  InboxFilter, InboxItem, PermissionRequest, PermissionScope, ThreadItem, WorkspaceAgent,
+} from '../types';
 
 const INBOX_LIMIT = 50;
+
+const NO_AGENTS: WorkspaceAgent[] = [];
 
 interface InboxPayload {
   items: InboxItem[];
@@ -19,11 +34,16 @@ interface InboxPayload {
 }
 
 export interface UseInboxResult {
+  /** Every feed merged: the server's inbox, pending approvals, followed threads. */
   items: InboxItem[];
-  /** Items collapsed per contextKey, blockers first. Stable keys — see inboxModel. */
+  /** Items collapsed per contextKey, approvals then blockers first. See inboxModel. */
   groups: InboxGroup[];
   unreadCount: number;
   loading: boolean;
+  /** Pending approvals by their inbox contextKey, so a row can offer the buttons. */
+  approvalsByKey: ReadonlyMap<string, PermissionRequest>;
+  /** True while a decision is in flight, so the buttons can go quiet. */
+  decidingApproval: boolean;
   /**
    * Advance this context's read marker. Resolves TRUE only when the marker is
    * durable — the server accepted it, or already holds one at least as new.
@@ -38,6 +58,13 @@ export interface UseInboxResult {
    * the caller can keep the row rather than lying about it.
    */
   resolveBlocker: (entityId: string, status: 'answered' | 'dismissed', response?: string) => Promise<boolean>;
+  /**
+   * Answer a parked tool call. Goes through the dedicated route (never a table
+   * write) because the server has to push the answer down the socket the daemon
+   * is holding open, and refuses the whole decision if that push fails.
+   * Resolves an error string, '' on success.
+   */
+  decideApproval: (requestId: string, behavior: 'allow' | 'deny', scope?: PermissionScope) => Promise<string>;
   refetch: () => void;
 }
 
@@ -46,10 +73,33 @@ export interface UseInboxResult {
  * of the app already writes (thread_items, the comment tables, activity_events,
  * agent_jobs), so this hook has exactly one bespoke route to call.
  *
+ * ...and then two more feeds merged on top of it, because two of the things
+ * most obviously "addressed to you" are not in that query and never could be:
+ *
+ *   APPROVALS  a daemon's parked tool call (agent_permission_requests). Its
+ *              turn is stopped, and it expires in ten minutes. Until this, the
+ *              only place it appeared was the one transcript it was raised in,
+ *              so an approval raised while you were reading anything else timed
+ *              out unseen.
+ *   THREADS    replies under message threads you follow (the /threads route,
+ *              which already owns the follow rule: a thread is yours when a
+ *              HUMAN took a turn in it).
+ *
+ * Both already had a route, a realtime subscription and a read model. Nothing
+ * new is written here — components/inbox/inboxSources reshapes them into
+ * `InboxItem` so grouping, ordering, read state and the row renderer treat them
+ * like everything else.
+ *
  * Read state is a per-user, per-context marker advanced MONOTONICALLY, so it
  * syncs across devices and never un-reads something.
  */
-export function useInbox(workspaceId: string | null, filter: InboxFilter = 'all'): UseInboxResult {
+export function useInbox(
+  workspaceId: string | null,
+  filter: InboxFilter = 'all',
+  /** Only used to name the agent that raised an approval; the row degrades to
+   *  "An agent" without it, and nothing else changes. */
+  agents: readonly WorkspaceAgent[] = NO_AGENTS,
+): UseInboxResult {
   const [items, setItems] = useState<InboxItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -106,6 +156,55 @@ export function useInbox(workspaceId: string | null, filter: InboxFilter = 'all'
     },
   );
 
+  // --- The two feeds the inbox query cannot see --------------------------
+  //
+  // Both hooks own their own loading and their own realtime. Approvals in
+  // particular are live over `agent_permission_requests`, which is what makes
+  // the inbox usable for them at all: a request appears the moment a daemon
+  // parks a call, and leaves the moment anybody answers it — including from the
+  // chat transcript, on another device.
+  const {
+    requests: permissionRequests,
+    decide: decidePermission,
+    busyId: decidingId,
+    reload: reloadPermissions,
+  } = usePermissionRequests(workspaceId);
+  const {
+    items: threadUpdates,
+    markThreadRead,
+    refetch: refetchThreads,
+  } = useThreadInbox(workspaceId);
+
+  const agentNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const agent of agents) {
+      const name = String(agent.name || agent.handle || '').trim();
+      if (agent.id && name) map.set(String(agent.id), name);
+    }
+    return map;
+  }, [agents]);
+
+  // Sampled ONCE per change of the requests themselves, never on a timer. The
+  // only clock-dependent decision here is "has this expired", and this surface
+  // has a standing rule against anything that re-renders on an interval.
+  const approvalItems = useMemo(
+    () => approvalInboxItems(permissionRequests, Date.now(), agentNames),
+    [permissionRequests, agentNames],
+  );
+  const threadItems = useMemo(() => threadInboxItems(threadUpdates), [threadUpdates]);
+
+  // Server items first — see mergeInboxItems for why the order matters.
+  const allItems = useMemo(
+    () => mergeInboxItems(items, approvalItems, threadItems),
+    [items, approvalItems, threadItems],
+  );
+
+  const approvalsByKey = useMemo(() => {
+    const map = new Map<string, PermissionRequest>();
+    for (const request of permissionRequests) map.set(`approval:${request.id}`, request);
+    return map;
+  }, [permissionRequests]);
+
   // Markers only move forward: remember the newest readAt sent per context so a
   // re-select of an older item can never walk a marker backwards. Cleared for a
   // context whose write failed, so the retry actually goes out.
@@ -113,6 +212,21 @@ export function useInbox(workspaceId: string | null, filter: InboxFilter = 'all'
 
   const markRead = useCallback(async (contextKey: string): Promise<boolean> => {
     if (!workspaceId || !contextKey) return false;
+
+    // A pending approval has no read state, deliberately. The agent is still
+    // stopped whether or not you have looked at the row, so letting it go quiet
+    // would drop it out of the Unread filter while the turn it holds stays
+    // parked. It leaves this list by being ANSWERED. Reported as success
+    // because nothing failed — there was simply nothing to mark.
+    if (isApprovalContextKey(contextKey)) return true;
+
+    // Threads keep their own marker under the same `msgthread:` key the sidebar
+    // writes, through the same /backend/inbox/read route. One read model, two
+    // surfaces — a second one would eventually disagree with this one about
+    // what "read" means.
+    if (isThreadContextKey(contextKey)) {
+      return markThreadRead(threadParentIdFromKey(contextKey));
+    }
 
     // All of the "which items, which marker, is this newer than what we sent"
     // reasoning is pure and lives in inboxModel — including the millisecond
@@ -157,7 +271,7 @@ export function useInbox(workspaceId: string | null, filter: InboxFilter = 'all'
       }
       return false;
     }
-  }, [workspaceId, items]);
+  }, [workspaceId, items, markThreadRead]);
 
   // Close a blocker off. 'answered' carries a human reply the agent reads back
   // (MCP list_thread_items tells agents to check status + response, so resolving
@@ -188,7 +302,49 @@ export function useInbox(workspaceId: string | null, filter: InboxFilter = 'all'
     return true;
   }, []);
 
-  const groups = useMemo(() => groupInboxItems(items), [items]);
+  /**
+   * Answer a parked tool call from the inbox.
+   *
+   * The row does not need removing by hand: the route returns the settled
+   * request, usePermissionRequests replaces its copy, and approvalInboxItems
+   * drops anything that is no longer pending. One source of truth for "is this
+   * still open", so the inbox and the transcript card cannot disagree.
+   */
+  const decideApproval = useCallback(async (
+    requestId: string,
+    behavior: 'allow' | 'deny',
+    scope: PermissionScope = 'once',
+  ): Promise<string> => {
+    const { error } = await decidePermission(requestId, behavior, scope);
+    return error;
+  }, [decidePermission]);
 
-  return { items, groups, unreadCount, loading, markRead, resolveBlocker, refetch: fetchInbox };
+  const groups = useMemo(() => groupInboxItems(allItems), [allItems]);
+
+  // The badge counts the merged set, not just the server's slice — a pending
+  // approval nobody has answered is the single most important thing this number
+  // can be telling you about, and it is not in the server's count at all.
+  const mergedUnreadCount = useMemo(
+    () => unreadCount + unreadItemCount(approvalItems) + unreadItemCount(threadItems),
+    [unreadCount, approvalItems, threadItems],
+  );
+
+  const refetch = useCallback(() => {
+    void fetchInbox();
+    void reloadPermissions();
+    refetchThreads();
+  }, [fetchInbox, reloadPermissions, refetchThreads]);
+
+  return {
+    items: allItems,
+    groups,
+    unreadCount: mergedUnreadCount,
+    loading,
+    approvalsByKey,
+    decidingApproval: decidingId !== '',
+    markRead,
+    resolveBlocker,
+    decideApproval,
+    refetch,
+  };
 }

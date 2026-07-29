@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import { AtSign, Hand, MessageCircle, TriangleAlert } from 'lucide-react';
+import { AtSign, Hand, MessageCircle, MessagesSquare, ShieldAlert, TriangleAlert } from 'lucide-react';
 import type { InboxCategory } from '../../types';
 
 // ---------------------------------------------------------------------------
@@ -55,9 +55,13 @@ export const TEXT_META = 'text-xs';
 export const TEXT_MICRO = 'text-[0.65rem]';
 
 export const CATEGORY_ICON: Record<InboxCategory, ComponentType<{ className?: string }>> = {
+  // The same shield the transcript's approval card uses, so the two surfaces
+  // are recognisably about one object.
+  approval: ShieldAlert,
   blocker: Hand,
   error: TriangleAlert,
   mention: AtSign,
+  thread: MessagesSquare,
   comment: MessageCircle,
 };
 
@@ -67,7 +71,7 @@ export const CATEGORY_ICON: Record<InboxCategory, ComponentType<{ className?: st
  * as muted glyphs so a full list stays calm.
  */
 export function categoryAccent(category: InboxCategory): string {
-  if (category === 'blocker') return 'text-amber-500';
+  if (category === 'approval' || category === 'blocker') return 'text-amber-500';
   if (category === 'error') return 'text-destructive';
   return '';
 }

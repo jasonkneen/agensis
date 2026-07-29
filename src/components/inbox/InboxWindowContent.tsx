@@ -27,6 +27,8 @@ import { booleanPreference, viewPreferenceKey } from '../../lib/viewPreferences'
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useSplitResize } from '../../hooks/useSplitResize';
 import { buildInboxRows, inboxEmptyState, type InboxRowModel } from './inboxModel';
+import type { InboxOpenSession } from './inboxNavigation';
+import type { WorkspaceAgent } from '../../types';
 import {
   NO_SELECTION,
   availableBulkActions,
@@ -48,9 +50,16 @@ import {
 
 // ---------------------------------------------------------------------------
 // The triage surface. Work that needs a HUMAN collects here instead of being
-// lost in channel scrollback — blockers above everything else, because an agent
-// stuck on a decision it cannot make is the only thing in this list that is
-// actively costing time.
+// lost in channel scrollback — approvals and blockers above everything else,
+// because an agent parked on a decision it cannot make is the only thing in
+// this list that is actively costing time. Approvals sort above blockers
+// because only they expire.
+//
+// Three feeds, one list (see hooks/useInbox + inboxSources): the server's inbox
+// query, pending tool-call approvals, and replies in threads you follow. They
+// are merged into one `InboxItem` stream on purpose — a surface with three
+// sections is three lists, and the whole claim of this one is that everything
+// waiting on you is in a single place, in urgency order.
 //
 // It is an INBOX, not a feed: one flat chronological stream of ~90px rows, each
 // three lines of text against a 32px face, with NOTHING drawn between them. No
@@ -130,15 +139,21 @@ function readStoredWidth(): number {
 
 interface InboxWindowContentProps {
   workspaceId: string | null;
+  /** Only used to name the agent that raised an approval. Optional by design. */
+  agents?: WorkspaceAgent[];
   /** Offered on any item that carries a session — "go read it where it happened". */
-  onOpenSession?: (sessionId: string) => void;
+  onOpenSession?: InboxOpenSession;
 }
 
 export const InboxWindowContent = React.memo(function InboxWindowContent({
   workspaceId,
+  agents,
   onOpenSession,
 }: InboxWindowContentProps) {
-  const { groups, unreadCount, loading, markRead, resolveBlocker, refetch } = useInbox(workspaceId);
+  const {
+    groups, unreadCount, loading, approvalsByKey, decidingApproval,
+    markRead, resolveBlocker, decideApproval, refetch,
+  } = useInbox(workspaceId, 'all', agents);
 
   // STABLE SELECTION: the contextKey, never an index and never the newest item's
   // id. New arrivals re-sort the list around the user without moving them.
@@ -420,9 +435,12 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
           now={now}
           /* The back arrow exists only when the detail has replaced the list. */
           backButtonClass="hidden @max-2xl/inboxwin:inline-flex"
+          approval={approvalsByKey.get(selected.key) ?? null}
+          decidingApproval={decidingApproval}
           onClose={() => setSelectedKey(null)}
           onOpenSession={onOpenSession}
           onResolveBlocker={resolveBlocker}
+          onDecideApproval={decideApproval}
         />
       )}
     </div>
@@ -442,7 +460,7 @@ interface InboxListProps {
   onSelect: (key: string) => void;
   onToggleSelect?: (key: string, extend: boolean) => void;
   onMarkRead: (key: string) => void;
-  onOpenSession?: (sessionId: string) => void;
+  onOpenSession?: InboxOpenSession;
 }
 
 const NO_KEYS: ReadonlySet<string> = new Set<string>();

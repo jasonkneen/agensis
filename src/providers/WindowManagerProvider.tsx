@@ -18,6 +18,7 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
   const {
     windows,
     openWindow,
+    openSessionBeside,
     openSplitWindow,
     closeWindow,
     closeAllWindows,
@@ -37,8 +38,8 @@ export function WindowManagerProvider({ children }: { children: ReactNode }) {
   } = windowManager;
 
   const value = useMemo<WindowManagerValue>(
-    () => ({ windows, openWindow, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, setWindowsMinimized, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, viewMode, enterFullExpand, exitFullExpand, toggleFullExpand }),
-    [windows, openWindow, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, setWindowsMinimized, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, viewMode, enterFullExpand, exitFullExpand, toggleFullExpand],
+    () => ({ windows, openWindow, openSessionBeside, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, setWindowsMinimized, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, viewMode, enterFullExpand, exitFullExpand, toggleFullExpand }),
+    [windows, openWindow, openSessionBeside, openSplitWindow, closeWindow, closeAllWindows, focusWindow, updateWindow, minimizeWindow, setWindowsMinimized, selectedWindowIds, setSelectedWindowIds, focusWindowGroup, minimizeWindowGroup, ungroupTiledWindows, viewMode, enterFullExpand, exitFullExpand, toggleFullExpand],
   );
 
   return <WindowManagerContext.Provider value={value}>{children}</WindowManagerContext.Provider>;

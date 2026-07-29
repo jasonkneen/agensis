@@ -8,11 +8,30 @@ import type { InboxCategory, InboxItem } from '../../types';
 
 /** Most urgent first. A group takes the rank of the most urgent item in it. */
 export const CATEGORY_RANK: Record<InboxCategory, number> = {
-  blocker: 0,
-  error: 1,
-  mention: 2,
-  comment: 3,
+  approval: 0,
+  blocker: 1,
+  error: 2,
+  mention: 3,
+  thread: 4,
+  comment: 5,
 };
+
+/**
+ * The two categories that are PINNED above the chronological stream, and their
+ * order relative to each other. Everything else returns 2 and is sorted purely
+ * by recency.
+ *
+ * Approvals outrank blockers because they are the only thing here on a timer:
+ * an unanswered permission request expires (ten minutes by default) and the
+ * tool call is refused, whereas a blocker waits indefinitely. A list that
+ * buried the expiring one under the patient one would be sorted by urgency
+ * exactly backwards.
+ */
+export function pinRank(category: InboxCategory): number {
+  if (category === 'approval') return 0;
+  if (category === 'blocker') return 1;
+  return 2;
+}
 
 /**
  * A burst of replies on one thread is ONE row. The group's identity is its
@@ -92,9 +111,9 @@ export function groupInboxItems(items: InboxItem[]): InboxGroup[] {
   });
 
   return groups.sort((a, b) => {
-    const aBlocked = a.category === 'blocker' ? 0 : 1;
-    const bBlocked = b.category === 'blocker' ? 0 : 1;
-    if (aBlocked !== bBlocked) return aBlocked - bBlocked;
+    const aPinned = pinRank(a.category);
+    const bPinned = pinRank(b.category);
+    if (aPinned !== bPinned) return aPinned - bPinned;
     const delta = timeOf(b.latestAt) - timeOf(a.latestAt);
     if (delta !== 0) return delta;
     return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
@@ -300,17 +319,19 @@ export function absoluteTime(iso: string): string {
 // the split between "what kind of thing is this" (line 2) and "what does it
 // say" (line 3) has to be made here rather than assumed.
 //
+//   approval title = "Bash · git clone …",           body = the daemon's reason
 //   blocker  title = the agent's question, body = a response that is usually ''
 //   comment  title = "Comment on <doc/task/path>",  body = the comment text
 //   mention  title = "<Sender>: <first 80 chars>",  body = the full message
 //   error    title = "<Agent> run failed",          body = the error text
+//   thread   title = the thread's name,             body = the newest reply
 
 /** Line 2: what kind of thing this is, and what it is attached to. */
 export interface InboxTypeLabel {
   text: string;
-  /** A neutral chip — the document/task/file the item hangs off, when known. */
+  /** A neutral chip — the document/task/file/thread the item hangs off, when known. */
   chip: string | null;
-  /** Only the two "a human has to move this" categories carry a hue. */
+  /** Only the "a human has to move this" categories carry a hue. */
   tone: 'blocker' | 'error' | 'muted';
 }
 
@@ -318,10 +339,25 @@ const COMMENT_PREFIX = 'Comment on ';
 
 export function inboxTypeLabel(group: InboxGroup): InboxTypeLabel {
   switch (group.category) {
+    case 'approval':
+      // Shares the blocker's amber rather than introducing a fourth hue. Both
+      // mean the same thing to a reader — an agent is stopped until you act —
+      // and the icon plus the wording already tell them apart. Spending a new
+      // colour here would leave the list with no calm state at all.
+      return { text: 'Needs your approval', chip: null, tone: 'blocker' };
     case 'blocker':
       return { text: 'Needs your decision', chip: null, tone: 'blocker' };
     case 'error':
       return { text: 'Run failed', chip: null, tone: 'error' };
+    case 'thread': {
+      // Same shape as a comment: what happened, then WHERE. The thread's own
+      // name is the chip because it is the only thing separating two replies
+      // from the same agent in the same channel.
+      const name = group.title.trim();
+      return name
+        ? { text: 'Replied in', chip: name, tone: 'muted' }
+        : { text: 'New reply', chip: null, tone: 'muted' };
+    }
     case 'comment': {
       // The server literally builds `'Comment on ' || <name>`, so this split is
       // deterministic — but it falls back to the whole title if that ever stops
@@ -343,7 +379,9 @@ export function inboxTypeLabel(group: InboxGroup): InboxTypeLabel {
  * whichever field actually carries the words wins.
  */
 export function inboxPreview(group: InboxGroup): string {
-  if (group.category === 'blocker') return group.title.trim();
+  // For these two the TITLE is the thing being asked; the body is a reason or
+  // an answer-on-file, which is detail-pane material.
+  if (group.category === 'blocker' || group.category === 'approval') return group.title.trim();
   const body = group.body.trim();
   if (body) return body;
   if (group.category === 'mention') {
@@ -358,7 +396,10 @@ export function inboxPreview(group: InboxGroup): string {
 export function senderLabel(group: InboxGroup): string {
   const name = group.actorName.trim();
   if (name) return name;
-  return group.category === 'blocker' || group.category === 'error' ? 'An agent' : 'Someone';
+  const fromAnAgent = group.category === 'approval'
+    || group.category === 'blocker'
+    || group.category === 'error';
+  return fromAnAgent ? 'An agent' : 'Someone';
 }
 
 /** Up to two initials for the avatar; '' when there is nothing usable to show. */
@@ -406,6 +447,6 @@ export function inboxEmptyState(unreadOnly: boolean): { title: string; descripti
       }
     : {
         title: 'Inbox zero',
-        description: 'Blockers, comments, mentions and failed runs land here when something needs a human.',
+        description: 'Approvals, blockers, thread replies, comments, mentions and failed runs land here when something needs a human.',
       };
 }
