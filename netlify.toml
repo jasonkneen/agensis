@@ -1,3 +1,22 @@
+# Netlify secret scanning.
+#
+# VITE_BACKEND_BASE_URL is compiled INTO the bundle by design — Vite inlines
+# `import.meta.env.*` at build time (src/lib/backendClient.ts reads it), and the
+# browser cannot call the backend without knowing its URL. So the scanner finds a
+# configured env var's value in dist/ and fails the deploy with "Exposed secrets
+# detected" + exit code 2. It is a false positive on a value that is public by
+# necessity, not a leak.
+#
+# Omitting the KEY rather than disabling the scan or omitting paths: every other
+# variable stays scanned, and dist/ stays scanned, so a genuine secret reaching
+# the bundle still fails the build.
+#
+# This lives here rather than in the Netlify UI on purpose. The same failure was
+# fixed once before via the UI, where it was invisible to the repo and to anyone
+# reading it later — and it recurred.
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "VITE_BACKEND_BASE_URL"
+
 # Headers only — build/publish settings stay in the Netlify UI (no [build]
 # section here so we don't override them).
 #
