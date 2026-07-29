@@ -26,7 +26,17 @@ import {
 // The reload path uses vite-plugin-pwa's `updateServiceWorker(true)` to activate
 // the waiting service worker (skipWaiting) and swap in the new precache — a real
 // cache bust — falling back to a hard reload where no SW is involved.
-export function AppUpdateManager() {
+/**
+ * `swOnly` registers the service worker and does nothing else — no version check,
+ * no toast, no dialog.
+ *
+ * The logged-OUT mount needs the SW registration (a visitor who never signs in
+ * would otherwise never register one, and an outdated SW serves the stale shell
+ * forever with no update path). It must NOT run the rest: "You're on the latest
+ * agensis, here's what changed" was appearing on the sign-in page, to someone who
+ * has not signed in and has no idea what the product is.
+ */
+export function AppUpdateManager({ swOnly = false }: { swOnly?: boolean } = {}) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<'available' | 'updated'>('available');
   const [notes, setNotes] = useState<ReleaseNote[]>([]);
@@ -97,6 +107,7 @@ export function AppUpdateManager() {
 
   // Trigger 1: live deploy event.
   useEffect(() => {
+    if (swOnly) return;
     const unsubscribe = onDeployPublished(async (payload: DeployPublishedPayload) => {
       const commit = payload?.commit ?? null;
       if (commit && commit === lastCommit.current) return;
@@ -109,10 +120,11 @@ export function AppUpdateManager() {
       showAvailableToast(Boolean(latest) && readLastSeenRelease() !== latest);
     });
     return unsubscribe;
-  }, [ensureNotes, showAvailableToast]);
+  }, [ensureNotes, showAvailableToast, swOnly]);
 
   // Triggers 2 & 3: version check on cold load.
   useEffect(() => {
+    if (swOnly) return;
     let cancelled = false;
     (async () => {
       // Notes first: the "what's new" recap is keyed on the newest note, so the
@@ -143,7 +155,10 @@ export function AppUpdateManager() {
     return () => {
       cancelled = true;
     };
-  }, [ensureNotes, showAvailableToast]);
+  }, [ensureNotes, showAvailableToast, swOnly]);
+
+  // Nothing to render: the SW registration above is the whole job here.
+  if (swOnly) return null;
 
   return (
     <UpdateDialog

@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Brain, Check, FileText, Pencil, Plus, Sprout, Tag, Trash2, X } from 'lucide-react';
+import { Brain, Check, FileText, Lightbulb, Pencil, Plus, Tag, Trash2, X } from 'lucide-react';
 import type { Document, MemoryFact, WorkspaceAgent } from '../../types';
 import { AgentMemoryBrowser } from './AgentMemoryBrowser';
-import { HarvestReviewPanel } from './HarvestReviewPanel';
+import { SuggestionsPanel } from './SuggestionsPanel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -55,16 +55,16 @@ interface MemorySectionProps {
   agents: WorkspaceAgent[];
   userId: string;
   userEmail: string;
-  /** Only used to warn that a harvested proposal duplicates a page you have. */
+  /** Only used to warn that a suggestion duplicates a page you already have. */
   documents: Document[];
 }
 
 export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, workspaceId, agents, userId, userEmail, documents }: MemorySectionProps) {
-  // Harvested proposals live beside memory rather than in their own window: they
-  // are suggestions ABOUT what to remember, and accepting one writes into the
-  // list on the first tab. Reviewing them a click away from what they would join
-  // is what makes "do we already know this?" answerable.
-  const [tab, setTab] = useState<'facts' | 'files' | 'harvests'>('facts');
+  // Suggestions live beside memory rather than in their own window: they are
+  // proposals ABOUT what to remember, and accepting one writes into the list on
+  // the first tab. Reviewing them a click away from what they would join is what
+  // makes "do we already know this?" answerable.
+  const [tab, setTab] = useState<'facts' | 'files' | 'suggestions'>('facts');
   const [newFact, setNewFact] = useState('');
   const [newCategory, setNewCategory] = useState('general');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -126,17 +126,17 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
         </button>
         <button
           type="button"
-          onClick={() => setTab('harvests')}
-          className={`inline-flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-sm font-medium ${tab === 'harvests' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+          onClick={() => setTab('suggestions')}
+          className={`inline-flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-sm font-medium ${tab === 'suggestions' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
         >
-          <Sprout className="size-4" />
-          Harvested
+          <Lightbulb className="size-4" />
+          Suggestions
         </button>
       </div>
 
-      {tab === 'harvests' ? (
+      {tab === 'suggestions' ? (
         <div className="min-h-0 flex-1">
-          <HarvestReviewPanel workspaceId={workspaceId} facts={facts} documents={documents} />
+          <SuggestionsPanel workspaceId={workspaceId} facts={facts} documents={documents} />
         </div>
       ) : tab === 'files' ? (
         <div className="min-h-0 flex-1">

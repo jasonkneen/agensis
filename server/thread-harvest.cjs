@@ -1,25 +1,51 @@
 'use strict';
 
-// Thread harvest: mine a discarded conversation for what was worth keeping.
+// Suggestions: mine this workspace's conversations for what was worth keeping.
 //
-// A thread that gets cleared or soft-deleted is usually the END of some piece of
-// work, which makes it the moment the workspace is most likely to LOSE what the
-// work taught it. The transcript still holds a repeatable procedure, a durable
-// fact about how this project behaves, or a decision worth writing down — and
-// then the row is hidden and nobody reads it again.
+// Called "Suggestions" everywhere a person sees it. The table, the routes and
+// this module keep the older `thread_harvest` name: renaming a live table that
+// two backends read buys nothing a human can see, and a rename landing on one
+// deploy target before the other is an outage. The vocabulary boundary is the
+// frontend (src/lib/suggestions.ts), which is where the words are read.
 //
-// So a soft-delete queues a background analysis. A worker loads the transcript,
-// asks a model what skills / memories / documents could be gleaned from it, and
-// stores the answer as PROPOSALS on `thread_harvests`.
+// A conversation holds a repeatable procedure, a durable fact about how this
+// project behaves, or a decision worth writing down. Left alone it stays buried
+// in a transcript nobody scrolls back through. So a worker reads one, asks a
+// model what skills / memories / documents could be gleaned from it, and stores
+// the answer as PROPOSALS on `thread_harvests`.
+//
+// TWO TRIGGERS, both of which mean "this piece of work is finished":
+//
+//  - 'deleted' — a soft-delete. The original trigger, and the sharpest signal
+//    there is: the thread is about to stop being read at all.
+//  - 'idle'    — a live conversation with nothing new for SUGGEST_IDLE_MINUTES.
+//    A live chat has no delete edge to hang off, and going quiet is the closest
+//    thing it has to a conclusion. Mid-conversation triggers (a message count,
+//    a periodic sweep) were rejected: they fire while the work is still being
+//    figured out, so they capture the guesses rather than the answer, and they
+//    re-fire for as long as the chat stays busy.
+//
+// Cost is the governing constraint, and it is bounded in FOUR independent
+// places rather than one: a per-session cooldown, a watermark so a long channel
+// is never re-read from message 1, a cap on how many sessions one sweep may
+// enqueue, and the pre-existing cap on how many the worker drains per tick. Any
+// one of them failing open still leaves the other three.
 //
 // Deliberately proposals, never direct writes. Auto-inserting memory_facts and
-// documents from every discarded thread would poison the two stores a human
-// trusts most, and it would do so invisibly — the thread is already hidden, so
-// nobody would be reviewing the source. A proposal is reviewable; a silent write
+// documents from every conversation would poison the two stores a human trusts
+// most, and it would do so invisibly. A proposal is reviewable; a silent write
 // is not.
 //
+// PRIVATE SESSIONS ARE NOT MINED AT ALL — not on the idle sweep, and not on
+// delete either. A suggestion is listed to the whole workspace and rides the
+// realtime fanout's open lane (server/realtime.cjs only routes `chat_sessions`
+// down the members-only lane), so a proposal drawn out of somebody's DM would
+// reach every socket in the workspace with the DM's content inside it. The
+// check lives in queueThreadHarvest, so BOTH triggers inherit it, and the list
+// query repeats it so rows queued before this rule existed stay hidden too.
+//
 // The soft-deleted row is NEVER resurrected or un-deleted by any of this. The
-// harvest reads it and writes elsewhere.
+// worker reads it and writes elsewhere.
 
 // A transcript is prompt input, so it is bounded twice: per message (one long
 // paste cannot crowd out fifty short exchanges) and in total.
@@ -32,6 +58,37 @@ const HARVEST_MAX_TRANSCRIPT_CHARS = 60_000;
 const HARVEST_MIN_MESSAGES = 4;
 
 const HARVEST_KINDS = ['skill', 'memory', 'doc'];
+
+// --- what makes a live conversation due -------------------------------------
+//
+// These four numbers ARE the cost control, so each one is here with the reason
+// it has the value it has rather than in a config nobody reads.
+
+// Quiet for this long and the piece of work is over. Short enough that a chat
+// finished after lunch has its suggestions the same evening; long enough that a
+// conversation pausing while somebody makes tea is not "finished".
+const SUGGEST_IDLE_MINUTES = 180;
+
+// The floor between two analyses of the SAME conversation, whatever it does in
+// between. This is the number that stops a busy channel from being the whole
+// bill: however much it is used, it can cost at most two model calls a day.
+const SUGGEST_COOLDOWN_HOURS = 12;
+
+// Older than this and a conversation is history, not recently-finished work.
+// Its real job is the FIRST run after deploy: without it, every session the
+// workspace has ever had becomes due in the same tick, and the backlog is the
+// whole archive instead of the last fortnight.
+const SUGGEST_MAX_AGE_DAYS = 14;
+
+// How many conversations one sweep may enqueue. The worker's own per-tick cap
+// bounds spend on its own; this bounds the QUEUE, so a backlog is visibly short
+// rather than a thousand rows deep pretending it will get to them.
+const SUGGEST_SWEEP_LIMIT = 5;
+
+// How often the sweep looks. Not on the shared 30s tick: the selector is a
+// join over messages, the cooldown means it has nothing to do 99% of the time,
+// and five minutes of latency on a three-hour idle threshold is not latency.
+const SUGGEST_SWEEP_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Did this write just discard a thread?
@@ -93,10 +150,39 @@ function isWorthHarvesting(messages) {
   return messageCount >= HARVEST_MIN_MESSAGES;
 }
 
-function harvestPrompt({ title, transcript }) {
+/**
+ * The opening line, which differs by trigger because the two are not the same
+ * situation and a model told the wrong one writes for the wrong one. A deleted
+ * thread is a last chance; a quiet one is a checkpoint on work that may well
+ * carry on tomorrow, and saying so is what stops the answer being written as an
+ * obituary.
+ */
+function harvestPromptOpening(reason) {
+  if (String(reason || '') === 'idle') {
+    return [
+      'A conversation in this workspace has gone quiet, so the piece of work in it',
+      'has probably finished. Identify what the workspace should KEEP from it.',
+    ];
+  }
   return [
     'A conversation in this workspace was just discarded (cleared or deleted).',
     'Before it is forgotten, identify what the workspace should KEEP from it.',
+  ];
+}
+
+function harvestPrompt({ title, transcript, reason = 'deleted', incremental = false }) {
+  return [
+    ...harvestPromptOpening(reason),
+    // Said plainly, because otherwise the model opens with "the conversation
+    // begins mid-discussion" and treats the missing context as the finding.
+    ...(incremental
+      ? [
+        '',
+        'Earlier parts of this conversation have ALREADY been reviewed, and what they',
+        'taught is already recorded. Below is only the part since then. Judge it on its',
+        'own and propose nothing you would have to have read the earlier part to write.',
+      ]
+      : []),
     '',
     `Conversation title: ${title || '(untitled)'}`,
     '',
@@ -165,6 +251,68 @@ function parseHarvestFindings(text) {
 }
 
 // ---------------------------------------------------------------------------
+// Deduplication.
+//
+// The same fact surfaces again and again — it is the nature of the thing being
+// mined. One workspace convention gets explained in four different chats, and
+// without this every one of them proposes it. Worse, a proposal a human has
+// already ANSWERED coming back is the single behaviour most likely to get the
+// feature switched off: dismissing something twice reads as not being listened
+// to, and accepting it twice puts two copies of one fact into memory.
+//
+// So the check is at STORE time, not at read time. A filtered list still leaves
+// the duplicate in the row, where the next change to the list query can leak it
+// back out; dropping it before the insert means it does not exist.
+//
+// Scope is the workspace and it ignores the verdict — accepted, dismissed and
+// still-waiting all count as "already proposed". A pending duplicate is exactly
+// as annoying as a decided one, and it is the same fix.
+// ---------------------------------------------------------------------------
+
+function normalizeForFingerprint(value) {
+  return String(value == null ? '' : value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/**
+ * The identity of a proposal, for "have we said this already".
+ *
+ * Keyed on the BODY for a memory and the TITLE for anything else, matching what
+ * duplicateOf() compares on the review screen — a memory is its fact, so two
+ * headings over one fact are one proposal, whereas a doc is its subject and two
+ * pages about different things may open with the same sentence.
+ *
+ * Normalised because a model rewrites punctuation and casing freely while
+ * saying exactly the same thing, and an exact-string check would therefore
+ * catch almost nothing.
+ */
+function suggestionFingerprint(finding) {
+  const kind = String(finding?.kind || '').trim().toLowerCase();
+  const key = normalizeForFingerprint(kind === 'memory' ? finding?.body : finding?.title);
+  return key ? `${kind}:${key}` : '';
+}
+
+/**
+ * Drop the proposals this workspace has already been shown.
+ *
+ * Also dedupes WITHIN the batch: one analysis can return the same fact twice
+ * under two headings, and there is no reason to make a person answer it twice.
+ */
+function dedupeFindings(findings, seenFingerprints) {
+  const seen = seenFingerprints instanceof Set ? new Set(seenFingerprints) : new Set(seenFingerprints || []);
+  const kept = [];
+  for (const finding of Array.isArray(findings) ? findings : []) {
+    const fingerprint = suggestionFingerprint(finding);
+    // A finding with no usable fingerprint is kept rather than dropped: it is
+    // the model's answer, and silently discarding it because our key came out
+    // empty would lose a real proposal to a normalisation quirk.
+    if (fingerprint && seen.has(fingerprint)) continue;
+    if (fingerprint) seen.add(fingerprint);
+    kept.push(finding);
+  }
+  return kept;
+}
+
+// ---------------------------------------------------------------------------
 // Review: what happens when a human answers a proposal.
 //
 // A finding carries its own verdict inside the jsonb array rather than in a
@@ -186,7 +334,7 @@ function findingDecision(finding) {
  *
  * Only two stores are writable from here, so three kinds map onto two tables:
  *
- * - "memory" -> memory_facts, under its own category so a harvested fact is
+ * - "memory" -> memory_facts, under its own category so a suggested fact is
  *   distinguishable from one a human typed.
  * - "doc"    -> documents.
  * - "skill"  -> documents too, in a Skills folder. THIS IS DELIBERATE: a skill
@@ -200,13 +348,13 @@ function findingDecision(finding) {
 function harvestAcceptTarget(finding) {
   const kind = String(finding?.kind || '').trim().toLowerCase();
   if (kind === 'memory') {
-    return { table: 'memory_facts', label: 'Team memory', category: 'harvested', folder: '' };
+    return { table: 'memory_facts', label: 'Team memory', category: 'suggested', folder: '' };
   }
   if (kind === 'skill') {
     return { table: 'documents', label: 'Documents · Skills', category: '', folder: 'Skills' };
   }
   if (kind === 'doc') {
-    return { table: 'documents', label: 'Documents · Harvested', category: '', folder: 'Harvested' };
+    return { table: 'documents', label: 'Documents · Suggestions', category: '', folder: 'Suggestions' };
   }
   return null;
 }
@@ -215,15 +363,17 @@ function harvestAcceptTarget(finding) {
  * The body a "doc"/"skill" finding is written as.
  *
  * The provenance line is part of the DOCUMENT, not just the review screen: once
- * accepted, the page outlives the harvest row and the thread it came from is
- * already deleted, so a reader six months from now has no other way to learn
- * that a model proposed this and a human waved it through.
+ * accepted, the page outlives the stored suggestion, and when the source was a
+ * deleted thread it outlives that too, so a reader six months from now has no
+ * other way to learn that a model proposed this and a human waved it through.
  */
 function harvestDocumentContent(finding, source = {}) {
   const body = String(finding?.body || '').trim();
   const title = String(source.threadTitle || '').trim();
   const when = String(source.discardedAt || '').trim();
-  const parts = ['Harvested from a discarded thread'];
+  const parts = [String(source.reason || '') === 'idle'
+    ? 'Suggested from a conversation'
+    : 'Suggested from a discarded conversation'];
   if (title) parts.push(`"${title}"`);
   if (when) parts.push(`(${when.slice(0, 10)})`);
   parts.push('— proposed by a model, accepted by a person.');
@@ -278,15 +428,36 @@ function createThreadHarvest(deps = {}) {
  } = deps;
 
  /**
-  * Queue an analysis for a thread that was just discarded.
+  * Queue an analysis of one conversation. The single door both triggers use.
   *
   * Idempotent per session: the partial unique index below means a second delete
   * of the same thread cannot stack a second pending row. Fails OPEN — a harvest
   * that cannot be queued must never cost somebody their delete.
+  *
+  * Except on privacy, where the same catch fails CLOSED: if the DB will not say
+  * whether the session is private, nothing is queued. A missing suggestion is
+  * an absence; a suggestion mined from a DM is a disclosure.
   */
  async function queueThreadHarvest({ workspaceId, sessionId, reason = 'deleted', requestedBy = null } = {}) {
   if (!workspaceId || !sessionId) return null;
   try {
+   // A private conversation is not mined, by either trigger. Suggestions are
+   // listed to the whole workspace, so a proposal drawn out of a DM publishes
+   // its contents to people who were never in it. Checked HERE rather than at
+   // each call site so a future third trigger cannot forget.
+   //
+   // Same two-part test the read authorizer uses (shared/backend-core.cjs
+   // isPrivateSessionRow): the column, and the folder for the older DMs that
+   // predate it.
+   const priv = await getDb().unsafe(
+    `select 1 from chat_sessions
+      where id = $1
+        and (coalesce(visibility, 'workspace') = 'private' or coalesce(folder, '') = 'Direct messages')
+      limit 1`,
+    [String(sessionId)],
+   );
+   if (priv.length > 0) return null;
+
    const rows = await getDb().unsafe(
     `insert into thread_harvests (workspace_id, session_id, status, reason, requested_by)
        values ($1, $2, 'pending', $3, $4)
@@ -309,21 +480,59 @@ function createThreadHarvest(deps = {}) {
   * themselves deleted, since a human removing a message is a signal not to keep
   * it.
   */
- async function loadHarvestSource(sessionId) {
+ async function loadHarvestSource(sessionId, excludeHarvestId = null) {
   const sessions = await getDb().unsafe(
    'select id, title, workspace_id from chat_sessions where id = $1 limit 1',
    [String(sessionId)],
   );
   if (!sessions[0]) return null;
+
+  // The watermark: the newest message any COMPLETED analysis of this session
+  // has already considered. Without it a channel that stays alive for months is
+  // re-read from message 1 every time it goes quiet — the same tokens, the same
+  // proposals, the same person dismissing them again.
+  //
+  // Only 'done' rows count. A 'skipped' or 'error' run considered nothing, and
+  // letting it move the mark would silently drop those messages forever.
+  const marks = await getDb().unsafe(
+   `select max(cursor_at) as cursor_at
+      from thread_harvests
+     where session_id = $1 and status = 'done' and cursor_at is not null
+       and ($2::uuid is null or id <> $2::uuid)`,
+   [String(sessionId), excludeHarvestId ? String(excludeHarvestId) : null],
+  );
+  const cursorAt = marks[0]?.cursor_at || null;
+
   const messages = await getDb().unsafe(
-   `select role, content, sender_name, message_kind
+   `select role, content, sender_name, message_kind, created_at
       from messages
       where session_id = $1 and deleted_at is null
+        and ($2::timestamptz is null or created_at > $2::timestamptz)
       order by created_at asc
       limit 500`,
-   [String(sessionId)],
+   [String(sessionId), cursorAt],
   );
-  return { session: sessions[0], messages };
+  return { session: sessions[0], messages, cursorAt };
+ }
+
+ /**
+  * How far this run may move the watermark: the newest message it READ.
+  *
+  * Read, not summarised. buildHarvestTranscript keeps only the newest
+  * HARVEST_MAX_MESSAGES lines, so on a session that produced more than that in
+  * one quiet-to-quiet window the middle is skipped rather than deferred. That
+  * is the deliberate trade: marking only as far as the transcript reached would
+  * make the next run start inside the same backlog and re-read it, every run,
+  * for as long as the session stayed busier than the cap — which is precisely
+  * the unbounded re-analysis the watermark exists to prevent.
+  */
+ function nextCursorAt(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+   const at = list[i] && list[i].created_at;
+   if (at) return at;
+  }
+  return null;
  }
 
  /**
@@ -337,13 +546,41 @@ function createThreadHarvest(deps = {}) {
  async function finishHarvest(id, patch) {
   const rows = await getDb().unsafe(
    `update thread_harvests
-       set status = $2, findings = $3::jsonb, error = $4, updated_at = now()
+       set status = $2, findings = $3::jsonb, error = $4,
+           cursor_at = coalesce($5::timestamptz, cursor_at), updated_at = now()
        where id = $1
        returning *`,
-   [id, patch.status, patch.findings ?? [], patch.error ?? null],
+   [id, patch.status, patch.findings ?? [], patch.error ?? null, patch.cursorAt ?? null],
   );
   if (rows.length) notifyDbSubscribers('thread_harvests', 'UPDATE', rows);
   return rows[0] || { id, status: patch.status, findings: patch.findings ?? [], error: patch.error ?? null };
+ }
+
+ /**
+  * Everything this workspace has already proposed, as fingerprints.
+  *
+  * One query per analysis rather than a lookup per finding, and capped: a
+  * workspace with a runaway number of stored proposals must not turn the dedup
+  * check into the expensive half of the job. If the cap ever bit, the cost is
+  * that an old duplicate slips through once — not that the analysis fails.
+  */
+ async function existingFingerprints(workspaceId) {
+  try {
+   const rows = await getDb().unsafe(
+    `select f->>'kind' as kind, f->>'title' as title, f->>'body' as body
+       from thread_harvests h
+       cross join lateral jsonb_array_elements(h.findings) f
+      where h.workspace_id = $1
+      limit 2000`,
+    [String(workspaceId)],
+   );
+   return new Set(rows.map(suggestionFingerprint).filter(Boolean));
+  } catch (error) {
+   // Fail OPEN. Dedup is a courtesy; losing it shows somebody a repeat, whereas
+   // failing the run loses the analysis entirely.
+   onWarn(`fingerprint lookup failed: ${error.message || error}`);
+   return new Set();
+  }
  }
 
  /**
@@ -369,18 +606,28 @@ function createThreadHarvest(deps = {}) {
   if (!harvest) return null;
 
   try {
-   const source = await loadHarvestSource(harvest.session_id);
+   const source = await loadHarvestSource(harvest.session_id, harvest.id);
    if (!source) return finishHarvest(harvest.id, { status: 'error', error: 'thread not found' });
 
    // Cheap threads never reach the model. Recorded as 'skipped', not 'error':
-   // nothing went wrong, there was simply nothing to learn.
+   // nothing went wrong, there was simply nothing to learn. The watermark is
+   // deliberately NOT moved — these messages have not been considered, and a
+   // skip must not be the thing that makes them unreachable.
    if (!isWorthHarvesting(source.messages)) {
     return finishHarvest(harvest.id, { status: 'skipped', findings: [] });
    }
 
    const { transcript } = buildHarvestTranscript(source.messages);
    const text = await runAnthropicCompletion({
-    messages: [{ role: 'user', content: harvestPrompt({ title: source.session.title, transcript }) }],
+    messages: [{
+     role: 'user',
+     content: harvestPrompt({
+      title: source.session.title,
+      transcript,
+      reason: harvest.reason,
+      incremental: Boolean(source.cursorAt),
+     }),
+    }],
     memory: [],
     documents: [],
     workspaceContext: '',
@@ -389,7 +636,17 @@ function createThreadHarvest(deps = {}) {
     usageKind: 'thread_harvest',
    });
 
-   return finishHarvest(harvest.id, { status: 'done', findings: parseHarvestFindings(text) });
+   // Dedup AFTER the model call, not before: the model is what produces the
+   // proposal, and there is nothing to compare until it has. The saving is the
+   // person's attention, which is the scarcer of the two.
+   const seen = await existingFingerprints(harvest.workspace_id);
+   const findings = dedupeFindings(parseHarvestFindings(text), seen);
+
+   return finishHarvest(harvest.id, {
+    status: 'done',
+    findings,
+    cursorAt: nextCursorAt(source.messages),
+   });
   } catch (error) {
    onWarn(`harvest ${harvest.id} failed: ${error.message || error}`);
    return finishHarvest(harvest.id, { status: 'error', error: String(error.message || error).slice(0, 500) });
@@ -416,6 +673,94 @@ function createThreadHarvest(deps = {}) {
  }
 
  /**
+  * Enqueue the conversations that have gone quiet.
+  *
+  * ONE statement, insert-from-select, because the alternative — select the due
+  * sessions, then insert them — has a window in which two server processes both
+  * read the same session as due and both queue it. The partial unique index
+  * catches that, but only after both have decided to spend.
+  *
+  * Every clause here is a spend limit, so none of them is optional:
+  *
+  *  - not deleted: a deleted thread comes through the delete edge instead, and
+  *    queueing it here as well would analyse it twice.
+  *  - not private: DMs are not mined at all. Repeated from queueThreadHarvest
+  *    because this path does not go through it — the insert IS the queue.
+  *  - quiet for SUGGEST_IDLE_MINUTES: the trigger itself.
+  *  - active within SUGGEST_MAX_AGE_DAYS: bounds the first run after deploy to
+  *    the recent past rather than the entire archive.
+  *  - enough NEW messages since the watermark: a session that has said four
+  *    things since its last analysis has something to add; one that has said
+  *    nothing is not re-analysed at all, at any interval. This is the clause
+  *    that makes "do not re-analyse the same conversation" true.
+  *  - past the cooldown: the ceiling on one conversation's own cost.
+  *  - nothing already open for it: no double-queue.
+  *
+  * The message count matches what buildHarvestTranscript will actually use —
+  * tool chips and empty bodies excluded — so a session cannot be woken by
+  * fifty tool steps and then skipped for having nothing in it.
+  */
+ async function sweepIdleSessionHarvests({
+  idleMinutes = SUGGEST_IDLE_MINUTES,
+  maxAgeDays = SUGGEST_MAX_AGE_DAYS,
+  minNewMessages = HARVEST_MIN_MESSAGES,
+  cooldownHours = SUGGEST_COOLDOWN_HOURS,
+  limit = SUGGEST_SWEEP_LIMIT,
+ } = {}) {
+  try {
+   const rows = await getDb().unsafe(
+    `insert into thread_harvests (workspace_id, session_id, status, reason)
+     select s.workspace_id, s.id, 'pending', 'idle'
+       from chat_sessions s
+       left join lateral (
+         select max(h.cursor_at) as cursor_at, max(h.updated_at) as last_run_at
+           from thread_harvests h
+          where h.session_id = s.id
+       ) prior on true
+       left join lateral (
+         select max(m.created_at) as last_at,
+                count(*) filter (
+                  where coalesce(m.message_kind, '') = ''
+                    and coalesce(m.content, '') <> ''
+                    and (prior.cursor_at is null or m.created_at > prior.cursor_at)
+                ) as fresh
+           from messages m
+          where m.session_id = s.id and m.deleted_at is null
+       ) recent on true
+      where s.deleted_at is null
+        and coalesce(s.visibility, 'workspace') <> 'private'
+        and coalesce(s.folder, '') <> 'Direct messages'
+        and recent.last_at is not null
+        and recent.last_at < now() - make_interval(mins => $1::int)
+        and recent.last_at > now() - make_interval(days => $2::int)
+        and recent.fresh >= $3::int
+        and (prior.last_run_at is null or prior.last_run_at < now() - make_interval(hours => $4::int))
+        and not exists (
+          select 1 from thread_harvests o
+           where o.session_id = s.id and o.status in ('pending', 'running')
+        )
+      order by recent.last_at desc
+      limit $5::int
+     on conflict do nothing
+     returning *`,
+    [
+     Math.max(1, Number(idleMinutes) || SUGGEST_IDLE_MINUTES),
+     Math.max(1, Number(maxAgeDays) || SUGGEST_MAX_AGE_DAYS),
+     Math.max(1, Number(minNewMessages) || HARVEST_MIN_MESSAGES),
+     Math.max(0, Number(cooldownHours) || SUGGEST_COOLDOWN_HOURS),
+     Math.min(Math.max(Number(limit) || SUGGEST_SWEEP_LIMIT, 1), 25),
+    ],
+   );
+   return rows;
+  } catch (error) {
+   // Never throws. This runs on a timer with nobody watching, and a sweep that
+   // cannot enqueue is a feature that goes quiet, not a server that falls over.
+   onWarn(`idle sweep failed: ${error.message || error}`);
+   return [];
+  }
+ }
+
+ /**
   * The review queue for one workspace.
   *
   * Only harvests that ACTUALLY PROPOSED SOMETHING. A 'skipped' thread (too short
@@ -427,6 +772,11 @@ function createThreadHarvest(deps = {}) {
   * Joins the thread back on so the card can say WHICH conversation this came
   * from and when it was discarded. LEFT join: the thread may since have been
   * hard-deleted, and losing the title must not lose the proposals.
+  *
+  * The privacy clause is the second of two — queueThreadHarvest already refuses
+  * to mine a private session, so on a clean database this filters nothing. It
+  * is here for the rows queued BEFORE that rule existed, which were mined from
+  * DMs and are sitting in production right now.
   */
  async function listThreadHarvests({ workspaceId, limit = 50 } = {}) {
   const id = String(workspaceId || '').trim();
@@ -441,6 +791,8 @@ function createThreadHarvest(deps = {}) {
      where h.workspace_id = $1
        and h.status = 'done'
        and jsonb_array_length(h.findings) > 0
+       and coalesce(s.visibility, 'workspace') <> 'private'
+       and coalesce(s.folder, '') <> 'Direct messages'
      order by h.created_at desc
      limit $2`,
    [id, capped],
@@ -575,6 +927,7 @@ function createThreadHarvest(deps = {}) {
   const content = harvestDocumentContent(finding, {
    threadTitle: harvest.session_title,
    discardedAt: harvest.session_deleted_at ? String(harvest.session_deleted_at) : String(harvest.created_at || ''),
+   reason: harvest.reason,
   });
   const rows = await getDb().unsafe(
    'insert into documents (workspace_id, title, content, folder) values ($1, $2, $3, $4) returning *',
@@ -589,6 +942,7 @@ function createThreadHarvest(deps = {}) {
   loadHarvestSource,
   runOneThreadHarvest,
   runDueThreadHarvests,
+  sweepIdleSessionHarvests,
   listThreadHarvests,
   decideHarvestFinding,
  };
@@ -639,15 +993,22 @@ module.exports = {
   harvestDocumentContent,
   harvestReviewCounts,
   buildHarvestTranscript,
+  dedupeFindings,
   harvestMessageLine,
   harvestPrompt,
   isDiscardTransition,
   isWorthHarvesting,
   parseHarvestFindings,
+  suggestionFingerprint,
   HARVEST_DECISIONS,
   HARVEST_KINDS,
   HARVEST_MAX_MESSAGES,
   HARVEST_MAX_MESSAGE_CHARS,
   HARVEST_MAX_TRANSCRIPT_CHARS,
   HARVEST_MIN_MESSAGES,
+  SUGGEST_COOLDOWN_HOURS,
+  SUGGEST_IDLE_MINUTES,
+  SUGGEST_MAX_AGE_DAYS,
+  SUGGEST_SWEEP_INTERVAL_MS,
+  SUGGEST_SWEEP_LIMIT,
 };

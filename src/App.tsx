@@ -2188,7 +2188,7 @@ function AppContent() {
           notice={authNotice}
           onDismissNotice={dismissAuthNotice}
         />
-        <AppUpdateManager />
+        <AppUpdateManager swOnly />
       </>
     );
   }

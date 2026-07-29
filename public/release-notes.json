@@ -1,5 +1,19 @@
 [
   {
+    "version": "suggestions",
+    "date": "2026-07-30",
+    "title": "Suggestions now come from every conversation, not just deleted ones",
+    "summary": "The Harvested tab is now called Suggestions, and it has stopped waiting for you to throw work away before it learns anything. Until now a conversation was only ever read for what was worth keeping at the moment you deleted it, which meant the feature learned from discarded chats and nothing else. Now any conversation is read once it has been quiet for a few hours — the closest thing a live chat has to finishing — and whatever it suggests keeping shows up in the same place. Everything else is unchanged: these are still suggestions and nothing is written into team memory or documents until you accept it, one at a time, with the destination named on the button before you click. Direct messages are never read at all.",
+    "highlights": [
+      "The Harvested tab in Memory is now Suggestions.",
+      "A conversation is read after roughly three hours of quiet, as well as when it is deleted.",
+      "A long-running channel is only read from where the last reading stopped, never from the first message again.",
+      "Anything already suggested to this workspace — accepted, dismissed, or still waiting — is not suggested a second time.",
+      "Direct messages are never mined, by either trigger.",
+      "Each conversation is read at most twice a day however busy it gets."
+    ]
+  },
+  {
     "version": "private-direct-messages",
     "date": "2026-07-30",
     "title": "Your direct messages are now actually private",
