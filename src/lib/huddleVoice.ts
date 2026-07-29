@@ -43,6 +43,41 @@ export interface SpeechItem {
   agentId: string;
 }
 
+/**
+ * One agent's stored Cartesia voice, keyed by id — the minimal shape
+ * {@link voiceIdForSpeechItem} needs. `HuddleAgentOption` (src/lib/huddleAgents)
+ * satisfies this structurally; kept separate so this module never has to import
+ * it.
+ */
+export interface VoiceRosterEntry {
+  id: string;
+  voiceId: string;
+}
+
+/**
+ * Which Cartesia voice a message should be read in.
+ *
+ * Keyed OFF THE MESSAGE — `item.agentId` (`messages.sender_id`) — never off
+ * whichever agent is currently active/being addressed in the strip. That was
+ * the bug this exists to prevent: when one agent interrupts with a status
+ * update while another is "active" (mid-turn), the huddle passed a single
+ * voice id for the whole call down to the speaker, so the interrupting
+ * agent's line played back in the CURRENT speaker's voice instead of its own.
+ *
+ * Falls back to '' — the server's own default voice — when the author is not
+ * on the roster or has no voice stored. Never falls back to another agent's
+ * voice; that would just relocate the bug rather than fix it.
+ */
+export function voiceIdForSpeechItem(
+  item: Pick<SpeechItem, 'agentId'> | null | undefined,
+  roster: readonly VoiceRosterEntry[] | null | undefined,
+): string {
+  const agentId = item?.agentId;
+  if (!agentId) return '';
+  const pool = Array.isArray(roster) ? roster : [];
+  return pool.find(agent => agent.id === agentId)?.voiceId || '';
+}
+
 // A spoken sentence runs ~15 chars/second, so this is roughly 80 seconds of
 // uninterrupted talking — already too long for a call, and a hard stop against
 // an agent that pastes a whole file into the channel.

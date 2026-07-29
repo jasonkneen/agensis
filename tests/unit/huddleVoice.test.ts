@@ -11,7 +11,9 @@ import {
   speechTextFromMarkdown,
   trailingCaption,
   truncateForSpeech,
+  voiceIdForSpeechItem,
   type VoiceMessage,
+  type VoiceRosterEntry,
 } from '../../src/lib/huddleVoice';
 
 // Voice in a huddle is text at both ends: speech becomes a chat message on the
@@ -182,6 +184,48 @@ describe('speechItemFor', () => {
 
   it('falls back to "Agent" when the row has no sender name', () => {
     expect(speechItemFor(agentMessage({ sender_name: '  ' }), JOINED)?.speaker).toBe('Agent');
+  });
+});
+
+describe('voiceIdForSpeechItem', () => {
+  // THE BUG: a huddle used to pass ONE voice id for the whole call — whoever
+  // was "active" in the strip — down to the speaker. An agent that interrupts
+  // or posts a status update while someone else is active was read in the
+  // CURRENT speaker's voice, not its own. The fix keys the lookup off the
+  // MESSAGE's author (agentId), every time, regardless of who else is active.
+  const roster: VoiceRosterEntry[] = [
+    { id: 'agent-coder', voiceId: 'voice-coder' },
+    { id: 'agent-reviewer', voiceId: 'voice-reviewer' },
+  ];
+
+  it("reads a message in its OWN author's voice", () => {
+    expect(voiceIdForSpeechItem({ agentId: 'agent-coder' }, roster)).toBe('voice-coder');
+  });
+
+  it('picks the interrupting agent\'s voice even while another agent is "active"', () => {
+    // Coder is mid-turn (the strip's active agent), but Reviewer posts a
+    // status update. Reviewer's line must use Reviewer's voice.
+    expect(voiceIdForSpeechItem({ agentId: 'agent-reviewer' }, roster)).toBe('voice-reviewer');
+  });
+
+  it('falls back to \'\' — the server default — for an agent with no stored voice', () => {
+    expect(voiceIdForSpeechItem({ agentId: 'agent-no-voice' }, roster)).toBe('');
+  });
+
+  it('never falls back to another agent\'s voice', () => {
+    const result = voiceIdForSpeechItem({ agentId: 'unknown' }, roster);
+    expect(result).not.toBe('voice-coder');
+    expect(result).not.toBe('voice-reviewer');
+  });
+
+  it('is blank for a row with no sender id', () => {
+    expect(voiceIdForSpeechItem({ agentId: '' }, roster)).toBe('');
+  });
+
+  it('tolerates a missing item or roster', () => {
+    expect(voiceIdForSpeechItem(null, roster)).toBe('');
+    expect(voiceIdForSpeechItem({ agentId: 'agent-coder' }, null)).toBe('');
+    expect(voiceIdForSpeechItem({ agentId: 'agent-coder' }, undefined)).toBe('');
   });
 });
 
