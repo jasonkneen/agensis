@@ -3866,7 +3866,7 @@ async function mirrorAgentReplyToTaskComment(messageRow) {
   const taskId = rootRows[0]?.source_task_id || null;
   if (!taskId) return null;
   const taskRows = await getDb().unsafe(
-   'select workspace_id from tasks where id = $1 limit 1',
+   'select workspace_id, status from tasks where id = $1 limit 1',
    [String(taskId)],
   );
   const workspaceId = taskRows[0]?.workspace_id || null;
@@ -3878,7 +3878,29 @@ async function mirrorAgentReplyToTaskComment(messageRow) {
    [String(taskId), String(workspaceId), String(messageRow.content || ''), String(messageRow.sender_id || '')],
   );
   if (commentRows[0]) notifyDbSubscribers('task_comments', 'INSERT', commentRows);
-  await getDb().unsafe('update tasks set updated_at = now() where id = $1', [String(taskId)]).catch(() => { });
+  // An agent replying in the task's own subthread IS the task being worked, so a
+  // task still reading 'todo' at this point is lying to whoever is looking at the
+  // board. Dispatch already moves todo -> in_progress, but not every turn arrives
+  // through dispatch: a task queued while the agent was mid-turn keeps its 'todo'
+  // + assignee, and a plain human follow-up in the thread wakes the agent without
+  // going near dispatchTaskAssignment. Both end here, with a visible reply on a
+  // task that claims nobody has started.
+  //
+  // Same rule as every other transition (taskStatusOnDispatch): ONLY 'todo'
+  // moves. done/cancelled/in_progress are returned unchanged, so mirroring can
+  // never resurrect a finished task or un-finish one — and the update is a no-op
+  // write in that case, which is why the status is compared before it is written
+  // rather than blindly set.
+  const priorStatus = String(taskRows[0]?.status || 'todo');
+  const nextStatus = taskStatusOnDispatch(priorStatus);
+  const statusRows = nextStatus !== priorStatus
+   ? await getDb().unsafe(
+    'update tasks set status = $1, updated_at = now() where id = $2 returning *',
+    [nextStatus, String(taskId)],
+   ).catch(() => [])
+   : await getDb().unsafe('update tasks set updated_at = now() where id = $1 returning *', [String(taskId)]).catch(() => []);
+  // The board is realtime; without this the row moves column only on refresh.
+  if (statusRows[0] && nextStatus !== priorStatus) notifyDbSubscribers('tasks', 'UPDATE', statusRows);
   return commentRows[0] || null;
  } catch (error) {
   console.error('mirrorAgentReplyToTaskComment failed', error);
