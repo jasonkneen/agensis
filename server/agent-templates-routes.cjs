@@ -102,6 +102,10 @@ function createAgentTemplates(deps = {}) {
   enforceWorkspaceRole,
   normalizeAgentTemplate,
   agentToTemplateDraft,
+  readTemplateExport,
+  templateFingerprint,
+  recordAudit,
+  clientIpFromReq,
  } = deps;
 
  async function listAgentTemplates({ userId, workspaceId } = {}) {
@@ -214,6 +218,74 @@ function createAgentTemplates(deps = {}) {
   return publicTemplate(row);
  }
 
+ /**
+  * "Import a template someone exported."
+  *
+  * MANAGE, not 'write', and this is the one place the roles diverge from
+  * authoring. Writing prose into a template grants nothing new — a 'write'
+  * member can already type a system prompt straight into an agent, which is why
+  * createAgentTemplate is 'write'. Importing CROSSES A WORKSPACE BOUNDARY: the
+  * prose came from outside, nobody here wrote it, and a teammate's agent will
+  * later speak it. That is a different decision from "I typed this", and it is
+  * the header's stated intent for when import was built.
+  *
+  * AUDITED, for the same reason and only for that reason. Authoring is not
+  * audited and should not be: an artifact that cannot carry privilege is a
+  * non-event, and logging every edit of a prompt would bury the rows that
+  * matter. Something arriving from outside the workspace is not a non-event.
+  *
+  * Nothing is stripped here, because there is nothing to strip — the table has
+  * no privilege-bearing column. readTemplateExport REFUSES a file that names
+  * one, and names the key in the error, so a hand-edited "permissionMode" is
+  * reported rather than silently ignored.
+  */
+ async function importAgentTemplate({ userId, workspaceId, payload, requestIp } = {}) {
+  const id = String(workspaceId || '').trim();
+  if (!id) throw badRequest('workspace id is required');
+  await enforceWorkspaceRole(userId, id, 'manage');
+
+  const result = readTemplateExport(payload);
+  if (!result.ok) throw badRequest(result.errors.join('; '));
+
+  const envelope = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+  const row = await writeTemplate({
+   workspaceId: id,
+   template: result.template,
+   userId,
+   source: 'imported',
+   // What ARRIVED, recorded as claims rather than as facts: `exportedAt` and
+   // any declared fingerprint come from the file and anyone can write anything
+   // there. `fingerprint` is recomputed from the body this server actually
+   // stored, so the two disagreeing is itself informative.
+   origin: {
+    importedAt: new Date().toISOString(),
+    format: String(envelope.format || ''),
+    formatVersion: Number(envelope.formatVersion) || 0,
+    claimedExportedAt: String(envelope.exportedAt || ''),
+    fingerprint: templateFingerprint(result.template),
+   },
+  });
+  if (row) notifyDbSubscribers('workspace_agent_templates', 'INSERT', [row]);
+
+  if (typeof recordAudit === 'function') {
+   await recordAudit({
+    workspaceId: id,
+    actor: { userId: String(userId || '') },
+    action: 'agent_template.imported',
+    target: { type: 'agent_template', id: String(row?.id || ''), label: result.template.name },
+    after: result.template.slug,
+    detail: {
+     handle: result.template.handleHint,
+     runtime: result.template.runtime,
+     model: result.template.model,
+    },
+    requestIp: requestIp || '',
+   });
+  }
+
+  return publicTemplate(row);
+ }
+
  async function updateAgentTemplate({ userId, workspaceId, templateId, template } = {}) {
   const id = String(workspaceId || '').trim();
   const target = String(templateId || '').trim();
@@ -269,6 +341,7 @@ function createAgentTemplates(deps = {}) {
   listAgentTemplates,
   createAgentTemplate,
   saveAgentAsTemplate,
+  importAgentTemplate,
   updateAgentTemplate,
   deleteAgentTemplate,
   publicTemplate,
@@ -278,8 +351,8 @@ function createAgentTemplates(deps = {}) {
 function mountAgentTemplateRoutes(app, deps = {}) {
  const {
   requireAuth, jsonError,
-  listAgentTemplates, createAgentTemplate, saveAgentAsTemplate,
-  updateAgentTemplate, deleteAgentTemplate,
+  listAgentTemplates, createAgentTemplate, saveAgentAsTemplate, importAgentTemplate,
+  updateAgentTemplate, deleteAgentTemplate, clientIpFromReq,
  } = deps;
 
  app.get('/backend/workspaces/:id/agent-templates', requireAuth, async (req, res) => {
@@ -306,6 +379,25 @@ function mountAgentTemplateRoutes(app, deps = {}) {
   try {
    const data = await saveAgentAsTemplate({
     userId: req.userId, workspaceId: req.params.id, agentId: req.params.agentId,
+   });
+   res.status(201).json({ data, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // Mounted BEFORE the :templateId routes below. Express matches in order, and
+ // 'import' would otherwise be readable as a template id by any route whose
+ // path is a single segment — this one is a POST and those are PATCH/DELETE, so
+ // there is no collision today, but the ordering is free and the next
+ // single-segment POST added below would collide silently.
+ app.post('/backend/workspaces/:id/agent-templates/import', requireAuth, async (req, res) => {
+  try {
+   const data = await importAgentTemplate({
+    userId: req.userId,
+    workspaceId: req.params.id,
+    payload: req.body?.export ?? req.body?.template ?? req.body,
+    requestIp: clientIpFromReq ? clientIpFromReq(req) : '',
    });
    res.status(201).json({ data, error: null });
   } catch (error) {

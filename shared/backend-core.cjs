@@ -2084,6 +2084,12 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  // silent grant is worse than no grant at all, because it looks like privacy.
  'chat_session.access_granted',
  'chat_session.access_revoked',
+ // A persona arriving from OUTSIDE this workspace. Authoring one is deliberately
+ // not audited: a template has no privilege-bearing column, so writing prose
+ // into one is a non-event and logging every edit would bury the rows above.
+ // Crossing a workspace boundary is not a non-event — nobody here wrote that
+ // prose, and a teammate's agent will later speak it.
+ 'agent_template.imported',
 ]));
 
 /** What an unrecognised action records as, rather than throwing in production. */

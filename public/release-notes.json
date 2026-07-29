@@ -1,5 +1,19 @@
 [
   {
+    "version": "template-export-import",
+    "date": "2026-07-30",
+    "title": "Move a persona between workspaces",
+    "summary": "A template you had written or saved from an agent was stuck in the workspace it was made in. You can now download one as a file and bring it into another workspace. Hover a template you made and there is a download button on the corner; the Import a template control sits above the list. What travels is wording only — the name, the prompt, the soul and instructions, and which tools and skills to ask for. A file cannot carry a permission mode, a sandbox setting, a connect token or an identity, and that is not a filter we run over it: a template has nowhere to keep those things in the first place, so there is nothing in a file to remove. If somebody hand-edits one in anyway, the import is refused and names the field rather than quietly ignoring it. Do read the prompt before you use an imported template, because it becomes the instructions an agent here follows. Importing needs the admin role and is written to the audit log, since the wording came from outside this workspace; writing your own template is unchanged and is not logged.",
+    "highlights": [
+      "Download a template you made as a .agent.json file",
+      "Import a template file into another workspace",
+      "Only wording travels — no permission mode, sandbox, token or identity, ever",
+      "A file that names one of those is refused, with the field named",
+      "Importing needs the admin role and is recorded in the audit log",
+      "Bundled templates cannot be exported, so a shipped persona cannot be forked into a stale copy"
+    ]
+  },
+  {
     "version": "automations-create-task",
     "date": "2026-07-30",
     "title": "A rule can now raise a task, not just post about it",

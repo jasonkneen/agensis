@@ -27,6 +27,7 @@ const ACTION_LABELS: Record<string, string> = {
   'vault.secret_deleted': 'Vault secret deleted',
   'chat_session.access_granted': 'Private conversation opened to someone',
   'chat_session.access_revoked': 'Private conversation access removed',
+  'agent_template.imported': 'Agent template imported',
   unknown: 'Unrecognised action',
 };
 

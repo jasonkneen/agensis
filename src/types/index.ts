@@ -437,7 +437,11 @@ export type AuditAction =
  // REFUSAL of a read is deliberately not recorded — it fires on ordinary
  // sidebar rendering — so an empty log does not mean nobody tried.
  | 'chat_session.access_granted'
- | 'chat_session.access_revoked';
+ | 'chat_session.access_revoked'
+ // A persona pack from outside this workspace. Authoring one is NOT audited —
+ // a template cannot carry authority, so writing one is a non-event; arriving
+ // from elsewhere is not.
+ | 'agent_template.imported';
 
 /**
  * One audit row as the read route returns it.

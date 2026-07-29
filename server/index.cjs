@@ -21,7 +21,9 @@ const {
 } = require('./flow-integration.cjs');
 const { createAutomations, mountAutomationRoutes } = require('./automations.cjs');
 const { createAgentTemplates, mountAgentTemplateRoutes } = require('./agent-templates-routes.cjs');
-const { normalizeAgentTemplate, agentToTemplateDraft } = require('../shared/agentTemplates.cjs');
+const {
+ normalizeAgentTemplate, agentToTemplateDraft, readTemplateExport, templateFingerprint,
+} = require('../shared/agentTemplates.cjs');
 // Reactions are written through the generic /backend/db/update route as a whole
 // jsonb map, so their flow events come from diffing that map — see the module
 // header. Shared with netlify/functions/backend.mjs; the two lanes differ only
@@ -7237,7 +7239,7 @@ const {
 // the security property is that its output is REBUILT from a carried-field list,
 // so no privilege-bearing column can ride into the template table.
 const {
- listAgentTemplates, createAgentTemplate, saveAgentAsTemplate,
+ listAgentTemplates, createAgentTemplate, saveAgentAsTemplate, importAgentTemplate,
  updateAgentTemplate, deleteAgentTemplate,
 } = createAgentTemplates({
  getDb: () => getDb(),
@@ -7245,6 +7247,12 @@ const {
  enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
  normalizeAgentTemplate,
  agentToTemplateDraft,
+ readTemplateExport,
+ templateFingerprint,
+ // Import alone is audited, because import alone crosses a workspace boundary.
+ // Authoring is not: a template cannot carry privilege, so writing one is a
+ // non-event and logging it would bury the rows that matter.
+ recordAudit: (...a) => recordAudit(...a),
 });
 
 // Agent jobs hold no in-process state — a job's liveness is a database fact, so
@@ -7659,7 +7667,7 @@ function createApp() {
  // still goes through the generic insert, where the column guards apply.
  mountAgentTemplateRoutes(app, {
   ...coreDeps(),
-  listAgentTemplates, createAgentTemplate, saveAgentAsTemplate,
+  listAgentTemplates, createAgentTemplate, saveAgentAsTemplate, importAgentTemplate,
   updateAgentTemplate, deleteAgentTemplate,
  });
  mountInboxRoutes(app, { ...coreDeps(), INBOX_DEFAULT_LIMIT, INBOX_FILTERS, INBOX_MAX_LIMIT, THREAD_INBOX_DEFAULT_LIMIT, buildInboxSql, buildThreadInboxSql, inboxMentionHandle, inboxMentionPattern, toInboxItem, toThreadInboxItem });
