@@ -515,6 +515,27 @@ Two related rules:
   chokepoint (kinds allowlist, Flows scope, channel pin, invite-role capability
   checks, 120/min limiter). Anything reached another way is outside all of it.
 
+### `cli/` is a client for that surface, not a second one
+
+`cli/agensis-ops.mjs` (`npm run ops -- <command>`) is a transport-only wrapper
+over `POST /backend/mcp`, for **humans and CI** — not for agents, which already
+have all 30 tools over MCP inside every job. It ships **zero server routes and
+zero hand-written tool schemas**: `call` builds its flag parser from the
+`inputSchema` the server publishes at runtime, so it cannot drift.
+
+The rule above is enforced here mechanically. `cli/src/rpc.mjs` is the CLI's
+**only** network egress, POSTs to one URL, and will emit only
+`initialize`/`tools/list`/`tools/call` — anything else throws.
+`tests/ops-cli.test.cjs` drives every command while recording every request and
+asserts that URL and method set, so **adding a bespoke CLI route fails a test.**
+If a command needs a capability MCP lacks, add an MCP tool.
+
+Two things to know before editing it: the package is `private: true` so there is
+no publish lane (run it from a checkout), and `cli/**/*.mjs` is listed in
+`eslint.config.js` with `auth.mjs`, `render.mjs` and `rpc.mjs` in
+`tests/lint-coverage.test.cjs` — those three hold the bearer token, the redaction
+and the egress allowlist. Full reference: `cli/README.md`.
+
 ## Tests (two runners)
 
 - `npm test` — Node's built-in runner over `tests/*.test.cjs` (backend/integration,

@@ -7,7 +7,11 @@
   "license": "MIT",
   "type": "module",
   "main": "electron/main.cjs",
+  "bin": {
+    "agensis-ops": "cli/agensis-ops.mjs"
+  },
   "scripts": {
+    "ops": "node cli/agensis-ops.mjs",
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.app.json && vite build",
     "lint": "eslint .",
