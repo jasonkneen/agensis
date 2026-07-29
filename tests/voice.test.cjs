@@ -49,7 +49,7 @@ const STRANGER = 'user-stranger';
 // Distinctive enough that a substring search for them in a response body is
 // meaningful, and shaped like the real thing.
 const DEEPGRAM_KEY = 'dg-secret-key-must-never-ship-abcdef0123456789';
-const CARTESIA_KEY = 'sk_car_secret-must-never-ship-abcdef0123456789';
+const CARTESIA_KEY = 'testkey_car_secret-must-never-ship-abcdef0123456789';
 const MINTED_TOKEN = 'eyJhbGciOiJIUzI1NiJ9.minted-short-lived-token.signature';
 
 // --- fakes ------------------------------------------------------------------
@@ -130,7 +130,7 @@ function assertNoKeys(body, where) {
   const text = typeof body === 'string' ? body : JSON.stringify(body);
   assert.ok(!text.includes(DEEPGRAM_KEY), `DEEPGRAM_API_KEY leaked in ${where}`);
   assert.ok(!text.includes(CARTESIA_KEY), `CARTESIA_API_KEY leaked in ${where}`);
-  assert.ok(!text.includes('sk_car_'), `a Cartesia key prefix leaked in ${where}`);
+  assert.ok(!text.includes('testkey_car_'), `a Cartesia key prefix leaked in ${where}`);
 }
 
 /** A stand-in for the ws client the relay opens to Deepgram. */

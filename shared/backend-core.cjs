@@ -86,6 +86,46 @@ const ALLOWED_TABLES = new Set([
  // 'allowed' via /backend/db/update would show "Approved" under a tool call
  // that never ran.
  'agent_permission_requests',
+ // Workspace automations. READ through the generic /db path so the list and the
+ // run history go live over the same realtime db_changes subscription every
+ // other table uses. Every WRITE is gated to 'manage' below and goes through
+ // /backend/workspaces/:id/automations instead — that route is the only place a
+ // definition is VALIDATED, and an unvalidated row is the whole problem: a
+ // forged automation is a standing grant to write into the workspace on an
+ // event, available to anyone who could reach /backend/db/insert.
+ 'automations',
+ 'automation_runs',
+ // Agent templates ("persona packs"). Readable at 'read' and writable at
+ // 'write' through the generic path, because a template is prose: a 'write'
+ // member can already type a system prompt straight into an agent, so authoring
+ // one grants nothing new. What makes that safe is the SHAPE — the table has no
+ // column for permission_mode, metadata, sandbox_config or a connect token, so
+ // there is nothing privileged for a generic write to reach. See the DDL
+ // comment in server/index.cjs and shared/agentTemplates.cjs.
+ 'workspace_agent_templates',
+ // Scheduled agent runs. READ through the generic /db path for one reason: a
+ // client cannot subscribe to a table it cannot select (authorizeRealtimeBinding
+ // -> ensureTable -> enforceDbOperationAccess('select')), and
+ // src/hooks/useSchedules.ts has subscribed to agent_schedules since the day it
+ // was written. Without this line that subscription is refused and the error
+ // frame is dropped by backendClient, so the schedules list never went live.
+ // Every WRITE is gated to 'manage' below and goes through
+ // /backend/workspaces/:id/schedules — the only place agent_id and session_id are
+ // checked to belong to this workspace and the interval is clamped. A schedule is
+ // a standing "run this agent on a timer" grant, so a forged row is strictly
+ // stronger than the 'run_agents' capability its dedicated route asks for.
+ 'agent_schedules',
+ // Workspace inference gateways. Same reason as agent_schedules: src/hooks/
+ // useGateways.ts has always subscribed and always been refused. Three
+ // protections ride WITH this line and are not optional:
+ //   - WORKSPACE_SCOPED_TABLES below (without it enforceDbOperationAccess returns
+ //     early and ANY signed-in user reads EVERY workspace's gateway rows),
+ //   - SELECTABLE_COLUMNS_BY_TABLE, which keeps api_key_cipher and the
+ //     credential-bearing `headers` off the generic select, and
+ //   - PRIVILEGED_DB_COLUMNS_BY_TABLE, which keeps base_url off generic writes so
+ //     the assertSafeOutboundUrl SSRF guard on the dedicated routes cannot be
+ //     stepped around by POSTing to /backend/db/insert.
+ 'gateway_configs',
 ]);
 
 // F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
@@ -126,6 +166,9 @@ const JSON_COLUMNS_BY_TABLE = {
  // reused as-is for tasks since the column is generic.
  tasks: new Set(['attachments']),
  feedback_reports: new Set(['page', 'selections', 'diagnostics']),
+ workspace_agent_templates: new Set(['tools', 'skills', 'origin']),
+ automations: new Set(['definition']),
+ automation_runs: new Set(['payload', 'steps']),
 };
 
 // Columns that are Postgres native arrays (NOT jsonb). The generic /backend/db
@@ -167,6 +210,15 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  'agent_schedules', 'agent_schedule_runs', 'activity_event_comments',
  'huddles', 'huddle_events', 'feedback_reports', 'orb_deliveries',
  'agent_permission_requests', 'thread_harvests',
+ 'automations', 'automation_runs',
+ 'workspace_agent_templates',
+ // Load-bearing, not tidy. enforceDbOperationAccess returns EARLY for any table
+ // that is not in this set (`if (!WORKSPACE_SCOPED_TABLES.has(table) && table !==
+ // 'messages') return;`) — so a table that is in ALLOWED_TABLES but missing here
+ // has NO row scoping at all, and one signed-in user reads every other tenant's
+ // rows. gateway_configs rows carry an encrypted provider API key, so that would
+ // be a cross-tenant leak, not a cosmetic one.
+ 'gateway_configs',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -198,6 +250,11 @@ const DB_TABLE_ACCESS = {
  tasks: DEFAULT_TABLE_ACCESS,
  document_versions: DEFAULT_TABLE_ACCESS,
  workspace_agents: DEFAULT_TABLE_ACCESS,
+ // Same capabilities as workspace_agents itself, and for the same reason:
+ // authoring a template is no more privileged than typing the prompt it holds,
+ // which 'write' can already do directly on an agent. The control is the
+ // table's SHAPE, not its capability row — it has no privilege-bearing column.
+ workspace_agent_templates: DEFAULT_TABLE_ACCESS,
  agent_connections: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
  cursorbuddy_connection_keys: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_jobs: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
@@ -215,6 +272,16 @@ const DB_TABLE_ACCESS = {
  // run_agents path can't bypass that validation; runs are written by the runner only.
  agent_schedules: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_schedule_runs: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // SELECT is 'read' to MATCH the dedicated route: GET /backend/workspaces/:id/
+ // gateways is gated at 'read', and every member who can pick a model in chat
+ // needs the list. Nothing is given away by the match, because
+ // SELECTABLE_COLUMNS_BY_TABLE projects the generic select down to STRICTLY LESS
+ // than that route returns (no api_key_cipher, and no `headers` either — the REST
+ // projection does pass headers through, this one does not).
+ // Every WRITE is 'manage', matching POST/PATCH/DELETE .../gateways, and the
+ // privileged-column strip below removes the columns those routes VALIDATE, so
+ // 'manage' here is strictly weaker than 'manage' there rather than a way around.
+ gateway_configs: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  // Orb deliveries are written ONLY by the trigger route (which is where the
  // dedupe gate lives): a client-forged row would let an attacker pre-claim a
  // delivery id and make the next real delivery look like a duplicate, and a
@@ -230,6 +297,19 @@ const DB_TABLE_ACCESS = {
  // from a discarded thread, so a client-forged row would put words a model never
  // produced in front of a human as a suggestion to accept.
  thread_harvests: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // Read-only to the client, and this one is load-bearing rather than tidy. An
+ // automations row is a STANDING grant: whenever its trigger event fires, the
+ // server writes into the workspace on the author's behalf, with no human in
+ // the loop. A client-forged row would therefore be an automation primitive
+ // available to anyone who can reach /backend/db/insert — strictly stronger
+ // than the 'write' capability they hold. Writes go through
+ // /backend/workspaces/:id/automations, which is the only place the definition
+ // is VALIDATED against the field/op/action allowlists.
+ automations: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // Written only by the engine. A client-forged run row would claim an
+ // automation did something it never did; a client DELETE would erase the
+ // record that it did.
+ automation_runs: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  thread_items: DEFAULT_TABLE_ACCESS,
@@ -262,6 +342,14 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
   'connect_token',
   'permission_mode',
  ]),
+ // Provenance, written only by the dedicated routes. A generic write that could
+ // set source='authored' on an imported template, or rewrite `origin`, would
+ // erase the only record of where an attacker-influenced system prompt came
+ // from — which is the question someone will ask when an agent misbehaves.
+ workspace_agent_templates: new Set([
+  'source',
+  'origin',
+ ]),
  uploaded_files: new Set([
   'storage_path',
   'content_sha256',
@@ -277,6 +365,26 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
   'user_id',
   'mcp_token_hash',
   'mcp_auto_approve',
+ ]),
+ // The three columns the dedicated gateway routes exist to VALIDATE or PROTECT.
+ // Allowlisting gateway_configs opens /backend/db/insert|update on it, and those
+ // routes do not run route-level validation — so without this strip:
+ //   base_url        would be settable without assertSafeOutboundUrl, which is the
+ //                   live SSRF guard (tests/gateway-ssrf.test.cjs). The row is
+ //                   later fetched server-side by the ai-chat gateway branch, so an
+ //                   unvalidated base_url is a request from the Fly machine to
+ //                   whatever the writer chose — 169.254.169.254 included.
+ //   api_key_cipher  would be settable to attacker-chosen ciphertext, and readable
+ //                   back only through the vault decryptor — a way to make the
+ //                   server hand a chosen credential to a chosen base_url.
+ //   headers         is where an Authorization header lives.
+ // Stripped rather than refused, matching every other entry here: a generic write
+ // that mentions one of these still succeeds, it just cannot set it. The dedicated
+ // routes remain the only door, which is the property the SSRF fix depends on.
+ gateway_configs: new Set([
+  'base_url',
+  'api_key_cipher',
+  'headers',
  ]),
 };
 
@@ -326,6 +434,23 @@ function setsManageOnlyDbColumn(table, values) {
 // (M7, 2026-07 review).
 const SELECTABLE_COLUMNS_BY_TABLE = {
  app_users: ['id', 'email', 'display_name', 'accent_color', 'created_at'],
+ // gateway_configs became selectable so its realtime subscription could work at
+ // all (authorizeRealtimeBinding authorizes a db_changes binding as a SELECT), and
+ // `columns: '*'` would otherwise hand back api_key_cipher — the encrypted
+ // provider key the dedicated route deliberately reduces to a `has_key` boolean,
+ // because "the API key is NEVER returned to the client" is the stated contract in
+ // server/workspaces-routes.cjs.
+ //
+ // `headers` is off this list too, and that is a DEPARTURE from publicGatewayConfig
+ // rather than a copy of it: the REST projection passes headers through verbatim,
+ // and an operator can put an `Authorization: Bearer …` in there. The generic path
+ // is new surface with no consumer that needs the value (useGateways refetches over
+ // REST and never reads the realtime row), so it gets the smaller set. Same rule as
+ // channel_bridges.config: strip the whole column, so a header nobody has thought
+ // of yet is excluded by default rather than by review.
+ gateway_configs: [
+  'id', 'workspace_id', 'name', 'base_url', 'model', 'protocol', 'created_at', 'updated_at',
+ ],
 };
 
 /**
@@ -700,6 +825,136 @@ async function assertWorkspaceRole({ userId, workspaceId, capability, minRole, m
 }
 
 // ----------------------------------------------------------------------------
+// Session read scope — the SECOND granularity, below the workspace.
+//
+// Everything above this line answers "may this user read this WORKSPACE". That
+// was the only question the codebase asked until now, which meant any member
+// holding `read` could read every session in the workspace including other
+// people's Direct messages: the SQL narrowed to one session because the caller
+// asked for it, not because a permission said they may see it.
+//
+// This layer only ever NARROWS. A caller must still pass the workspace check
+// first; a channel (`visibility` anything but 'private') is unaffected and costs
+// one column read that the caller already had in hand.
+// ----------------------------------------------------------------------------
+
+/**
+ * Is this session row one that only its members may read?
+ *
+ * TWO independent signals, ORed, and that is the point. `visibility` is the
+ * column the product sets and the grant routes manage. The folder check is the
+ * backstop: a DM-creating path that forgets to set visibility would otherwise
+ * silently produce a world-readable DM, and this feature is worth nothing if it
+ * can be switched off by omission. Fail closed.
+ *
+ * Takes a ROW, not an id, so callers that already selected the session (the
+ * transcript route, the realtime resolver) do not pay a second query.
+ */
+function isPrivateSessionRow(row) {
+ if (!row) return false;
+ return String(row.visibility || '') === 'private'
+  || String(row.folder || '') === 'Direct messages';
+}
+
+/**
+ * SQL predicate for "user $N may read session `<alias>`", for the aggregate
+ * queries that span many sessions at once (the inbox, thread lists, search).
+ *
+ * Those cannot call the row-at-a-time check without an N+1, and rewriting each
+ * of them by hand is how a path gets missed. `userParam` is a bind placeholder
+ * ($2, $3 …) chosen by the caller — never interpolated user input.
+ *
+ * The expiry comparison lives HERE, in SQL, so an expired grant cannot be
+ * honoured by a row that was read a moment earlier.
+ */
+function sessionReadableSql(alias, userParam) {
+ if (!/^[a-z_][a-z0-9_]*$/i.test(String(alias))) throw new Error(`Invalid alias: ${alias}`);
+ if (!/^\$\d+$/.test(String(userParam))) throw new Error(`Invalid bind: ${userParam}`);
+ // Parenthesised explicitly. `and` binds tighter than `or`, so this reads
+ // correctly without them — but "correct by precedence" is how a later edit
+ // inserts a third condition in the wrong group and quietly opens every DM.
+ return `(
+    (
+      coalesce(${alias}.visibility, 'workspace') <> 'private'
+      and coalesce(${alias}.folder, '') <> 'Direct messages'
+    )
+    or exists (
+      select 1 from chat_session_members csm
+       where csm.session_id = ${alias}.id
+         and csm.user_id = ${userParam}::uuid
+         and (csm.expires_at is null or csm.expires_at > now())
+    )
+  )`;
+}
+
+/**
+ * Enforce that `userId` may read `sessionId`. Throws 403 when they may not.
+ *
+ * Deliberately does NOT do the workspace check — callers have already done it,
+ * and folding it in here would double every membership query on the hottest
+ * read path in the app. This is an ADDITIONAL gate, never a replacement.
+ *
+ * `sessionRow` is an optimisation for callers holding the row already; omit it
+ * and one query fetches what is needed.
+ *
+ * NO IMPLICIT OWNER OVERSIGHT, on purpose. A workspace owner holds `manage`, so
+ * they can grant themselves access to any session — and that leaves an audit
+ * row. Letting them read silently would give the same power with no trace,
+ * which is strictly worse for the person whose DM it is.
+ */
+async function enforceSessionReadAccess({ userId, sessionId, sessionRow = null, db }) {
+ if (!sessionId) return;
+ let row = sessionRow;
+ if (!row) {
+  const rows = await db('select id, visibility, folder from chat_sessions where id = $1 limit 1', [sessionId]);
+  row = rows[0] || null;
+ }
+ // A session that does not exist is not this gate's problem — the caller's own
+ // 404 handling owns that, and throwing 403 here would turn every missing id
+ // into a misleading permission error.
+ if (!row) return;
+ if (!isPrivateSessionRow(row)) return;
+ if (!userId) throw forbidden('This conversation is private');
+ const allowed = await db(
+  `select 1 from chat_session_members
+     where session_id = $1 and user_id = $2
+       and (expires_at is null or expires_at > now())
+     limit 1`,
+  [sessionId, userId],
+ );
+ if (allowed.length > 0) return;
+ throw forbidden('This conversation is private');
+}
+
+/**
+ * Record `userId` as an intrinsic participant of a session.
+ *
+ * Called where a human's own action puts them in a conversation: opening a DM,
+ * assigning a task to an agent, @mentioning one in a comment. That last pair
+ * matters — the dispatch writes into the agent's DM under the actor's name, and
+ * an actor who cannot then read the reply their own action produced would be a
+ * worse bug than the one this feature fixes.
+ *
+ * ON CONFLICT DO NOTHING: never demotes an existing row. Someone who holds a
+ * 'grant' and then dispatches into the session keeps the grant's provenance.
+ * Best-effort — a failure here must not fail the dispatch that triggered it.
+ */
+async function addSessionParticipant({ sessionId, userId, db }) {
+ if (!sessionId || !userId) return false;
+ try {
+  await db(
+   `insert into chat_session_members (session_id, user_id, source)
+      values ($1, $2, 'participant')
+      on conflict (session_id, user_id) do nothing`,
+   [sessionId, userId],
+  );
+  return true;
+ } catch {
+  return false;
+ }
+}
+
+// ----------------------------------------------------------------------------
 // Re-parenting: the write that creates the hierarchy, and the one that can
 // break it. Nothing in the product sets parent_id yet — the only reachable
 // writer is a generic POST /backend/db/update on `workspaces` — so this exists
@@ -954,7 +1209,50 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   const resolved = await resolveOperationWorkspace(table, { filters: flt }, db);
   if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
   await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
+
+  // The session gate, layered UNDER the workspace one. Only for `select`: this
+  // is a READ-scope feature, and quietly extending it to delete would change
+  // write behaviour nobody asked to change.
+  //
+  // This is also what closes REALTIME, at no extra cost — realtime subscribe
+  // authorizes a binding by calling this same function with op 'select'
+  // (server/realtime.cjs authorizeRealtimeBinding), so a client cannot
+  // subscribe to `session_id=eq.<someone's DM>` either. Single-sourcing the
+  // rule here is the reason there is no second copy to drift.
+  if (op === 'select') {
+   // Any table filtered by session_id inherits its session's privacy — not
+   // just `messages`. thread_items, agent_jobs and the rest hang off a session
+   // and would otherwise be a side channel into a private one.
+   const sessionId = table === 'chat_sessions'
+    ? findFilterValue(flt, 'id')
+    : findFilterValue(flt, 'session_id');
+   if (sessionId) await enforceSessionReadAccess({ userId, sessionId, db });
+  }
  }
+}
+
+// Constrain a SELECT on `chat_sessions` / `messages` to rows in a session the
+// user may read. The sibling of appendWorkspaceAccessClause, and needed for the
+// same reason: enforceDbOperationAccess can only ANSWER "may you", it cannot
+// remove rows from a result set. Without this a select on chat_sessions
+// filtered by workspace_id returns every DM's title and roster, which leaks the
+// existence and subject of a private conversation without reading one message.
+//
+// Both tables route through one subquery alias so the two cases differ only in
+// the join column. Slightly more work than inlining the predicate on
+// chat_sessions itself; worth it because there is then exactly ONE spelling of
+// the readability rule to keep correct.
+function appendSessionAccessClause(where, userId, table) {
+ if (table !== 'chat_sessions' && table !== 'messages') return where;
+ const params = where.params || [];
+ params.push(userId);
+ const userParam = `$${params.length}`;
+ const joinColumn = table === 'chat_sessions' ? `"chat_sessions"."id"` : `"messages"."session_id"`;
+ const accessClause = `EXISTS (SELECT 1 FROM chat_sessions cs WHERE cs.id = ${joinColumn} AND ${sessionReadableSql('cs', userParam)})`;
+ return {
+  clause: where.clause ? `${where.clause} AND ${accessClause}` : ` WHERE ${accessClause}`,
+  params,
+ };
 }
 
 // Constrain a SELECT on `workspaces` to rows the user owns or is a member of.
@@ -1694,6 +1992,342 @@ async function insertFeedbackReport({ db, jsonParam, userId, sourceWorkspaceId, 
  return { taskId, reportId: reportId || null, systemWorkspaceId };
 }
 
+// ============================================================================
+// The audit log
+// ----------------------------------------------------------------------------
+// A durable, SERVER-AUTHORED record of the privileged actions that previously
+// left no trace anywhere: role changes, member removal, invites, permission-mode
+// flips (including 'yolo', which is unrestricted shell on the daemon host),
+// permanent tool grants, connect-token mints, and vault writes.
+//
+// This is NOT activity_events, and the distinction is structural rather than a
+// matter of taste. activity_events is written by the BROWSER through the generic
+// /backend/db/insert route (src/hooks/useActivity.ts), the client picks its own
+// event_type/title/user_id, and DB_TABLE_ACCESS gives it insert/update/delete at
+// 'write' — so any editor can forge a row and delete a real one. That is fine
+// for a feed and disqualifies it as an audit record permanently.
+//
+// So `audit_log` is deliberately ABSENT from ALLOWED_TABLES and from
+// DB_TABLE_ACCESS. ensureTable() rejects unknown tables before any /backend/db/*
+// handler runs, so there is no generic read, write or realtime-subscribe path to
+// this table at all — a stronger guarantee than {insert:'manage'}, which would
+// still leave a route for a future manage-holder or a bug in the gate to travel.
+// The only doors are recordAuditEntry (in) and the manage-gated
+// GET /backend/workspaces/:id/audit route (out). tests/audit-log-append-only
+// fails if anyone allowlists it.
+//
+// WHAT THIS IS WORTH, stated honestly so nobody over-claims it: entries are
+// attested by the SERVER, not signed by the actor, and the app connects to
+// Postgres as a role that can DROP the immutability trigger. It is tamper-
+// EVIDENT against application-level actors — a member, an agent, a bug, a SQL
+// injection reaching a DELETE. It is not tamper-PROOF against whoever holds
+// DATABASE_URL, and no design available in this architecture would be.
+//
+// v1 stores a per-row `entry_hash` and a bigserial `seq`, and deliberately does
+// NOT chain rows with a prev_hash. A chain's real cost is serialisation: every
+// entry must read the current tail before it can write, turning an independent
+// INSERT into a lock-taking read-modify-write on paths (role changes, token
+// mints, secret writes) that must never stall. And a chain is only evidence if
+// its head is anchored where the adversary cannot reach — agensis has one
+// Postgres and one operator, so a chain written by the operator, anchored in the
+// operator's database, verified by the operator, against the operator, proves
+// nothing. The per-row hash detects EDITS and the sequence flags GAPS, at no
+// lock and two columns. Add prev_hash going forward the day an external anchor
+// exists; do not pretend the historical rows were ever sealed.
+
+/**
+ * Every action this log will record. An `action` outside this set is a typo, and
+ * a typo must not silently produce a row nobody can filter for.
+ */
+const AUDIT_ACTIONS = Object.freeze(new Set([
+ 'member.role_changed',
+ 'member.removed',
+ 'invite.created',
+ 'invite.revoked',
+ 'agent.permission_mode_changed',
+ 'agent.permission_rule_granted',
+ 'agent.permission_rule_revoked',
+ 'agent.connect_token_minted',
+ // The workspace MCP token (agw_) is the control-plane secret for the whole
+ // workspace: a bearer reaches all 29 MCP tools, can register_agent, and can
+ // mint an agent's daemon connect token via get_connect_command. Minting it
+ // ROTATES it, which silently breaks every MCP client still holding the old
+ // one — so "who reissued this, and when" is exactly the question this log
+ // exists to answer. Its sibling agent.connect_token_minted was recorded from
+ // the start; this one was not, which is the only reason it is a separate line.
+ 'workspace.mcp_token_minted',
+ // A human's ORDINARY SESSION TOKEN was used to authenticate at /backend/mcp
+ // (the verifyUserAuthMcpToken tail of verifyMcpToken). Recorded to answer one
+ // question with data instead of a guess — "is anyone actually using this
+ // path?" — before deciding whether to stop accepting login tokens there. See
+ // AGENTS.md "Login tokens at the MCP door".
+ //
+ // MCP AUTH RUNS ON EVERY REQUEST, so this is the one action in this registry
+ // that could flood the table. It does not, because it is emitted at most ONCE
+ // PER USER PER 24h PER PROCESS via createFirstUseWindow below. Never remove
+ // that dedup and leave the call site in place.
+ 'mcp.login_token_used',
+ 'vault.secret_set',
+ 'vault.secret_deleted',
+ // Authoring an automation is a STANDING grant to write into the workspace
+ // whenever an event matches — the same class of thing as an agent_webhook, and
+ // the reason both are manage-gated. "Who turned this on" is a different
+ // question from "who edited it", so enable/disable is its own action.
+ 'automation.created',
+ 'automation.updated',
+ 'automation.deleted',
+ 'automation.enabled',
+ 'automation.disabled',
+ // Reading into someone else's private conversation. The DENIAL of a read is
+ // deliberately NOT audited — it fires on ordinary sidebar rendering and would
+ // bury the entries that matter. The GRANT is the decision worth keeping: a
+ // silent grant is worse than no grant at all, because it looks like privacy.
+ 'chat_session.access_granted',
+ 'chat_session.access_revoked',
+]));
+
+/** What an unrecognised action records as, rather than throwing in production. */
+const AUDIT_UNKNOWN_ACTION = 'unknown';
+
+const FIRST_USE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const FIRST_USE_MAX_KEYS = 5000;
+
+/**
+ * First-use-per-key-per-window, so a per-request code path can emit an audit row
+ * WITHOUT flooding the log.
+ *
+ * The audit table is built for rare, human-attributable, privileged actions, and
+ * it is a tamper-evident chain (entry_hash over the previous row). One row per
+ * MCP request would bury the privileged actions it exists for and make the
+ * manage-gated audit view unusable — the log would technically contain more and
+ * answer less.
+ *
+ * So the call site asks this first. `shouldRecord(key)` returns true the first
+ * time it sees a key in a 24h window and false for every repeat, which turns
+ * "every request from this credential" into "this credential appeared today".
+ * That is the signal the question actually needs, and it is the same rate class
+ * as the other actions in the registry.
+ *
+ * Bounded in BOTH directions on purpose:
+ *   - time — an entry expires after `windowMs`, so a key seen once a year
+ *     records once a year rather than never again;
+ *   - memory — at most `maxKeys` entries. Map preserves insertion order, so the
+ *     oldest is evicted in O(1). Worst case when a cap eviction happens is one
+ *     extra row, never unbounded growth.
+ *
+ * PROCESS-LOCAL, like the MCP presence map. On a multi-instance deploy the
+ * ceiling is one row per key per window PER INSTANCE. That is fine for "did this
+ * happen at all", and it is not a counter — do not read row counts as request
+ * volume.
+ *
+ * `now` is injectable so the window can be tested without waiting a day.
+ */
+function createFirstUseWindow({
+ windowMs = FIRST_USE_WINDOW_MS,
+ maxKeys = FIRST_USE_MAX_KEYS,
+ now = Date.now,
+} = {}) {
+ const seen = new Map();
+
+ function shouldRecord(key) {
+  const id = String(key || '');
+  if (!id) return false;
+  const at = now();
+
+  const expiresAt = seen.get(id);
+  if (expiresAt !== undefined) {
+   if (expiresAt > at) return false;
+   // Expired: drop it so the re-insert below lands at the END of the insertion
+   // order. Without this the key keeps its original position and would be
+   // evicted first despite having just been used.
+   seen.delete(id);
+  }
+
+  seen.set(id, at + windowMs);
+
+  // Evict from the front (oldest inserted) until back under the cap.
+  while (seen.size > maxKeys) {
+   const oldest = seen.keys().next();
+   if (oldest.done) break;
+   seen.delete(oldest.value);
+  }
+  return true;
+ }
+
+ return { shouldRecord, size: () => seen.size };
+}
+
+/** Ceilings on what one row may carry. Bounded so a row can never become a dump. */
+const AUDIT_MAX_TEXT = 200;
+const AUDIT_MAX_LABEL = 160;
+const AUDIT_MAX_DETAIL_KEYS = 24;
+const AUDIT_MAX_DETAIL_ITEMS = 24;
+
+function auditText(value, max = AUDIT_MAX_TEXT) {
+ if (value === null || value === undefined) return '';
+ return String(value).slice(0, max);
+}
+
+/**
+ * The email DOMAIN, never the local-part.
+ *
+ * "someone invited an external address" is the thing an owner actually needs to
+ * see; who exactly it was is already in the invite row. This log has a 400-day
+ * horizon and a different erasure path from the user record, so a deleted user's
+ * address must not outlive them in here.
+ */
+function auditEmailDomain(email) {
+ const at = String(email || '').lastIndexOf('@');
+ if (at < 0) return '';
+ return auditText(String(email).slice(at + 1).toLowerCase(), 80);
+}
+
+/**
+ * Reduce `detail` to bounded scalars at depth 1.
+ *
+ * This is a STRUCTURAL guard against the highest-severity failure this feature
+ * has: someone writing `detail: agentRow`, which would carry connect_token_hash
+ * into a table with a longer retention than the row it came from. It cannot tell
+ * a secret from a rule string — only the call sites and their tests do that (see
+ * the audit redaction contract) — but it
+ * does make "dump the whole row in" impossible rather than merely discouraged.
+ */
+function sanitizeAuditDetail(detail) {
+ if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return {};
+ const out = {};
+ let keys = 0;
+ for (const key of Object.keys(detail).sort()) {
+  if (keys >= AUDIT_MAX_DETAIL_KEYS) break;
+  const value = detail[key];
+  if (value === null || value === undefined) continue;
+  if (typeof value === 'string') out[key] = auditText(value);
+  else if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
+  else if (typeof value === 'boolean') out[key] = value;
+  else if (Array.isArray(value)) {
+   out[key] = value
+    .slice(0, AUDIT_MAX_DETAIL_ITEMS)
+    .filter((item) => typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean')
+    .map((item) => (typeof item === 'string' ? auditText(item) : item));
+  } else continue; // objects and everything else are dropped, not stringified
+  keys += 1;
+ }
+ return out;
+}
+
+/** Key-sorted deep copy, so two equal payloads always hash the same. */
+function auditCanonicalValue(value) {
+ if (value === null || typeof value !== 'object') return value;
+ if (Array.isArray(value)) return value.map(auditCanonicalValue);
+ const out = {};
+ for (const key of Object.keys(value).sort()) out[key] = auditCanonicalValue(value[key]);
+ return out;
+}
+
+/**
+ * SHA-256 over the row's canonical content — no prev_hash, no read of the tail,
+ * no lock. Detects an EDIT to a stored row; says nothing about ordering.
+ *
+ * created_at is part of the hash and is generated in JS by the writer, so the
+ * hash covers the same instant the row stores (now() would be a different one).
+ */
+function auditEntryHash(row = {}) {
+ const payload = JSON.stringify([
+  String(row.workspace_id || ''),
+  String(row.actor_user_id || ''),
+  String(row.actor_agent_id || ''),
+  String(row.action || ''),
+  String(row.target_type || ''),
+  String(row.target_id || ''),
+  String(row.before_value || ''),
+  String(row.after_value || ''),
+  auditCanonicalValue(row.detail || {}),
+  String(row.created_at || ''),
+ ]);
+ return crypto.createHash('sha256').update(payload, 'utf8').digest('hex');
+}
+
+/**
+ * Write one audit entry. Returns the row's { id, seq, entry_hash } or null.
+ *
+ * FIRE-AND-FORGET, in the same sense as logProviderCallActivity: awaited so an
+ * ordinary failure reaches the server log, but it NEVER rejects. An audit write
+ * that throws inside a role-change handler would turn a working privileged
+ * action into a 500 — the log must not be able to break the thing it observes.
+ *
+ * `actor` is { userId, agentId, label }. A user action sets actor_user_id from
+ * the VERIFIED session (req.userId), never from a request body; an agent-
+ * initiated one sets actor_agent_id from the token-resolved agent. Never both.
+ *
+ * `jsonParam` is the two-driver seam described on insertFeedbackReport above. It
+ * defaults to identity, which is correct for postgres.js on Fly, where every v1
+ * call site lives. A Netlify caller must pass JSON.stringify.
+ */
+async function recordAuditEntry({
+ db,
+ workspaceId = null,
+ actor = {},
+ action,
+ target = {},
+ before = '',
+ after = '',
+ detail = {},
+ requestIp = '',
+ jsonParam = (value) => value,
+} = {}) {
+ try {
+  if (typeof db !== 'function') throw new Error('recordAuditEntry requires a db function');
+  let resolvedAction = String(action || '').trim();
+  if (!AUDIT_ACTIONS.has(resolvedAction)) {
+   // Loud in development so a typo is caught at the desk; recorded as 'unknown'
+   // in production so the ACTION still leaves a row even when its name is wrong.
+   if (process.env.NODE_ENV !== 'production') {
+    throw new Error(`recordAuditEntry: unknown action ${JSON.stringify(resolvedAction)}`);
+   }
+   resolvedAction = AUDIT_UNKNOWN_ACTION;
+  }
+
+  const actorUserId = actor?.userId ? String(actor.userId) : null;
+  // Never both: an action has one actor. A user session wins if a caller
+  // somehow supplies each, because req.userId is the verified one.
+  const actorAgentId = !actorUserId && actor?.agentId ? String(actor.agentId) : null;
+
+  const row = {
+   workspace_id: workspaceId ? String(workspaceId) : null,
+   actor_user_id: actorUserId,
+   actor_agent_id: actorAgentId,
+   actor_label: auditText(actor?.label, AUDIT_MAX_LABEL),
+   action: resolvedAction,
+   target_type: auditText(target?.type, 60),
+   target_id: target?.id ? auditText(target.id, 120) : null,
+   target_label: auditText(target?.label, AUDIT_MAX_LABEL),
+   before_value: auditText(before),
+   after_value: auditText(after),
+   detail: sanitizeAuditDetail(detail),
+   request_ip: auditText(requestIp, 60),
+   created_at: new Date().toISOString(),
+  };
+  row.entry_hash = auditEntryHash(row);
+
+  const inserted = await db(
+   `insert into audit_log
+        (workspace_id, actor_user_id, actor_agent_id, actor_label, action,
+         target_type, target_id, target_label, before_value, after_value,
+         detail, request_ip, entry_hash, created_at)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
+      returning id, seq, entry_hash`,
+   [
+    row.workspace_id, row.actor_user_id, row.actor_agent_id, row.actor_label, row.action,
+    row.target_type, row.target_id, row.target_label, row.before_value, row.after_value,
+    jsonParam(row.detail), row.request_ip, row.entry_hash, row.created_at,
+   ],
+  );
+  return inserted?.[0] ?? null;
+ } catch (error) {
+  console.error('recordAuditEntry failed', error);
+  return null;
+ }
+}
+
 module.exports = {
  verifyAuthToken,
  issueAuthToken,
@@ -1701,6 +2335,11 @@ module.exports = {
  DEFAULT_TOKEN_TTL_SEC,
  enforceDbOperationAccess,
  assertWorkspaceRole,
+ // Session read scope — the granularity below the workspace.
+ enforceSessionReadAccess,
+ isPrivateSessionRow,
+ sessionReadableSql,
+ addSessionParticipant,
  ALLOWED_TABLES,
  VERSIONED_TABLES,
  JSON_COLUMNS_BY_TABLE,
@@ -1731,8 +2370,19 @@ module.exports = {
  listWorkspaceSecretMeta,
  listWorkspaceVaultEntries,
  storagePathBelongsToWorkspace,
+ // The audit log. Note what is NOT here: audit_log appears in neither
+ // ALLOWED_TABLES nor DB_TABLE_ACCESS, on purpose — see the block above.
+ AUDIT_ACTIONS,
+ AUDIT_UNKNOWN_ACTION,
+ auditEmailDomain,
+ auditEntryHash,
+ recordAuditEntry,
+ createFirstUseWindow,
+ FIRST_USE_WINDOW_MS,
+ sanitizeAuditDetail,
  createTokenVersionCache,
  appendWorkspaceAccessClause,
+ appendSessionAccessClause,
  logMessageActivityIdempotent,
  createRateLimiter,
  createDbRateLimiter,

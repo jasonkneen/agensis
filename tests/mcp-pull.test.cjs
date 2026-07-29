@@ -207,8 +207,20 @@ test('finalizeAgentJobResult inserts a fresh message when there is no placeholde
 const { registerAgentRequest, finalizeRegistrationApproval, decideAgentRegistration, getRegistrationStatus, verifyWorkspaceMcpToken, verifyUserAuthMcpToken, createWorkspaceMcpToken, hashAgentToken } = __test;
 
 test('verifyWorkspaceMcpToken resolves the one workspace token + auto-approve flag', async () => {
-  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS, mcp_auto_approve: true }] }]);
-  assert.deepEqual(await verifyWorkspaceMcpToken('agw_x'), { kind: 'workspace', workspaceId: WS, name: 'MCP client', autoApprove: true });
+  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS, user_id: 'owner-1', mcp_auto_approve: true }] }]);
+  // ownerUserId is SECURITY-RELEVANT, not decoration: server/mcp.cjs
+  // mcpSubjectUserId reads private sessions AS this user, so a workspace token
+  // that loses it silently stops being able to open its owner's own DMs.
+  assert.deepEqual(await verifyWorkspaceMcpToken('agw_x'), {
+    kind: 'workspace', workspaceId: WS, ownerUserId: 'owner-1', name: 'MCP client', autoApprove: true,
+  });
+  resetTestState();
+
+  // A workspace row with no owner must resolve to '' and NOT to undefined/null:
+  // mcpSubjectUserId treats a falsy value as "no subject", which denies private
+  // sessions. Anything else risks a null landing in a `= $n::uuid` comparison.
+  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS, user_id: null, mcp_auto_approve: false }] }]);
+  assert.equal((await verifyWorkspaceMcpToken('agw_x')).ownerUserId, '');
   resetTestState();
   use([{ match: /from workspaces where mcp_token_hash/, rows: () => [] }]);
   assert.equal(await verifyWorkspaceMcpToken('nope'), null);

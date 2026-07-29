@@ -92,6 +92,17 @@ export interface ChatSession {
  split_at?: string | null;
  /** Soft-delete marker. Sessions are never hard-deleted so the data stays usable. */
  deleted_at?: string | null;
+ /**
+  * Who may READ this session, one level below the workspace role check:
+  * 'workspace' (every member with read — channels, and the default) or
+  * 'private' (only its members). DMs and anything derived from one — sub-thread
+  * splits, huddle transcripts — are 'private'.
+  *
+  * SERVER-DECIDED. Sending it on an insert does nothing: the backend overrides
+  * it from the parent session, because a client declaring itself public would
+  * be a one-line way to publish any DM by splitting a thread out of it.
+  */
+ visibility?: 'workspace' | 'private' | null;
  version?: number;
  created_at: string;
  updated_at: string;
@@ -269,9 +280,9 @@ export interface CanvasGroup {
 
 export type CanvasTool = 'select' | 'pen' | 'rect' | 'ellipse' | 'diamond' | 'line' | 'arrow' | 'text' | 'eraser' | 'sticky_note';
 
-export type ActiveView = 'chat' | 'document' | 'memory' | 'skills' | 'files' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules';
+export type ActiveView = 'chat' | 'document' | 'memory' | 'skills' | 'files' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules' | 'automations';
 
-export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules' | 'inbox' | 'tenants' | 'browser' | 'terminal';
+export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules' | 'automations' | 'inbox' | 'tenants' | 'browser' | 'terminal';
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
@@ -393,6 +404,59 @@ export type ActivityEventType =
  // redeemed on and the role — never the token, which exists only as a hash.
  | 'join_link_created'
  | 'join_link_redeemed';
+
+/**
+ * The privileged actions the audit log records.
+ *
+ * NOT an activity event, and the distinction is structural rather than stylistic.
+ * `activity_events` rows are written by THIS BUNDLE through the generic
+ * /backend/db/insert route, so a member picks their own event_type, title and
+ * user_id — forgeable and deletable by design, which is fine for a feed.
+ * `audit_log` rows are written only by the server at the action itself, the
+ * table is absent from the client allowlist entirely, and the only way to read
+ * one is the manage-gated GET /backend/workspaces/:id/audit.
+ *
+ * Keep in step with AUDIT_ACTIONS in shared/backend-core.cjs.
+ */
+export type AuditAction =
+ | 'member.role_changed'
+ | 'member.removed'
+ | 'invite.created'
+ | 'invite.revoked'
+ // 'yolo' is unrestricted shell on whatever machine the daemon runs on. This is
+ // the highest-value row in the log.
+ | 'agent.permission_mode_changed'
+ | 'agent.permission_rule_granted'
+ | 'agent.permission_rule_revoked'
+ | 'agent.connect_token_minted'
+ // The key NAME and a configured boolean. Never the value — see the redaction
+ // contract on the vault routes.
+ | 'vault.secret_set'
+ | 'vault.secret_deleted';
+
+/**
+ * One audit row as the read route returns it.
+ *
+ * `request_ip` is stored but deliberately NOT projected, so it is absent here.
+ */
+export interface AuditEntry {
+ id: string;
+ seq: number;
+ workspace_id: string | null;
+ actor_user_id: string | null;
+ actor_agent_id: string | null;
+ actor_label: string;
+ action: AuditAction | 'unknown';
+ target_type: string;
+ target_id: string | null;
+ target_label: string;
+ before_value: string;
+ after_value: string;
+ detail: Record<string, unknown> | null;
+ /** SHA-256 of the row's canonical content. Detects an edit, not a reordering. */
+ entry_hash: string;
+ created_at: string;
+}
 
 export interface ActivityEvent {
  id: string;

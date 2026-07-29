@@ -14,6 +14,7 @@ import {
   Palette,
   Plug,
   Plus,
+  ScrollText,
   Trash2,
   Settings as SettingsIcon,
   Sparkles,
@@ -31,6 +32,7 @@ import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities 
 import { generateMcpToken, setMcpAutoApprove, type McpConnectInfo } from '../../lib/mcpConnect';
 import { WORKSPACE_UNAVAILABLE, describeWriteFailure } from '../../lib/writeFeedback';
 import { useWorkspaceVault } from '../../hooks/useWorkspaceVault';
+import { AuditLogPanel } from './AuditLogPanel';
 import { useGateways } from '../../hooks/useGateways';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
@@ -77,7 +79,7 @@ interface SettingsDialogProps {
   initialTab?: SettingsTabId;
 }
 
-export type SettingsTabId = 'general' | 'notifications' | 'appearance' | 'ai' | 'tools' | 'connections' | 'secrets' | 'usage' | 'about';
+export type SettingsTabId = 'general' | 'notifications' | 'appearance' | 'ai' | 'tools' | 'connections' | 'secrets' | 'audit' | 'usage' | 'about';
 type TabId = SettingsTabId;
 
 const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
@@ -88,6 +90,11 @@ const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: 'tools', label: 'Tools', icon: <Wrench /> },
   { id: 'connections', label: 'Connections', icon: <Plug /> },
   { id: 'secrets', label: 'Vault', icon: <KeyRound /> },
+  // Next to the Vault: same manage gate, same sensitivity. The route behind it
+  // returns 403 to anyone below manage, so a non-manager who opens this tab sees
+  // that message rather than an empty table they would read as "nothing has
+  // happened".
+  { id: 'audit', label: 'Audit log', icon: <ScrollText /> },
   { id: 'usage', label: 'Usage', icon: <Gauge /> },
   { id: 'about', label: 'About', icon: <Info /> },
 ];
@@ -157,6 +164,7 @@ export function SettingsDialog({
               {tab === 'tools' && <ToolsPanel workspace={workspace} />}
               {tab === 'connections' && <ConnectionsPanel workspaceId={secretsWorkspaceId} />}
               {tab === 'secrets' && <SecretsPanel workspaceId={secretsWorkspaceId} />}
+              {tab === 'audit' && <AuditLogPanel workspaceId={secretsWorkspaceId} />}
               {tab === 'usage' && <UsagePanel workspaceId={secretsWorkspaceId} workspaceName={workspaceName} />}
               {tab === 'about' && <AboutPanel />}
             </div>

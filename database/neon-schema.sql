@@ -127,6 +127,74 @@ ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT 
 
 CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id);
 
+-- The audit log: a durable, SERVER-AUTHORED record of privileged actions (role
+-- changes, member removal, invites, permission-mode flips including 'yolo',
+-- permanent tool grants, connect-token mints, vault writes). Deliberately absent
+-- from ALLOWED_TABLES in shared/backend-core.cjs, so no generic /backend/db/*
+-- route and no realtime subscription can reach it; the only doors are
+-- recordAuditEntry and the manage-gated GET /backend/workspaces/:id/audit.
+--
+-- workspace_id is ON DELETE SET NULL, not CASCADE. Deleting a workspace is the
+-- most audit-worthy action there is; CASCADE would erase the evidence of it as a
+-- side effect of committing it. Hence the nullable column.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  seq bigserial NOT NULL,
+  workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+  actor_user_id uuid,
+  actor_agent_id uuid,
+  actor_label text NOT NULL DEFAULT '',
+  action text NOT NULL,
+  target_type text NOT NULL DEFAULT '',
+  target_id text,
+  target_label text NOT NULL DEFAULT '',
+  -- text, not jsonb: these hold short scalars ('editor' -> 'admin') and must not
+  -- become the place someone dumps a whole row, and with it a secret.
+  before_value text NOT NULL DEFAULT '',
+  after_value text NOT NULL DEFAULT '',
+  detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+  request_ip text NOT NULL DEFAULT '',
+  -- SHA-256 over the row's canonical content. No prev_hash: a chain would make
+  -- every write read the tail under a lock, on paths that must never stall, and
+  -- would prove nothing while the only possible anchor is the same database the
+  -- operator controls. This detects edits; seq gaps suggest deletion.
+  entry_hash text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_workspace_created ON audit_log(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_audit_log_seq ON audit_log(seq);
+
+-- Append-only at the DB layer. This stops app bugs, a SQL injection reaching a
+-- DELETE, and a future contributor allowlisting the table without thinking. It
+-- does NOT stop whoever holds DATABASE_URL, who can drop it in one statement --
+-- and nothing available in this architecture would.
+CREATE OR REPLACE FUNCTION audit_log_refuse_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    RAISE EXCEPTION 'audit_log rows are immutable'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  -- DELETE is permitted only past the retention horizon, so pruning never
+  -- requires dropping this trigger by hand.
+  IF OLD.created_at > now() - interval '400 days' THEN
+    RAISE EXCEPTION 'audit_log rows younger than the retention horizon cannot be deleted'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN OLD;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_audit_log_refuse_mutation ON audit_log;
+CREATE TRIGGER trg_audit_log_refuse_mutation
+  BEFORE UPDATE OR DELETE ON audit_log
+  FOR EACH ROW
+  EXECUTE FUNCTION audit_log_refuse_mutation();
+
 CREATE TABLE IF NOT EXISTS gateway_configs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -192,6 +260,17 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   deleted_at timestamptz,
   canvas_id text,
   version integer NOT NULL DEFAULT 1,
+  -- Who may READ this session, one level BELOW the workspace role check:
+  --   'workspace'  every member with `read` — channels, and the default
+  --   'private'    only rows in chat_session_members (plus a manage-granted one)
+  -- DMs and everything derived from a DM (sub-thread splits, huddle transcripts)
+  -- are 'private'. Deliberately a text column and not a boolean: the next
+  -- visibility we need is a private CHANNEL, not a second flag.
+  --
+  -- Read as private ONLY on an exact 'private' match — but the authorizer also
+  -- treats folder='Direct messages' as private regardless, so a new DM-creating
+  -- path that forgets to set this column cannot open a hole. Fail closed.
+  visibility text NOT NULL DEFAULT 'workspace',
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
@@ -201,6 +280,35 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_folder ON chat_sessions(workspace_i
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(workspace_id, archived_at);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_favorite ON chat_sessions(workspace_id, is_favorite);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_canvas ON chat_sessions(workspace_id, canvas_id);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_visibility ON chat_sessions(workspace_id, visibility);
+
+-- Who may read a `visibility='private'` session. Empty for every 'workspace'
+-- session — this table is consulted ONLY after the session is known private, so
+-- channels cost nothing.
+--
+-- DELIBERATELY ABSENT FROM ALLOWED_TABLES in shared/backend-core.cjs, for the
+-- same reason audit_log is: reachable through POST /backend/db/insert, this
+-- table IS a self-grant primitive and the whole feature becomes theatre. The
+-- only doors are the participant writes on the DM-creation paths and the
+-- manage-gated grant/revoke routes. tests/dm-read-scope fails if anyone
+-- allowlists it.
+CREATE TABLE IF NOT EXISTS chat_session_members (
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL,
+  -- 'participant' — intrinsic: opened this DM, or dispatched an agent into it.
+  -- 'grant'       — explicitly given by a member holding `manage`, and audited.
+  -- The distinction is what makes a revoke safe: revoking clears grants and
+  -- must never strip the person whose DM it is.
+  source text NOT NULL DEFAULT 'participant',
+  granted_by uuid,
+  -- NULL = open-ended. A past timestamp reads as no access at all; expiry is
+  -- evaluated in SQL so an expired row cannot be honoured by a stale cache.
+  expires_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (session_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_session_members_user ON chat_session_members(user_id);
 
 -- message_kind/tool_name/tool_detail carry agent tool steps: message_kind
 -- 'tool_step' marks a row the UI renders as a compact chip rather than a full
@@ -264,6 +372,16 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS broadcast_to_channel boolean NOT N
 -- per-task subthread; source_task_id ties the thread root back to its task.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS source_task_id uuid;
 CREATE INDEX IF NOT EXISTS idx_messages_source_task_id ON messages(session_id, source_task_id);
+-- taskThreadLastWordAt (server/task-dispatch.cjs) filters `root.source_task_id`
+-- with no session_id, so it cannot use the (session_id, source_task_id) index
+-- above — Postgres has no index skip scan. Partial on both predicates because
+-- that query always pairs source_task_id with `thread_parent_id is null`, and
+-- only thread ROOTS carry source_task_id: 23 of 5493 message rows, a 16 kB index.
+-- Keep the composite index above too: postTaskSubthreadMention queries on both
+-- columns and does use it.
+CREATE INDEX IF NOT EXISTS idx_messages_source_task_root
+  ON messages(source_task_id)
+  WHERE source_task_id IS NOT NULL AND thread_parent_id IS NULL;
 
 -- Trigram GIN indexes so MCP search_messages / search_docs (leading-wildcard
 -- ILIKE '%q%') are index-backed instead of a full sequential scan. Mirrors the
@@ -310,6 +428,64 @@ CREATE TABLE IF NOT EXISTS flow_webhook_deliveries (
   UNIQUE (connection_id, event_id)
 );
 CREATE INDEX IF NOT EXISTS idx_flow_deliveries_due ON flow_webhook_deliveries(status, next_attempt_at);
+
+-- Workspace automations: "when X happens inside agensis, do Y inside agensis",
+-- without a code change. Engine: server/automations.cjs. Evaluator (pure):
+-- shared/automation-rules.cjs.
+--
+-- Distinct from flow_connections directly above, and deliberately a different
+-- word: a flow connection is OUTBOUND (a workspace event POSTed to an external
+-- URL for the Flows product). An automation is INTERNAL -- it ends in a write
+-- back into this workspace, decided by a deterministic evaluator with no model
+-- call. They share the event vocabulary and nothing else.
+CREATE TABLE IF NOT EXISTS automations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL DEFAULT '',
+  description text NOT NULL DEFAULT '',
+  -- OFF by default: a definition that starts live means a mistyped condition
+  -- fires on everything before the author has read it back.
+  enabled boolean NOT NULL DEFAULT false,
+  -- Denormalised out of definition so the matcher is a partial-index lookup
+  -- rather than a jsonb scan on every workspace write.
+  trigger_event text NOT NULL,
+  definition jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_by uuid,
+  run_count integer NOT NULL DEFAULT 0,
+  fail_count integer NOT NULL DEFAULT 0,
+  last_run_at timestamptz,
+  last_status text NOT NULL DEFAULT '',
+  -- Set by the runaway guard; a tripped automation stays off until a human
+  -- clears it, and this is why the UI can say why it stopped.
+  disabled_reason text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_automations_workspace ON automations(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_automations_trigger ON automations(workspace_id, trigger_event) WHERE enabled;
+
+-- One row per (automation, triggering event). The queue AND the history.
+CREATE TABLE IF NOT EXISTS automation_runs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  automation_id uuid NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  event_id text NOT NULL,
+  event_type text NOT NULL,
+  status text NOT NULL DEFAULT 'pending',
+  attempt_count integer NOT NULL DEFAULT 0,
+  claim_token uuid,
+  lease_expires_at timestamptz,
+  payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  steps jsonb NOT NULL DEFAULT '[]'::jsonb,
+  error text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+-- Idempotent enqueue. This index IS the deduplication.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_runs_event ON automation_runs(automation_id, event_id);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_pending ON automation_runs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_workspace ON automation_runs(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_recent ON automation_runs(automation_id, created_at DESC);
 
 -- F6 (2026-07 review): thread_items existed ONLY in the runtime DDL
 -- (ensureRuntimeSchema, server/index.cjs) — a fresh migrate DB never got it,
@@ -433,6 +609,50 @@ CREATE TABLE IF NOT EXISTS agent_skill_documents (
 
 CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_workspace_id ON agent_skill_documents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_agent_id ON agent_skill_documents(agent_id);
+
+-- Agent templates ("persona packs") as DATA rather than code. Validator:
+-- shared/agentTemplates.cjs. Routes: server/agent-templates-routes.cjs.
+--
+-- THE ABSENT COLUMNS ARE THE SECURITY CONTROL. There is deliberately no
+-- permission_mode, metadata, sandbox_provider, sandbox_config,
+-- connect_token_hash, mcp_approved, memory_dir or identity. A template carries
+-- prose and requests; it never carries authority, and you cannot import what
+-- the shape cannot hold. metadata is the field that looks harmless and is not:
+-- it holds host_folders (which the daemon turns into `--add-dir <path>` on a
+-- real machine) and sandbox_skills (a baseUrl the server fetches plus a vault
+-- credential key). Adding any of them later is a security decision.
+CREATE TABLE IF NOT EXISTS workspace_agent_templates (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  slug text NOT NULL,
+  name text NOT NULL,
+  category text NOT NULL DEFAULT 'Custom',
+  description text DEFAULT '',
+  handle_hint text DEFAULT '',
+  system_prompt text DEFAULT '',
+  soul text DEFAULT '',
+  instructions text DEFAULT '',
+  -- Both string[]. skills MUST stay string[] — the Agents window round-trips it
+  -- through a comma-separated text input, so an object renders '[object Object]'
+  -- and is saved back over the real definition on the next edit.
+  tools jsonb NOT NULL DEFAULT '[]'::jsonb,
+  skills jsonb NOT NULL DEFAULT '[]'::jsonb,
+  model text NOT NULL DEFAULT 'auto',
+  run_mode text NOT NULL DEFAULT 'builtin',
+  runtime text DEFAULT '',
+  avatar text DEFAULT '',
+  accent_color text DEFAULT '',
+  revision integer NOT NULL DEFAULT 1,
+  source text NOT NULL DEFAULT 'authored',
+  origin jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_by uuid,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE (workspace_id, slug)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_agent_templates_workspace_id
+  ON workspace_agent_templates(workspace_id);
 
 CREATE TABLE IF NOT EXISTS uploaded_files (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

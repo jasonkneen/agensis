@@ -100,11 +100,17 @@ function installDb({ job = JOB, request = REQUEST, agentMetadata = {}, role = 'o
       }
       if (n.startsWith('select metadata from workspace_agents')) return [{ metadata: agentMetadata }];
       if (n.startsWith('update workspace_agents set metadata')) return [{ id: params[0], metadata: params[2] }];
-      if (n.startsWith('update workspace_agents set permission_mode')) {
+      if (n.startsWith('update workspace_agents a set permission_mode')) {
         // Mirror the real WHERE: a mismatched agent or workspace updates nothing.
         if (params[0] !== 'agent-1' || params[1] !== 'ws-1') return [];
-        return [{ id: params[0], workspace_id: params[1], permission_mode: params[2] }];
+        // The statement joins the pre-update row in as `prev` so the audit entry
+        // can record what the mode changed FROM; mirror that extra column.
+        return [{
+          id: params[0], workspace_id: params[1], permission_mode: params[2],
+          handle: 'coder', audit_previous_permission_mode: 'default',
+        }];
       }
+      if (n.startsWith('insert into audit_log')) return [{ id: 'audit-1', seq: 1, entry_hash: params[12] }];
       if (n.startsWith('select display_name, email from app_users')) return [{ display_name: 'Jason', email: 'j@x.io' }];
       if (n.startsWith('update messages set content')) return [{ id: params[0], content: params[1] }];
       // enforceWorkspaceRole, mirrored query for query. Answering these loosely
@@ -401,9 +407,19 @@ test('setting the permission mode writes the column the generic db path strips',
     userId: 'user-1', workspaceId: 'ws-1', agentId: 'agent-1', permissionMode: 'yolo',
   });
   assert.equal(mode, 'yolo');
-  const update = calls.find((call) => call.n.startsWith('update workspace_agents set permission_mode'));
+  const update = calls.find((call) => call.n.startsWith('update workspace_agents a set permission_mode'));
   assert.ok(update, 'the column must be written directly');
   assert.deepEqual(update.params, ['agent-1', 'ws-1', 'yolo']);
+
+  // The same change is now recorded in the audit log, with the mode it came
+  // from — this is the highest-value row in that log, because 'yolo' is
+  // unrestricted shell on the daemon host and nothing used to record who
+  // granted it. (tests/audit-log-call-sites.test.cjs covers it end to end.)
+  const audit = calls.find((call) => call.n.startsWith('insert into audit_log'));
+  assert.ok(audit, 'a permission mode change must leave an audit row');
+  assert.equal(audit.params[4], 'agent.permission_mode_changed');
+  assert.equal(audit.params[8], 'default', 'the mode it changed FROM');
+  assert.equal(audit.params[9], 'yolo');
 });
 
 test('changing an agent’s access needs manage, not write', async () => {

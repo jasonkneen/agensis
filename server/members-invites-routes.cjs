@@ -19,7 +19,11 @@ const crypto = require('crypto');
 function mountMembersInvitesRoutes(app, deps = {}) {
  const {
   requireAuth, jsonError, enforceWorkspaceRole, getDb, notifyDbSubscribers,
-  hashAgentToken, inviteTokenLookupParams,
+  hashAgentToken, inviteTokenLookupParams, clientIpFromReq,
+  // The audit writer (server/index.cjs recordAudit). Never rejects.
+  recordAudit = async () => null,
+  // Email DOMAIN only, never the local-part — see the invite call site.
+  auditEmailDomain = () => '',
  } = deps;
 
  app.get('/backend/workspaces/:id/members', requireAuth, async (req, res) => {
@@ -61,15 +65,36 @@ function mountMembersInvitesRoutes(app, deps = {}) {
    const allowedRoles = ['admin', 'editor', 'commenter', 'viewer'];
    const role = String(req.body?.role || '').trim();
    if (!allowedRoles.includes(role)) return jsonError(res, 400, new Error('Invalid workspace member role'));
+   // The pre-update role comes back from the same statement, not a preceding
+   // SELECT: "from editor to admin" is the whole content of the audit row, and a
+   // separate read could observe a value this UPDATE did not overwrite.
    const rows = await getDb().unsafe(
-    `update workspace_members set role = $3
-          where id = $1 and workspace_id = $2
-          returning *`,
+    `update workspace_members m set role = $3
+          from (select id, role from workspace_members where id = $1 and workspace_id = $2) prev
+          where m.id = prev.id
+          returning m.*, prev.role as audit_previous_role`,
     [memberId, workspaceId, role],
    );
    if (!rows[0]) return jsonError(res, 404, new Error('Workspace member not found'));
-   notifyDbSubscribers('workspace_members', 'UPDATE', rows);
-   res.json({ data: rows[0], error: null });
+   const previousRole = String(rows[0].audit_previous_role || '');
+   // Strip the joined-in audit column before the row reaches realtime or the
+   // response; it exists only for the audit line below.
+   const publicRows = rows.map(({ audit_previous_role: _prev, ...member }) => member);
+   notifyDbSubscribers('workspace_members', 'UPDATE', publicRows);
+   // target_id is the MEMBER ROW id, which resolves to the current user record at
+   // read time. The member's email is deliberately not recorded: this log has a
+   // 400-day horizon and a different erasure path from the user record.
+   await recordAudit({
+    workspaceId,
+    actor: { userId: String(req.userId || '') },
+    action: 'member.role_changed',
+    target: { type: 'workspace_member', id: memberId },
+    before: previousRole,
+    after: role,
+    detail: { member_user_id: String(publicRows[0].user_id || '') },
+    requestIp: clientIpFromReq ? clientIpFromReq(req) : '',
+   });
+   res.json({ data: publicRows[0], error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
@@ -90,6 +115,19 @@ function mountMembersInvitesRoutes(app, deps = {}) {
     [memberId, workspaceId],
    );
    notifyDbSubscribers('workspace_members', 'DELETE', rows);
+   // Only when a row actually went. A DELETE that matched nothing is not a
+   // removal, and logging it would put phantom removals in front of an owner.
+   if (rows[0]) {
+    await recordAudit({
+     workspaceId,
+     actor: { userId: String(req.userId || '') },
+     action: 'member.removed',
+     target: { type: 'workspace_member', id: memberId },
+     before: String(rows[0].role || ''),
+     detail: { member_user_id: String(rows[0].user_id || '') },
+     requestIp: clientIpFromReq ? clientIpFromReq(req) : '',
+    });
+   }
    res.json({ data: rows[0] ?? null, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -140,6 +178,21 @@ function mountMembersInvitesRoutes(app, deps = {}) {
     [workspaceId, hashAgentToken(token), email, role, req.userId],
    );
    notifyDbSubscribers('workspace_invites', 'INSERT', rows);
+   // NEITHER the token NOR its hash NOR the local-part of the address. An invite
+   // token is a real credential (verifyInviteToken accepts one as an MCP bearer
+   // for its whole lifetime), so an audit row carrying it would be strictly more
+   // dangerous than the gap this log closes. The DOMAIN is kept because "someone
+   // invited an external address" is what an owner actually needs to see; who
+   // exactly is already on the invite row this points at.
+   await recordAudit({
+    workspaceId,
+    actor: { userId: String(req.userId || '') },
+    action: 'invite.created',
+    target: { type: 'workspace_invite', id: String(rows[0].id || '') },
+    after: role,
+    detail: { email_domain: auditEmailDomain(email), external: Boolean(email) },
+    requestIp: clientIpFromReq ? clientIpFromReq(req) : '',
+   });
    // Return the plaintext token ONCE (not persisted) so the UI can show the
    // invite link at creation; the stored row only carries the hash.
    res.json({ data: { ...rows[0], token }, error: null });
@@ -159,6 +212,16 @@ function mountMembersInvitesRoutes(app, deps = {}) {
     [inviteId, workspaceId],
    );
    notifyDbSubscribers('workspace_invites', 'UPDATE', rows);
+   if (rows[0]) {
+    await recordAudit({
+     workspaceId,
+     actor: { userId: String(req.userId || '') },
+     action: 'invite.revoked',
+     target: { type: 'workspace_invite', id: inviteId },
+     before: String(rows[0].role || ''),
+     requestIp: clientIpFromReq ? clientIpFromReq(req) : '',
+    });
+   }
    res.json({ data: rows[0] ?? null, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);

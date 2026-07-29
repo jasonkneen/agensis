@@ -1,5 +1,126 @@
 [
   {
+    "version": "private-direct-messages",
+    "date": "2026-07-30",
+    "title": "Your direct messages are now actually private",
+    "summary": "Until now, anyone you shared a workspace with could read every direct message in it, including yours. Not through a bug — there was simply no such thing as permission to read one conversation rather than another. Any member with read access could open any DM, search its contents, or watch it live. That is fixed: a direct message is now readable only by the people in it, and so is anything split out of one, like a sub-thread or a huddle held inside it. Nothing you could read before has been taken away — every existing DM stays with the person whose workspace it is, and your agents carry on reading and answering in their own DMs exactly as before. When someone genuinely does need to see a conversation they are not part of, an admin can grant them access to that one conversation, optionally with an expiry date, and every grant and withdrawal is written to the audit log. There is no silent way in: an admin cannot read your DM without leaving a record, and being given access to a conversation does not let you pass it on to anyone else.",
+    "highlights": [
+      "A direct message is readable only by the people in it — not by everyone in the workspace",
+      "Sub-threads and huddles split out of a DM stay private too",
+      "Nothing you could read before is gone, and agents still work in their own DMs as normal",
+      "An admin can grant access to one conversation when it is genuinely needed, with an optional expiry",
+      "Every grant and withdrawal is recorded, so nobody can look in silently",
+      "Being granted access does not let you pass it on to anyone else"
+    ]
+  },
+  {
+    "version": "automations-window",
+    "date": "2026-07-30",
+    "title": "Set up a rule without writing anything",
+    "summary": "Rules that watch for something happening in a workspace and post a message existed, but the only way to make one was to talk to the server directly, which in practice meant nobody could. There is an Automations panel now, in the sidebar. Pick what to watch for, narrow it down if you want, choose where the message goes, and write it. A rule you make starts switched off so you can read it back before it does anything. Rules also react faster now — within about a second of the thing happening, rather than up to half a minute later. The panel is honest about the limits: a rule can post a message and nothing else, so it can never wake an agent or cost you anything however often it fires. A rule that starts firing far too often is switched off for you, and the panel says so plainly and explains why, rather than leaving it to quietly stop working. Creating and changing rules needs the admin role, and every change is written to the audit log.",
+    "highlights": [
+      "An Automations panel in the sidebar — no more setting rules up by hand",
+      "Rules react within about a second instead of up to thirty",
+      "New rules start switched off so you can read them back first",
+      "A rule that switched itself off says so clearly, and why",
+      "Says plainly that a rule can only post a message — it cannot wake an agent or spend anything",
+      "Creating or changing a rule needs the admin role, and is recorded in the audit log"
+    ]
+  },
+  {
+    "version": "agent-templates",
+    "date": "2026-07-30",
+    "title": "Save an agent you have tuned, and start the next one from it",
+    "summary": "The starter templates in the new-agent gallery were fixed: fifteen of them, written into the app, changeable only by us. If you spent an afternoon getting an agent's instructions right, there was no way to keep that shape for the next one, and no way to hand it to a colleague's workspace. Now a workspace can have its own. Open any agent and choose Save as template, and it joins the gallery alongside the built-in ones, ready to start the next agent from. Your own templates come first, and one that shares a name with a built-in replaces it, so an edit you made is the one you get. What a template copies is deliberately limited: the wording, the model, the tool and skill lists. It does not copy the agent's permissions, the folders it can reach on your machine, or its connection token. Those are decisions someone makes about one agent on purpose, and they are not the kind of thing that should travel quietly inside something you pass around.",
+    "highlights": [
+      "Save any agent as a reusable template from its detail panel",
+      "Your workspace's templates appear in the gallery next to the built-in ones",
+      "A template of yours with the same name as a built-in one replaces it",
+      "Templates copy wording, model, tools and skills — never permissions, folder access or connection tokens",
+      "The built-in templates keep working exactly as before"
+    ]
+  },
+  {
+    "version": "automations",
+    "date": "2026-07-30",
+    "title": "Rules that run themselves, without asking an agent",
+    "summary": "Until now the only thing in agensis that could decide anything was an agent, which means every small piece of routine reacting cost a real model call and could give a slightly different answer each time. Automations are a plain rule instead: when something happens in a workspace, and some condition about it holds, post a message. They run on the server, they cost nothing, and they do exactly the same thing every time. You describe a rule once, read it back in plain text before switching it on, and it keeps working whether or not any agent is online. New rules start switched off so a mistyped condition cannot fire on everything before you have read it. A rule can only post a message, never start an agent, so nothing here can spend tokens or run away with your budget. Rules that misbehave get switched off automatically and tell you why. Configuring one needs admin rights, and every change is written to the audit log.",
+    "highlights": [
+      "Write a rule once and it runs on its own, with no agent and no cost",
+      "Same input, same result, every time — not a model deciding afresh",
+      "New rules start off, and you can read the rule back in plain text first",
+      "A rule can only post a message, so it can never start an agent or spend tokens",
+      "A rule that fires too often is switched off automatically and says why",
+      "Only admins can create or change one, and every change is recorded"
+    ]
+  },
+  {
+    "version": "schedules-and-gateways-go-live",
+    "date": "2026-07-29",
+    "title": "Schedules and inference gateways update themselves now",
+    "summary": "Both of these screens have always been built to update the moment something changed — and neither of them ever did. The lists asked the server to keep them posted, the server quietly refused, and the refusal was thrown away without a word, so the only way to see a change was to reload. If a schedule ran, or someone else on your team added a gateway, your screen went on showing the old picture indefinitely. Both are live now: a schedule that fires, gets switched off, or has its timing changed updates in front of you, and a gateway someone adds or removes appears and disappears on everyone's screen at once. The gateway list carries no credentials with it — the stored API key never leaves the server, and neither does anything you put in a gateway's custom headers, so nothing sensitive rides along with the update. Adding, editing or deleting a gateway still needs admin rights, and gateway addresses are still checked before the server will call them.",
+    "highlights": [
+      "Schedules update as they run, get paused, or have their timing changed",
+      "Gateways your teammates add or remove appear and disappear straight away",
+      "No API key and no custom header ever leaves the server with an update",
+      "You can see the lists as any member; changing them still needs admin rights",
+      "One workspace's schedules and gateways are never visible to another"
+    ]
+  },
+  {
+    "version": "thread-counts-tell-the-truth",
+    "date": "2026-07-29",
+    "title": "Thread reply counts stopped counting the agent's tool calls",
+    "summary": "A thread in the sidebar said 98 replies. The same thread, open in the channel, said 14. The sidebar was counting every tool call the agent made along the way as a reply, and the channel was not — so the two numbers on one screen had never agreed. The sidebar now counts what was said, and names the tool work separately, so \"14 replies, 84 tool calls\" tells you both things instead of hiding one inside the other. The preview line under a thread also stopped showing a tool step where the agent's actual answer should be. Alongside that, the agent activity line in the sidebar — the one meant to say what an agent is doing right now rather than just that it is busy — turned out never to have worked at all, and now does.",
+    "highlights": [
+      "The sidebar and the channel finally agree on how many replies a thread has",
+      "Tool calls are counted and shown separately instead of inflating the reply count",
+      "A thread the agent is still working in says so, rather than reading as empty",
+      "The preview under a thread shows what was said, not the last tool that ran",
+      "The live agent activity line works — it had been waiting for an update that could never arrive"
+    ]
+  },
+  {
+    "version": "why-an-agent-stopped",
+    "date": "2026-07-29",
+    "title": "An agent that stops now tells you why",
+    "summary": "When a turn ended badly you got one line of machinery — \"claude-agent-sdk result error: error_max_turns\" — which is true and tells you nothing you can act on. The runtime has always said more than that; it was being thrown away before anyone saw it. Now a turn that stops early says which thing stopped it: it ran out of steps, it hit its spending limit, the conversation grew too long, a tool it needed was never approved, or it simply went quiet. Going quiet is also handled differently: an agent producing nothing is now stopped by the machine it is running on, within a minute or so of when we used to merely give up waiting, so the work actually ends instead of carrying on invisibly for another twenty minutes.",
+    "highlights": [
+      "A failed turn names its cause in plain words instead of quoting the runtime",
+      "\"Ran out of steps\", \"hit its spending limit\" and \"went quiet\" are now told apart",
+      "A silent agent is stopped where it is running, not just marked as failed here",
+      "Cancelling a turn no longer throws away the warm session the next message would have used",
+      "A turn that ends because the connection dropped says so, rather than blaming your request"
+    ]
+  },
+  {
+    "version": "audit-log",
+    "date": "2026-07-29",
+    "title": "A permanent record of who changed what",
+    "summary": "Until now the actions that matter most left no trace at all. Nobody could answer who put an agent into unrestricted mode, who promoted someone to admin, who issued a connect token or who wrote over a shared key — not because the answer was hard to find, but because it was never written down anywhere. Settings has a new Audit log tab that records those actions from now on, with who did it, when, and what changed from and to. Only people who can manage the workspace can read it, and nobody can write to it, edit it or delete from it through the app — entries come from the server itself at the moment the action happens. It records names, never values: which key was set, never the key itself; which invite went out and to what kind of address, never the invite link. The log starts empty because there was nothing to recover, so an empty log does not mean nothing has ever happened.",
+    "highlights": [
+      "A new Audit log tab in Settings, for people who can manage the workspace",
+      "Records permission mode changes, permanent tool grants, connect tokens, role changes, member removals, invites and vault writes",
+      "Flags the ones that widen access, and calls out unrestricted mode specifically",
+      "Written only by the server — it cannot be created, edited or deleted from the app",
+      "Every row carries a fingerprint, so a later edit to one is detectable",
+      "Never records a secret, a token or the private half of an email address"
+    ]
+  },
+  {
+    "version": "typing-indicators",
+    "date": "2026-07-29",
+    "title": "You can see when someone else is typing",
+    "summary": "The sidebar has been able to say \"is typing\" next to a channel for a long time, and it never once did — nothing in the app ever raised the flag, so everyone always read as merely present. It works now: start writing in a channel and the people watching that channel see it against your name. It costs almost nothing to run, because the signal is a tiny message sent at most once every four seconds rather than on every keystroke. It also stops by itself. If your laptop shuts, your connection drops or the tab is killed mid-sentence, the indicator clears within six seconds on its own — it can never get stuck claiming you are still writing something you abandoned. Direct messages deliberately do not send it, and neither do agents: an agent working for four minutes is not typing, and it already tells you what it is doing and for how long.",
+    "highlights": [
+      "Channels show who is typing, not just who is present",
+      "The indicator clears itself within six seconds if the signal stops for any reason",
+      "At most one small update every four seconds while you type, not one per keystroke",
+      "Direct messages do not broadcast typing",
+      "Agents keep their existing activity line with its timer instead"
+    ]
+  },
+  {
     "version": "harvest-review",
     "date": "2026-07-29",
     "title": "See what a deleted thread was worth keeping",

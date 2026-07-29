@@ -252,3 +252,98 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     tools: [], skills: [], runMode: 'builtin', icon: Globe,
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Authored templates
+// ---------------------------------------------------------------------------
+// AGENT_TEMPLATES above is the BUNDLED source and must stay. Onboarding reads it
+// directly for its one-click presets, so it has to work before a workspace has
+// authored anything and must not gain a network dependency on that path; it is
+// also what the gallery falls back to when the fetch fails, which is the whole
+// rollback story for this feature.
+//
+// A workspace can now also author templates, which live in
+// workspace_agent_templates and arrive through useAgentTemplates. They carry
+// PROSE and REQUESTS only — there is no field here for permission_mode,
+// metadata, sandbox config or a connect token, because the table has no column
+// for them. See shared/agentTemplates.cjs for why that is structural rather
+// than a filter.
+
+/** One authored template, as the server projects it. */
+export interface StoredAgentTemplate {
+  id: string;
+  workspace_id: string;
+  slug: string;
+  name: string;
+  category: string;
+  description: string;
+  handleHint: string;
+  systemPrompt: string;
+  soul: string;
+  instructions: string;
+  tools: string[];
+  skills: string[];
+  model: string;
+  runMode: AgentTemplate['runMode'];
+  runtime: string;
+  avatar: string;
+  accentColor: string;
+  revision: number;
+  /** 'authored' typed here, 'derived' saved from an agent, 'imported' from outside. */
+  source: string;
+  origin: Record<string, unknown>;
+  created_by: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** A gallery entry, either bundled or authored. */
+export type GalleryTemplate = AgentTemplate & {
+  /** Set for an authored template; absent for a bundled one. */
+  stored?: StoredAgentTemplate;
+};
+
+function storedToGalleryTemplate(stored: StoredAgentTemplate): GalleryTemplate {
+  return {
+    id: `authored:${stored.slug}`,
+    name: stored.name,
+    handle: stored.handleHint || stored.slug,
+    category: stored.category || 'Custom',
+    description: stored.description || '',
+    systemPrompt: stored.systemPrompt || '',
+    tools: Array.isArray(stored.tools) ? stored.tools : [],
+    skills: Array.isArray(stored.skills) ? stored.skills : [],
+    runMode: stored.runMode || 'builtin',
+    runtime: (stored.runtime || undefined) as AgentExecutionRuntime | undefined,
+    // Deliberately NO metadata key. The form spreads what it gets, and even an
+    // empty object would be a metadata write on submit — which
+    // setsManageOnlyDbColumn refuses for a 'write' member, making an authored
+    // template appear to need manage for no reason.
+    icon: Sparkles,
+    avatar: stored.avatar || undefined,
+    stored,
+  };
+}
+
+/**
+ * The list the gallery renders: bundled templates plus authored ones, with
+ * AUTHORED WINNING on a slug collision.
+ *
+ * Authored wins because a workspace that has deliberately written its own
+ * "Researcher" means that one; silently preferring the shipped version would
+ * make their edit look like it did nothing. Mirrors how sandbox skills resolve
+ * an agent-authored definition over a bundled one of the same id.
+ */
+export function mergeTemplateSources(
+  bundled: AgentTemplate[],
+  authored: StoredAgentTemplate[],
+): GalleryTemplate[] {
+  const authoredEntries = (authored || []).map(storedToGalleryTemplate);
+  const authoredSlugs = new Set(authoredEntries.map(entry => entry.handle.toLowerCase()));
+  const bundledSlugs = new Set((authored || []).map(entry => String(entry.slug || '').toLowerCase()));
+  const survivingBundled = (bundled || []).filter(
+    tpl => !authoredSlugs.has(tpl.handle.toLowerCase()) && !bundledSlugs.has(tpl.id.toLowerCase()),
+  );
+  // Authored first: they are the ones this workspace chose to write.
+  return [...authoredEntries, ...survivingBundled];
+}

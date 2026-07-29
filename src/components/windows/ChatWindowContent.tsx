@@ -203,6 +203,7 @@ import { useSharedNow } from '../../hooks/useSharedNow';
 import { ThreadWorkBadge } from '../chat/AgentWorkBadge';
 import { cn } from '@/lib/utils';
 import { getSettings } from '../../lib/settings';
+import { shouldAnnounceTyping } from '../../lib/typingPresence';
 import { availableChatModelId, workspaceChatModels } from '../../lib/sharedModels';
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
 import { channelComposerPlaceholder, directMessageComposerPlaceholder } from '@/lib/composerPlaceholder';
@@ -260,6 +261,18 @@ interface ChatWindowContentProps {
   // (a DropdownMenuItem / DropdownMenuSub), not a standalone button.
   contextControls?: React.ReactNode;
   isDirectMessage?: boolean;
+  /**
+   * Fired as the draft becomes non-empty and again when it empties, blurs or
+   * sends. Safe to fire on every keystroke — the 4s re-arm throttle lives in
+   * useItemPresence/typingPresence, not here.
+   *
+   * Never fired for a direct message: `item-presence:<workspaceId>` fans out to
+   * every member with `read`, and the frame carries the session id, so emitting
+   * for a DM would tell the whole workspace that a private session exists and
+   * is active. The sidebar's presence filtering is a UI convenience, not an
+   * access boundary, and must not be relied on as one.
+   */
+  onTypingChange?: (typing: boolean) => void;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   onUpdateAgent?: (id: string, updates: Partial<WorkspaceAgent>) => void | Promise<unknown>;
   subThreadsByMessage?: Record<string, ChatSession[]>;
@@ -345,6 +358,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   systemCapabilities = null,
   contextControls,
   isDirectMessage: isDirectMessageProp = false,
+  onTypingChange,
   onUpdateAgent,
   subThreadsByMessage = {},
   activeSubThread,
@@ -1100,6 +1114,35 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     return entries;
   }, [displayMessages, directAgent]);
   const isDirectMessage = isDirectMessageProp || Boolean(directAgent) || channelMeta?.folder === 'Direct messages';
+
+  // Typing presence. The composer is the only thing that knows a human is
+  // mid-sentence; the throttle, the TTL and the fan-out all live downstream in
+  // useItemPresence / src/lib/typingPresence.ts, so this can fire freely.
+  //
+  // `input` is the whole trigger: emptying the box, sending (handleSend clears
+  // it) and unmounting all resolve to "not typing". Whether this composer may
+  // announce at all — DMs may not — is shouldAnnounceTyping's call, which is
+  // where the reason is written down and where a test can reach it.
+  const typingEnabled = shouldAnnounceTyping({
+    hasSink: !!onTypingChange,
+    isDirectMessage,
+    readOnly,
+  });
+  const typingSinkRef = useRef<((typing: boolean) => void) | undefined>(undefined);
+  useEffect(() => {
+    typingSinkRef.current = typingEnabled ? onTypingChange : undefined;
+  }, [onTypingChange, typingEnabled]);
+  useEffect(() => {
+    if (!typingEnabled) return;
+    onTypingChange?.(input.trim().length > 0);
+  }, [input, typingEnabled, onTypingChange]);
+  // Closing the window or switching channels must not leave an indicator up on
+  // someone else's screen for the rest of the TTL.
+  useEffect(() => () => { typingSinkRef.current?.(false); }, []);
+  const handleComposerBlur = () => {
+    if (typingEnabled) onTypingChange?.(false);
+  };
+
   const directProfileKey = directAgent?.agent_id || directAgent?.handle || directAgent?.name || null;
   const profileAgent = useMemo(() => {
     const key = profileAgentKey || directProfileKey;
@@ -2280,6 +2323,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                     value={input}
                     onChange={handleInputChange}
                     onKeyDown={handleKeyDown}
+                    onBlur={handleComposerBlur}
                     onPaste={handleComposerPaste}
                     placeholder={isDirectMessage
                       ? directMessageComposerPlaceholder(directAgent?.name || channelTitle)

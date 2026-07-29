@@ -70,6 +70,7 @@ function mountAgentsRoutes(app, deps = {}) {
     model: req.body?.model,
     permissionMode: req.body?.permissionMode || req.body?.permission_mode,
     baseUrl,
+    actorUserId: req.userId,
    });
    res.json({ data: payload, error: null });
   } catch (error) {

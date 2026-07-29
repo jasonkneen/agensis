@@ -30,7 +30,15 @@ function mountVaultRoutes(app, deps = {}) {
   listWorkspaceVaultEntries, parseSandboxCredentialKey,
   providerCredentialSlots, sandboxCredentialKey,
   setWorkspaceSecretValue, settingsWorkspaceIdFromRequest,
-  workspaceAuthoredProviderSkills,
+  workspaceAuthoredProviderSkills, clientIpFromReq,
+  // The audit writer (server/index.cjs recordAudit). Never rejects.
+  //
+  // THE RULE FOR EVERY CALL BELOW: the KEY NAME and a `configured` boolean, and
+  // nothing else. Never the value, never the ciphertext, never a length or a
+  // prefix. An audit row must be strictly less sensitive than the thing it
+  // describes, and this file exists precisely because a vault value must not
+  // leave it — the routes here do not even SELECT the secret columns.
+  recordAudit = async () => null,
  } = deps;
 
  app.get('/backend/settings/secrets', requireAuth, async (req, res) => {
@@ -71,6 +79,17 @@ function mountVaultRoutes(app, deps = {}) {
    }
    for (const [key, value] of Object.entries(updates)) {
     await setWorkspaceSecretValue(workspaceId, key, value, req.userId);
+    // An empty string intentionally CLEARS the key, so the two cases are
+    // different actions in the log, not one action with a flag.
+    await recordAudit({
+     workspaceId,
+     actor: { userId: String(req.userId || '') },
+     action: value ? 'vault.secret_set' : 'vault.secret_deleted',
+     target: { type: 'managed_secret', id: key, label: key },
+     after: value ? 'configured' : 'cleared',
+     detail: { key, configured: Boolean(value), lane: 'managed' },
+     requestIp: clientIpFromReq ? clientIpFromReq(req) : '',
+    });
    }
    const keys = await listManagedSecrets(workspaceId);
    res.json({ data: { keys }, error: null });
@@ -155,6 +174,15 @@ function mountVaultRoutes(app, deps = {}) {
    const description = typeof req.body?.description === 'string' ? req.body.description.slice(0, 300) : undefined;
    await setWorkspaceSecretValue(workspaceId, key, value, req.userId, description);
    notifyDbSubscribers('workspace_secrets', 'UPDATE', [{ workspace_id: workspaceId, key }]);
+   await recordAudit({
+    workspaceId,
+    actor: { userId: String(req.userId || '') },
+    action: value ? 'vault.secret_set' : 'vault.secret_deleted',
+    target: { type: 'vault_secret', id: key, label: key },
+    after: value ? 'configured' : 'cleared',
+    detail: { key, configured: Boolean(value), lane: 'shared' },
+    requestIp: clientIpFromReq ? clientIpFromReq(req) : '',
+   });
    res.json({ data: { key, configured: !!value }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -171,6 +199,15 @@ function mountVaultRoutes(app, deps = {}) {
    await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
    await getDb().unsafe('delete from workspace_secrets where workspace_id = $1 and key = $2', [workspaceId, key]);
    notifyDbSubscribers('workspace_secrets', 'DELETE', [{ workspace_id: workspaceId, key }]);
+   await recordAudit({
+    workspaceId,
+    actor: { userId: String(req.userId || '') },
+    action: 'vault.secret_deleted',
+    target: { type: 'vault_secret', id: key, label: key },
+    before: 'configured',
+    detail: { key, configured: false, lane: 'shared' },
+    requestIp: clientIpFromReq ? clientIpFromReq(req) : '',
+   });
    res.json({ data: { key }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -234,6 +271,15 @@ function mountVaultRoutes(app, deps = {}) {
    // value column, and a fanout carrying the secret would put it in every
    // subscribed browser — which is the one thing this whole route exists to stop.
    notifyDbSubscribers('workspace_secrets', 'UPDATE', [{ workspace_id: workspaceId, key }]);
+   await recordAudit({
+    workspaceId,
+    actor: { userId: String(req.userId || '') },
+    action: 'vault.secret_set',
+    target: { type: 'sandbox_credential', id: key, label: key },
+    after: 'configured',
+    detail: { key, configured: true, lane: 'provider' },
+    requestIp: clientIpFromReq ? clientIpFromReq(req) : '',
+   });
    res.json({ data: { key, configured: true }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -249,6 +295,15 @@ function mountVaultRoutes(app, deps = {}) {
    await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
    await getDb().unsafe('delete from workspace_secrets where workspace_id = $1 and key = $2', [workspaceId, key]);
    notifyDbSubscribers('workspace_secrets', 'DELETE', [{ workspace_id: workspaceId, key }]);
+   await recordAudit({
+    workspaceId,
+    actor: { userId: String(req.userId || '') },
+    action: 'vault.secret_deleted',
+    target: { type: 'sandbox_credential', id: key, label: key },
+    before: 'configured',
+    detail: { key, configured: false, lane: 'provider' },
+    requestIp: clientIpFromReq ? clientIpFromReq(req) : '',
+   });
    res.json({ data: { key, configured: false }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);

@@ -899,14 +899,30 @@ function mountHuddleRoutes(app, deps = {}) {
   // In a huddle the HUMAN drives turn-taking. An utterance mentions the active
   // agent and that agent answers; nothing else should speak unprompted.
   const rows = await getDb().unsafe(
-   `insert into chat_sessions (id, workspace_id, title, model, conversation_mode, folder, canvas_id, participants)
-        select $1, $2, $3, host.model, 'mention', 'huddle', host.canvas_id, host.participants
+   // `visibility` is copied for the same reason `participants` is: a huddle held
+   // inside a private conversation is part of that conversation. Copying it in
+   // the SAME statement is what stops a transcript session existing, even for an
+   // instant, as a world-readable copy of a private one. The member rows are
+   // copied straight after — see below.
+   `insert into chat_sessions (id, workspace_id, title, model, conversation_mode, folder, canvas_id, participants, visibility)
+        select $1, $2, $3, host.model, 'mention', 'huddle', host.canvas_id, host.participants, host.visibility
           from chat_sessions host
          where host.id = $4
         returning id`,
    [sessionId, huddle.workspace_id, title.slice(0, 200), huddle.session_id],
   );
   if (!rows[0]) return null;
+  // Inherit the host's member list too. A private transcript with no members is
+  // a room nobody can open — the failure mode is silent (an empty huddle), so
+  // it rides in the same best-effort path as the session itself.
+  await getDb().unsafe(
+   `insert into chat_session_members (session_id, user_id, source, granted_by, expires_at)
+        select $1, m.user_id, m.source, m.granted_by, m.expires_at
+          from chat_session_members m
+         where m.session_id = $2
+      on conflict (session_id, user_id) do nothing`,
+   [rows[0].id, huddle.session_id],
+  ).catch((error) => console.error('huddle transcript member copy failed', error?.message || error));
   const updated = await getDb().unsafe(
    `update huddles set transcript_session_id = $1 where id = $2 returning ${HUDDLE_COLUMNS}`,
    [rows[0].id, huddle.id],

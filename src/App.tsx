@@ -1,7 +1,7 @@
 import { NewChannelDialog } from './components/chat/NewChannelDialog';
 import { DEFAULT_BACKGROUND_OPACITY } from './lib/wallpaperDefaults';
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
-import { Globe, SquareTerminal, MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2 } from 'lucide-react';
+import { Globe, SquareTerminal, MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2, Zap } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { WorkspaceRail } from './components/layout/WorkspaceRail';
@@ -157,6 +157,7 @@ const ActivityWindowContent = lazy(() => import('./components/windows/ActivityWi
 const AgentsWindowContent = lazy(() => import('./components/windows/AgentsWindowContent').then(m => ({ default: m.AgentsWindowContent })));
 const UsersWindow = lazy(() => import('./components/windows/UsersWindow').then(m => ({ default: m.UsersWindow })));
 const SchedulesWindow = lazy(() => import('./components/windows/SchedulesWindow').then(m => ({ default: m.SchedulesWindow })));
+const AutomationsWindowContent = lazy(() => import('./components/windows/AutomationsWindowContent').then(m => ({ default: m.AutomationsWindowContent })));
 const TerminalPanel = lazy(() => import('./components/windows/TerminalPanel').then(m => ({ default: m.TerminalPanel })));
 const BrowserPanel = lazy(() => import('./components/windows/BrowserPanel').then(m => ({ default: m.BrowserPanel })));
 const InboxWindowContent = lazy(() => import('./components/inbox/InboxWindowContent').then(m => ({ default: m.InboxWindowContent })));
@@ -1346,6 +1347,16 @@ function AppContent() {
     openWindow('schedules', { title: 'Schedules', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
+  const handleOpenAutomations = useCallback(() => {
+    const existing = windows.find(w => w.type === 'automations');
+    if (existing) {
+      focusWindow(existing.id);
+      if (existing.minimized) minimizeWindow(existing.id);
+      return;
+    }
+    openWindow('automations', { title: 'Automations', canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
+
   // Farm device-code pairing: after sign-in, return to /integrations/farm?code=…
   // (FarmIntegrationApproval stashes the path before redirecting here).
   useEffect(() => {
@@ -1925,7 +1936,8 @@ function AppContent() {
     else if (win.type === 'agents') handleOpenAgents();
     else if (win.type === 'inbox') handleOpenInbox();
     else if (win.type === 'schedules') handleOpenSchedules();
-  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenInbox, handleOpenMemory, handleOpenSchedules, handleOpenTasks, handleSessionOpen, sessions]);
+    else if (win.type === 'automations') handleOpenAutomations();
+  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenAutomations, handleOpenInbox, handleOpenMemory, handleOpenSchedules, handleOpenTasks, handleSessionOpen, sessions]);
 
   const [useWorkspaceCtx, setUseWorkspaceCtx] = useState(() => getSetting('ai_use_workspace_context'));
   const extractedMessageIdsRef = useRef<Set<string>>(new Set());
@@ -2267,6 +2279,7 @@ function AppContent() {
             onOpenAgents={handleOpenAgents}
             onOpenUsers={handleOpenUsers}
             onOpenSchedules={handleOpenSchedules}
+            onOpenAutomations={handleOpenAutomations}
             onAgentMessage={handleAgentDirectMessage}
             onAgentProfile={handleSidebarAgentProfile}
             onOpenTemplates={handleOpenTemplates}
@@ -2461,6 +2474,7 @@ function AppContent() {
                   onCreateSubThread={handleCreateSubThreadFromScene}
                   onSendSubThreadMessage={sendSubThreadMessage}
                   onSplitThread={handleSplitThread}
+                  onTypingChange={itemPresence.setTyping}
                   useWorkspaceCtx={useWorkspaceCtx}
                   onToggleWorkspaceCtx={handleToggleWorkspaceCtx}
                   onHomeSendMessage={handleHomeSendMessage}
@@ -2798,6 +2812,7 @@ function CanvasLayerScene({
   onCreateSubThread: onCreateSubThreadProp,
   onSendSubThreadMessage,
   onSplitThread,
+  onTypingChange,
   useWorkspaceCtx,
   onToggleWorkspaceCtx,
   onHomeSendMessage,
@@ -2894,6 +2909,8 @@ function CanvasLayerScene({
   onCreateSubThread: (messageId: string, agent: WorkspaceAgent) => void;
   onSendSubThreadMessage: (content: string) => void;
   onSplitThread: (source: import('./types').ChatSession) => void;
+  /** useItemPresence().setTyping — see src/lib/typingPresence.ts. */
+  onTypingChange: (type: 'chat' | 'document', itemId: string, typing: boolean) => void;
   useWorkspaceCtx: boolean;
   onToggleWorkspaceCtx: () => void;
   // false = no channel was created, so the composer must keep the draft.
@@ -3077,6 +3094,7 @@ function CanvasLayerScene({
                     onAppSendMessage={onSendMessage}
                     onSetActiveSession={onSetActiveSession}
                     onAppSplitThread={onSplitThread}
+                    onAppTypingChange={onTypingChange}
                     messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : EMPTY_MESSAGES}
                     hasMoreMessages={winSession && activeSession?.id === win.sessionId ? hasMoreMessages : false}
                     loadingEarlier={loadingEarlier}
@@ -3588,6 +3606,38 @@ function CanvasLayerScene({
                 <SchedulesWindow
                   workspaceId={workspaceId}
                   agents={agents}
+                  sessions={sessions}
+                />
+              </Suspense>
+            </FloatingWindowShell>
+          );
+        }
+
+        if (win.type === 'automations') {
+          return (
+            <FloatingWindowShell
+              key={win.id}
+              window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
+              onClose={onCloseWindow}
+              onFocus={onFocusWindow}
+              onUpdate={onUpdateWindow}
+              onMinimize={onMinimizeWindow}
+              onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
+              titleIcon={<Zap size={13} />}
+              breadcrumb={workspaceName}
+            >
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <AutomationsWindowContent
+                  workspaceId={workspaceId}
                   sessions={sessions}
                 />
               </Suspense>

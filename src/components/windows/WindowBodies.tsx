@@ -27,10 +27,16 @@ import type { ChatSession, Document, FloatingWindow, MemoryFact, MessageAttachme
 
 export type ChatWindowBodyProps = Omit<
   ComponentProps<typeof ChatWindowContent>,
-  'onSendMessage' | 'onSendThreadReply' | 'onSplitThread'
+  'onSendMessage' | 'onSendThreadReply' | 'onSplitThread' | 'onTypingChange'
 > & {
   winSession: ChatSession | undefined;
   isActiveSession: boolean;
+  /**
+   * `useItemPresence().setTyping`. Bound to this window's session below, so
+   * ChatWindowContent gets a stable `(typing: boolean) => void` and the memo
+   * still holds.
+   */
+  onAppTypingChange?: (type: 'chat' | 'document', itemId: string, typing: boolean) => void;
   onAppSendMessage: (
     content: string,
     model: string,
@@ -55,6 +61,7 @@ export function ChatWindowBody({
   onAppSendMessage,
   onSetActiveSession,
   onAppSplitThread,
+  onAppTypingChange,
   ...contentProps
 }: ChatWindowBodyProps) {
   const { memoryFacts, activeThreadId } = contentProps;
@@ -79,12 +86,19 @@ export function ChatWindowBody({
     if (winSession) onAppSplitThread(winSession);
   }, [winSession, onAppSplitThread]);
 
+  const sessionId = winSession?.id;
+  const handleTypingChange = useCallback((typing: boolean) => {
+    if (!sessionId || !onAppTypingChange) return;
+    onAppTypingChange('chat', sessionId, typing);
+  }, [sessionId, onAppTypingChange]);
+
   return (
     <ChatWindowContent
       {...contentProps}
       onSendMessage={handleSendMessage}
       onSendThreadReply={handleSendThreadReply}
       onSplitThread={winSession ? handleSplitThread : undefined}
+      onTypingChange={sessionId && onAppTypingChange ? handleTypingChange : undefined}
     />
   );
 }

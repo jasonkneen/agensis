@@ -15,7 +15,13 @@ const {
  flowWebhookRetryDecision,
  normalizeFlowWebhookUrl,
  signFlowWebhook,
+ // The event vocabulary. One list, two consumers: outbound webhook connections
+ // ("who wants to know") and automations ("what should happen").
+ FLOW_EVENTS,
 } = require('./flow-integration.cjs');
+const { createAutomations, mountAutomationRoutes } = require('./automations.cjs');
+const { createAgentTemplates, mountAgentTemplateRoutes } = require('./agent-templates-routes.cjs');
+const { normalizeAgentTemplate, agentToTemplateDraft } = require('../shared/agentTemplates.cjs');
 // Reactions are written through the generic /backend/db/update route as a whole
 // jsonb map, so their flow events come from diffing that map — see the module
 // header. Shared with netlify/functions/backend.mjs; the two lanes differ only
@@ -103,6 +109,7 @@ const { mountFeedbackRoutes } = require('./feedback-routes.cjs');
 const { mountAiChatRoutes } = require('./ai-chat-routes.cjs');
 const { installBrowserProxy } = require('./browser-proxy.cjs');
 const { mountVaultRoutes } = require('./vault-routes.cjs');
+const { mountAuditRoutes } = require('./audit-routes.cjs');
 const { mountTenantsRoutes } = require('./tenants-routes.cjs');
 const { mountSchedulesRoutes } = require('./schedules-routes.cjs');
 const { mountCursorbuddyRoutes } = require('./cursorbuddy-routes.cjs');
@@ -118,6 +125,8 @@ const { mountSystemRoutes } = require('./system-routes.cjs');
 const { mountWorkspacesRoutes } = require('./workspaces-routes.cjs');
 const { mountWorkspaceMcpRoutes } = require('./workspace-mcp-routes.cjs');
 const { mountInboxRoutes } = require('./inbox-routes.cjs');
+const { mountSessionAccessRoutes } = require('./session-access-routes.cjs');
+const { runDmScopeBackfill } = require('./dm-scope-backfill.cjs');
 const { mountLinkPreviewsRoutes } = require('./link-previews-routes.cjs');
 const { mountAgentsRoutes } = require('./agents-routes.cjs');
 const { mountJoinPagesRoutes } = require('./join-pages-routes.cjs');
@@ -194,6 +203,11 @@ const {
  normalizeFeedbackSubmission,
  insertFeedbackReport,
  assertWorkspaceRole: sharedAssertWorkspaceRole,
+ enforceSessionReadAccess: sharedEnforceSessionReadAccess,
+ sessionReadableSql,
+ addSessionParticipant,
+ isPrivateSessionRow,
+ appendSessionAccessClause,
  userCanAccessWorkspace: sharedUserCanAccessWorkspace,
  // The vault surface — one classification, shared with the Netlify mirror.
  VAULT_KEY_RE,
@@ -206,6 +220,8 @@ const {
  decryptVaultSecret: coreDecryptVaultSecret,
  getWorkspaceSecretValue: coreGetWorkspaceSecretValue,
  setWorkspaceSecretValue: coreSetWorkspaceSecretValue,
+ auditEmailDomain,
+ recordAuditEntry,
 } = require('../shared/backend-core.cjs');
 const { normalizeTaskTitle } = require('../shared/taskTitle.cjs');
 const { WORKSPACE_MAX_DEPTH } = require('../shared/workspace-tree.cjs');
@@ -675,6 +691,111 @@ async function enforceWorkspaceRole(userId, workspaceId, mode) {
  return sharedAssertWorkspaceRole({ userId, workspaceId, capability: mode, db: sharedDbAdapter });
 }
 
+/**
+ * 'private' when any of these about-to-be-inserted chat_sessions rows descends
+ * from a private one; null when none does (leave the column's default alone).
+ *
+ * Two edges reach a parent at insert time: `parent_message_id` (a sub-thread
+ * session hangs off a MESSAGE, so the parent session is one join away) and
+ * `split_parent_id` (a fork points straight at another session). The huddle
+ * edge is not here because a transcript session is created server-side and
+ * copies its host's visibility in the same statement.
+ *
+ * Batch-wide rather than per-row on purpose: these inserts are single-row in
+ * practice, and one private parent in a batch making the whole batch private is
+ * the fail-closed direction.
+ */
+async function resolveInheritedSessionVisibility(rows) {
+ const messageIds = [];
+ const sessionIds = [];
+ for (const row of rows) {
+  if (!row || typeof row !== 'object') continue;
+  if (row.parent_message_id) messageIds.push(String(row.parent_message_id));
+  if (row.split_parent_id) sessionIds.push(String(row.split_parent_id));
+ }
+ if (messageIds.length === 0 && sessionIds.length === 0) return null;
+ try {
+  const params = [];
+  const bind = (value) => { params.push(value); return `$${params.length}::uuid`; };
+  const bySession = sessionIds.length > 0
+   ? `s.id in (${sessionIds.map(bind).join(', ')})`
+   : 'false';
+  const byMessage = messageIds.length > 0
+   ? `s.id in (select m.session_id from messages m where m.id in (${messageIds.map(bind).join(', ')}))`
+   : 'false';
+  const found = await getDb().unsafe(
+   `select 1
+      from chat_sessions s
+     where (${bySession} or ${byMessage})
+       and (coalesce(s.visibility, 'workspace') = 'private' or coalesce(s.folder, '') = 'Direct messages')
+     limit 1`,
+   params,
+  );
+  return found.length > 0 ? 'private' : null;
+ } catch (error) {
+  // Fail CLOSED. If we cannot tell whether the parent is private, the safe
+  // answer is the restrictive one — an over-private sub-thread is a grant away
+  // from fixed, an under-private one is a disclosure.
+  console.warn('[backend] inherited session visibility lookup failed:', error?.message || error);
+  return 'private';
+ }
+}
+
+/**
+ * Copy a newly created derived session's member list down from its parent.
+ *
+ * Best-effort and never throws: the creator has already been added as a member
+ * by the caller, so a failure here costs other people their access to the new
+ * offshoot — annoying and fixable with a grant — rather than locking everyone
+ * out of it.
+ */
+async function copyInheritedSessionMembers(row) {
+ const parentSessionId = row?.split_parent_id ? String(row.split_parent_id) : '';
+ const parentMessageId = row?.parent_message_id ? String(row.parent_message_id) : '';
+ if (!parentSessionId && !parentMessageId) return;
+ try {
+  await getDb().unsafe(
+   `insert into chat_session_members (session_id, user_id, source, granted_by, expires_at)
+      select $1::uuid, m.user_id, m.source, m.granted_by, m.expires_at
+        from chat_session_members m
+       where m.session_id = coalesce(
+               $2::uuid,
+               (select msg.session_id from messages msg where msg.id = $3::uuid)
+             )
+    on conflict (session_id, user_id) do nothing`,
+   [String(row.id), parentSessionId || null, parentMessageId || null],
+  );
+ } catch (error) {
+  console.warn('[backend] inherited session member copy failed:', error?.message || error);
+ }
+}
+
+// The read gate BELOW the workspace: a private session (a DM, or a sub-thread /
+// huddle transcript derived from one) is readable only by its members. Always
+// called AFTER enforceWorkspaceRole, never instead of it — it narrows, it does
+// not grant. Same wrapper shape as enforceWorkspaceRole so route modules keep
+// taking one injected function and cannot reimplement the rule.
+async function enforceSessionRead(userId, sessionId, sessionRow = null) {
+ return sharedEnforceSessionReadAccess({ userId, sessionId, sessionRow, db: sharedDbAdapter });
+}
+
+/**
+ * The user ids that may currently read a private session, as a Set of strings.
+ *
+ * Only the realtime fanout needs this shape: it holds a list of sockets and has
+ * to decide, without a query per socket, which of them may receive the row.
+ * Expiry is applied in SQL so an elapsed grant drops off without a sweeper.
+ */
+async function sessionMemberUserIds(sessionId) {
+ if (!sessionId) return new Set();
+ const rows = await sharedDbAdapter(
+  `select user_id from chat_session_members
+    where session_id = $1 and (expires_at is null or expires_at > now())`,
+  [String(sessionId)],
+ );
+ return new Set(rows.map((row) => String(row.user_id)));
+}
+
 // Adapter so shared enforceDbOperationAccess can use postgres.js (getDb().unsafe).
 function sharedDbAdapter(sql, params = []) {
  return getDb().unsafe(sql, params);
@@ -793,6 +914,21 @@ async function ensureRuntimeSchema() {
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS split_at timestamptz;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS canvas_id text;
+    -- Read scope one level BELOW the workspace role check. See the column
+    -- comment in database/neon-schema.sql for the two values and why the
+    -- authorizer ALSO treats folder='Direct messages' as private.
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS visibility text NOT NULL DEFAULT 'workspace';
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_visibility ON chat_sessions(workspace_id, visibility);
+    CREATE TABLE IF NOT EXISTS chat_session_members (
+      session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      user_id uuid NOT NULL,
+      source text NOT NULL DEFAULT 'participant',
+      granted_by uuid,
+      expires_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (session_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_session_members_user ON chat_session_members(user_id);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_canvas ON chat_sessions(workspace_id, canvas_id);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_folder ON chat_sessions(workspace_id, folder);
     CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(workspace_id, archived_at);
@@ -820,6 +956,74 @@ async function ensureRuntimeSchema() {
     -- retry) must not stack a second pending row or bill a second model call.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_harvests_one_open
       ON thread_harvests(session_id) WHERE status IN ('pending', 'running');
+
+    -- Workspace automations: "when X happens inside agensis, do Y inside
+    -- agensis", without a code change. See server/automations.cjs for the
+    -- engine and shared/automation-rules.cjs for the evaluator.
+    --
+    -- This is the one cell of the trigger/action matrix none of the three
+    -- existing systems cover: agent_schedules is time -> wake an agent,
+    -- agent_webhooks is inbound HTTP -> wake an agent, flow_connections is
+    -- workspace event -> POST to an external URL. All three end in a model call
+    -- or an outbound request. An automation ends in a deterministic internal
+    -- write, which is why it can decide something for zero cost.
+    --
+    -- enabled defaults to FALSE. A definition that starts live means the first
+    -- thing a mistyped condition does is fire on everything, and the author
+    -- finds out from the channel rather than from the form.
+    --
+    -- trigger_event is denormalised out of the definition so the matcher's only
+    -- query is a partial-index lookup rather than a jsonb scan on every write.
+    CREATE TABLE IF NOT EXISTS automations (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      name text NOT NULL DEFAULT '',
+      description text NOT NULL DEFAULT '',
+      enabled boolean NOT NULL DEFAULT false,
+      trigger_event text NOT NULL,
+      definition jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_by uuid,
+      run_count integer NOT NULL DEFAULT 0,
+      fail_count integer NOT NULL DEFAULT 0,
+      last_run_at timestamptz,
+      last_status text NOT NULL DEFAULT '',
+      -- Set by the runaway guard. A tripped automation stays off until a human
+      -- clears it, and this column is why the UI can say WHY it stopped.
+      disabled_reason text NOT NULL DEFAULT '',
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_automations_workspace ON automations(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_automations_trigger ON automations(workspace_id, trigger_event) WHERE enabled;
+
+    -- One row per (automation, triggering event). The QUEUE and the history.
+    CREATE TABLE IF NOT EXISTS automation_runs (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      automation_id uuid NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      -- Stable per triggering row+version, the same shape as the flow webhook
+      -- event id, so a retried write cannot enqueue the same run twice.
+      event_id text NOT NULL,
+      event_type text NOT NULL,
+      status text NOT NULL DEFAULT 'pending',
+      attempt_count integer NOT NULL DEFAULT 0,
+      claim_token uuid,
+      lease_expires_at timestamptz,
+      -- The projected event the run saw, so a run stays readable after the
+      -- source row has changed or been deleted.
+      payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+      steps jsonb NOT NULL DEFAULT '[]'::jsonb,
+      error text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    -- Idempotent enqueue. This index IS the deduplication.
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_runs_event
+      ON automation_runs(automation_id, event_id);
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_pending ON automation_runs(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_workspace ON automation_runs(workspace_id, created_at DESC);
+    -- The per-automation rate window counts rows in an interval.
+    CREATE INDEX IF NOT EXISTS idx_automation_runs_recent ON automation_runs(automation_id, created_at DESC);
 
     ALTER TABLE documents ADD COLUMN IF NOT EXISTS folder text DEFAULT 'General';
     ALTER TABLE documents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
@@ -1253,6 +1457,9 @@ async function ensureRuntimeSchema() {
     -- agent-authored task comment (task_comments.agent_id).
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS source_task_id uuid;
     CREATE INDEX IF NOT EXISTS idx_messages_source_task_id ON messages(session_id, source_task_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_source_task_root
+      ON messages(source_task_id)
+      WHERE source_task_id IS NOT NULL AND thread_parent_id IS NULL;
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS agent_id uuid;
 
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS memory_dir text DEFAULT '';
@@ -1298,6 +1505,66 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_workspace_id ON agent_skill_documents(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_agent_id ON agent_skill_documents(agent_id);
+
+    -- Agent templates ("persona packs") as DATA rather than code. The 15
+    -- bundled templates live in a frontend array and can only be changed by a
+    -- deploy; this table lets a workspace author its own and save a tuned agent
+    -- as a starting point for the next one. See shared/agentTemplates.cjs for
+    -- the validator and server/agent-templates-routes.cjs for the routes.
+    --
+    -- THE ABSENT COLUMNS ARE THE SECURITY CONTROL, and adding one later is a
+    -- security decision rather than a schema tidy-up.
+    --
+    -- There is deliberately no permission_mode, no metadata, no
+    -- sandbox_provider, no sandbox_config, no connect_token_hash, no
+    -- mcp_approved, no memory_dir and no identity. A template carries prose and
+    -- requests; it never carries authority. metadata is the one that looks
+    -- harmless and is not: it holds host_folders, which the daemon turns into
+    -- an --add-dir argument on somebody's actual machine, and sandbox_skills, whose
+    -- definitions carry a baseUrl the server will fetch and a credential naming
+    -- a workspace-vault key. permission_mode is 'yolo', which is unrestricted
+    -- shell on the daemon host. Both are guarded on workspace_agents itself
+    -- (PRIVILEGED_DB_COLUMNS_BY_TABLE / MANAGE_ONLY_DB_COLUMNS_BY_TABLE), and a
+    -- template that could carry them would be a way around those guards.
+    --
+    -- Instantiating a template prefills the existing Agents window form; the
+    -- write still goes through the generic /backend/db/insert where those guards
+    -- apply. This feature adds NO new write path to workspace_agents.
+    CREATE TABLE IF NOT EXISTS workspace_agent_templates (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      slug text NOT NULL,
+      name text NOT NULL,
+      category text NOT NULL DEFAULT 'Custom',
+      description text DEFAULT '',
+      handle_hint text DEFAULT '',
+      system_prompt text DEFAULT '',
+      soul text DEFAULT '',
+      instructions text DEFAULT '',
+      -- Both string[] and both jsonb. skills MUST stay string[]: the Agents
+      -- window round-trips it through a comma-separated text input, so an object
+      -- in that array renders '[object Object]' and is saved back over the real
+      -- definition on the next unrelated edit.
+      tools jsonb NOT NULL DEFAULT '[]'::jsonb,
+      skills jsonb NOT NULL DEFAULT '[]'::jsonb,
+      model text NOT NULL DEFAULT 'auto',
+      run_mode text NOT NULL DEFAULT 'builtin',
+      runtime text DEFAULT '',
+      avatar text DEFAULT '',
+      accent_color text DEFAULT '',
+      revision integer NOT NULL DEFAULT 1,
+      -- 'authored' (typed here), 'derived' (saved from an agent), 'imported'
+      -- (crossed a workspace boundary). Provenance, so "where did this prompt
+      -- come from" has an answer when an agent later behaves oddly.
+      source text NOT NULL DEFAULT 'authored',
+      origin jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_by uuid,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      UNIQUE (workspace_id, slug)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_agent_templates_workspace_id
+      ON workspace_agent_templates(workspace_id);
 
     CREATE TABLE IF NOT EXISTS memory_file_comments (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1412,6 +1679,70 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id);
     ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS secret_cipher text DEFAULT '';
     ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT '';
+  `);
+ // The audit log lives next to workspace_secrets because it is the same
+ // sensitivity: server-written only, manage-gated to read, reachable through no
+ // generic /backend/db/* route (audit_log is absent from ALLOWED_TABLES, so
+ // ensureTable rejects it before any handler runs). See the block above
+ // recordAuditEntry in shared/backend-core.cjs for what this is and is not worth.
+ //
+ // workspace_id is ON DELETE SET NULL, NOT CASCADE, and that is the one line here
+ // worth defending at review. Every other workspace-scoped table cascades.
+ // "Someone deleted the workspace" is the single most audit-worthy action there
+ // is, and CASCADE would erase the evidence of it as a side effect of committing
+ // it. That is also why the column is nullable.
+ //
+ // before_value/after_value are text, not jsonb, so they hold the short scalars
+ // they are for ('editor' -> 'admin', 'default' -> 'yolo') and cannot quietly
+ // become the place someone dumps a whole row — and with it, a secret.
+ await db.unsafe(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      seq bigserial NOT NULL,
+      workspace_id uuid REFERENCES workspaces(id) ON DELETE SET NULL,
+      actor_user_id uuid,
+      actor_agent_id uuid,
+      actor_label text NOT NULL DEFAULT '',
+      action text NOT NULL,
+      target_type text NOT NULL DEFAULT '',
+      target_id text,
+      target_label text NOT NULL DEFAULT '',
+      before_value text NOT NULL DEFAULT '',
+      after_value text NOT NULL DEFAULT '',
+      detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+      request_ip text NOT NULL DEFAULT '',
+      entry_hash text NOT NULL DEFAULT '',
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_log_workspace_created ON audit_log(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor_user_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_audit_log_seq ON audit_log(seq);
+
+    CREATE OR REPLACE FUNCTION audit_log_refuse_mutation()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+      IF TG_OP = 'UPDATE' THEN
+        RAISE EXCEPTION 'audit_log rows are immutable'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      -- DELETE is permitted only past the retention horizon, so pruning never
+      -- requires dropping this trigger by hand — and a trigger dropped for
+      -- maintenance is a trigger that stays off.
+      IF OLD.created_at > now() - interval '400 days' THEN
+        RAISE EXCEPTION 'audit_log rows younger than the retention horizon cannot be deleted'
+          USING ERRCODE = 'check_violation';
+      END IF;
+      RETURN OLD;
+    END $$;
+
+    DROP TRIGGER IF EXISTS trg_audit_log_refuse_mutation ON audit_log;
+    CREATE TRIGGER trg_audit_log_refuse_mutation
+      BEFORE UPDATE OR DELETE ON audit_log
+      FOR EACH ROW
+      EXECUTE FUNCTION audit_log_refuse_mutation();
   `);
  await reencryptLegacyPlaintextSecrets(db);
  await db.unsafe(`
@@ -1604,6 +1935,19 @@ async function ensureRuntimeSchema() {
  } catch (error) {
   console.warn('[backend] agent_jobs active-job unique index migration failed:', error.message || error);
  }
+
+ // DM read scope — the one-time backfill that turns 'every member can read every
+ // session' into 'a private session is readable by its members'.
+ //
+ // Lives in server/dm-scope-backfill.cjs, not inline here, because its central
+ // claim — that the workspace owner is the right member to seed — is a fact
+ // about TODAY's data rather than a law. Extracted, that claim is executable and
+ // tested: the migration seeds the humans who demonstrably SPOKE in a private
+ // session, and reports loudly (with ids) anything the owner-only story cannot
+ // explain, instead of silently orphaning somebody's DM.
+ //
+ // Never throws: a data-shape surprise must not take the schema bootstrap down.
+ await runDmScopeBackfill(sharedDbAdapter);
 
  // In-app feedback -> System workspace.
  //
@@ -1988,6 +2332,27 @@ async function setWorkspaceSecretValue(workspaceId, key, value, userId, descript
 function dbUnsafe(sql, params) {
  return getDb().unsafe(sql, params);
 }
+
+/**
+ * The audit writer, bound to this backend's db handle.
+ *
+ * Injected into the extracted route modules through coreDeps rather than
+ * imported by them, so the audit surface follows the same dependency contract as
+ * auth, RBAC and realtime and cannot drift per module.
+ *
+ * `jsonParam` is left at its default (identity) because every audit call site is
+ * on the Fly/postgres.js side, where binding the OBJECT is the correct half of
+ * the two-driver rule documented on insertFeedbackReport. A Netlify caller would
+ * have to pass JSON.stringify.
+ *
+ * Fire-and-forget: recordAuditEntry never rejects, so no caller needs to await
+ * it defensively and no audit failure can turn a successful role change into a
+ * 500. Awaited at the call sites anyway, so an ordinary failure reaches the log
+ * in order.
+ */
+function recordAudit(entry) {
+ return recordAuditEntry({ ...entry, db: dbUnsafe });
+}
 async function flowSecretKey() {
  const authSecret = await getAuthSecret();
  return crypto.createHash('sha256').update(`agensis-flow-webhook:${authSecret}`).digest();
@@ -2125,6 +2490,10 @@ const skillRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 //     brute-force attempt from being free load on the database.
 const joinLinkRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 const joinRedeemRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
+// The audit log read. Manage-gated already, so this is not an authorization
+// control — it bounds how fast an admin (or a stolen admin session) can page the
+// whole log out, which is the one cheap way to bulk-exfiltrate it.
+const auditReadRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 // Plan 004 — auth hardening: signin is keyed per-email (matches the client's
 // documented "5 attempts" lockout intent); signup is keyed per-IP and looser,
 // to slow down bulk account creation without punishing normal signup retries.
@@ -2865,7 +3234,13 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
 // must be restarted with the new one) and flips run_mode to 'daemon' so a connected
 // daemon takes over from the builtin server runner. Authorization is the caller's
 // responsibility (HTTP route enforces manage role; MCP scopes by workspace token).
-async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle = null, model = null, permissionMode = null, baseUrl = null, profile = null } = {}) {
+// `actorUserId` is threaded in by every caller that has a verified session, for
+// the audit row at the end. It is recorded HERE rather than at the four call
+// sites so a new way to mint a token cannot ship without an audit row — an
+// unattributed mint ('' actor) is still a recorded mint, which is the property
+// that matters. Note the connect token itself is minted in this function and is
+// never, anywhere below, put in the audit row.
+async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle = null, model = null, permissionMode = null, baseUrl = null, profile = null, actorUserId = null } = {}) {
  const id = String(agentId || '').trim();
  if (!id) throw new Error('agentId is required');
  const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [id]);
@@ -2895,6 +3270,19 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
   [id, resolvedHandle, hashAgentToken(token), resolvedModel, resolvedPermissionMode],
  );
  notifyDbSubscribers('workspace_agents', 'UPDATE', updateRows);
+ // A connect token is a real credential: it is the daemon's whole identity, and
+ // this UPDATE also (re)sets permission_mode, so a mint is how an agent can end
+ // up in 'yolo'. Recorded: the agent, its handle, and the RESULTING mode.
+ // Never recorded: the token, and never its hash either.
+ await recordAudit({
+  workspaceId: agent.workspace_id ? String(agent.workspace_id) : null,
+  actor: { userId: actorUserId ? String(actorUserId) : '' },
+  action: 'agent.connect_token_minted',
+  target: { type: 'agent', id, label: resolvedHandle },
+  before: String(agent.permission_mode || ''),
+  after: resolvedPermissionMode,
+  detail: { handle: resolvedHandle, model: resolvedModel, runtime: resolvedRuntime || '' },
+ });
  const resolvedBaseUrl = normalizeAgentBackendBaseUrl(baseUrl)
   || normalizeAgentBackendBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL)
   || '';
@@ -2988,12 +3376,23 @@ async function verifyInviteToken(token) {
 async function verifyWorkspaceMcpToken(token) {
  if (!token || typeof token !== 'string') return null;
  const rows = await getDb().unsafe(
-  `select id, mcp_auto_approve from workspaces where mcp_token_hash = $1 and mcp_token_hash <> '' limit 1`,
+  `select id, user_id, mcp_auto_approve from workspaces where mcp_token_hash = $1 and mcp_token_hash <> '' limit 1`,
   [hashAgentToken(token)],
  );
  const ws = rows[0];
  if (!ws) return null;
- return { kind: 'workspace', workspaceId: ws.id, name: 'MCP client', autoApprove: Boolean(ws.mcp_auto_approve) };
+ // ownerUserId is what this token reads PRIVATE sessions as (mcpSubjectUserId in
+ // server/mcp.cjs). The workspace token is the workspace's own credential, so
+ // reading as its owner is what it already is — not an elevation. Without it,
+ // pointing an MCP client at your own workspace would stop being able to open
+ // your own DMs.
+ return {
+  kind: 'workspace',
+  workspaceId: ws.id,
+  ownerUserId: ws.user_id || '',
+  name: 'MCP client',
+  autoApprove: Boolean(ws.mcp_auto_approve),
+ };
 }
 
 // "Agensis login": the client authenticates with the user's own auth token. Resolves to
@@ -3243,13 +3642,18 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
        limit ${BOOTSTRAP_LIMITS.agents}`,
    [workspaceId],
   ),
+  // The session list is where DM privacy leaks WITHOUT reading a message: a
+  // title is "Coder", a roster names the agent, and the existence of the
+  // conversation is itself the disclosure. Filtered here rather than after the
+  // fact so the rows never reach the payload builder.
   db.unsafe(
-   `select id, workspace_id, title, model, folder, description, icon, intent, is_favorite, participants, conversation_mode, max_agent_turns, auto_rounds, parent_message_id, split_parent_id, split_at, archived_at, deleted_at, canvas_id, version, created_at, updated_at
+   `select id, workspace_id, title, model, folder, description, icon, intent, is_favorite, participants, conversation_mode, max_agent_turns, auto_rounds, parent_message_id, split_parent_id, split_at, archived_at, deleted_at, canvas_id, visibility, version, created_at, updated_at
        from chat_sessions
        where workspace_id = $1 and deleted_at is null
+         and ${sessionReadableSql('chat_sessions', '$2')}
        order by updated_at desc nulls last
        limit ${BOOTSTRAP_LIMITS.sessions}`,
-   [workspaceId],
+   [workspaceId, userId],
   ),
   db.unsafe(
    `select id, workspace_id, title, folder, is_favorite, created_at, updated_at
@@ -3367,6 +3771,20 @@ function buildInboxSql(perCategory) {
  const window = `now() - interval '${INBOX_LOOKBACK_DAYS} days'`;
  const title = (expr) => `left(regexp_replace(coalesce(${expr}, ''), '\\s+', ' ', 'g'), ${INBOX_TITLE_CHARS})`;
  const body = (expr) => `left(coalesce(${expr}, ''), ${INBOX_BODY_CHARS})`;
+ // Three of the branches below reach into a session: blockers join one, the
+ // mention branch carries a message's CONTENT, and a failed agent job names the
+ // session it failed in. An inbox is the easiest place to forget this, because
+ // none of these branches selects from `messages`. A NULL/absent session id
+ // means "not session-scoped" and stays visible.
+ //
+ // Joined on ::text rather than casting the metadata value to uuid: that column
+ // is free-form jsonb and a non-uuid string in it would turn a bad row into a
+ // query-wide 500 instead of one hidden item.
+ const sessionVisible = (expr, alias) =>
+  `(${expr} is null or ${expr} = '' or exists (
+      select 1 from chat_sessions ${alias}
+       where ${alias}.id::text = ${expr} and ${sessionReadableSql(alias, '$2')}
+    ))`;
  return `
     with items as (
       (
@@ -3386,6 +3804,7 @@ function buildInboxSql(perCategory) {
          where ti.workspace_id = $1::uuid
            and ti.kind = 'blocker'
            and ti.status <> 'dismissed'
+           and ${sessionReadableSql('cs', '$2')}
          order by ti.created_at desc
          limit ${cap}
       )
@@ -3471,6 +3890,7 @@ function buildInboxSql(perCategory) {
            and $3::text <> ''
            and coalesce(ae.metadata->>'content', '') ~* $3::text
            and (ae.user_id is null or ae.user_id <> $2::uuid)
+           and ${sessionVisible(`nullif(ae.metadata->>'session_id', '')`, 'cs_ae')}
          order by ae.created_at desc
          limit ${cap}
       )
@@ -3491,6 +3911,7 @@ function buildInboxSql(perCategory) {
          where j.workspace_id = $1::uuid
            and j.status = 'error'
            and coalesce(j.finished_at, j.updated_at, j.created_at) > ${window}
+           and ${sessionVisible('j.session_id::text', 'cs_job')}
          order by coalesce(j.finished_at, j.updated_at, j.created_at) desc
          limit ${cap}
       )
@@ -3780,13 +4201,25 @@ async function findOrCreateDirectSession(workspaceId, agent) {
   added_at: new Date().toISOString(),
  };
  const created = await getDb().unsafe(
-  `insert into chat_sessions (workspace_id, title, model, folder, conversation_mode, participants)
-     values ($1, $2, $3, 'Direct messages', 'auto', $4::jsonb)
+  `insert into chat_sessions (workspace_id, title, model, folder, conversation_mode, participants, visibility)
+     values ($1, $2, $3, 'Direct messages', 'auto', $4::jsonb, 'private')
      returning *`,
   // The ARRAY itself — see the note on the participants update above.
   [workspaceId, title, resolveAnthropicModel(agent.model), [participant]],
  );
- if (created[0]) notifyDbSubscribers('chat_sessions', 'INSERT', created);
+ // A DM the SYSTEM opened (a task dispatch, a comment @mention) has no human
+ // action behind it to attribute, so it belongs to the workspace owner — the
+ // same answer the migration gives every pre-existing DM, so a DM created the
+ // minute before this shipped and one created the minute after are owned by the
+ // same person. Without this the session would be private with no members and
+ // nobody could read it, agent included.
+ if (created[0]) {
+  const owner = await getDb().unsafe('select user_id from workspaces where id = $1 limit 1', [workspaceId]);
+  if (owner[0]?.user_id) {
+   await addSessionParticipant({ sessionId: created[0].id, userId: owner[0].user_id, db: sharedDbAdapter });
+  }
+  notifyDbSubscribers('chat_sessions', 'INSERT', created);
+ }
  return created[0] || null;
 }
 
@@ -6701,6 +7134,45 @@ const { queueThreadHarvest, runDueThreadHarvests, listThreadHarvests, decideHarv
  badRequest,
 });
 
+// Workspace automations — the event-triggered/internal-action cell that
+// agent_schedules, agent_webhooks and flow_connections between them leave
+// uncovered. See server/automations.cjs for why it is not a fourth engine.
+//
+// The event vocabulary is INJECTED rather than extracted into a shared module.
+// FLOW_EVENT_BY_CHANGE drives live outbound webhooks for anyone using the Flows
+// integration, and a refactor that silently dropped an entry would stop their
+// automation with nothing failing; passing the same objects in gives both
+// consumers one map at no risk to the shipped path.
+const {
+ enqueueAutomationRuns, runDueAutomations, sweepAutomationRuns,
+ listAutomations, listAutomationRuns,
+ createAutomation, updateAutomation, deleteAutomation,
+} = createAutomations({
+ getDb: () => getDb(),
+ notifyDbSubscribers: (...a) => notifyDbSubscribers(...a),
+ enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
+ flowEventByChange: FLOW_EVENT_BY_CHANGE,
+ flowEvents: FLOW_EVENTS,
+ publicFlowEventRecord: (...a) => publicFlowEventRecord(...a),
+ flowEventLocation: (...a) => flowEventLocation(...a),
+ recordAudit: (...a) => recordAudit(...a),
+ onWarn: (message) => console.warn('[automations]', message),
+});
+
+// Agent templates ("persona packs"). The validator is shared/agentTemplates.cjs;
+// the security property is that its output is REBUILT from a carried-field list,
+// so no privilege-bearing column can ride into the template table.
+const {
+ listAgentTemplates, createAgentTemplate, saveAgentAsTemplate,
+ updateAgentTemplate, deleteAgentTemplate,
+} = createAgentTemplates({
+ getDb: () => getDb(),
+ notifyDbSubscribers: (...a) => notifyDbSubscribers(...a),
+ enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
+ normalizeAgentTemplate,
+ agentToTemplateDraft,
+});
+
 // Agent jobs hold no in-process state — a job's liveness is a database fact, so
 // a restart cannot lose it. See server/agent-jobs.cjs.
 const agentJobs = createAgentJobs({
@@ -6730,6 +7202,7 @@ const {
  clearStrandedPlaceholders, handleAgentJobResult, handleAgentJobDelta,
  handleAgentJobStep, handleAgentJobSegment, agentStepParts, agentStepContent,
  finalizeAgentJobResult, ampResultMetadata, validateAmpJobResult, claimMcpJob, submitMcpJobResult, reapStuckMcpJobs,
+ normalizeStopReason, stopResultMetadata, failureSentence,
  dispatchFarmAgentJob, getFarmAgentJob, cancelFarmAgentJob,
 } = agentJobs;
 
@@ -6742,6 +7215,7 @@ const agentPermissions = createAgentPermissions({
  notifyDbSubscribers: (...a) => realtime.notifyDbSubscribers(...a),
  sendWs: (...a) => realtime.sendWs(...a),
  getConnectedAgents: () => agentConnections.connectedAgents,
+ recordAudit: (...a) => recordAudit(...a),
 });
 const {
  decideAgentPermissionRequest, expireConnectionPermissionRequests,
@@ -6826,6 +7300,7 @@ const voiceRelay = createVoiceRelay();
 // binding here — see server/realtime.cjs.
 const realtime = createRealtime({
  enforceDbOperationAccess, enforceWorkspaceRole, enqueueFlowWebhookEvents,
+ enqueueAutomationRuns,
  ensureTable, forbidden, agentTokenFromWsRequest, VAULT_SECRET_COLUMNS,
  handleAgentCapabilitiesSync,
  handleAgentJobDelta, handleAgentJobResult, handleAgentJobSegment,
@@ -6833,8 +7308,12 @@ const realtime = createRealtime({
  handleAgentPermissionRequest,
  handleBridgeMessage: (...args) => channelBridges.handleBridgeMessage(...args),
  handlePeerListRequest, handlePeerTicketRequest, inferenceBroker,
+ isPrivateSessionRow, sessionMemberUserIds,
  logMessageActivity, markAgentConnectionOffline,
  refreshConnectedAgentConfigs, registerAgentConnection, updateAgentHeartbeat,
+ // Lets the agent-status broadcast resolve a row's workspace. `messages` has no
+ // workspace_id column, so without this the broadcast cannot fire at all.
+ resolveWorkspaceIdForSession,
  verifyAgentConnectToken, verifyToken, voiceRelay, voiceStreamRateLimiter,
 });
 const {
@@ -6969,8 +7448,13 @@ function coreDeps() {
   // Auth + RBAC. These stay single-sourced here and in shared/backend-core.cjs;
   // an extracted module must never reimplement one.
   requireAuth, requireUserOrFarm, enforceWorkspaceRole, enforceDbOperationAccess,
+  // The read gate below the workspace. Injected next to enforceWorkspaceRole so
+  // a route that does one and not the other is visible at the call site.
+  enforceSessionRead, sessionReadableSql, addSessionParticipant,
   // Realtime fanout
   notifyDbSubscribers, sendWs,
+  // The audit log's write surface. Never rejects; see recordAudit.
+  recordAudit, auditEmailDomain,
   // Rate limiting (the limiter instances themselves stay per-module)
   rateLimitBlocked, dbRateLimitBlocked, clientIpFromReq,
   // Common value coercion
@@ -7085,7 +7569,27 @@ function createApp() {
  // client write, for the same reason thread_harvests is read-only to clients:
  // the request names which proposal, never what gets written into memory.
  mountThreadHarvestRoutes(app, { ...coreDeps(), listThreadHarvests, decideHarvestFinding });
+
+ // Automations. Every write is 'manage' (a standing grant to act without a
+ // human), list and history are 'read'. The routes are behind the same
+ // AGENSIS_AUTOMATIONS flag as the worker, so the feature cannot be half-on.
+ mountAutomationRoutes(app, {
+  ...coreDeps(),
+  listAutomations, listAutomationRuns, createAutomation, updateAutomation, deleteAutomation,
+ });
+
+ // Agent templates. Read at 'read', author/edit/delete at 'write' — authoring a
+ // template is no more privileged than typing the prompt it holds, which
+ // 'write' can already do on an agent directly. Note there is deliberately no
+ // create-agent route here: a template prefills the existing form and the write
+ // still goes through the generic insert, where the column guards apply.
+ mountAgentTemplateRoutes(app, {
+  ...coreDeps(),
+  listAgentTemplates, createAgentTemplate, saveAgentAsTemplate,
+  updateAgentTemplate, deleteAgentTemplate,
+ });
  mountInboxRoutes(app, { ...coreDeps(), INBOX_DEFAULT_LIMIT, INBOX_FILTERS, INBOX_MAX_LIMIT, THREAD_INBOX_DEFAULT_LIMIT, buildInboxSql, buildThreadInboxSql, inboxMentionHandle, inboxMentionPattern, toInboxItem, toThreadInboxItem });
+ mountSessionAccessRoutes(app, { ...coreDeps(), revokeRealtimeAccessForMember });
  mountLinkPreviewsRoutes(app, { ...coreDeps(), LINK_PREVIEW_COLUMNS, LINK_PREVIEW_MAX_PER_REQUEST, fetchLinkPreview, fetchPreviewImage, linkPreviewCacheKey, linkPreviewDbRateLimiter, linkPreviewImageDbRateLimiter, linkPreviewImageRateLimiter, linkPreviewRateLimiter, normalizeUnfurlUrl, publicLinkPreview, upsertLinkPreview });
  mountFeedbackRoutes(app, {
   ...coreDeps(), feedbackRateLimiter, feedbackDbRateLimiter, dbQuery,
@@ -7119,6 +7623,11 @@ function createApp() {
   rateLimitBlocked,
   runtimeSchemaReady,
   serverVersion: '1.0.0',
+  // Measurement only, and a transport concern rather than a tool one, so it is
+  // injected here rather than through mcpToolDeps(). Lets the door record that a
+  // human's session token was used to authenticate — at most once per user per
+  // 24h — while the decision to keep accepting them is still open.
+  recordAudit,
  });
 
  mountMcpDoorsRoutes(app, { ...coreDeps(), mcpHandler, normalizeBaseUrl, renderSkillMd, requestBaseUrl, skillManifest, skillRateLimiter });
@@ -7220,7 +7729,10 @@ function createApp() {
    await enforceDbOperationAccess(req.userId, table, 'select', { filters });
    const where = table === 'workspaces'
     ? appendWorkspaceAccessClause(buildWhereClause(filters, []), req.userId)
-    : buildWhereClause(filters, []);
+    // enforceDbOperationAccess can only answer "may you"; it cannot drop rows.
+    // A chat_sessions select filtered by workspace_id would otherwise hand back
+    // every DM's title and roster.
+    : appendSessionAccessClause(buildWhereClause(filters, []), req.userId, table);
    const { clause, params } = where;
    const rows = await getDb().unsafe(`select ${normalizeColumns(safeSelectColumns(table, columns))} from ${tableSql}${clause}${buildOrderClause(orderBy)}${Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : ''}`, params);
    res.json({ data: single ? (rows[0] ?? null) : rows, error: null });
@@ -7234,10 +7746,22 @@ function createApp() {
    const { table, values, returning = '*', single = false } = req.body || {};
    const tableSql = ensureTable(table);
    await enforceDbOperationAccess(req.userId, table, 'insert', { values });
+   // Resolve inherited privacy BEFORE the insert, never as a fixup after it. A
+   // sub-thread or split of a DM is created by the client through this generic
+   // route with no visibility of its own; correcting it afterwards would leave a
+   // window — and a realtime INSERT fanout — in which a private conversation's
+   // offshoot was world-readable.
+   const inheritedVisibility = table === 'chat_sessions'
+    ? await resolveInheritedSessionVisibility(Array.isArray(values) ? values : [values])
+    : null;
    const rows = (Array.isArray(values) ? values : [values]).map(row => {
     if (!row || typeof row !== 'object') return row;
     let next = stripPrivilegedDbValues(table, row);
     if (table === 'workspaces') next = { ...next, user_id: req.userId };
+    // `visibility` is server-decided. A client may not declare a session public
+    // when its parent is private — that would be a one-line way to publish any
+    // DM by splitting a thread out of it.
+    if (table === 'chat_sessions' && inheritedVisibility) next = { ...next, visibility: inheritedVisibility };
     // Strip agent-invented outline prefixes ("Ship UI work / 1. …") from task
     // titles. Title only on this route: inferring parent_id from a title string
     // is the right call for the MCP tool (server/mcp.cjs, where agents create
@@ -7286,6 +7810,31 @@ function createApp() {
      void channelBridges.emitBridgeOutbound(row).catch((error) =>
       console.error('emitBridgeOutbound failed', error),
      );
+    }
+   }
+
+   // A DM opened from the client arrives here (createSession -> POST /db/insert).
+   // The person who opened it is its first member — do this in the SAME request,
+   // not lazily, because a private session with no members is one its own creator
+   // cannot read.
+   //
+   // This is the ONLY place a user is added to a session by their own action.
+   // Dispatching an agent into a DM deliberately does NOT add the dispatcher:
+   // `run_agents` is an editor-level capability, so auto-adding would make
+   // "assign a task" a self-service way into anyone's DM — a self-grant
+   // primitive, which is exactly what this feature exists to remove. Access for
+   // someone else goes through the manage-gated grant route and leaves an audit
+   // row.
+   if (table === 'chat_sessions') {
+    for (const row of result) {
+     if (!row?.id) continue;
+     if (!isPrivateSessionRow(row)) continue;
+     await addSessionParticipant({ sessionId: row.id, userId: req.userId, db: sharedDbAdapter });
+     // A sub-thread or fork of a private session inherits its member list, not
+     // just its privacy. Otherwise splitting a thread out of a DM would quietly
+     // cut off everyone in that DM except whoever clicked — including someone
+     // holding a deliberate grant.
+     await copyInheritedSessionMembers(row);
     }
    }
 
@@ -7516,6 +8065,10 @@ function createApp() {
   workspaceAuthoredProviderSkills,
  });
 
+ // The audit log's only read route. Mounted next to the vault because it is the
+ // same sensitivity and the same gate: manage, user session, Fly only.
+ mountAuditRoutes(app, { ...coreDeps(), auditReadRateLimiter });
+
  // --- Cartesia voices -------------------------------------------------------
  // Two routes, both thin. The browser must never see CARTESIA_API_KEY, so the
  // catalogue is proxied and the preview is rendered here.
@@ -7564,7 +8117,10 @@ function startBackendServer(port = DEFAULT_PORT) {
  });
  void reconcileAgentConnectionsAtStartup();
  void reconcileSchedulesAtStartup();
- const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void expireStalePermissionRequests(); void pruneOfflineConnections(); pruneExpiredPeerTickets(); void runDueSchedules(); void runDueThreadHarvests(); }, 30_000);
+ // sweepAutomationRuns stays on the 30s tick: reclaiming a lease that expired
+ // because a process died is housekeeping, and running it every second would be
+ // 30x the query for no benefit. The DRAIN moved to its own 1s worker below.
+ const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void expireStalePermissionRequests(); void pruneOfflineConnections(); pruneExpiredPeerTickets(); void runDueSchedules(); void runDueThreadHarvests(); void sweepAutomationRuns(); }, 30_000);
  if (jobReaper.unref) jobReaper.unref();
  let flowDeliveryRunning = false;
  const flowDeliveryWorker = setInterval(() => {
@@ -7575,9 +8131,39 @@ function startBackendServer(port = DEFAULT_PORT) {
    .finally(() => { flowDeliveryRunning = false; });
  }, 1_000);
  flowDeliveryWorker.unref?.();
+
+ // Automations drain on their OWN 1s worker, a sibling of the flow delivery
+ // worker above rather than a passenger on the 30s reaper tick.
+ //
+ // WHY 1s: "when X happens, do Y" arriving up to 30 seconds later reads as
+ // broken. This is the cadence the shipped flowDeliveryWorker already runs at
+ // against the same database, with the same in-flight boolean, so it is a known
+ // quantity rather than a new risk.
+ //
+ // WHY A SIBLING AND NOT MERGED INTO IT: a slow automation must not delay a
+ // webhook delivery, and a slow webhook must not delay an automation.
+ //
+ // A FASTER TICK IS NOT A BIGGER TICK. runDueAutomations keeps its per-tick
+ // bound exactly as it was — the interval got 30x shorter and the batch did not
+ // grow, so peak work per tick is strictly lower than before. The in-flight
+ // boolean means a drain that outlives its interval simply skips the next one
+ // instead of stacking, and every other guard (compare-and-set lease, idempotent
+ // enqueue, fan-out cap, the rate limit that disables rather than throttles) is
+ // untouched and lives in server/automations.cjs, not here.
+ let automationRunning = false;
+ const automationWorker = setInterval(() => {
+  if (automationRunning) return;
+  automationRunning = true;
+  void runDueAutomations()
+   .catch(error => console.error('[automations] worker failed:', error.message || error))
+   .finally(() => { automationRunning = false; });
+ }, 1_000);
+ automationWorker.unref?.();
+
  server.on('close', () => {
   clearInterval(jobReaper);
   clearInterval(flowDeliveryWorker);
+  clearInterval(automationWorker);
   wss.close();
   realtime.reset();
  });
@@ -7803,6 +8389,9 @@ module.exports = {
   reapStuckMcpJobs,
   finalizeAgentJobResult,
   ampResultMetadata,
+  normalizeStopReason,
+  stopResultMetadata,
+  failureSentence,
   validateAmpJobResult,
   dispatchFarmAgentJob,
   disableFarmIntegrationAgents,

@@ -15,7 +15,7 @@
 
 function mountSessionsRoutes(app, deps = {}) {
  const {
-  requireAuth, jsonError, enforceWorkspaceRole, getDb,
+  requireAuth, jsonError, enforceWorkspaceRole, enforceSessionRead, getDb,
   buildAgentConnectionCommand, buildWorkspaceBootstrap,
   ensurePrimaryDaemonAgent, normalizeAgentBackendBaseUrl, requestBaseUrl,
   resolveSetupWorkspace, resolveWorkspaceIdForSession,
@@ -99,6 +99,10 @@ function mountSessionsRoutes(app, deps = {}) {
    const workspaceId = await resolveWorkspaceIdForSession(sessionId);
    if (!workspaceId) return jsonError(res, 404, new Error('Session not found'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'read');
+   // Then the session gate. Workspace `read` is necessary but no longer
+   // sufficient: a private session (a DM, or a sub-thread/huddle split out of
+   // one) is readable only by its members.
+   await enforceSessionRead(req.userId, sessionId);
    const limit = Math.min(500, Math.max(1, Math.trunc(Number(req.query.limit)) || 200));
    const before = String(req.query.before || '').trim();
    const beforeId = String(req.query.beforeId || '').trim();
@@ -157,6 +161,7 @@ function mountSessionsRoutes(app, deps = {}) {
     permissionMode: req.body?.permissionMode || req.body?.permission_mode || agent.permission_mode,
     baseUrl,
     profile: false,
+    actorUserId: req.userId,
    });
    const daemonArgs = {
     command: 'connect',

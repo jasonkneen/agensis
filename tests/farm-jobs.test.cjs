@@ -147,7 +147,12 @@ test('Farm jobs use a long stale-progress timeout instead of the four-minute cha
   await __test.reapStuckAgentJobs();
   const query = db.calls.find((call) => /select \* from agent_jobs where status = 'running'/.test(call.sql));
   assert.match(query.sql, /updated_at/);
-  assert.match(query.sql, /31 minutes/);
+  // The three windows are named constants bound as parameters now (idle,
+  // hard ceiling, farm ceiling) rather than literals inlined in the SQL — the
+  // idle one has to stay paired with the daemon's 9-minute deadline, which a
+  // magic number buried in a query string cannot express.
+  assert.match(query.sql, /make_interval\(mins => \$3::int\)/);
+  assert.deepEqual(query.params, [10, 30, 31]);
 });
 
 test('late Farm deltas are ignored after cancellation wins the status transition', async () => {

@@ -132,6 +132,16 @@ const MUST_BE_LINTED = [
   'server/farm-integration.cjs',
   'server/flow-integration.cjs',
   'netlify/functions/backend.mjs',
+  // The operator CLI's three load-bearing modules. `auth.mjs` resolves a bearer
+  // token from the environment and the daemon's 0600 profile store; `render.mjs`
+  // owns the redaction that keeps that token out of stdout and stderr on every
+  // path; `rpc.mjs` is the CLI's ONLY network egress and holds the JSON-RPC
+  // method allowlist that stops it growing into a second API surface. All three
+  // are .mjs in a directory that had no eslint block until they landed — exactly
+  // the shape of the gap this file exists to catch.
+  'cli/src/auth.mjs',
+  'cli/src/render.mjs',
+  'cli/src/rpc.mjs',
   // Not a backend entry point, but it is what keeps a developer's real
   // credentials — DATABASE_URL, AUTH_SECRET, every provider key — out of every
   // test process. If it silently stops being linted it silently stops being

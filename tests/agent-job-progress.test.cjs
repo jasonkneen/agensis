@@ -54,8 +54,12 @@ test('the stuck-job reaper measures content progress, not liveness ticks', () =>
   assert.match(body, /metadata->>'lastContentAt'/);
   assert.match(body, /coalesce\(\(metadata->>'lastContentAt'\)::timestamptz, started_at\)/);
 
-  // An absolute ceiling so no amount of ticking keeps a job alive forever.
-  assert.match(body, /started_at < now\(\) - interval '30 minutes'/);
+  // An absolute ceiling so no amount of ticking keeps a job alive forever. It
+  // is a bound parameter rather than an inline literal because the idle window
+  // beside it is paired with the daemon's own deadline in the other repo, and
+  // that pairing needs a named constant to hang a comment on.
+  assert.match(body, /started_at < now\(\) - make_interval\(mins => \$2::int\)/);
+  assert.match(body, /AGENT_JOB_HARD_CEILING_MINUTES/);
 
   // The regression: a bare updated_at/started_at comparison for the non-farm
   // branch is what produced both halves of this bug.

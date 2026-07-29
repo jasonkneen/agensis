@@ -38,6 +38,7 @@ import {
  Star,
  UserRound,
  Check,
+  Zap,
 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import type { ThemeMode } from '../../hooks/useTheme';
@@ -269,6 +270,7 @@ interface SidebarProps {
  onOpenAgents?: () => void;
  onOpenUsers?: () => void;
  onOpenSchedules?: () => void;
+ onOpenAutomations?: () => void;
  onAgentMessage?: (agent: SidebarAgentTarget) => void;
  onAgentProfile?: (agent: SidebarAgentTarget) => void;
  onOpenTemplates?: () => void;
@@ -333,6 +335,7 @@ export const Sidebar = React.memo(function Sidebar({
  onOpenAgents,
  onOpenUsers,
  onOpenSchedules,
+ onOpenAutomations,
  onAgentMessage,
  onAgentProfile,
  onOpenTemplates,
@@ -594,6 +597,7 @@ export const Sidebar = React.memo(function Sidebar({
     {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
     {onOpenUsers && <SidebarRailButton icon={<Users />} title="Users" onClick={onOpenUsers} />}
     {onOpenSchedules && <SidebarRailButton icon={<Clock />} title="Schedules" onClick={onOpenSchedules} />}
+    {onOpenAutomations && <SidebarRailButton icon={<Zap />} title="Automations" onClick={onOpenAutomations} />}
     {onOpenTemplates && <SidebarRailButton icon={<LayoutTemplate />} title="Applets" onClick={onOpenTemplates} />}
     {onOpenBrowser && <SidebarRailButton icon={<Globe />} title="Browser" onClick={onOpenBrowser} />}
     {onOpenTerminal && <SidebarRailButton icon={<SquareTerminal />} title="Terminal" onClick={onOpenTerminal} />}
@@ -786,7 +790,7 @@ export const Sidebar = React.memo(function Sidebar({
             </span>
            </span>
            <span className="truncate pl-0 text-xs text-muted-foreground">
-            {thread.sessionTitle ? `${thread.sessionTitle} - ` : ''}{threadReplyLabel(thread.replyCount)}
+            {thread.sessionTitle ? `${thread.sessionTitle} - ` : ''}{threadReplyLabel(thread.replyCount, thread.toolCount)}
            </span>
           </span>
          </button>
@@ -965,6 +969,7 @@ export const Sidebar = React.memo(function Sidebar({
       {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
       {onOpenUsers && <ActionTile icon={<Users />} label="Users" active={focusedWindowType === 'users'} onClick={onOpenUsers} />}
       {onOpenSchedules && <ActionTile icon={<Clock />} label="Schedules" active={focusedWindowType === 'schedules'} onClick={onOpenSchedules} />}
+      {onOpenAutomations && <ActionTile icon={<Zap />} label="Automations" active={focusedWindowType === 'automations'} onClick={onOpenAutomations} />}
       {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Applets" onClick={onOpenTemplates} />}
       {onOpenBrowser && <ActionTile icon={<Globe />} label="Browser" active={focusedWindowType === 'browser'} onClick={onOpenBrowser} />}
       {onOpenTerminal && <ActionTile icon={<SquareTerminal />} label="Terminal" active={focusedWindowType === 'terminal'} onClick={onOpenTerminal} />}

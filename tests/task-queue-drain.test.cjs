@@ -46,7 +46,7 @@ const AGENT = {
   model: 'claude-sonnet-4-6',
   run_mode: 'daemon',
 };
-const OTHER_AGENT = { ...AGENT, id: 'agent-2', name: 'Buzz', handle: 'buzz' };
+const OTHER_AGENT = { ...AGENT, id: 'agent-2', name: 'Rowan', handle: 'rowan' };
 const SESSION = { id: 'dm-1', workspace_id: WS, folder: 'Direct messages' };
 
 function taskRow(id, overrides = {}) {
@@ -172,10 +172,13 @@ function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
       if (n.startsWith('select id, status, connection_id, metadata, started_at from agent_jobs where workspace_id')) {
         return state.jobs.filter((j) => j.workspace_id === String(params[0]) && j.agent_id === String(params[1]) && active(j));
       }
-      if (n.startsWith("update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now() where id = $1 and status in ('queued', 'running')")) {
+      // finalizeStuckJob. The write now also records WHY it reaped the job in
+      // metadata ($3), so this prefix stops at the error bind.
+      if (n.startsWith("update agent_jobs set status = 'error', error = $2")) {
         const job = state.jobs.find((j) => j.id === String(params[0]) && active(j));
         if (!job) return [];
         job.status = 'error';
+        if (params[2]) job.metadata = params[2];
         return [{ id: job.id }];
       }
       if (n.startsWith("update agent_jobs set status = 'cancelled'")) {
@@ -541,7 +544,7 @@ test('a task reassigned while it waited is never dispatched to the old agent', a
   __test.setTestDb(world.db);
   const { runs, run } = jobRunner(world);
 
-  // t-1 is queued behind nothing, so it goes. Then it is handed to @buzz while
+  // t-1 is queued behind nothing, so it goes. Then it is handed to @rowan while
   // the drain is looking at it.
   world.state.tasks[0].assignee_id = OTHER_AGENT.id;
   const out = await __test.drainAgentTaskQueue({ workspaceId: WS, agentId: AGENT.id, cause: 'test', run });

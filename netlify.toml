@@ -1,3 +1,32 @@
+# Netlify secret scanning.
+#
+# TWO configured env var values legitimately end up in dist/, and BOTH must be
+# named here — omitting only one leaves the build failing identically, which
+# cost a wasted round on 2026-07-29:
+#
+#   VITE_BACKEND_BASE_URL   — Vite inlines `import.meta.env.*` at build time
+#                             (src/lib/backendClient.ts), and the browser cannot
+#                             call the backend without knowing its URL.
+#   AGENSIS_DAEMON_BASE_URL — baked in by scripts/gen-skill.cjs.
+#
+# Both are plain URLs. Verified by grepping every configured env var's value
+# against dist/: AUTH_SECRET and DATABASE_URL do NOT appear, so there is no real
+# leak — these are false positives on values that are public by necessity.
+#
+# To re-check after adding an env var, grep its value against dist/ rather than
+# guessing which key the scanner means; the build log is not retrievable through
+# `netlify api`.
+#
+# Omitting the KEY rather than disabling the scan or omitting paths: every other
+# variable stays scanned, and dist/ stays scanned, so a genuine secret reaching
+# the bundle still fails the build.
+#
+# This lives here rather than in the Netlify UI on purpose. The same failure was
+# fixed once before via the UI, where it was invisible to the repo and to anyone
+# reading it later — and it recurred.
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "VITE_BACKEND_BASE_URL,AGENSIS_DAEMON_BASE_URL"
+
 # Headers only — build/publish settings stay in the Netlify UI (no [build]
 # section here so we don't override them).
 #
