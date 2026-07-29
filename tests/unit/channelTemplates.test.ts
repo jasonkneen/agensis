@@ -8,6 +8,7 @@ import {
 } from '../../src/lib/channelTemplates';
 import { CHANNEL_ICONS, MAX_INTENT_CHARS, MAX_DESCRIPTION_CHARS } from '../../src/lib/channelProfile';
 import { CONVERSATION_MODES } from '../../src/lib/channelMentions';
+import { bridgeSpec } from '../../src/lib/bridgeProviders';
 
 describe('channel templates', () => {
   it('every template stores a REAL channel icon key', () => {
@@ -46,25 +47,42 @@ describe('channel templates', () => {
   });
 });
 
-describe('bridges are visible but not creatable', () => {
+describe('bridges are real, and each one has somewhere to send you', () => {
   const bridges = CHANNEL_TEMPLATES.filter(t => t.kind === 'bridge');
 
-  it('ships the four asked for', () => {
-    expect(bridges.map(b => b.id).sort()).toEqual(['openclaw', 'signal', 'telegram', 'whatsapp']);
+  it('ships the five that have a transport', () => {
+    // These are exactly the providers server/channel-bridges.cjs carries
+    // (DAEMON_PROVIDERS + HUB_PROVIDERS). A template for a sixth would be a
+    // card that opens a setup step the backend cannot honour.
+    expect(bridges.map(b => b.id).sort()).toEqual(['openclaw', 'signal', 'slack', 'telegram', 'whatsapp']);
   });
 
-  it('NONE of them can create a channel — the transport does not exist', () => {
-    // The whole point: a card that created a channel which then never receives
-    // a message is worse than a card that says it is not built yet.
+  it('every bridge has a provider spec to ask for credentials with', () => {
+    // NewChannelDialog sends a bridge to `bridgeSpec(tpl.id)` for the fields to
+    // collect. A template with no spec renders a setup step with nothing in it —
+    // a dead end that looks like a bug in the dialog rather than a missing spec.
     for (const bridge of bridges) {
-      expect(canCreateFromTemplate(bridge), bridge.id).toBe(false);
-      expect(bridge.unavailableNote, bridge.id).toBeTruthy();
+      const spec = bridgeSpec(bridge.id);
+      expect(spec, bridge.id).toBeTruthy();
+      expect(spec!.provider, bridge.id).toBe(bridge.id);
+      expect(spec!.fields.length + (spec!.pairing ? 1 : 0), bridge.id).toBeGreaterThan(0);
     }
   });
 
-  it('every NATIVE template can create a channel', () => {
-    for (const tpl of CHANNEL_TEMPLATES.filter(t => t.kind === 'native')) {
+  it('bridges all sit in the one category the gallery groups them under', () => {
+    for (const bridge of bridges) {
+      expect(bridge.category, bridge.id).toBe('Bring your own');
+    }
+  });
+
+  it('every template can create a channel — nothing ships as a placeholder card', () => {
+    // `available: false` still exists for the next template whose UI lands ahead
+    // of its backend, but nothing sets it today. A bridge is gated by needing
+    // credentials (NewChannelDialog routes kind==='bridge' to setup FIRST), not
+    // by being unbuilt — so it is `available` and has no unavailableNote.
+    for (const tpl of CHANNEL_TEMPLATES) {
       expect(canCreateFromTemplate(tpl), tpl.id).toBe(true);
+      expect(tpl.unavailableNote, tpl.id).toBeUndefined();
     }
   });
 });
@@ -119,7 +137,13 @@ describe('filterChannelTemplates', () => {
 
   it('searches name, description and category, case-insensitively', () => {
     expect(filterChannelTemplates(CHANNEL_TEMPLATES, 'All', 'TELEGRAM').map(t => t.id)).toEqual(['telegram']);
-    expect(filterChannelTemplates(CHANNEL_TEMPLATES, 'All', 'bring your own').length).toBe(4);
+    // Matched on CATEGORY text alone — no bridge repeats "bring your own" in its
+    // name or description. Counted off the templates rather than hardcoded, so
+    // adding a sixth bridge does not fail a test about case-insensitivity.
+    const bringYourOwn = CHANNEL_TEMPLATES.filter(t => t.category === 'Bring your own');
+    expect(bringYourOwn.length).toBeGreaterThan(0);
+    expect(filterChannelTemplates(CHANNEL_TEMPLATES, 'All', 'bring your own').map(t => t.id))
+      .toEqual(bringYourOwn.map(t => t.id));
   });
 
   it('a search matching nothing returns empty rather than everything', () => {
