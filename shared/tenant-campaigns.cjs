@@ -74,6 +74,11 @@ const USER_MESSAGE_LIMIT = 5;
 const MIN_DAYS = 1;
 const MAX_DAYS = 3650;
 const DEFAULT_DAYS = 30;
+// Named recipients per campaign. A broadcast to a hand-picked list is a list,
+// not a segment; past a few hundred the owner wanted a filter and should be made
+// to say so. Capped for the same reason every other input here is: this shape
+// arrives over HTTP.
+const MAX_NAMED_ACCOUNTS = 500;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -277,7 +282,34 @@ function normalizeSegment(input) {
  if (rawConditions.length > CAMPAIGN_CATEGORIES.length * 2) {
   throw httpError(400, 'Too many conditions');
  }
- return { match, conditions: rawConditions.map(normalizeCondition) };
+ return {
+  match,
+  conditions: rawConditions.map(normalizeCondition),
+  account_ids: normalizeAccountIds(source.account_ids),
+ };
+}
+
+/**
+ * The hand-picked half of a segment: accounts named outright.
+ *
+ * Deduped and order-preserving, so the confirm count matches the number of
+ * chips the owner is looking at even if the UI let them add one twice. Ids are
+ * kept as opaque strings and only ever COMPARED — never interpolated into SQL —
+ * so a malformed one selects nobody rather than doing anything worse.
+ */
+function normalizeAccountIds(input) {
+ if (input === undefined || input === null) return [];
+ if (!Array.isArray(input)) throw httpError(400, 'account_ids must be a list');
+ const seen = new Set();
+ for (const value of input) {
+  const id = typeof value === 'string' ? value.trim() : '';
+  if (!id) continue;
+  seen.add(id);
+  if (seen.size > MAX_NAMED_ACCOUNTS) {
+   throw httpError(400, `A campaign can name at most ${MAX_NAMED_ACCOUNTS} accounts directly`);
+  }
+ }
+ return [...seen];
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +341,17 @@ function conditionHolds(condition, facts, now) {
  * is vacuously true in logic and catastrophically wrong here.
  */
 function evaluateSegment(segment, facts, now = Date.now()) {
+ // A named account is selected OUTRIGHT, never intersected with the filters.
+ // "Send to these three people, and also to everyone with no agents" is the only
+ // reading of a list beside a filter that does not silently drop someone the
+ // owner explicitly picked — and silently dropping a named recipient is the one
+ // failure this surface must not have. `match: 'all'` deliberately does not
+ // apply here: it governs the conditions, which is what it is labelled as doing.
+ const named = segment?.account_ids;
+ if (Array.isArray(named) && named.length > 0) {
+  const id = facts?.user_id || '';
+  if (id && named.includes(id)) return true;
+ }
  const conditions = segment?.conditions;
  if (!Array.isArray(conditions) || conditions.length === 0) return false;
  if (segment.match === 'any') {
@@ -330,13 +373,19 @@ function selectSegmentMatches(segment, accounts, now = Date.now()) {
  */
 function describeSegment(segment) {
  const conditions = Array.isArray(segment?.conditions) ? segment.conditions : [];
- if (conditions.length === 0) return 'nothing selected';
+ const named = Array.isArray(segment?.account_ids) ? segment.account_ids.length : 0;
+ // The audit row is the only lasting record of who a broadcast went to, so a
+ // hand-picked list has to appear in it. Counted, not listed: 500 uuids is not a
+ // sentence, and the recipient rows hold the exact list.
+ const namedText = named === 0 ? '' : named === 1 ? '1 named account' : `${named} named accounts`;
+ if (conditions.length === 0) return namedText || 'nothing selected';
  const parts = conditions.map((condition) => {
   const category = CATEGORY_BY_ID.get(condition.category);
   const text = category ? category.describe(condition) : condition.category;
   return condition.negate ? `NOT ${text}` : text;
  });
- return parts.join(segment?.match === 'any' ? ' or ' : ' and ');
+ const filterText = parts.join(segment?.match === 'any' ? ' or ' : ' and ');
+ return namedText ? `${namedText}, plus ${filterText}` : filterText;
 }
 
 // ---------------------------------------------------------------------------
@@ -501,7 +550,10 @@ function normalizeStoredSegment(value) {
     ...(condition.days === undefined ? {} : { days: Number(condition.days) || DEFAULT_DAYS }),
    }))
   : [];
- return { match, conditions };
+ const accountIds = Array.isArray(source?.account_ids)
+  ? source.account_ids.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim())
+  : [];
+ return { match, conditions, account_ids: accountIds };
 }
 
 /** Past campaigns, newest first, each with how many have dismissed it. */

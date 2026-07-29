@@ -30,10 +30,13 @@ import {
   campaignSurfaceLabel,
   charactersLeft,
   EMPTY_SEGMENT,
+  segmentAccountIds,
+  toggleSegmentAccount,
   type CampaignCondition,
   type CampaignSegment,
   type CampaignSurface,
 } from '../../lib/tenantCampaigns';
+import { tenantDisplayName, type TenantAccount } from '../../lib/tenants';
 
 // ---------------------------------------------------------------------------
 // MESSAGE ACCOUNTS — segment, then send.
@@ -58,15 +61,18 @@ import {
 // ---------------------------------------------------------------------------
 
 interface CampaignComposerProps {
+  /** The loaded tenant list, so recipients can be picked by hand. */
+  accounts: readonly TenantAccount[];
   onClose: () => void;
 }
 
-export const CampaignComposer = React.memo(function CampaignComposer({ onClose }: CampaignComposerProps) {
+export const CampaignComposer = React.memo(function CampaignComposer({ accounts, onClose }: CampaignComposerProps) {
   const [segment, setSegment] = useState<CampaignSegment>(EMPTY_SEGMENT);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [surface, setSurface] = useState<CampaignSurface>('tip');
   const [showMatches, setShowMatches] = useState(false);
+  const [pickQuery, setPickQuery] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const {
@@ -98,6 +104,21 @@ export const CampaignComposer = React.memo(function CampaignComposer({ onClose }
       )),
     }));
   }, []);
+
+  const namedIds = segmentAccountIds(segment);
+  const namedAccounts = useMemo(
+    () => namedIds.map(id => accounts.find(a => a.id === id)).filter((a): a is TenantAccount => Boolean(a)),
+    [namedIds, accounts],
+  );
+  // Search is over the loaded list, same as the Tenants list itself — no round
+  // trip, and it cannot disagree with what the operator just saw there.
+  const pickMatches = useMemo(() => {
+    const q = pickQuery.trim().toLowerCase();
+    if (!q) return [];
+    return accounts
+      .filter(a => `${a.email} ${a.display_name}`.toLowerCase().includes(q))
+      .slice(0, 20);
+  }, [pickQuery, accounts]);
 
   const blocked = campaignBlockedReason({ title, body, segment, preview, previewLoading });
   const matchedCount = preview?.matched_count ?? 0;
@@ -228,11 +249,73 @@ export const CampaignComposer = React.memo(function CampaignComposer({ onClose }
             </div>
           </section>
 
+          {/* --- 1b. SEND TO SPECIFIC PEOPLE ---------------------------- */}
+          {/* Named recipients are ADDED to whatever the filters match, never
+              intersected with them: someone picked by hand must never be
+              silently dropped by a filter they happen to fail. */}
+          <section className="rounded-xl border border-border bg-muted/30 p-3">
+            <div className={cn('mb-1.5 font-semibold text-foreground', TEXT_BODY)}>
+              Send to specific people
+            </div>
+            <p className={cn('mb-2 text-muted-foreground', TEXT_META)}>
+              Anyone chosen here receives the message regardless of the filters above.
+            </p>
+            {namedAccounts.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-1">
+                {namedAccounts.map(account => (
+                  <button
+                    key={account.id}
+                    type="button"
+                    className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-xs hover:bg-muted"
+                    onClick={() => setSegment(current => toggleSegmentAccount(current, account.id))}
+                    aria-label={`Remove ${tenantDisplayName(account)}`}
+                  >
+                    <span className="min-w-0 truncate">{tenantDisplayName(account)}</span>
+                    <X className="size-3 shrink-0 opacity-60" />
+                  </button>
+                ))}
+              </div>
+            )}
+            <input
+              type="search"
+              value={pickQuery}
+              onChange={event => setPickQuery(event.target.value)}
+              placeholder="Search accounts by name or email"
+              aria-label="Search accounts to send to"
+              className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-ring"
+            />
+            {pickQuery.trim() && (
+              <ul className="mt-1.5 max-h-48 overflow-y-auto rounded-lg border border-border bg-card">
+                {pickMatches.length === 0 ? (
+                  <li className={cn('px-2.5 py-2 text-muted-foreground', TEXT_META)}>No accounts match.</li>
+                ) : pickMatches.map(account => {
+                  const picked = namedIds.includes(account.id);
+                  return (
+                    <li key={account.id}>
+                      <button
+                        type="button"
+                        className="flex w-full min-w-0 items-center gap-2 px-2.5 py-1.5 text-left hover:bg-muted"
+                        onClick={() => setSegment(current => toggleSegmentAccount(current, account.id))}
+                      >
+                        <span className={cn('min-w-0 flex-1 truncate', TEXT_BODY)}>
+                          {tenantDisplayName(account)}
+                        </span>
+                        <span className={cn('min-w-0 shrink-0 text-muted-foreground', TEXT_META)}>
+                          {picked ? 'Added' : 'Add'}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
           {/* --- 2. HOW MANY, AND WHICH -------------------------------- */}
           <section className="rounded-xl border border-border bg-muted/30 p-3">
             <div className="flex flex-wrap items-center gap-2">
               <span className={cn('font-semibold text-foreground', TEXT_BODY)}>
-                {segment.conditions.length === 0
+                {segment.conditions.length === 0 && namedIds.length === 0
                   ? 'No filters — nobody selected'
                   : previewLoading
                     ? 'Counting…'

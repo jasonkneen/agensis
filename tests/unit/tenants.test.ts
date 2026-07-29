@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildTenantInventorySections,
   buildTenantRows,
   buildTenantWorkspaceRow,
   filterTenants,
@@ -346,5 +347,99 @@ describe('a list row carries activity and cost', () => {
     expect(totals.calls).toBe(9);
     // A provider with no rate is named so the footer can say the figure is short.
     expect(totals.unpricedProviders).toEqual(['deepgram']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inventory — what an account HAS.
+//
+// The load-bearing property is what these rows CANNOT carry: no document body,
+// no skill body, no memory fact text, no agent file content. The owner pane
+// exists to show the shape of an account, not to read its contents.
+// ---------------------------------------------------------------------------
+
+describe('buildTenantInventorySections', () => {
+  const inventory = {
+    skills: {
+      items: [{
+        id: 's1', workspace_id: 'w1', workspace_name: 'Acme', agent_name: 'Coder',
+        skill: 'deploy-targets', summary: 'How to ship', byte_size: 2048, last_synced: null,
+      }],
+      total: 3,
+    },
+    documents: {
+      items: [{
+        id: 'd1', workspace_id: 'w1', workspace_name: 'Acme',
+        title: 'Runbook', folder: 'Ops', is_favorite: true, updated_at: null,
+      }],
+      total: 1,
+    },
+    memories: {
+      items: [{
+        workspace_id: 'w1', workspace_name: 'Acme', category: 'billing',
+        fact_count: 4, last_updated: null,
+      }],
+      total: 4,
+    },
+    memory_files: { items: [], total: 0 },
+    tasks: {
+      items: [{
+        id: 't1', workspace_id: 'w1', workspace_name: 'Acme', title: 'Ship it',
+        status: 'in_progress', priority: 'high', due_date: null, updated_at: null,
+      }],
+      total: 1,
+    },
+  };
+
+  it('returns every section in a fixed order, including the empty ones', () => {
+    const sections = buildTenantInventorySections(inventory);
+    expect(sections.map(s => s.id)).toEqual(['skills', 'documents', 'memories', 'memory_files', 'tasks']);
+    // "No agent memory files" is an ANSWER. Omitting the section would leave the
+    // reader unable to tell empty from never-loaded.
+    expect(sections.find(s => s.id === 'memory_files')?.rows).toEqual([]);
+  });
+
+  it('returns nothing at all when the inventory is absent — unknown is not empty', () => {
+    expect(buildTenantInventorySections(null)).toEqual([]);
+    expect(buildTenantInventorySections(undefined)).toEqual([]);
+  });
+
+  it('flags a capped list so a partial view is never read as complete', () => {
+    const sections = buildTenantInventorySections(inventory);
+    const skills = sections.find(s => s.id === 'skills')!;
+    expect(skills.total).toBe(3);
+    expect(skills.rows).toHaveLength(1);
+    expect(skills.truncated).toBe(true);
+    expect(sections.find(s => s.id === 'documents')!.truncated).toBe(false);
+  });
+
+  it('titles each row with the thing itself and qualifies it in the detail line', () => {
+    const sections = buildTenantInventorySections(inventory);
+    const row = (id: string) => sections.find(s => s.id === id)!.rows[0];
+    expect(row('skills').title).toBe('deploy-targets');
+    expect(row('skills').detail).toContain('Acme');
+    expect(row('skills').detail).toContain('Coder');
+    expect(row('skills').detail).toContain('2 KB');
+    expect(row('documents').title).toBe('Runbook');
+    expect(row('documents').detail).toContain('Favourite');
+    // A memory fact has no title of its own, so the CATEGORY stands in — and the
+    // fact text is deliberately never sent to the client at all.
+    expect(row('memories').title).toBe('billing');
+    expect(row('memories').detail).toContain('4 facts');
+    expect(row('tasks').detail).toContain('in_progress');
+  });
+
+  it('carries no field that could hold a body', () => {
+    const sections = buildTenantInventorySections(inventory);
+    const keys = new Set(sections.flatMap(s => s.rows).flatMap(r => Object.keys(r)));
+    expect([...keys].sort()).toEqual(['detail', 'key', 'title']);
+  });
+
+  it('survives a total that disagrees with the item count', () => {
+    // A count query racing an insert can return fewer than the rows fetched.
+    const sections = buildTenantInventorySections({ ...inventory, tasks: { items: inventory.tasks.items, total: 0 } });
+    const tasks = sections.find(s => s.id === 'tasks')!;
+    expect(tasks.total).toBe(1);
+    expect(tasks.truncated).toBe(false);
   });
 });

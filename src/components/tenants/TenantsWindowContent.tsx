@@ -161,7 +161,7 @@ export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
   if (composing) {
     return (
       <div className="@container/tenantswin flex h-full min-h-0 bg-card text-card-foreground">
-        <CampaignComposer onClose={() => setComposing(false)} />
+        <CampaignComposer accounts={accounts} onClose={() => setComposing(false)} />
       </div>
     );
   }
