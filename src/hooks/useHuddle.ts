@@ -119,11 +119,14 @@ export function useHuddleHeartbeat(
  */
 export function useHuddleRecord(workspaceId: string | null, huddleId: string | null) {
   const [state, setState] = useState<HuddleState | null>(null);
+  const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
+  const [savingNotes, setSavingNotes] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setState(null);
+    setNotes('');
     if (!workspaceId || !huddleId) return;
     setLoading(true);
     const path = `/backend/workspaces/${encodeURIComponent(workspaceId)}/huddles/${encodeURIComponent(huddleId)}`;
@@ -133,6 +136,7 @@ export function useHuddleRecord(workspaceId: string | null, huddleId: string | n
         if (cancelled) return;
         const data = payload?.data as HuddlePayload | undefined;
         setState(foldHuddleState(data?.huddle ?? null, Array.isArray(data?.events) ? data.events : []));
+        setNotes(data?.huddle?.notes ?? '');
         setLoading(false);
       })
       .catch(() => {
@@ -141,7 +145,34 @@ export function useHuddleRecord(workspaceId: string | null, huddleId: string | n
     return () => { cancelled = true; };
   }, [workspaceId, huddleId]);
 
-  return { state, loading };
+  // Notes can still be added to a huddle that has already ended — "drop a
+  // note about what was decided" does not require the call to still be live.
+  // Un-subscribed like the rest of this hook (a record is read by one person
+  // at a time in practice), so the save just updates the local copy rather
+  // than waiting on a realtime echo.
+  const saveNotes = useCallback(async (next: string): Promise<boolean> => {
+    if (!workspaceId || !huddleId) return false;
+    setSavingNotes(true);
+    try {
+      const path = `/backend/workspaces/${encodeURIComponent(workspaceId)}/huddles/${encodeURIComponent(huddleId)}/notes`;
+      const response = await fetch(apiUrl(path), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+        body: JSON.stringify({ notes: next }),
+      });
+      if (!response.ok) return false;
+      const payload = await response.json().catch(() => null);
+      const saved = (payload?.data as HuddlePayload | undefined)?.huddle?.notes;
+      setNotes(typeof saved === 'string' ? saved : next);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setSavingNotes(false);
+    }
+  }, [workspaceId, huddleId]);
+
+  return { state, notes, loading, savingNotes, saveNotes };
 }
 
 /**
@@ -348,9 +379,26 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
     });
   }, [workspaceId, post]);
 
+  /**
+   * Save the Notes tab's text. Keyed on the huddle itself, not the connection —
+   * notes can be jotted before anyone's mic is even on, or after the call ends
+   * but before the dock is closed. The realtime `huddles` subscription above
+   * already applies OTHER browsers' saves to `huddle` (and so to `notes`
+   * below); this is only the write side.
+   */
+  const saveNotes = useCallback(async (next: string): Promise<boolean> => {
+    if (!workspaceId || !huddle?.id) return false;
+    const data = await post(
+      `/backend/workspaces/${encodeURIComponent(workspaceId)}/huddles/${encodeURIComponent(huddle.id)}/notes`,
+      { notes: next },
+    );
+    return !!data;
+  }, [workspaceId, huddle?.id, post]);
+
   return {
     state,
     huddle,
+    notes: huddle?.notes ?? '',
     events,
     configured,
     loading,
@@ -361,6 +409,7 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
     confirmJoin,
     end,
     leave,
+    saveNotes,
     refetch,
   };
 }

@@ -129,6 +129,7 @@ describe('the fold carries the transcript link through', () => {
       started_by: 'user-a',
       started_at: '2026-07-26T10:00:00.000Z',
       ended_at: null,
+      notes: '',
     };
     expect(foldHuddleState(row, [])?.transcriptSessionId).toBe(TRANSCRIPT);
     expect(foldHuddleState({ ...row, transcript_session_id: null }, [])?.transcriptSessionId).toBeNull();

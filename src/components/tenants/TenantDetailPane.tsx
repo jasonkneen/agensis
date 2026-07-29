@@ -5,6 +5,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { MICRO_LABEL, PANE_HEADER, SCROLL_VIEWPORT_BLOCK, TEXT_BODY, TEXT_META } from '../inbox/inboxPresentation';
 import {
+  buildTenantInventorySections,
   buildTenantWorkspaceRow,
   tenantIdentityHeader,
   tenantInitials,
@@ -12,6 +13,7 @@ import {
   tenantTileColor,
   type TenantAccount,
   type TenantAccountDetail,
+  type TenantInventorySection,
   type TenantMemberWorkspace,
   type TenantWorkspace,
 } from '../../lib/tenants';
@@ -77,6 +79,10 @@ export function TenantDetailPane({
   const shown = detail?.account ?? account;
   const { title, subtitle } = tenantIdentityHeader(shown);
   const stats = normalizeStats(shown.stats);
+  // Empty sections are kept — "no documents" is an answer. A null inventory
+  // (schema older than these tables) yields none at all, because there the
+  // honest answer is "unknown", not "none".
+  const inventorySections = buildTenantInventorySections(detail?.inventory);
   const owned = detail?.owned_workspaces ?? [];
   const shared = detail?.member_workspaces ?? [];
   const meteringWindow = detail?.metering ?? metering ?? null;
@@ -163,6 +169,9 @@ export function TenantDetailPane({
                 workspaces={shared}
                 empty="Not a member of anyone else's workspace."
               />
+              {inventorySections.map(section => (
+                <InventoryGroup key={section.id} section={section} />
+              ))}
             </>
           )}
 
@@ -348,6 +357,45 @@ function WorkspaceGroup({
               </div>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One inventory list: skills, documents, memory, agent files, or tasks.
+ *
+ * Metadata only, by construction — TenantInventoryRow carries a title and a
+ * detail line and has nowhere to put a body even if the server sent one.
+ * The count in the label is the TRUE total; when the list is capped the footer
+ * says so, so a truncated view is never mistaken for a complete one.
+ */
+function InventoryGroup({ section }: { section: TenantInventorySection }) {
+  return (
+    <div className="flex min-w-0 flex-col">
+      <div className={cn(MICRO_LABEL, 'mb-1.5')}>{`${section.label} (${section.total})`}</div>
+      {section.rows.length === 0 ? (
+        <p className={cn('leading-snug text-muted-foreground', TEXT_META)}>{section.emptyLabel}</p>
+      ) : (
+        <div className="flex min-w-0 flex-col gap-0.5">
+          {section.rows.map(row => (
+            <div key={row.key} className="flex min-w-0 flex-col rounded-md px-1 py-1.5 hover:bg-muted/50">
+              <span className={cn('min-w-0 truncate font-medium text-foreground', TEXT_BODY)}>
+                {row.title}
+              </span>
+              {row.detail && (
+                <span className={cn('min-w-0 truncate text-muted-foreground', TEXT_META)}>
+                  {row.detail}
+                </span>
+              )}
+            </div>
+          ))}
+          {section.truncated && (
+            <p className={cn('px-1 pt-1 leading-snug text-muted-foreground', TEXT_META)}>
+              {`Showing ${section.rows.length} of ${section.total}.`}
+            </p>
+          )}
         </div>
       )}
     </div>

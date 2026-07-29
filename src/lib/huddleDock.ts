@@ -16,6 +16,13 @@ export function normalizeHuddleDockTab(value: unknown): HuddleDockTab {
 }
 
 /**
+ * Client-side mirror of NOTES_MAX_LENGTH in server/huddles.cjs. Only used to
+ * stop typing past the point the server would reject — the server's value is
+ * still the actual limit enforced.
+ */
+export const HUDDLE_NOTES_MAX_LENGTH = 20_000;
+
+/**
  * What this browser is doing in the LiveKit room right now.
  *
  * Lives here rather than beside the room component so the dock's gating (is the

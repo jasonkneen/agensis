@@ -5,7 +5,7 @@ import {
   isActivityPlaceholderMessage,
 } from '../../lib/activityStatus';
 import type { Message as ChatMessage, PermissionRequest } from '../../types';
-import { isPermissionRequestMessage } from './permissionRequests';
+import { isPermissionRequestMessage, settledApprovalFromMessage } from './permissionRequests';
 
 /** `messages.message_kind` for one agent tool call. Anything else is a real message. */
 export const TOOL_STEP_KIND = 'tool_step';
@@ -301,7 +301,12 @@ export function buildTranscriptRows(
     // call it gated; a pending or unresolved one stays a row so its card keeps its
     // buttons (the agent's turn is parked on that click).
     if (isPermission) {
-      const request = resolvePermission?.(message);
+      // A decision made before this tab loaded has no live row to look up — the
+      // workspace route only returns what is still pending — so fall back to the
+      // settled sentence the server already wrote onto the message. Without this
+      // the same approval folded into a chip or sat as a full-width bubble
+      // depending only on when the window was opened.
+      const request = resolvePermission?.(message) ?? settledApprovalFromMessage(message) ?? undefined;
       if (request && request.status !== 'pending') {
         // Two decided requests before any step can't share one — the first gets
         // its own settled row rather than being silently overwritten.

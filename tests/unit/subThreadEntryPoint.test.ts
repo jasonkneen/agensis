@@ -42,39 +42,40 @@ describe('sub-thread creation has a live entry point', () => {
   });
 });
 
-// The button was hover-revealed with `opacity-0`, which keeps it in layout. Its
-// wrapper rendered on EVERY message (onCreateSubThread is always supplied), so
-// every message in the timeline carried an invisible ~28px row under it — a
-// large gap with nothing in it unless you happened to hover.
-//
-// The fix puts it on the same line as the reply stats and hides it properly.
-// These assert the two properties that matter; they do not pin exact classes.
-describe('the hover-only sub-thread button costs no layout when hidden', () => {
+// Delegate now lives in the message's floating action bar, not under the
+// message. The gap this replaced: the button was hover-revealed with
+// `opacity-0`, which keeps an element in layout, and its wrapper rendered on
+// EVERY message — so every message carried an invisible ~28px row beneath it.
+// Moving into an existing icon bar costs no layout at all, and works on touch
+// (where hover never fires) without needing a pointer-coarse escape hatch.
+describe('Delegate lives in the message action bar', () => {
   const chat = () => read('src/components/windows/ChatWindowContent.tsx');
 
-  it('is display-hidden, not merely transparent', () => {
-    const btn = chat().slice(chat().indexOf('Sub-thread') - 900, chat().indexOf('Sub-thread'));
-    expect(btn, 'opacity-0 keeps the button in layout — that is the gap').not.toMatch(/\bopacity-0\b/);
-    expect(btn).toMatch(/\bhidden\b/);
-    expect(btn, 'must come back on hover').toMatch(/group-hover:inline-flex/);
-  });
-
-  it('stays reachable on touch, which never fires hover', () => {
-    const btn = chat().slice(chat().indexOf('Sub-thread') - 900, chat().indexOf('Sub-thread'));
-    expect(btn).toMatch(/pointer-coarse:inline-flex/);
-  });
-
-  it('shares one row with the reply stats instead of stacking a second block', () => {
+  it('is an icon button in the floating bar, beside the thread action', () => {
     const c = chat();
-    // The stats button is rendered INSIDE the same flex row as the chips.
-    const row = c.slice(c.indexOf('{(replyCount && onOpenThread) ||'), c.indexOf('Sub-thread'));
-    expect(row, 'the stats button moved into the shared row').toContain('<ThreadReplySummaryButton');
-    expect(row).toContain('flex flex-wrap items-center');
+    const bar = c.slice(c.indexOf("aria-label={replyCount ? 'Open thread' : 'Start thread'}"), c.indexOf("{onTogglePin && ("));
+    expect(bar, 'Delegate belongs in the same bar as Open thread / Pin').toContain('onCreateSubThread');
+    expect(bar).toMatch(/aria-label="Delegate to an agent"/);
   });
 
-  it('does not double the top margin now that the row owns spacing', () => {
+  it('is called Delegate, not Sub-thread', () => {
     const c = chat();
-    const decl = c.slice(c.indexOf('function ThreadReplySummaryButton'), c.indexOf('function ThreadReplySummaryButton') + 2600);
-    expect(decl, 'row provides mt-1; the button must not add its own').not.toMatch(/className="mt-1 -ml-1 inline-flex h-7/);
+    const bar = c.slice(c.indexOf("aria-label={replyCount ? 'Open thread' : 'Start thread'}"), c.indexOf("{onTogglePin && ("));
+    expect(bar).not.toMatch(/>\s*Sub-thread\s*</);
+  });
+
+  it('costs no layout: no hover-revealed button remains under the message', () => {
+    const c = chat();
+    // The old shape — a labelled button revealed by group-hover — is gone.
+    expect(c).not.toMatch(/group-hover:inline-flex[^"]*"\s*\n\s*onClick=\{onCreateSubThread\}/);
+    expect(c, 'opacity-0 on a delegate button is the gap bug').not.toMatch(/opacity-0[^"]*"\s*\n?\s*onClick=\{onCreateSubThread\}/);
+  });
+
+  it('the stats row renders only when it has real content to show', () => {
+    const c = chat();
+    const guard = c.slice(c.indexOf('{(replyCount && onOpenThread)'), c.indexOf('{(replyCount && onOpenThread)') + 160);
+    // `|| onCreateSubThread` is always truthy, so keeping it would render an
+    // empty row under every message — the gap, reintroduced.
+    expect(guard, 'the row must not be gated on an always-true prop').not.toContain('onCreateSubThread');
   });
 });

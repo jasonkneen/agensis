@@ -27,6 +27,7 @@ import { useHuddleDock } from './HuddleDockContext';
 import { HuddleSessionContext } from './HuddleSessionContext';
 import { HuddleAgentStrip } from './HuddleAgentStrip';
 import { HuddleCaption } from './HuddleCaption';
+import { HuddleNotes } from './HuddleNotes';
 import { HuddlePanel } from './HuddlePanel';
 import { HuddleMicButton, HuddleRoom, HuddleSpeakingNow } from './HuddleRoom';
 
@@ -437,9 +438,10 @@ export function HuddleDock() {
                 mode={tab}
               />
             ) : (
-              <div className="p-3 text-sm text-muted-foreground">
-                Notes and actions from this call will appear here.
-              </div>
+              <HuddleNotes
+                workspaceId={dock.target.workspaceId}
+                huddleId={recordHuddleId || state?.id || null}
+              />
             )}
           </div>
         </>

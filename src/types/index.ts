@@ -742,6 +742,8 @@ export interface Huddle {
  started_by: string | null;
  started_at: string;
  ended_at: string | null;
+ /** Shared call notes — the Notes tab in the dock. Plain text, own write route. */
+ notes: string;
 }
 
 /**

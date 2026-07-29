@@ -1,5 +1,42 @@
 [
   {
+    "version": "agents-keep-working",
+    "date": "2026-07-29",
+    "title": "Agents stop dying halfway through a job",
+    "summary": "An agent running a build or a test suite used to be declared dead and have its work thrown away, because it was too busy to answer a heartbeat in time. It now gets four times longer to reply, and when it does go quiet mid-task you find out instead of watching a spinner that never resolves. Work started inside a huddle also survives the call ending, so hanging up no longer discards what you asked for.",
+    "highlights": [
+      "A long build or test run no longer causes the agent to be killed and its answer lost",
+      "Work asked for in a huddle continues after the call ends, and the result is posted into the channel",
+      "Tool activity now appears in the thread you are reading, instead of scattering into the channel root",
+      "Failed tool calls say so, rather than looking identical to ones that worked"
+    ]
+  },
+  {
+    "version": "tasks-and-delegation",
+    "date": "2026-07-29",
+    "title": "Tasks show what is actually happening",
+    "summary": "A task an agent has picked up now moves into In progress by itself, so the board matches reality instead of showing untouched work next to a visible agent comment. You can drag files onto a task, the editor no longer runs off the edge of its own panel, and handing a message to an agent is now called Delegate and sits with the other message actions.",
+    "highlights": [
+      "Tasks move to In progress automatically when an agent starts on them",
+      "Drag and drop attachments straight onto a task",
+      "The task editor wraps long titles instead of overflowing the panel",
+      "Delegate replaces the old Sub-thread button and lives in the message action bar",
+      "Delegating a message to an agent works again after being removed by mistake"
+    ]
+  },
+  {
+    "version": "calmer-workspace",
+    "date": "2026-07-29",
+    "title": "A calmer, faster workspace",
+    "summary": "The activity feed now stays short and readable, older entries fading out until you scroll back for them, with new ones sliding in rather than jumping. Choosing a model finally follows the runtime next to it. And this panel will only appear when there is genuinely something new to read, instead of after every deploy.",
+    "highlights": [
+      "Activity keeps a short, readable list; older rows fade and come back when you scroll",
+      "Picking Codex or Claude now offers that runtime’s own models",
+      "What’s new only interrupts you when a release note is actually new",
+      "Fixed a crash that could take out the Tasks window entirely"
+    ]
+  },
+  {
     "version": "amp-orb-runtime",
     "date": "2026-07-28",
     "title": "An Amp orb can live inside an Agensis conversation",

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   Brain,
@@ -33,6 +33,12 @@ import {
   activityMetadataText,
   hasActivityMetadata,
 } from '../../lib/activityEntry';
+import {
+  activityRowOpacity,
+  hasHiddenActivity,
+  shouldAnimateEntry,
+  takeActivityWindow,
+} from '../../lib/activityFeed';
 import { oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useActivityEventComments } from '../../hooks/useActivityEventComments';
@@ -333,7 +339,32 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
       : events.filter(event => ACTIVITY_FAMILY[event.event_type] === activeFilter)),
     [events, activeFilter],
   );
-  const days = useMemo(() => groupByDay(filtered), [filtered]);
+
+  // Collapsed by default: the feed is a firehose, and a hundred equal-weight
+  // rows made the newest one indistinguishable from the hundredth.
+  const [expanded, setExpanded] = useState(false);
+  // A new tab is a new list — carrying "expanded" across would dump the reader
+  // into a hundred rows of a category they just opened.
+  useEffect(() => { setExpanded(false); }, [activeFilter]);
+
+  const windowed = useMemo(() => takeActivityWindow(filtered, expanded), [filtered, expanded]);
+  const days = useMemo(() => groupByDay(windowed), [windowed]);
+  // id -> position in the flat window. groupByDay preserves order but splits the
+  // list, so without this the ramp would restart at full strength on every day
+  // heading — brightest row halfway down the feed.
+  const rowDepth = useMemo(
+    () => new Map(windowed.map((event, index) => [event.id, index])),
+    [windowed],
+  );
+  const hiddenCount = hasHiddenActivity(filtered.length, expanded) ? filtered.length - windowed.length : 0;
+
+  // Which row (if any) should play the enter animation. Tracked in a ref so
+  // seeing it never triggers another render, and compared against the id rather
+  // than the length — a filter change alters the count without anything arriving.
+  const newestId = filtered.length > 0 ? filtered[0].id : null;
+  const previousNewestId = useRef<string | null>(null);
+  const enteringId = shouldAnimateEntry(newestId ?? '', newestId, previousNewestId.current) ? newestId : null;
+  useEffect(() => { previousNewestId.current = newestId; }, [newestId]);
 
   // Resolved against the FULL set, so switching tabs never yanks away the entry
   // you were reading in the detail pane.
@@ -385,7 +416,14 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
           selectedEvent ? 'w-[46%] shrink-0 border-r' : 'flex-1',
         )}
       >
-        <div className="flex flex-col p-1.5">
+        <div
+          className="flex flex-col p-1.5"
+          // Collapsed, the list is shorter than the viewport, so a scroll gesture
+          // has nothing to move and silently does nothing — which is precisely
+          // the gesture a reader reaches for to get the older rows back. Treat a
+          // downward wheel as the request it obviously is.
+          onWheel={hiddenCount > 0 ? (e) => { if (e.deltaY > 0) setExpanded(true); } : undefined}
+        >
           {days.length === 0 && (
             <p className="px-2 py-6 text-center text-xs text-muted-foreground">
               Nothing in this category yet.
@@ -399,12 +437,23 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
               <div className="flex flex-col">
                 {group.items.map(event => {
                   const selected = event.id === selectedId;
+                  // Depth is GLOBAL, not per-day: the ramp follows how far down
+                  // the feed a row is, and a day boundary would otherwise restart
+                  // it at full strength halfway down the list.
+                  const depth = rowDepth.get(event.id) ?? 0;
+                  // A selected row is being read — never dim it out from under
+                  // the reader just because it sits low in the window.
+                  const opacity = selected ? 1 : activityRowOpacity(depth, windowed.length, expanded);
                   // Shortened for the row, full for the tooltip — a shortened path
                   // is a label, so the exact one stays one hover away.
                   const full = activityEntryText(event);
                   return (
-                    <button
+                    <div
                       key={event.id}
+                      className={cn('activity-row activity-row-fade', event.id === enteringId && 'activity-row-enter')}
+                      style={{ opacity }}
+                    >
+                    <button
                       type="button"
                       onClick={() => setSelectedId(selected ? null : event.id)}
                       title={`${full}\n${formatFullDate(event.created_at)}`}
@@ -422,11 +471,21 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
                           outside the pane. */}
                       <Badge variant="secondary" className="min-w-0 shrink overflow-hidden text-[10px]">{event.event_type.replace(/_/g, ' ')}</Badge>
                     </button>
+                    </div>
                   );
                 })}
               </div>
             </section>
           ))}
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              className="mt-0.5 rounded-md px-1.5 py-1.5 text-center text-[11px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+            >
+              {`Show ${hiddenCount} earlier`}
+            </button>
+          )}
         </div>
       </ScrollArea>
 

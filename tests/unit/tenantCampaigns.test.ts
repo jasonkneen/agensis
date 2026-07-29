@@ -17,6 +17,8 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  segmentAccountIds,
+  toggleSegmentAccount,
   CAMPAIGN_SURFACES,
   CAMPAIGN_SURFACE_INFO,
   EMPTY_SEGMENT,
@@ -61,7 +63,9 @@ describe('campaignBlockedReason', () => {
     // look armed while the server was about to refuse — or worse, if the
     // server's rule were ever inverted, would arm a send to every account.
     const reason = campaignBlockedReason({ ...READY, segment: EMPTY_SEGMENT, preview: null });
-    expect(reason).toBe('Pick at least one filter.');
+    // Copy changed when hand-picked recipients arrived; the RULE did not —
+    // neither a filter nor a named account means there is nobody to send to.
+    expect(reason).toBe('Pick at least one filter, or choose who to send to.');
   });
 
   it('blocks a segment that matched nobody, and says so', () => {
@@ -166,5 +170,36 @@ describe('the sidebar slot, now that an owner message can claim it', () => {
     const tip = resolveGetStartedSlot({ ...base, onboardingRemaining: 0 });
     expect(tip.kind).toBe('tip');
     expect(resolveGetStartedSlot({ ...base, onboardingRemaining: 2, checklistDismissed: true }).kind).toBe('tip');
+  });
+});
+
+// Hand-picked recipients: "send this to these three people" has to be
+// expressible on its own, without inventing a filter that happens to match them.
+describe('named recipients', () => {
+  it('a named account alone is a sendable campaign', () => {
+    const segment = { ...EMPTY_SEGMENT, account_ids: ['acc-1'] };
+    const reason = campaignBlockedReason({
+      title: 'Heads up', body: 'Maintenance tonight', segment,
+      preview: { matched_count: 1, total_accounts: 40, truncated: false, summary: '1 named account', accounts: [] },
+      previewLoading: false,
+    });
+    expect(reason).toBeNull();
+  });
+
+  it('toggling adds then removes, and never duplicates', () => {
+    const once = toggleSegmentAccount(EMPTY_SEGMENT, 'acc-1');
+    expect(segmentAccountIds(once)).toEqual(['acc-1']);
+    expect(segmentAccountIds(toggleSegmentAccount(once, 'acc-1'))).toEqual([]);
+    const twice = toggleSegmentAccount(toggleSegmentAccount(once, 'acc-2'), 'acc-1');
+    expect(segmentAccountIds(twice)).toEqual(['acc-2']);
+  });
+
+  it('reads a segment saved before the field existed', () => {
+    expect(segmentAccountIds({ match: 'all', conditions: [] })).toEqual([]);
+    expect(segmentAccountIds(null)).toEqual([]);
+  });
+
+  it('ignores a blank id rather than storing an empty recipient', () => {
+    expect(segmentAccountIds(toggleSegmentAccount(EMPTY_SEGMENT, '   '))).toEqual([]);
   });
 });

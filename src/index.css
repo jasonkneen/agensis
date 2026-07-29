@@ -5231,3 +5231,56 @@ select {
 [data-window-interacting='true'] iframe {
   pointer-events: none;
 }
+
+/* Activity feed: a new row arrives at the top and pushes the list down.
+ *
+ * The feed is newest-first, so an incoming event is PREPENDED and every row
+ * below shifts by one. Without an animation that shift is a jump-cut — the
+ * reader sees a different list, not a list that moved. The row animates its own
+ * height open from 0 (the grid-rows 0fr -> 1fr technique, so no row height is
+ * hardcoded and a wrapped row still works) while fading and sliding in, which
+ * is what makes the downward push legible.
+ */
+@keyframes activity-row-in {
+ from {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-4px);
+ }
+ to {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+ }
+}
+
+.activity-row {
+ display: grid;
+ grid-template-rows: 1fr;
+}
+
+/* The grid child must be able to collapse, or 0fr has nothing to shrink. */
+.activity-row > * {
+ min-height: 0;
+ overflow: hidden;
+}
+
+.activity-row-enter {
+ animation: activity-row-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Opacity is set per row from activityRowOpacity(); the transition is what makes
+ * expanding read as the tail being recovered rather than swapped. */
+.activity-row-fade {
+ transition: opacity 220ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+ .activity-row-enter {
+  animation: none;
+ }
+
+ .activity-row-fade {
+  transition: none;
+ }
+}

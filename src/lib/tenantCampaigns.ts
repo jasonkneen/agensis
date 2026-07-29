@@ -70,9 +70,33 @@ export interface CampaignCondition {
 export interface CampaignSegment {
   match: 'any' | 'all';
   conditions: CampaignCondition[];
+  /**
+   * Accounts named outright. Selected in ADDITION to whatever the conditions
+   * match, never intersected with them — see evaluateSegment in
+   * shared/tenant-campaigns.cjs. Picking someone by hand and then having a
+   * filter quietly exclude them is the one outcome this surface must not have.
+   */
+  account_ids?: string[];
 }
 
-export const EMPTY_SEGMENT: CampaignSegment = { match: 'all', conditions: [] };
+export const EMPTY_SEGMENT: CampaignSegment = { match: 'all', conditions: [], account_ids: [] };
+
+/** How many accounts a campaign may name directly. Mirrors MAX_NAMED_ACCOUNTS. */
+export const MAX_NAMED_ACCOUNTS = 500;
+
+/** The named half of a segment, tolerating a segment saved before the field existed. */
+export function segmentAccountIds(segment: CampaignSegment | null | undefined): string[] {
+  return Array.isArray(segment?.account_ids) ? segment.account_ids : [];
+}
+
+/** Add or remove one named recipient, preserving order and never duplicating. */
+export function toggleSegmentAccount(segment: CampaignSegment, accountId: string): CampaignSegment {
+  const id = String(accountId || '').trim();
+  if (!id) return segment;
+  const current = segmentAccountIds(segment);
+  const next = current.includes(id) ? current.filter(value => value !== id) : [...current, id];
+  return { ...segment, account_ids: next };
+}
 
 /** One account in a preview — the same three identity fields the tenant list shows. */
 export interface CampaignPreviewAccount {
@@ -134,7 +158,12 @@ export function campaignBlockedReason(input: {
   // An empty condition list is not "everyone", it is "nobody" — the same rule
   // the server's evaluateSegment enforces. Saying so here means the owner is
   // never looking at a composer that appears ready and is not.
-  if (input.segment.conditions.length === 0) return 'Pick at least one filter.';
+  // A hand-picked list is a complete campaign on its own — requiring a filter
+  // beside it would make "send this to these three people" impossible to
+  // express. Only when BOTH are empty is there nobody to send to.
+  if (input.segment.conditions.length === 0 && segmentAccountIds(input.segment).length === 0) {
+    return 'Pick at least one filter, or choose who to send to.';
+  }
   if (input.previewLoading || !input.preview) return 'Checking who matches…';
   if (input.preview.matched_count === 0) return 'No accounts match these filters.';
   return null;

@@ -35,6 +35,7 @@ import { agentHandle } from '../../lib/agentAccent';
 import { isAssigneeActive, resolveTaskCommentAuthor } from '../../lib/taskAgents';
 import { parseMessageAttachments } from '../../lib/messageAttachments';
 import { MessageAttachmentList } from '../chat/MessageAttachments';
+import { TaskActivityChip } from './TaskActivityChip';
 import {
   DAY_MS,
   applyHideDone,
@@ -673,6 +674,11 @@ function TaskRow({
             {task.title}
           </ItemTitle>
           <div className="flex flex-wrap items-center gap-1.5">
+            {/* First in the row on purpose: "is this moving" is the question
+                asked of a task list, and it should not be behind a priority
+                flag and a due date. Renders nothing unless the task is in
+                progress — see TaskActivityChip. */}
+            <TaskActivityChip task={task} sessionId={chatSessionId} />
             {task.priority !== 'normal' && (
               <Badge variant={task.priority === 'urgent' ? 'destructive' : 'secondary'}>
                 <Flag />
@@ -1559,9 +1565,21 @@ function TaskEditPanel({
           <X />
         </Button>
       </div>
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-4 p-3">
-          <div className="flex flex-col gap-2">
+      {/* The `!block` override is the second half of 746fed7, and without it that
+          fix only ever clamped the empty box. Radix drops a `display:table;
+          min-width:100%` wrapper inside its viewport so content can be wider than
+          the pane and scroll sideways — and a table shrink-wraps to MIN-CONTENT,
+          which here is 397px (`.task-detail`'s ml-8 + pl-5 + pr-3 around two
+          `min-w-32` date labels). The panel itself is clamped to 318–380px, so
+          every control was laid out ~80px wider than the pane and the surplus was
+          clipped: half a word of "In progress", half of "Add a description…". As
+          `block` the content is the viewport's width and wraps instead. Same
+          override, same reason, as Sidebar and ActivityWindowContent — an inline
+          style, hence the `!`. min-w-0 lets the flex children give ground rather
+          than re-establishing the same floor one level down. */}
+      <ScrollArea className="min-h-0 flex-1 [&_[data-radix-scroll-area-viewport]>div]:!block">
+        <div className="flex min-w-0 flex-col gap-4 p-3">
+          <div className="flex min-w-0 flex-col gap-2">
             {/* A textarea, not an Input, purely so a long title WRAPS.
                 Task titles here are routinely a full sentence ("Can't escalate,
                 share or save a thread — no path from a DM to another agent or
@@ -1889,6 +1907,7 @@ function TaskKanban({
                       {task.title}
                     </span>
                     <div className="flex flex-wrap items-center gap-1">
+                      <TaskActivityChip task={task} sessionId={taskChatSessionId(task)} compact />
                       {task.priority !== 'normal' && (
                         <Badge variant={task.priority === 'urgent' ? 'destructive' : 'secondary'}>
                           <Flag />
@@ -2331,6 +2350,20 @@ function TaskGantt({
                         />
                       </span>
                     )}
+                    {/* Activity chip, just past the right edge of the shape.
+                        Outside the bar rather than in it: a bar's width is its
+                        DATE RANGE, so anything put inside a short one is
+                        immediately truncated. Only for rows whose title already
+                        sits in the bar — when the title is alongside, the chip
+                        rides that label instead (below) so the two can't
+                        overlap. pointer-events-auto because the row wrapper
+                        turns them off and the chip carries the tooltip that
+                        says what its number means. */}
+                    {labelInside && (
+                      <span className="pointer-events-auto ml-1.5 flex items-center">
+                        <TaskActivityChip task={task} sessionId={taskChatSessionId(task)} compact />
+                      </span>
+                    )}
                     </span>
                     {/* The name, when the shape is too small to hold it — which
                         is every undated marker. It is `sticky`, so it travels
@@ -2342,8 +2375,14 @@ function TaskGantt({
                     {labelPlacement === 'outside' && (
                       <span
                         data-gantt-sticky-label=""
+                        // inline-flex with the TITLE in its own truncating span,
+                        // rather than truncating the whole label: the activity
+                        // chip lives at the end, and inside a single truncating
+                        // box a long title ate it outright — the rows most worth
+                        // knowing are being worked were the ones whose chip was
+                        // clipped away. The title gives up the room instead.
                         className={cn(
-                          'pointer-events-auto sticky z-10 cursor-pointer truncate rounded-sm bg-card/80 px-1 text-sm',
+                          'pointer-events-auto sticky z-10 inline-flex cursor-pointer items-center gap-1 overflow-hidden whitespace-nowrap rounded-sm bg-card/80 px-1 text-sm',
                           row.hasChildren && 'font-medium',
                           task.status === 'done' ? 'text-muted-foreground line-through' : 'text-foreground',
                         )}
@@ -2356,10 +2395,13 @@ function TaskGantt({
                         onClick={() => onSelectTask(task.id)}
                       >
                         {row.depth > 0 && (
-                          <CornerDownRight className="mr-1 inline size-3.5 shrink-0 align-[-3px] text-muted-foreground" aria-hidden />
+                          <CornerDownRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
                         )}
-                        {task.title}
-                        {assigneeLabel && <span className="text-muted-foreground"> · {assigneeLabel}</span>}
+                        <span className="truncate">
+                          {task.title}
+                          {assigneeLabel && <span className="text-muted-foreground"> · {assigneeLabel}</span>}
+                        </span>
+                        <TaskActivityChip task={task} sessionId={taskChatSessionId(task)} compact />
                       </span>
                     )}
                   </div>

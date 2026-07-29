@@ -51,6 +51,10 @@ const SYSTEM_OWNER_EMAIL_ENV = 'AGENSIS_SYSTEM_OWNER_EMAIL';
  * total, so the UI can say which it is.
  */
 const TENANT_LIST_LIMIT = 500;
+// How many of each inventory the detail pane carries. The pane answers "what is
+// in this account", not "give me everything they wrote" — the count beside each
+// list is the true total, so a truncated list never reads as a complete one.
+const TENANT_INVENTORY_LIMIT = 50;
 
 /**
  * Normalize an email for comparison: trim, lowercase ASCII A-Z and nothing
@@ -545,6 +549,101 @@ async function listTenantAccounts(db, { limit = TENANT_LIST_LIMIT } = {}) {
  * Returns null when there is no such account, so the route can answer 404
  * rather than an empty object that reads like a permissions bug.
  */
+// ---------------------------------------------------------------------------
+// What an account HAS: its skills, documents, memories and tasks.
+//
+// IDENTIFYING METADATA ONLY — deliberately no bodies. `documents.content`,
+// `agent_skill_documents.content` and `agent_memory_files.content_cache` are
+// never selected here. This surface exists so a deployment owner can see the
+// SHAPE of an account (what exists, how much, how recently touched) without it
+// becoming a licence to read every customer's documents. Titles and names are
+// the minimum that makes a list navigable; bodies are a different decision and
+// should be taken deliberately, not inherited from an admin pane.
+//
+// Scoped to OWNED workspaces, matching the stats above: a shared workspace's
+// contents belong to the account that owns it and would otherwise be counted
+// against two people at once.
+//
+// Each returns { items, total } — `total` from a separate count so a capped
+// list still tells the truth about how much is there.
+async function loadAccountInventory(db, accountId, limit = TENANT_INVENTORY_LIMIT) {
+ const scoped = async (sql, countSql) => {
+  const [items, counted] = await Promise.all([
+   db(sql, [accountId, limit]),
+   db(countSql, [accountId]),
+  ]);
+  return { items: items || [], total: Number(counted?.[0]?.total || 0) };
+ };
+
+ const [skills, documents, memories, tasks] = await Promise.all([
+  scoped(
+   `select sd.id, sd.workspace_id, w.name as workspace_name, a.name as agent_name,
+           sd.skill, sd.summary, sd.byte_size, sd.last_synced
+      from agent_skill_documents sd
+      join workspaces w on w.id = sd.workspace_id
+      left join workspace_agents a on a.id = sd.agent_id
+     where w.user_id = $1
+     order by sd.last_synced desc nulls last, sd.id asc
+     limit $2`,
+   `select count(*) as total from agent_skill_documents sd
+      join workspaces w on w.id = sd.workspace_id where w.user_id = $1`,
+  ),
+  scoped(
+   `select d.id, d.workspace_id, w.name as workspace_name,
+           d.title, d.folder, d.is_favorite, d.updated_at
+      from documents d
+      join workspaces w on w.id = d.workspace_id
+     where w.user_id = $1
+     order by d.updated_at desc nulls last, d.id asc
+     limit $2`,
+   `select count(*) as total from documents d
+      join workspaces w on w.id = d.workspace_id where w.user_id = $1`,
+  ),
+  // Memories are two different things and the pane must not pretend otherwise:
+  // memory_facts is workspace knowledge, agent_memory_files is an agent's own
+  // file mirror. Fact TEXT is withheld for the same reason document bodies are —
+  // a fact is often the most personal row in the schema.
+  scoped(
+   `select m.workspace_id, w.name as workspace_name, m.category,
+           count(*)::int as fact_count, max(m.updated_at) as last_updated
+      from memory_facts m
+      join workspaces w on w.id = m.workspace_id
+     where w.user_id = $1
+     group by m.workspace_id, w.name, m.category
+     order by max(m.updated_at) desc nulls last, m.workspace_id asc
+     limit $2`,
+   `select count(*) as total from memory_facts m
+      join workspaces w on w.id = m.workspace_id where w.user_id = $1`,
+  ),
+  scoped(
+   `select t.id, t.workspace_id, w.name as workspace_name,
+           t.title, t.status, t.priority, t.due_date, t.updated_at
+      from tasks t
+      join workspaces w on w.id = t.workspace_id
+     where w.user_id = $1
+     order by t.updated_at desc nulls last, t.id asc
+     limit $2`,
+   `select count(*) as total from tasks t
+      join workspaces w on w.id = t.workspace_id where w.user_id = $1`,
+  ),
+ ]);
+
+ const memoryFiles = await scoped(
+  `select f.id, f.workspace_id, w.name as workspace_name, a.name as agent_name,
+          f.path, f.kind, f.summary, f.byte_size, f.last_synced
+     from agent_memory_files f
+     join workspaces w on w.id = f.workspace_id
+     left join workspace_agents a on a.id = f.agent_id
+    where w.user_id = $1
+    order by f.last_synced desc nulls last, f.id asc
+    limit $2`,
+  `select count(*) as total from agent_memory_files f
+     join workspaces w on w.id = f.workspace_id where w.user_id = $1`,
+ );
+
+ return { skills, documents, memories, memory_files: memoryFiles, tasks };
+}
+
 async function getTenantAccount(db, accountId) {
  const id = typeof accountId === 'string' ? accountId.trim() : '';
  if (!id) throw httpError(400, 'An account id is required');
@@ -609,6 +708,14 @@ async function getTenantAccount(db, accountId) {
   [id],
  );
  const metering = await getMeteringWindow(db);
+ // Best-effort: a deployment whose schema predates one of these tables should
+ // still get the pane it had before, minus the inventory — not a 500.
+ let inventory = null;
+ try {
+  inventory = await loadAccountInventory(db, id);
+ } catch {
+  inventory = null;
+ }
 
  const statsByWorkspace = new Map();
  for (const row of workspaceStats || []) {
@@ -645,12 +752,15 @@ async function getTenantAccount(db, accountId) {
    owner_email: row.owner_email || '',
   })),
   metering,
+  inventory,
  };
 }
 
 module.exports = {
  SYSTEM_OWNER_EMAIL_ENV,
  TENANT_LIST_LIMIT,
+ TENANT_INVENTORY_LIMIT,
+ loadAccountInventory,
  normalizeOwnerEmail,
  isSystemOwnerEmail,
  configuredSystemOwnerEmail,

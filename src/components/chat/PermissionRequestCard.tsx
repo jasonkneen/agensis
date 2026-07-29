@@ -7,9 +7,11 @@ import {
   SCOPE_LABELS,
   isPermissionRequestOpen,
   offeredScopes,
+  permissionOutcomeBadge,
   permissionOutcomeLabel,
   permissionRequestSummary,
 } from './permissionRequests';
+import { shortenPathsIn } from '../../lib/shortPath';
 
 // Matches ToolStepGroup's rails so a request lines up with the tool chips it
 // interrupts — same indent, same "hanging off the conversation" reading.
@@ -64,6 +66,10 @@ export function PermissionRequestCard({
   const summary = permissionRequestSummary(request);
   const indent = bare ? '' : compact ? COMPACT_INDENT : CHANNEL_INDENT;
 
+  // Settled: a record, not a question. WHAT was approved leads and gets the
+  // room; the scope is one word and the approver's name lives in the tooltip.
+  // Reading "Always allowed by <name>" first, with an absolute path trailing off
+  // the end of the line, buried the only part that identifies the call.
   if (!open) {
     const allowed = request.status === 'allowed';
     const Icon = allowed ? ShieldCheck : request.status === 'expired' ? Clock : ShieldAlert;
@@ -71,8 +77,13 @@ export function PermissionRequestCard({
       <div className={cn('min-w-0 py-1', indent)}>
         <div className="flex min-w-0 items-center gap-2 border-l border-border pl-2.5 text-[11px] text-muted-foreground">
           <Icon className={cn('size-3.5 shrink-0', allowed ? 'text-emerald-500' : '')} aria-hidden />
-          <span className="font-medium">{permissionOutcomeLabel(request)}</span>
-          <span className="truncate font-mono" title={summary}>{summary}</span>
+          <span className="truncate font-mono" title={summary}>{shortenPathsIn(summary)}</span>
+          <span
+            className={cn('shrink-0 font-medium', allowed ? 'text-emerald-600/90 dark:text-emerald-400/90' : '')}
+            title={permissionOutcomeLabel(request)}
+          >
+            {permissionOutcomeBadge(request)}
+          </span>
         </div>
       </div>
     );

@@ -67,11 +67,88 @@ export interface TenantMemberWorkspace extends TenantWorkspace {
   owner_email: string;
 }
 
+/** One capped list plus the true total, so a truncated view never reads as complete. */
+export interface TenantInventoryList<T> {
+  items: T[];
+  total: number;
+}
+
+export interface TenantSkillItem {
+  id: string;
+  workspace_id: string;
+  workspace_name: string;
+  agent_name: string | null;
+  skill: string;
+  summary: string;
+  byte_size: number;
+  last_synced: string | null;
+}
+
+export interface TenantDocumentItem {
+  id: string;
+  workspace_id: string;
+  workspace_name: string;
+  title: string;
+  folder: string;
+  is_favorite: boolean;
+  updated_at: string | null;
+}
+
+/** Workspace knowledge, grouped by category. Fact TEXT is deliberately absent. */
+export interface TenantMemoryItem {
+  workspace_id: string;
+  workspace_name: string;
+  category: string;
+  fact_count: number;
+  last_updated: string | null;
+}
+
+/** An agent's own file mirror — path and size, never content_cache. */
+export interface TenantMemoryFileItem {
+  id: string;
+  workspace_id: string;
+  workspace_name: string;
+  agent_name: string | null;
+  path: string;
+  kind: string;
+  summary: string;
+  byte_size: number;
+  last_synced: string | null;
+}
+
+export interface TenantTaskItem {
+  id: string;
+  workspace_id: string;
+  workspace_name: string;
+  title: string;
+  status: string;
+  priority: string;
+  due_date: string | null;
+  updated_at: string | null;
+}
+
+/**
+ * What an account HAS. Identifying metadata only — no document bodies, no skill
+ * bodies, no memory fact text, no agent file contents. The server does not
+ * select them; this type not having the fields is the second reminder.
+ *
+ * `null` when the deployment's schema predates one of these tables — the pane
+ * degrades to what it showed before rather than erroring.
+ */
+export interface TenantInventory {
+  skills: TenantInventoryList<TenantSkillItem>;
+  documents: TenantInventoryList<TenantDocumentItem>;
+  memories: TenantInventoryList<TenantMemoryItem>;
+  memory_files: TenantInventoryList<TenantMemoryFileItem>;
+  tasks: TenantInventoryList<TenantTaskItem>;
+}
+
 export interface TenantAccountDetail {
   account: TenantAccount;
   owned_workspaces: TenantWorkspace[];
   member_workspaces: TenantMemberWorkspace[];
   metering?: TenantMeteringWindow;
+  inventory?: TenantInventory | null;
 }
 
 export interface TenantListPayload {
@@ -417,4 +494,112 @@ export function buildTenantWorkspaceRow(
     color: workspaceTileColor({ id: workspace.id, name: workspace.name }),
     isSystem: workspace.is_system === true,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Inventory rows — what an account HAS.
+//
+// Pure shaping only, same as everything above: the pane renders what these
+// return and holds no formatting of its own. None of these can surface a body,
+// because the types they take do not carry one.
+// ---------------------------------------------------------------------------
+
+export interface TenantInventoryRow {
+  key: string;
+  /** The thing's own name — a skill, a document title, a task title, a path. */
+  title: string;
+  /** Where it lives and anything qualifying it, already joined with ' · '. */
+  detail: string;
+}
+
+export interface TenantInventorySection {
+  id: 'skills' | 'documents' | 'memories' | 'memory_files' | 'tasks';
+  label: string;
+  total: number;
+  rows: TenantInventoryRow[];
+  /** True when `total` exceeds what the server sent, so the UI can say so. */
+  truncated: boolean;
+  /** What to show instead of rows when there are none. */
+  emptyLabel: string;
+}
+
+function bytesLabel(bytes: number): string {
+  const value = Math.max(0, Number(bytes) || 0);
+  if (value === 0) return '';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function joinDetail(parts: Array<string | number | null | undefined>): string {
+  return parts
+    .map(part => (part === null || part === undefined ? '' : String(part).trim()))
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/**
+ * Every inventory section, in a fixed order, INCLUDING the empty ones.
+ *
+ * Empty sections are kept deliberately: "this account has no documents" is an
+ * answer, and a pane that silently omits the section leaves the reader unsure
+ * whether it was empty or never loaded. `null` inventory (schema too old) is the
+ * one case that returns nothing at all, because there the answer is unknown.
+ */
+export function buildTenantInventorySections(
+  inventory: TenantInventory | null | undefined,
+): TenantInventorySection[] {
+  if (!inventory) return [];
+  const section = <T,>(
+    id: TenantInventorySection['id'],
+    label: string,
+    list: TenantInventoryList<T> | undefined,
+    emptyLabel: string,
+    row: (item: T, index: number) => TenantInventoryRow,
+  ): TenantInventorySection => {
+    const items = Array.isArray(list?.items) ? list.items : [];
+    // max(), not the raw total: a count query racing an insert can return fewer
+    // than the rows already fetched, and "showing 5 of 0" is nonsense.
+    const total = Math.max(items.length, Number(list?.total) || 0);
+    return {
+      id,
+      label,
+      total,
+      rows: items.map(row),
+      truncated: total > items.length,
+      emptyLabel,
+    };
+  };
+
+  return [
+    section('skills', 'Skills', inventory.skills, 'No skills synced', (item, i) => ({
+      key: item.id || `skill-${i}`,
+      title: String(item.skill || '').trim() || 'Untitled skill',
+      detail: joinDetail([item.workspace_name, item.agent_name, bytesLabel(item.byte_size)]),
+    })),
+    section('documents', 'Documents', inventory.documents, 'No documents', (item, i) => ({
+      key: item.id || `doc-${i}`,
+      title: String(item.title || '').trim() || 'Untitled',
+      detail: joinDetail([item.workspace_name, item.folder, item.is_favorite ? 'Favourite' : '']),
+    })),
+    section('memories', 'Memory', inventory.memories, 'No memory facts', (item, i) => ({
+      key: `${item.workspace_id}-${item.category}-${i}`,
+      // The category IS the title here — the facts themselves are not sent.
+      title: String(item.category || '').trim() || 'general',
+      detail: joinDetail([
+        item.workspace_name,
+        `${item.fact_count} ${item.fact_count === 1 ? 'fact' : 'facts'}`,
+      ]),
+    })),
+    section('memory_files', 'Agent memory files', inventory.memory_files, 'No agent memory files', (item, i) => ({
+      key: item.id || `file-${i}`,
+      title: String(item.path || '').trim() || 'Untitled file',
+      detail: joinDetail([item.workspace_name, item.agent_name, item.kind, bytesLabel(item.byte_size)]),
+    })),
+    section('tasks', 'Tasks', inventory.tasks, 'No tasks', (item, i) => ({
+      key: item.id || `task-${i}`,
+      title: String(item.title || '').trim() || 'Untitled task',
+      detail: joinDetail([item.workspace_name, item.status, item.priority]),
+    })),
+  ];
 }

@@ -882,3 +882,79 @@ test('the schema landed in all THREE places', () => {
   }
  }
 });
+
+// ---------------------------------------------------------------------------
+// NAMED RECIPIENTS — "send this to these specific people".
+//
+// A hand-picked list is UNION'd with the filters, never intersected. Picking
+// someone by hand and then having a filter they happen to fail quietly drop them
+// is the one failure this surface must not have: the owner would believe a
+// message went to a person it never reached.
+// ---------------------------------------------------------------------------
+
+test('a named account is selected even when it matches no filter', () => {
+ const segment = campaigns.normalizeSegment({
+  match: 'all',
+  conditions: [{ category: 'never_huddled' }],
+  account_ids: ['active'],
+ });
+ // activeAccount HAS huddled, so the filter alone excludes it.
+ assert.equal(campaigns.evaluateSegment(segment, activeAccount(), NOW), true,
+  'a hand-picked account must not be filtered back out');
+ assert.equal(campaigns.evaluateSegment(segment, dormantAccount(), NOW), true,
+  'the filter still selects on its own');
+});
+
+test('naming accounts is a complete campaign with no filters at all', () => {
+ const segment = campaigns.normalizeSegment({ match: 'all', conditions: [], account_ids: ['active'] });
+ assert.equal(campaigns.evaluateSegment(segment, activeAccount(), NOW), true);
+ assert.equal(campaigns.evaluateSegment(segment, dormantAccount(), NOW), false,
+  'naming one account must not widen to anybody else');
+});
+
+test('the empty case survives the new field: no filters and no names is nobody', () => {
+ for (const match of ['all', 'any']) {
+  for (const facts of [activeAccount(), dormantAccount()]) {
+   assert.equal(
+    campaigns.evaluateSegment(campaigns.normalizeSegment({ match, conditions: [], account_ids: [] }), facts, NOW),
+    false,
+    `an empty ${match} segment must still match nobody`,
+   );
+  }
+ }
+});
+
+test('named ids are deduped and non-strings are dropped', () => {
+ const segment = campaigns.normalizeSegment({
+  conditions: [],
+  account_ids: ['a', 'a', '  b  ', '', null, 42, { id: 'c' }],
+ });
+ assert.deepEqual(segment.account_ids, ['a', 'b'],
+  'a duplicate would make the confirm count disagree with the chips on screen');
+});
+
+test('a non-array account_ids is refused rather than silently ignored', () => {
+ assert.throws(() => campaigns.normalizeSegment({ conditions: [], account_ids: 'everyone' }), /account_ids/);
+});
+
+test('describeSegment names the hand-picked half, so the audit row cannot lie', () => {
+ assert.match(
+  campaigns.describeSegment(campaigns.normalizeSegment({ conditions: [], account_ids: ['a', 'b'] })),
+  /2 named accounts/,
+ );
+ const both = campaigns.describeSegment(campaigns.normalizeSegment({
+  match: 'all', conditions: [{ category: 'never_huddled' }], account_ids: ['a'],
+ }));
+ assert.match(both, /1 named account/);
+ assert.match(both, /plus/, 'both halves have to appear or the record is incomplete');
+});
+
+test('a stored segment round-trips its named list', () => {
+ const stored = campaigns.normalizeStoredSegment(
+  JSON.stringify({ match: 'all', conditions: [], account_ids: ['a', 'b'] }),
+ );
+ assert.deepEqual(stored.account_ids, ['a', 'b'],
+  're-reading a sent campaign must not lose who it went to');
+ // A segment saved before the field existed must not explode.
+ assert.deepEqual(campaigns.normalizeStoredSegment({ match: 'all', conditions: [] }).account_ids, []);
+});
