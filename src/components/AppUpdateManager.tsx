@@ -65,22 +65,35 @@ export function AppUpdateManager() {
     window.location.replace(url.href);
   }, [updateServiceWorker]);
 
-  const showAvailableToast = useCallback(() => {
+  // A new build is live. Whether there is anything to READ about it is a
+  // separate question, and conflating the two is what made this nag.
+  //
+  // "What's new" used to be offered on EVERY deploy. Most deploys ship no
+  // release note at all — a fix, a test, a skill file — so the button opened
+  // notes whose newest entry was days old. On a busy day that is a dozen
+  // prompts to re-read the same stale entry. Offer the notes only when one
+  // exists that this user has not seen; otherwise say the true and useful
+  // thing, which is just "reload".
+  const showAvailableToast = useCallback((hasUnseenNotes: boolean) => {
     toast('A new version of agensis is available', {
       // Stable id → sonner updates the existing toast instead of stacking a
       // second one when another deploy lands while this is still on screen.
       id: 'deploy-published',
-      description: 'See what’s new and reload to update.',
+      description: hasUnseenNotes
+        ? 'See what’s new and reload to update.'
+        : 'Reload to pick up the latest fixes.',
       duration: Infinity,
-      action: {
-        label: 'What’s new',
-        onClick: () => {
-          setMode('available');
-          setOpen(true);
-        },
-      },
+      action: hasUnseenNotes
+        ? {
+          label: 'What’s new',
+          onClick: () => {
+            setMode('available');
+            setOpen(true);
+          },
+        }
+        : { label: 'Reload', onClick: () => { void reload(); } },
     });
-  }, []);
+  }, [reload]);
 
   // Trigger 1: live deploy event.
   useEffect(() => {
@@ -91,8 +104,9 @@ export function AppUpdateManager() {
       // Ask the browser to fetch the freshly-published SW now, so a later Reload
       // activates the new precache rather than re-requesting stale assets.
       swRegistration.current?.update().catch(() => {});
-      await ensureNotes();
-      showAvailableToast();
+      const loaded = await ensureNotes();
+      const latest = latestReleaseId(loaded);
+      showAvailableToast(Boolean(latest) && readLastSeenRelease() !== latest);
     });
     return unsubscribe;
   }, [ensureNotes, showAvailableToast]);
@@ -114,7 +128,7 @@ export function AppUpdateManager() {
         lastSeenRelease: readLastSeenRelease(),
       });
       if (state === 'available') {
-        showAvailableToast();
+        showAvailableToast(Boolean(latestRelease) && readLastSeenRelease() !== latestRelease);
       } else if (state === 'updated') {
         setMode('updated');
         setOpen(true);
