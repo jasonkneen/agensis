@@ -48,6 +48,11 @@ function createRealtime(deps = {}) {
   handlePeerListRequest,
   handlePeerTicketRequest,
   inferenceBroker,
+  // Is this session members-only, and who are they? Injected rather than
+  // imported so the read rule stays single-sourced in shared/backend-core.cjs —
+  // a second copy here is exactly how the fanout would drift back open.
+  isPrivateSessionRow = () => false,
+  sessionMemberUserIds = async () => new Set(),
   logMessageActivity,
   markAgentConnectionOffline,
   refreshConnectedAgentConfigs,
@@ -196,11 +201,34 @@ function createRealtime(deps = {}) {
   // The whole column, not named fields: a new provider added to PROVIDER_FIELDS
   // in server/bridge-admin-routes.cjs would otherwise leak by default.
   channel_bridges: ['config'],
+  // gateway_configs is now subscribable (src/hooks/useGateways.ts), so this one
+  // is live rather than pre-emptive.
+  //
+  // The three dedicated routes in server/workspaces-routes.cjs already map their
+  // fanout through publicGatewayConfig, which drops api_key_cipher — but the
+  // GENERIC /backend/db/update|delete routes fan out raw `returning *` rows, and
+  // allowlisting the table is exactly what opened those. So the encrypted provider
+  // key reaches this function on the generic path and nowhere else strips it.
+  //
+  // `headers` goes too, for the reason publicGatewayConfig does NOT strip it and
+  // should: an operator can put `Authorization: Bearer …` in that jsonb. Nothing
+  // is lost — useGateways ignores the payload and refetches over REST, so the
+  // realtime row is a change notification, not data.
+  gateway_configs: ['api_key_cipher', 'headers'],
   // Nothing broadcasts workspace_join_links today — the mint/list/revoke routes
   // deliberately do not call notifyDbSubscribers. This entry is here for the day
   // someone adds one: workspace_invites IS broadcast, so copying that pattern
   // across is the obvious next edit, and it would put token_hash on the wire.
   workspace_join_links: ['token_hash'],
+  // workspace_invites.token is NAMED token and HOLDS hashAgentToken(token) — the
+  // same value workspace_join_links spells token_hash, under a name that reads
+  // like the raw credential. All five fanout calls in
+  // server/members-invites-routes.cjs pass raw `returning *` rows. Nothing
+  // subscribes (the table is deliberately absent from ALLOWED_TABLES), so this is
+  // pre-emptive in exactly the way the line above it is — and it is the entry that
+  // makes the pair consistent, which is what stops the next reader concluding the
+  // omission was a judgement rather than an oversight.
+  workspace_invites: ['token'],
  };
 
  function sanitizeRealtimeRow(table, row) {
@@ -322,6 +350,35 @@ function createRealtime(deps = {}) {
    }
   }
 
+  // A PRIVATE chat_sessions row cannot ride the synchronous lane.
+  //
+  // Subscribing is gated (authorizeRealtimeBinding -> enforceDbOperationAccess),
+  // but a `chat_sessions` subscription filtered on workspace_id is legitimate —
+  // that is how the sidebar stays live — and every row matching that filter is
+  // fanned out below. Without this split, opening a DM would push its title and
+  // roster to every socket in the workspace, which is the same disclosure the
+  // bootstrap payload was just fixed to withhold. `messages` needs no equivalent:
+  // an unfiltered messages subscription cannot be established at all, so a
+  // message only ever reaches a socket that named its session.
+  //
+  // Answering "who may see this" needs the DB, and this function is synchronous
+  // and holds no handle (see emitAgentStatus above for the same constraint), so
+  // these rows leave through an async lane instead.
+  const privateRows = table === 'chat_sessions' ? rowList.filter(isPrivateSessionRow) : [];
+  const openRows = privateRows.length > 0 ? rowList.filter((row) => !isPrivateSessionRow(row)) : rowList;
+
+  const deliver = (ws, row) => {
+   const outRow = sanitizeRealtimeRow(table, row);
+   sendWs(ws, {
+    type: 'db_changes',
+    schema: 'public',
+    table,
+    payload: eventType === 'DELETE'
+     ? { eventType, new: {}, old: outRow }
+     : { eventType, new: outRow, old: {} },
+   });
+  };
+
   for (const ws of websocketClients) {
    const subscriptions = ws.subscriptions || [];
    for (const subscription of subscriptions) {
@@ -330,17 +387,46 @@ function createRealtime(deps = {}) {
     if (subscription.schema && subscription.schema !== 'public') continue;
     if (subscription.event && subscription.event !== '*' && subscription.event !== eventType) continue;
 
-    for (const row of rowList) {
+    for (const row of openRows) {
      if (!matchesFilter(subscription.filter, row)) continue;
-     const outRow = sanitizeRealtimeRow(table, row);
-     sendWs(ws, {
-      type: 'db_changes',
-      schema: 'public',
-      table,
-      payload: eventType === 'DELETE'
-       ? { eventType, new: {}, old: outRow }
-       : { eventType, new: outRow, old: {} },
-     });
+     deliver(ws, row);
+    }
+   }
+  }
+
+  if (privateRows.length > 0) void fanoutPrivateSessionRows(privateRows, eventType, deliver);
+ }
+
+ /**
+  * Fan private `chat_sessions` rows out to their members only.
+  *
+  * ONE membership query per row rather than one per (row, socket): a private
+  * session changes rarely compared with the message traffic this loop normally
+  * carries, so the cost lands where it is cheapest.
+  *
+  * Silence on failure is deliberate and is the fail-CLOSED direction: a member
+  * who misses a live update sees it on their next load, whereas guessing
+  * "deliver anyway" would publish the thing this exists to withhold.
+  */
+ async function fanoutPrivateSessionRows(rows, eventType, deliver) {
+  for (const row of rows) {
+   let allowed;
+   try {
+    allowed = await sessionMemberUserIds(row.id);
+   } catch (error) {
+    console.error('private session fanout membership lookup failed', error?.message || error);
+    continue;
+   }
+   if (!allowed || allowed.size === 0) continue;
+   for (const ws of websocketClients) {
+    if (!ws.userId || !allowed.has(String(ws.userId))) continue;
+    for (const subscription of ws.subscriptions || []) {
+     if (subscription.type !== 'db_changes') continue;
+     if (subscription.table && subscription.table !== 'chat_sessions') continue;
+     if (subscription.schema && subscription.schema !== 'public') continue;
+     if (subscription.event && subscription.event !== '*' && subscription.event !== eventType) continue;
+     if (!matchesFilter(subscription.filter, row)) continue;
+     deliver(ws, row);
     }
    }
   }

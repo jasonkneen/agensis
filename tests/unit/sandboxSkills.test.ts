@@ -385,7 +385,7 @@ describe('redactSandboxSecrets', () => {
   });
 
   it('catches credential-shaped strings it was not told about', () => {
-    expect(redactSandboxSecrets('api_key=sk_live_0123456789abcdef')).not.toContain('sk_live_0123456789abcdef');
+    expect(redactSandboxSecrets('api_key=testkey_live_0123456789abcdef')).not.toContain('testkey_live_0123456789abcdef');
     expect(redactSandboxSecrets('{"token": "aga_ZZZZ1111YYYY2222"}')).not.toContain('aga_ZZZZ1111YYYY2222');
   });
 

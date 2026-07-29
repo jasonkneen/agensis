@@ -39,40 +39,66 @@ Array columns (e.g. `uuid[]`) need
 `ARRAY_COLUMNS_BY_TABLE` + the `toPgArrayLiteral` bind path in BOTH backends —
 postgres.js will not array-serialize a raw JS array bound via `.unsafe`.
 
-## Read authorization has ONE granularity: the workspace
+## Read authorization has TWO granularities: workspace, then session
 
-**Read authorization is workspace-granular. There is no channel-, session- or
-DM-level check anywhere in the codebase.** Every read path resolves a
-`workspace_id` and calls `enforceWorkspaceRole(userId, workspaceId, 'read')`.
-Below that, scoping happens because the SQL narrows to the session the caller
-asked for — not because a permission check said that caller may see it.
+Every read path resolves a `workspace_id` and calls
+`enforceWorkspaceRole(userId, workspaceId, 'read')`. That check is necessary and
+unchanged. **Since 2026-07-30 it is no longer sufficient**: a session marked
+`chat_sessions.visibility = 'private'` is readable only by rows in
+`chat_session_members`.
 
-Concretely, a member holding only `viewer` (the weakest role) can read the full
-transcript of ANY session in the workspace via `GET /backend/sessions/:id/messages`,
-receive any session's live rows by subscribing with `session_id=eq.<id>`, and see
-every session in the bootstrap payload. An agent's MCP identity is workspace-level
-too: `search_messages` and `list_channels` (`server/mcp.cjs`) span every channel
-and every DM in the workspace.
+The rule has exactly ONE spelling, in `shared/backend-core.cjs`:
 
-**DM privacy is not enforced, and no feature may assume it.** The original
-justification is a comment at the DM-creation site — "workspaces are effectively
-single-human, so the DM keys on the agent alone". That was a reasonable
-assumption and it is **already false**: as of 2026-07-29 one workspace has two
-distinct human members and four Direct-message sessions, all readable by both.
-The product has `workspace_members`, five roles, an invite flow and
-`revokeRealtimeAccessForMember`, so it plainly expects multi-human workspaces.
+| helper | use |
+| --- | --- |
+| `isPrivateSessionRow(row)` | is this session members-only? |
+| `enforceSessionReadAccess({userId, sessionId, db})` | row-at-a-time gate; throws 403 |
+| `sessionReadableSql(alias, '$n')` | SQL predicate, for queries spanning many sessions |
+| `appendSessionAccessClause(where, userId, table)` | row filter for generic `chat_sessions`/`messages` selects |
 
-This is a known, deliberate limitation rather than an oversight, and it is pinned
-by `tests/dm-scope-assumption.test.cjs`, which asserts the current answer out
-loud. If you add a per-session read check, that test goes red — update it and this
-section together.
+**Add a read path, use one of those four.** Do not re-spell the predicate — a
+second copy is how this drifts back open.
 
-**Do not fix this partially.** A per-session check on one read path and not the
-others is strictly worse than the current uniform behaviour: it reads as privacy
-while leaving the other paths open. The real fix is a `chat_session_members`
-table, a new capability, a migration for the existing sessions, and a rewrite of
-every read path listed above — a product decision about what a DM means here, not
-a bug fix.
+**A private session is a DM, or anything derived from one.** Sub-thread splits
+(`parent_message_id`), forks (`split_parent_id`) and huddle transcripts
+(`huddles.transcript_session_id`) inherit both `visibility` and the member list
+at creation time. Scoping only `folder = 'Direct messages'` is a partial fix:
+production had 12 sub-thread sessions hanging off DM messages and 38 huddle
+sessions carrying a DM roster.
+
+`isPrivateSessionRow` treats `visibility = 'private'` **OR**
+`folder = 'Direct messages'` as private, on purpose. The folder half is the
+fail-closed backstop: a new DM-creating path that forgets the column cannot
+silently produce a world-readable DM.
+
+**No implicit owner oversight.** A workspace owner is not a member of your DM
+just for owning the workspace. They hold `manage`, so they can GRANT themselves
+access — which writes a `chat_session.access_granted` audit row. Silent reads
+would be the same power with no trace.
+
+**Granting is manage-gated and authorized on the WORKSPACE ROLE, never on the
+grant.** `server/session-access-routes.cjs`. A grant-holder without `manage`
+cannot widen their own access or pass it on; otherwise one grant would compound
+into the whole workspace. Revoke touches `source = 'grant'` rows only, so it can
+never strip the person whose conversation it is.
+
+**`chat_session_members` is deliberately absent from `ALLOWED_TABLES`**, like
+`audit_log`. Reachable through `POST /backend/db/insert` it would be a self-grant
+primitive and the whole feature would be theatre.
+
+**An AGENT is scoped by participation, not membership** (`mcpSessionScopeSql` in
+`server/mcp.cjs`). `chat_session_members` holds user ids and an agent is not a
+user, so the agent branch asks whether the agent is in the session's roster. That
+keeps an agent working in its own DM — the core product loop — without opening
+every other agent's DM to it. A `workspace` MCP token reads as its workspace's
+owner; `invite` and unpinned `integration` tokens get no private sessions at all.
+
+Pinned by `tests/dm-scope-assumption.test.cjs`. If you change any of the above,
+that file goes red — update it and this section together.
+
+What IS still structurally guaranteed, and must stay that way: `messages` has no
+`workspace_id` column, so a message is only reachable through
+`session_id -> chat_sessions.workspace_id`.
 
 What IS structurally guaranteed, and must stay that way: `messages` has no
 `workspace_id` column, so a message is only reachable through
@@ -100,8 +126,13 @@ side logs anything. The surface just stays empty forever.
 
 That is not hypothetical. An audit found **eight** tables broadcast but not
 subscribable, two of them (`agent_schedules`, `gateway_configs`) with live client
-subscriptions that have never once worked — through 1471 backend and 2434
-frontend passing tests, because nothing asserted what the protocol is.
+subscriptions that had never once worked — through 1471 backend and 2434
+frontend passing tests, because nothing asserted what the protocol is. Those two
+are fixed and allowlisted; `tests/schedules-gateways-realtime.test.cjs` walks the
+whole path (the hook's exact binding -> `authorizeRealtimeBinding` -> a real
+fanout -> the frame the client receives) so the two halves can't drift apart
+again silently. The other six are exemptions on purpose, `FANOUT_BROKEN` is empty,
+and empty is the goal state rather than a disabled check.
 
 So every table passed to `notifyDbSubscribers` must be exactly one of:
 
@@ -130,6 +161,23 @@ projection. `channel_bridges.config` is the cautionary tale — the REST routes
 project it away, all four fanout calls pass raw `returning *` rows, and only the
 missing allowlist entry stood between that and a live Slack bot token on every
 subscriber's socket.
+
+Allowlisting `gateway_configs` is the worked example of what that costs, and all
+four parts were needed in the one commit:
+
+- `ALLOWED_TABLES` — otherwise the subscription is refused.
+- `WORKSPACE_SCOPED_TABLES` — **load-bearing, not tidy.**
+  `enforceDbOperationAccess` returns EARLY for any table outside that Set, so an
+  `ALLOWED_TABLES` entry without it has *no row scoping at all* and one signed-in
+  user reads every tenant's rows.
+- `SELECTABLE_COLUMNS_BY_TABLE` — `columns: '*'` on the generic select would
+  otherwise return `api_key_cipher`, which the dedicated route reduces to a
+  `has_key` boolean on purpose. The rule of thumb: **the generic path must never
+  return more than the dedicated route does at the same capability.**
+- `PRIVILEGED_DB_COLUMNS_BY_TABLE` — a generic write must not set the columns the
+  dedicated route exists to validate. `base_url` is checked by
+  `assertSafeOutboundUrl` on POST/PATCH and nowhere else, so leaving it writable
+  through `/backend/db/insert` would be a way around a live SSRF guard.
 
 ### Presence: two transports, merged only at the view layer
 
@@ -261,12 +309,16 @@ window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
     This is why there is no `depth` column on `messages`: a flat "automations do
     not chain" rule needs no schema change to the hottest table in the product.
     Relaxing it means adding that column, and the cycle risk comes back with it.
-  - **The drain is BOUNDED per tick** on the shared 30s reaper interval, for the
-    same reason `thread-harvest.cjs` bounds its own: everything on that interval
-    runs serially, so an unbounded drain would stall the job reapers behind it.
-    The bound is the invariant; the number is tuned to what the action costs.
-    Latency is therefore up to 30s — if that becomes a complaint, the fix is a
-    sibling 1s worker like `flowDeliveryWorker`, not removing the bound.
+  - **The drain runs on its OWN 1s worker**, a sibling of `flowDeliveryWorker`
+    rather than a passenger on the 30s reaper tick — "when X happens, do Y"
+    arriving up to 30 seconds later reads as broken. It is a sibling and not
+    merged into that worker because a slow automation must not delay a webhook
+    delivery. **A faster tick is not a bigger tick**: the per-tick drain bound is
+    unchanged, so peak work per tick is strictly lower than it was, and the
+    in-flight boolean makes a slow drain skip the next tick rather than stack.
+    `sweepAutomationRuns` stays on the 30s tick — reclaiming an expired lease is
+    housekeeping and does not need to run 30x more often. The BOUND is the
+    invariant, not the number; do not remove it to make the worker faster.
   - **Definitions are JSON. YAML is rendered, never parsed.** YAML's silent
     coercions (`on:` -> true, an unquoted `1.0` -> float) do not throw; they
     produce a different valid document that runs the wrong step. There is no
@@ -282,6 +334,15 @@ window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
     read-only to clients through `/backend/db` (same shape as `agent_schedules`),
     so the dedicated route stays the only place a definition is validated. Create,
     update, delete, enable and disable all write to the audit log.
+  - **The UI is `src/components/windows/AutomationsWindowContent.tsx`**, with the
+    display logic split into the pure `src/lib/automationView.ts` so it is
+    testable without mounting. Three things it must keep saying: that a rule can
+    only post a message (so it cannot wake an agent or spend a token), that
+    authoring needs `manage`, and — most importantly — that a rule the runaway
+    guard switched off is DIFFERENT from one a person paused. Both are
+    `enabled: false` in the database; a rule that silently stopped firing is the
+    worst outcome this feature has, so `automationState()` returns three states,
+    never two.
   - **The flag gates execution, not a button.** The enqueue hook, the worker and
     the routes all check `AGENSIS_AUTOMATIONS`. A flag that only hid the UI would
     still run automations.
@@ -595,6 +656,87 @@ Two related rules:
   parallel client-only route.** `runToolForIdentity` is the single authorization
   chokepoint (kinds allowlist, Flows scope, channel pin, invite-role capability
   checks, 120/min limiter). Anything reached another way is outside all of it.
+
+### Login tokens at the MCP door
+
+`verifyMcpToken` (`server/index.cjs`) tries five verifiers in order, and the last
+is `verifyUserAuthMcpToken`: **a human's ordinary agensis session token
+authenticates at `/backend/mcp`**, resolving to a `kind: 'user'` identity on the
+workspace that user owns. This is **deliberate** — it arrived with the MCP client
+registration approval flow, the order is documented above `verifyMcpToken`, and
+`get_connect_command` carries a per-kind branch that re-checks the `manage` role
+specifically for `kind === 'user'`. Do not "fix" it as a fall-through bug.
+
+Know what it costs before you point anyone at it:
+
+- **It grants nothing the `agw_` workspace token does not.** Both reach the same
+  29 tools — asserted in `tests/mcp-user-token-assumption.test.cjs`, which fails
+  if that ever stops being true.
+- **It is not separately revocable.** Revocation is `token_version` on
+  `app_users`, a per-user counter, so withdrawing a pasted copy signs the human
+  out everywhere. `agw_` is revoked by re-minting and touches MCP clients only.
+- **It has no prefix.** `aga_`/`agw_`/`agx_`/`agf_`/`cbk_` are pattern-matchable,
+  so a redactor can strip them from a log, transcript or screenshot. A session
+  token cannot be recognised by shape — this is why `cli/src/render.mjs` redacts
+  the exact resolved credential as well as the prefixes.
+- **It expires in 14 days** (`DEFAULT_TOKEN_TTL_SEC`), so a working MCP config
+  silently starts returning 401. `agw_` does not expire.
+- **It picks the user's OLDEST owned workspace** (`order by created_at asc limit
+  1`), not the one they are looking at.
+
+So: **`agw_` is the credential to hand a human or an MCP client.** It is
+manage-gated, minted at `POST /backend/workspaces/:id/mcp-token`, and it is the
+only thing the UI ever produces (`src/lib/mcpConnect.ts`). Nothing in the product
+tells anyone to paste a login token, and nothing should start.
+
+**The door records that this happened, so the decision can rest on data.** A
+`mcp.login_token_used` audit row is written when a `kind: 'user'` identity
+authenticates — workspace, user id and kind, never the token, its hash or any
+fragment. It answers one question: is anyone actually using this path?
+
+MCP auth runs on **every request**, so the row is emitted at most **once per user
+per 24h per process** via `createFirstUseWindow` (`shared/backend-core.cjs`). That
+dedup is what makes the audit log the right home rather than the wrong one: after
+it, the rate is bounded by *distinct humans per day* — the same rate class as
+`invite.created` — instead of by request volume. Without it, a per-request row
+would bury the privileged actions the log exists for and flood a tamper-evident
+chain. **If you ever need the actual call volume, do not reach for this table**;
+that is a metrics counter, and the audit log would answer less by containing
+more. Recording is scoped by a frozen `KINDS_TO_RECORD` set, and rows are never
+awaited, so no DB write is on the MCP hot path.
+
+Read the rows as "this credential appeared today", **not** as a request count —
+the window is process-local, so a multi-instance deploy can produce one row per
+instance.
+
+One thing that is **not** implementable, so nobody spends a day on it: you cannot
+"allow the tools but deny `/backend/db/*`" for a login token used at MCP. It is
+one string, and when it later arrives at `/backend/db/*` nothing marks it as
+having been used at the MCP door. MCP acceptance does not *grant* that reach
+either — the session token always had it through `requireAuth`. The only lever is
+whether `verifyMcpToken` keeps accepting login tokens at all, and that is a
+product decision: removing it would break anyone who has already pasted one.
+
+### `cli/` is a client for that surface, not a second one
+
+`cli/agensis-ops.mjs` (`npm run ops -- <command>`) is a transport-only wrapper
+over `POST /backend/mcp`, for **humans and CI** — not for agents, which already
+have all 30 tools over MCP inside every job. It ships **zero server routes and
+zero hand-written tool schemas**: `call` builds its flag parser from the
+`inputSchema` the server publishes at runtime, so it cannot drift.
+
+The rule above is enforced here mechanically. `cli/src/rpc.mjs` is the CLI's
+**only** network egress, POSTs to one URL, and will emit only
+`initialize`/`tools/list`/`tools/call` — anything else throws.
+`tests/ops-cli.test.cjs` drives every command while recording every request and
+asserts that URL and method set, so **adding a bespoke CLI route fails a test.**
+If a command needs a capability MCP lacks, add an MCP tool.
+
+Two things to know before editing it: the package is `private: true` so there is
+no publish lane (run it from a checkout), and `cli/**/*.mjs` is listed in
+`eslint.config.js` with `auth.mjs`, `render.mjs` and `rpc.mjs` in
+`tests/lint-coverage.test.cjs` — those three hold the bearer token, the redaction
+and the egress allowlist. Full reference: `cli/README.md`.
 
 ## Tests (two runners)
 

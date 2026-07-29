@@ -506,7 +506,7 @@ test('settings secrets route is owner/admin only', async () => {
       'ws-1:user-admin': 'admin',
     },
     workspaceSecrets: {
-      'ws-1:ANTHROPIC_API_KEY': 'sk-workspace-secret',
+      'ws-1:ANTHROPIC_API_KEY': 'testkey-workspace-secret',
     },
   });
 
@@ -526,7 +526,7 @@ test('settings secrets route is owner/admin only', async () => {
     // so every workspace owner was shown four characters of it.
     assert.equal('preview' in adminBody.data.keys[0], false, 'a managed key must not carry a preview');
     assert.ok(
-      !JSON.stringify(adminBody).includes('sk-w'),
+      !JSON.stringify(adminBody).includes('testkey-w'),
       'no part of the stored key may appear in the response',
     );
   });
@@ -543,7 +543,7 @@ test('settings secrets post stores workspace-scoped values for admins', async ()
     const response = await authedFetch(baseUrl, token, '/backend/settings/secrets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspaceId: 'ws-1', ANTHROPIC_API_KEY: 'sk-new-workspace-key' }),
+      body: JSON.stringify({ workspaceId: 'ws-1', ANTHROPIC_API_KEY: 'testkey-new-workspace-key' }),
     });
     const body = await response.json();
 
@@ -551,8 +551,8 @@ test('settings secrets post stores workspace-scoped values for admins', async ()
     assert.equal(body.data.keys[0].scope, 'workspace');
     // The write is confirmed by STATE, not by echoing the value back.
     assert.equal(body.data.keys[0].configured, true);
-    assert.ok(!JSON.stringify(body).includes('sk-new-workspace-key'), 'the written key must not be echoed');
-    assert.ok(!JSON.stringify(body).includes('sk-n'), 'not even a prefix of the written key');
+    assert.ok(!JSON.stringify(body).includes('testkey-new-workspace-key'), 'the written key must not be echoed');
+    assert.ok(!JSON.stringify(body).includes('testkey-n'), 'not even a prefix of the written key');
     const insertCall = fakeDb.calls.find(call => String(call.sql).includes('insert into workspace_secrets'));
     assert.ok(insertCall, 'expected an insert into workspace_secrets');
     // Encryption-at-rest: the value column is a SQL literal '' (not a param), and
@@ -560,7 +560,7 @@ test('settings secrets post stores workspace-scoped values for admins', async ()
     assert.equal(insertCall.params[0], 'ws-1');
     assert.equal(insertCall.params[1], 'ANTHROPIC_API_KEY');
     assert.ok(insertCall.params[2] && insertCall.params[2].length > 0, 'ciphertext must be stored at params[2]');
-    assert.ok(!insertCall.params.some(p => typeof p === 'string' && p.includes('sk-new-workspace-key')), 'plaintext secret must not appear in any DB parameter');
+    assert.ok(!insertCall.params.some(p => typeof p === 'string' && p.includes('testkey-new-workspace-key')), 'plaintext secret must not appear in any DB parameter');
   });
 });
 
@@ -592,7 +592,7 @@ test('settings secrets POST rejects app-level writes for ordinary authenticated 
     const noWorkspace = await authedFetch(baseUrl, token, '/backend/settings/secrets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ANTHROPIC_API_KEY: 'sk-evil-platform-key' }),
+      body: JSON.stringify({ ANTHROPIC_API_KEY: 'testkey-evil-platform-key' }),
     });
     const noWorkspaceBody = await noWorkspace.json();
     assert.equal(noWorkspace.status, 403);

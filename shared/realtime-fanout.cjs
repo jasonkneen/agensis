@@ -14,9 +14,14 @@
 // AGENTS.md carried the rule as prose — "if a column is workspace-scoped, also
 // confirm the table is in the access allowlists" — and prose is exactly what
 // failed. An audit of `main-next` found EIGHT tables broadcast but not
-// subscribable, two of them with live client subscriptions that have never once
+// subscribable, two of them with live client subscriptions that had never once
 // worked. This file plus tests/realtime-fanout-allowlist.test.cjs turns that
 // sentence into a check that fails the build.
+//
+// Those two — agent_schedules and gateway_configs — are FIXED and allowlisted
+// now, so FANOUT_BROKEN is empty. The remaining six are exemptions on purpose and
+// each one still carries its reason. Read the reason before changing a category:
+// one of them is the vault.
 //
 // THE RULE
 //
@@ -94,30 +99,19 @@ const FANOUT_EXEMPT = {
 // also opens the generic /backend/db path to it on BOTH backends (Fly and
 // netlify/functions/backend.mjs), so each needs a DB_TABLE_ACCESS entry in the
 // same commit or it falls through to DEFAULT_TABLE_ACCESS (read/write).
-const FANOUT_BROKEN = {
- agent_schedules: {
-  subscriber: 'src/hooks/useSchedules.ts',
-  fix:
-   'Add to ALLOWED_TABLES with DB_TABLE_ACCESS '
-   + "{ select: 'read', insert: 'manage', update: 'manage', delete: 'manage' } — "
-   + 'a schedule runs an agent on a timer, so a `write` member must not be able to '
-   + 'create one through /db/insert and bypass server/schedules-routes.cjs. '
-   + 'Already in WORKSPACE_SCOPED_TABLES, so row scoping is in place.',
- },
-
- gateway_configs: {
-  subscriber: 'src/hooks/useGateways.ts',
-  fix:
-   "Add to ALLOWED_TABLES with DB_TABLE_ACCESS `manage` on all four operations, "
-   + 'AND add to WORKSPACE_SCOPED_TABLES — it is in neither today, so it would have '
-   + 'no row scoping at all. Gateways hold base_url, which is the subject of a '
-   + 'known live SSRF finding, so this one wants a security review rather than a '
-   + 'ride-along. The fanout itself is already projected through '
-   + 'publicGatewayConfig (api_key_cipher reduced to a has_key boolean), but that '
-   + 'projection passes `headers` through verbatim and an operator can put an '
-   + 'Authorization header there.',
- },
-};
+//
+// EMPTY IS THE GOAL STATE, NOT A DISABLED CHECK. Both original entries —
+// agent_schedules (src/hooks/useSchedules.ts) and gateway_configs
+// (src/hooks/useGateways.ts) — were fixed rather than reclassified: they are in
+// ALLOWED_TABLES now, so fanoutTableStatus reports them 'allowlisted' and leaving
+// them here would be a `conflict:allowlisted+broken` failure. What each fix
+// actually required is pinned by tests, not by prose — see
+// `the two subscriptions this file was written for are live` in
+// tests/realtime-fanout-allowlist.test.cjs, which asserts the allowlist entry,
+// the workspace scoping, the per-operation roles, the selectable-column
+// projection and the fanout strip. Those assertions are the record; if you are
+// tempted to move a table back in here, read them first.
+const FANOUT_BROKEN = {};
 
 // `notifyDbSubscribers` is also called with a VARIABLE table name by the generic
 // /backend/db insert/update/delete routes in server/index.cjs. Those are safe by

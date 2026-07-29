@@ -8,7 +8,14 @@ const {
 // NOT array-serialize a raw JS array bound to an untyped $n — it coerces with
 // '' + value, producing `a,b` instead of `{a,b}`. Single-sourced from
 // backend-core (same helper the generic /backend/db path uses).
-const { toPgArrayLiteral } = require('../shared/backend-core.cjs');
+const { toPgArrayLiteral, createFirstUseWindow } = require('../shared/backend-core.cjs');
+
+// Which identity kinds get a "this credential was seen today" audit row. Only
+// the login-token path, because it is the only one with an open question
+// attached (see noteLoginTokenUse). Every other kind is a purpose-built MCP
+// credential whose use is not in doubt, and recording those would add rows
+// without changing any decision.
+const KINDS_TO_RECORD = Object.freeze(new Set(['user']));
 const { normalizeTaskTitle, resolveTaskParentByTitle } = require('../shared/taskTitle.cjs');
 const { normalizeConversationMode } = require('../shared/channelMentions.cjs');
 
@@ -309,13 +316,20 @@ function buildTools() {
     );
     return { channels: rows };
    }
+   // Enumerating channels leaks a private conversation's existence and title
+   // without reading a message, so the scope predicate belongs here too — not
+   // only on the tools that return content.
+   const params = [identity.workspaceId];
+   const scope = mcpSessionScopeSql(identity, 'chat_sessions', params);
+   params.push(limit);
    const rows = await db.unsafe(
-    `select id, title, folder, model, conversation_mode, participants, archived_at, updated_at
+    `select id, title, folder, model, conversation_mode, participants, visibility, archived_at, updated_at
            from chat_sessions
           where workspace_id = $1 ${includeArchived ? '' : 'and archived_at is null'}
+            and ${scope}
           order by updated_at desc
-          limit $2`,
-    [identity.workspaceId, limit],
+          limit $${params.length}`,
+    params,
    );
    return { channels: rows };
   },
@@ -339,7 +353,7 @@ function buildTools() {
    const limit = optInt(args?.limit, 50, 200);
    const threadParentId = typeof args?.thread_parent_id === 'string' && args.thread_parent_id.trim()
     ? args.thread_parent_id.trim() : null;
-   await assertChannelInWorkspace(db, channelId, identity.workspaceId);
+   await assertChannelInWorkspace(db, channelId, identity);
    const rows = threadParentId
     ? await db.unsafe(
      `select id, role, content, sender_kind, sender_id, sender_name, thread_parent_id, broadcast_to_channel, created_at
@@ -378,13 +392,18 @@ function buildTools() {
   async run(args, { db, identity }) {
    const query = requireString(args, 'query');
    const limit = optInt(args?.limit, 30, 100);
-   const channelClause = identity.kind === 'integration' && identity.channelId
-    ? 'and s.id = $3'
-    : '';
-   const params = identity.kind === 'integration' && identity.channelId
-    ? [identity.workspaceId, `%${query}%`, identity.channelId, limit]
-    : [identity.workspaceId, `%${query}%`, limit];
-   const limitParam = identity.kind === 'integration' && identity.channelId ? '$4' : '$3';
+   // A substring search is the widest read in the whole MCP surface — it spans
+   // every session in the workspace at once. Before this it returned matches
+   // out of other people's DMs, which is the single worst shape this bug had.
+   const pinned = identity.kind === 'integration' && identity.channelId;
+   const params = [identity.workspaceId, `%${query}%`];
+   let channelClause = '';
+   if (pinned) {
+    params.push(identity.channelId);
+    channelClause = `and s.id = $${params.length}`;
+   }
+   const scope = mcpSessionScopeSql(identity, 's', params);
+   params.push(limit);
    const rows = await db.unsafe(
     `select m.id, m.session_id, s.title as channel_title, m.role, m.content,
                 m.sender_kind, m.sender_name, m.created_at
@@ -392,7 +411,8 @@ function buildTools() {
            join chat_sessions s on s.id = m.session_id
           where s.workspace_id = $1 and m.content ilike $2
             and m.deleted_at is null and s.deleted_at is null ${channelClause}
-          order by m.created_at desc limit ${limitParam}`,
+            and ${scope}
+          order by m.created_at desc limit $${params.length}`,
     params,
    );
    return { results: rows };
@@ -900,7 +920,7 @@ function buildTools() {
    }
    const content = requireString(args, 'content');
    const kind = ['todo', 'plan', 'blocker'].includes(args?.kind) ? args.kind : 'todo';
-   await assertChannelInWorkspace(db, sessionId, identity.workspaceId);
+   await assertChannelInWorkspace(db, sessionId, identity);
    const ordRows = await db.unsafe(
     'select coalesce(max(order_index), 0) as m from thread_items where session_id = $1 and kind = $2',
     [sessionId, kind]);
@@ -970,7 +990,7 @@ function buildTools() {
   },
   async run(args, { db, identity }) {
    const sessionId = requireString(args, 'session_id');
-   await assertChannelInWorkspace(db, sessionId, identity.workspaceId);
+   await assertChannelInWorkspace(db, sessionId, identity);
    const kind = ['todo', 'plan', 'blocker'].includes(args?.kind) ? args.kind : null;
    const rows = kind
     ? await db.unsafe(
@@ -1584,16 +1604,95 @@ function createBuiltinToolset(deps) {
 
 // --- shared tool internals --------------------------------------------------
 
-async function assertChannelInWorkspace(db, channelId, workspaceId) {
+/**
+ * Which user id, if any, this MCP identity reads private sessions AS.
+ *
+ * `user` is the obvious one. `workspace` is the interesting one: that token is
+ * the workspace's own credential, minted by and for its owner, so it reads as
+ * the owner rather than as a stranger — without this, connecting Claude Code to
+ * your own workspace would stop being able to open your own DMs, which is the
+ * primary way this product is used.
+ *
+ * `invite` and an unpinned `integration` deliberately resolve to nothing. They
+ * are guest and machine credentials; neither is a person with DMs.
+ */
+function mcpSubjectUserId(identity) {
+ if (!identity) return '';
+ if (identity.kind === 'user' && identity.userId) return String(identity.userId);
+ if (identity.kind === 'workspace' && identity.ownerUserId) return String(identity.ownerUserId);
+ return '';
+}
+
+/**
+ * SQL predicate limiting `alias` to sessions this identity may see. Pushes its
+ * own binds onto `params`.
+ *
+ * AN AGENT IS SCOPED BY PARTICIPATION, NOT BY MEMBERSHIP. chat_session_members
+ * holds user ids, and an agent is not a user — so the agent branch asks the
+ * question that actually applies to it: is this agent in the session's roster.
+ * That is what keeps an agent reading and answering in its own DM (the core
+ * product loop) while not opening every other agent's DM to it.
+ */
+function mcpSessionScopeSql(identity, alias, params) {
+ const open = `(coalesce(${alias}.visibility, 'workspace') <> 'private'
+    and coalesce(${alias}.folder, '') <> 'Direct messages')`;
+
+ if (identity?.kind === 'agent' && identity.agentId) {
+  params.push(String(identity.agentId));
+  const agentParam = `$${params.length}`;
+  return `(${open} or exists (
+      select 1 from jsonb_array_elements(
+        case when jsonb_typeof(${alias}.participants) = 'array'
+             then ${alias}.participants else '[]'::jsonb end
+      ) mp
+       where mp->>'agent_id' = ${agentParam}
+    ))`;
+ }
+
+ // An integration pinned to one channel was configured for that channel on
+ // purpose — the pin IS the grant, and it is already the narrowest scope in the
+ // system. Anything else it could reach is excluded by identity.channelId.
+ if (identity?.kind === 'integration' && identity.channelId) return `(true)`;
+
+ const userId = mcpSubjectUserId(identity);
+ if (!userId) return open;
+ params.push(userId);
+ const userParam = `$${params.length}`;
+ return `(${open} or exists (
+      select 1 from chat_session_members csm
+       where csm.session_id = ${alias}.id
+         and csm.user_id = ${userParam}::uuid
+         and (csm.expires_at is null or csm.expires_at > now())
+    ))`;
+}
+
+/**
+ * The channel gate for EVERY MCP tool that names one.
+ *
+ * Takes the whole identity rather than just a workspace id so the private-session
+ * check cannot be omitted by a new caller: there is no signature here that
+ * compiles without it. That matters more than the ergonomics — this repo's MCP
+ * surface is public, and "the tool nobody remembered to gate" is precisely how
+ * the workspace-only read scope survived this long.
+ */
+async function assertChannelInWorkspace(db, channelId, identity) {
+ const workspaceId = identity?.workspaceId;
+ const params = [channelId, workspaceId];
+ const scope = mcpSessionScopeSql(identity, 'chat_sessions', params);
  const rows = await db.unsafe(
-  'select id from chat_sessions where id = $1 and workspace_id = $2 limit 1',
-  [channelId, workspaceId]);
+  `select id from chat_sessions
+     where id = $1 and workspace_id = $2 and ${scope}
+     limit 1`,
+  params);
+ // Deliberately the SAME message as a genuinely missing channel. Telling a
+ // caller "that exists but is private" confirms the conversation exists, which
+ // is most of what is being protected.
  if (!rows[0]) throw new ToolError('Channel not found in this workspace');
 }
 
 async function insertAgentMessage(ctx, channelId, content, threadParentId, actingAgent = null, broadcastToChannel = false) {
  const { db, identity, deps } = ctx;
- await assertChannelInWorkspace(db, channelId, identity.workspaceId);
+ await assertChannelInWorkspace(db, channelId, identity);
  // When a non-agent client (workspace/user/invite) speaks via `as: "<handle>"`,
  // the message must be attributed to that resolved agent, not the raw token —
  // otherwise a workspace-token client could never post AS an agent (the reason
@@ -1631,6 +1730,8 @@ function createMcpHandler(deps) {
   rateLimitBlocked,
   runtimeSchemaReady,
   serverVersion = '1.0.0',
+  recordAudit,
+  loginTokenWindow = createFirstUseWindow(),
  } = deps;
 
  const TOOLS = buildTools();
@@ -1638,6 +1739,50 @@ function createMcpHandler(deps) {
 
  function toolsForIdentity(identity) {
   return TOOLS.filter((tool) => toolAllowedForIdentity(tool, identity));
+ }
+
+ /**
+  * MEASUREMENT ONLY — this function authorizes nothing and refuses nothing.
+  *
+  * `verifyMcpToken` ends in `verifyUserAuthMcpToken`, so a human's ordinary
+  * session token authenticates here. Whether it should keep doing so is an open
+  * product decision, and the only missing input is whether anyone actually uses
+  * it. This records that, so the decision rests on data rather than a guess.
+  *
+  * Three properties this must hold, in order of how badly getting them wrong
+  * would hurt:
+  *
+  *   1. It cannot flood the audit log. MCP auth runs on EVERY request; the
+  *      first-use window collapses that to at most one row per user per 24h per
+  *      process. The dedup is checked BEFORE anything else happens.
+  *   2. It records nothing that reconstructs a credential — no token, no hash,
+  *      no prefix, no fragment. Only the workspace, the user id and the kind.
+  *      The user id is here deliberately: without it, several rows cannot be
+  *      told apart from one person retrying, which is the whole question.
+  *   3. It cannot break or slow the request. Nothing is awaited, so no DB write
+  *      is ever on the MCP hot path, and a rejection cannot surface as a failed
+  *      tool call. `recordAudit` already never rejects; the catch is belt and
+  *      braces against that changing.
+  *
+  * KINDS_TO_RECORD is a frozen set rather than an `=== 'user'` test so that
+  * widening it later (say, to compare adoption against the agw_ path) is one
+  * line and visibly the only thing that changes.
+  */
+ function noteLoginTokenUse(identity) {
+  if (!recordAudit || !identity || !KINDS_TO_RECORD.has(identity.kind)) return;
+  if (!identity.userId) return;
+  if (!loginTokenWindow.shouldRecord(`${identity.kind}:${identity.userId}`)) return;
+  try {
+   Promise.resolve(recordAudit({
+    workspaceId: identity.workspaceId || null,
+    actor: { userId: identity.userId },
+    action: 'mcp.login_token_used',
+    target: { type: 'mcp_endpoint', label: 'POST /backend/mcp' },
+    detail: { kind: identity.kind, firstUseInWindowHours: 24 },
+   })).catch(() => {});
+  } catch {
+   // Measurement must never be able to fail an authenticated request.
+  }
  }
 
  async function handleOne(rpc, identity) {
@@ -1707,6 +1852,8 @@ function createMcpHandler(deps) {
     return res.status(401).json(jsonrpcError(null, -32001, 'Unauthorized: valid agent or invite Bearer token required'));
    }
 
+   noteLoginTokenUse(identity);
+
    const rateKey = identity.agentId || identity.inviteId || identity.workspaceId;
    if (rateLimiter && rateLimitBlocked && rateLimitBlocked(res, rateLimiter, `mcp:${rateKey}`)) return;
 
@@ -1747,5 +1894,5 @@ module.exports = {
  listToolSummaries,
  SERVER_INSTRUCTIONS,
  SERVER_NAME,
- __test: { buildTools, ToolError, toolAllowedForIdentity, runToolForIdentity },
+ __test: { buildTools, ToolError, toolAllowedForIdentity, runToolForIdentity, KINDS_TO_RECORD },
 };

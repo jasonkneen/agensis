@@ -1,5 +1,33 @@
 [
   {
+    "version": "private-direct-messages",
+    "date": "2026-07-30",
+    "title": "Your direct messages are now actually private",
+    "summary": "Until now, anyone you shared a workspace with could read every direct message in it, including yours. Not through a bug — there was simply no such thing as permission to read one conversation rather than another. Any member with read access could open any DM, search its contents, or watch it live. That is fixed: a direct message is now readable only by the people in it, and so is anything split out of one, like a sub-thread or a huddle held inside it. Nothing you could read before has been taken away — every existing DM stays with the person whose workspace it is, and your agents carry on reading and answering in their own DMs exactly as before. When someone genuinely does need to see a conversation they are not part of, an admin can grant them access to that one conversation, optionally with an expiry date, and every grant and withdrawal is written to the audit log. There is no silent way in: an admin cannot read your DM without leaving a record, and being given access to a conversation does not let you pass it on to anyone else.",
+    "highlights": [
+      "A direct message is readable only by the people in it — not by everyone in the workspace",
+      "Sub-threads and huddles split out of a DM stay private too",
+      "Nothing you could read before is gone, and agents still work in their own DMs as normal",
+      "An admin can grant access to one conversation when it is genuinely needed, with an optional expiry",
+      "Every grant and withdrawal is recorded, so nobody can look in silently",
+      "Being granted access does not let you pass it on to anyone else"
+    ]
+  },
+  {
+    "version": "automations-window",
+    "date": "2026-07-30",
+    "title": "Set up a rule without writing anything",
+    "summary": "Rules that watch for something happening in a workspace and post a message existed, but the only way to make one was to talk to the server directly, which in practice meant nobody could. There is an Automations panel now, in the sidebar. Pick what to watch for, narrow it down if you want, choose where the message goes, and write it. A rule you make starts switched off so you can read it back before it does anything. Rules also react faster now — within about a second of the thing happening, rather than up to half a minute later. The panel is honest about the limits: a rule can post a message and nothing else, so it can never wake an agent or cost you anything however often it fires. A rule that starts firing far too often is switched off for you, and the panel says so plainly and explains why, rather than leaving it to quietly stop working. Creating and changing rules needs the admin role, and every change is written to the audit log.",
+    "highlights": [
+      "An Automations panel in the sidebar — no more setting rules up by hand",
+      "Rules react within about a second instead of up to thirty",
+      "New rules start switched off so you can read them back first",
+      "A rule that switched itself off says so clearly, and why",
+      "Says plainly that a rule can only post a message — it cannot wake an agent or spend anything",
+      "Creating or changing a rule needs the admin role, and is recorded in the audit log"
+    ]
+  },
+  {
     "version": "agent-templates",
     "date": "2026-07-30",
     "title": "Save an agent you have tuned, and start the next one from it",
@@ -24,6 +52,19 @@
       "A rule can only post a message, so it can never start an agent or spend tokens",
       "A rule that fires too often is switched off automatically and says why",
       "Only admins can create or change one, and every change is recorded"
+    ]
+  },
+  {
+    "version": "schedules-and-gateways-go-live",
+    "date": "2026-07-29",
+    "title": "Schedules and inference gateways update themselves now",
+    "summary": "Both of these screens have always been built to update the moment something changed — and neither of them ever did. The lists asked the server to keep them posted, the server quietly refused, and the refusal was thrown away without a word, so the only way to see a change was to reload. If a schedule ran, or someone else on your team added a gateway, your screen went on showing the old picture indefinitely. Both are live now: a schedule that fires, gets switched off, or has its timing changed updates in front of you, and a gateway someone adds or removes appears and disappears on everyone's screen at once. The gateway list carries no credentials with it — the stored API key never leaves the server, and neither does anything you put in a gateway's custom headers, so nothing sensitive rides along with the update. Adding, editing or deleting a gateway still needs admin rights, and gateway addresses are still checked before the server will call them.",
+    "highlights": [
+      "Schedules update as they run, get paused, or have their timing changed",
+      "Gateways your teammates add or remove appear and disappear straight away",
+      "No API key and no custom header ever leaves the server with an update",
+      "You can see the lists as any member; changing them still needs admin rights",
+      "One workspace's schedules and gateways are never visible to another"
     ]
   },
   {
