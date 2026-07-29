@@ -32,7 +32,10 @@ A schema change is only correct when all three agree, or a fresh DB drifts:
 
 If a column is workspace-scoped, also confirm the table is in the access
 allowlists in `shared/backend-core.cjs` (`ALLOWED_TABLES`,
-`WORKSPACE_SCOPED_TABLES`, `DB_TABLE_ACCESS`). Array columns (e.g. `uuid[]`) need
+`WORKSPACE_SCOPED_TABLES`, `DB_TABLE_ACCESS`). **That confirmation is no longer
+on your honour** — if the table is broadcast, `tests/realtime-fanout-allowlist.test.cjs`
+fails until it is allowlisted or declared; see "Fanout and the allowlist" below.
+Array columns (e.g. `uuid[]`) need
 `ARRAY_COLUMNS_BY_TABLE` + the `toPgArrayLiteral` bind path in BOTH backends —
 postgres.js will not array-serialize a raw JS array bound via `.unsafe`.
 
@@ -43,6 +46,103 @@ Clients receive live updates via `notifyDbSubscribers(table, eventType, rows)` i
 Streaming agent output works by inserting a `Thinking …` placeholder message,
 then `UPDATE`-ing its content (each update broadcasts). Heavy fields are stripped
 from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bodies.
+
+### Fanout and the allowlist: the two halves that must agree
+
+Broadcasting a table and being able to subscribe to it are separate decisions in
+separate files, and **both failure directions are silent**. The server will
+happily `notifyDbSubscribers('x', …)` for a table no client can subscribe to; the
+client's subscribe is refused by `ensureTable` -> `ALLOWED_TABLES`, the server
+replies `{type:'error'}`, and `src/lib/backendClient.ts` drops that frame. Neither
+side logs anything. The surface just stays empty forever.
+
+That is not hypothetical. An audit found **eight** tables broadcast but not
+subscribable, two of them (`agent_schedules`, `gateway_configs`) with live client
+subscriptions that have never once worked — through 1471 backend and 2434
+frontend passing tests, because nothing asserted what the protocol is.
+
+So every table passed to `notifyDbSubscribers` must be exactly one of:
+
+- in `ALLOWED_TABLES` — clients may subscribe; the normal case;
+- declared in `FANOUT_EXEMPT` (`shared/realtime-fanout.cjs`) — deliberately not
+  subscribable, **with a written reason**;
+- declared in `FANOUT_BROKEN` — a known defect, with the concrete fix recorded.
+
+`tests/realtime-fanout-allowlist.test.cjs` enforces it, and also enforces that
+nothing in `src/` subscribes to an exempt table, that a `FANOUT_BROKEN` entry
+really does have a subscriber, and that declarations for tables no longer
+broadcast get pruned.
+
+**Do not "fix" a failure by adding the table to `ALLOWED_TABLES` reflexively.**
+That Set is a security boundary: adding a table also opens the generic
+`/backend/db` path to it on **both** backends (Fly and
+`netlify/functions/backend.mjs`), so it needs a `DB_TABLE_ACCESS` entry in the
+same commit or it falls through to `DEFAULT_TABLE_ACCESS` (read/write). Some
+tables are exempt precisely because they must never be subscribable —
+`workspace_secrets` is one, and `bridge_qr` carries a live device-linking QR.
+Read the reason in the declaration before changing a category.
+
+Related: if a broadcast row carries anything secret, strip it in
+`REALTIME_HEAVY_FIELDS` rather than relying on every call site to pass a
+projection. `channel_bridges.config` is the cautionary tale — the REST routes
+project it away, all four fanout calls pass raw `returning *` rows, and only the
+missing allowlist entry stood between that and a live Slack bot token on every
+subscriber's socket.
+
+### Presence: two transports, merged only at the view layer
+
+There are two independent lanes and they must not be joined upstream of the UI.
+
+- **Durable rows fanned out as `db_changes`** — everything that has to survive a
+  reload.
+- **Ephemeral `broadcast` frames** (`relayBroadcast`, `server/realtime.cjs`) —
+  presence, cursors, typing. These touch no storage at all. Do not add a
+  `workspace_presence` table: a value with a six-second lifetime does not belong
+  in Postgres, and a new table would need `ALLOWED_TABLES` + `DB_TABLE_ACCESS`
+  entries kept in sync by hand across two runtimes.
+
+**Every ephemeral signal expires at the RECEIVER.** There is no server-side
+roster, so "the sender went quiet" is the only stop signal you can rely on — a
+force-quit tab, a dead socket and a polite goodbye are indistinguishable. Each
+lane therefore owns a TTL, and the UI's answer to silence is always "the thing
+disappears", never "the last value sticks".
+
+| Signal | Source | Refresh | TTL | On silence |
+|---|---|---|---|---|
+| Human item/window presence | browser broadcast | 2s with peers / 10s alone | 7s | avatar leaves the sidebar row |
+| Human cursor | browser broadcast | <=80ms while moving, off with no peers | 5s | cursor vanishes |
+| Human typing | browser broadcast | <=1 per 4s per target | 6s, sent as a relative `ttlMs` | indicator clears itself; no stop frame is required for correctness |
+| Huddle participant | HTTP heartbeat | 30s | 150s | `reaped_at` set, roster row removed |
+| Agent daemon liveness | WS heartbeat + pings | 15s | ~120s of missed pongs | `status='offline'`, filtered out of the roster |
+| Agent activity chip | placeholder message content | ~1/s | 60s (`ACTIVITY_STALE_MS`) | chip stops claiming the run is live |
+
+Two rules that are easy to get wrong and expensive to get wrong:
+
+1. **Typing frames carry a relative `ttlMs`, never an absolute deadline.** The
+   receiver computes `now + ttlMs` on arrival and clamps it to its own ceiling.
+   `src/lib/activityStatus.ts` had to buy 60s of slack purely to absorb
+   server-vs-browser clock skew; a 6s TTL has no room for that, and sending a
+   duration removes the whole skew class instead of budgeting for it.
+2. **Agents never emit typing, and should not be given it.** A human's typing is
+   a 2-8 second prediction; an agent's equivalent is a multi-minute tool run, and
+   a three-dot animation running for six minutes reads as a hang. Agents already
+   have the right surface with a clock on it — `activityChipLabel()` ->
+   `"Thinking 1m 56s"`, `src/lib/activityStatus.ts`. There is also a hard
+   blocker: an agent-token socket has no `ws.userId`, so
+   `authorizeRealtimeBroadcast` rejects it. Adding agent typing would mean
+   opening a new authorization path for daemon-originated broadcasts to ship a
+   worse version of something that already exists.
+
+`item-presence:<workspaceId>` is workspace-wide and its frames carry item ids,
+so typing is **not** emitted for direct messages. The sidebar's presence
+filtering is a UI convenience, not an access boundary — do not describe it as
+one, and do not widen what rides that channel until the channel grammar can
+carry an item scope (`workspaceIdFromRealtimeChannel` rejects a second colon).
+
+Cost matters on this path: see `plans/012-cut-idle-realtime-chatter.md`. Typing
+is a ~150-byte frame throttled to one per 4s **specifically** so it does not
+undo that work — `setTyping` must never call `sendSnapshot()`, which is a ~2 KB
+window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
 
 ## Recent cross-cutting features (2026-07)
 
@@ -151,6 +251,40 @@ from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bo
   - **`workspace_id` is `ON DELETE SET NULL`, not `CASCADE`** — deleting a
     workspace is the most audit-worthy action there is, and `CASCADE` would erase
     the evidence of it as a side effect. Those rows become DB-only.
+
+- **Structured stop reasons, and two deadlines instead of one** — a finished or
+  failed turn now reports WHY it stopped, and the idle deadline is separated from
+  the hard one. Three things to know before touching any of it:
+  - **The vocabulary is duplicated on purpose, in two repos.** It lives in
+    `packages/agensis-cli/src/stopReasons.mjs` (agensis-agent) and as `STOP_REASONS`
+    in `server/agent-jobs.cjs`. There is no shared module across the repos, so the
+    two lists must be kept identical by hand — a value added on one side and not
+    the other is silently dropped rather than stored. The set is:
+    `completed | cancelled | max_tokens | max_turns | max_budget | refused |
+    idle_timeout | hard_timeout | permission_denied | agent_error | connection_lost`.
+  - **A daemon-supplied reason is untrusted and ends up in a human's transcript.**
+    It is matched against the closed set in `normalizeStopReason` and anything else
+    becomes `''` — never a passthrough, the same discipline `AMP_ERROR_CODE_RE`
+    uses next door. `stopDetail` is charset-restricted and length-capped. Nothing
+    lands in a message that did not come out of the server's own `STOP_REASON_TEXT`.
+  - **9 vs 10 minutes is a PAIR across two repos, and it silently inverts if
+    either moves.** `DEFAULT_IDLE_TIMEOUT_MS` (agensis-agent `agensis.mjs`) is nine
+    minutes; `AGENT_JOB_IDLE_REAP_MINUTES` (`server/agent-jobs.cjs`) is ten. The
+    daemon is deliberately first because only the daemon can actually stop the
+    work — the server can only rewrite the row. If the server ever wins the race,
+    a human is told "it stopped responding" while a CLI keeps running on someone's
+    laptop for another twenty minutes. `AGENT_JOB_HARD_CEILING_MINUTES` (30) pairs
+    with the daemon's `DEFAULT_TIMEOUT_MS` the same way.
+  - **`AGENSIS_SESSION_SLOTS` (default 1) is off for a reason.** `--max-concurrency`
+    was a no-op: the queue admitted two lanes and the keyed mutex funnelled them
+    onto one `sessionKey`, so real parallelism was 1. Slots
+    (`packages/agensis-cli/src/sessionSlots.mjs`) give the mutex more than one
+    connection. At 1 the key is `silo#0` and behaviour is byte-identical to before.
+    Raising it also stops separate conversations sharing one runtime history —
+    correct, but visible, hence opt-in. The allocator NEVER refuses a slot;
+    admission stays the queue's job, so a leaked claim can cost slot preference
+    but can never wedge a silo. `isDaemonIdle` counts jobs, not sessions, so
+    self-update's guard needs no change.
 
 - **Interactive tool approvals** — a daemon agent that hits a tool it isn't
   cleared for now ASKS, in the conversation it is working in, instead of erroring.

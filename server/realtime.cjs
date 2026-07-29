@@ -179,6 +179,19 @@ function createRealtime(deps = {}) {
   agent_memory_files: ['content_cache'],
   agent_jobs: ['prompt', 'response'],
   workspace_secrets: VAULT_SECRET_COLUMNS,
+  // channel_bridges.config is jsonb holding Slack/Telegram botToken, Slack
+  // signingSecret and OpenClaw authToken. The REST projection publicBridge drops
+  // it — "a bot token in a JSON response ends up in devtools, in logs, and in a
+  // screenshot" — but all four notifyDbSubscribers('channel_bridges', …) calls
+  // pass raw `returning *` rows and never touch that projection. The tokens are
+  // already on the broadcast payload; they reach nobody today only because the
+  // table is deliberately absent from ALLOWED_TABLES, which makes one line in
+  // that Set the whole distance between here and handing every workspace member
+  // with `read` a live Slack bot token.
+  //
+  // The whole column, not named fields: a new provider added to PROVIDER_FIELDS
+  // in server/bridge-admin-routes.cjs would otherwise leak by default.
+  channel_bridges: ['config'],
   // Nothing broadcasts workspace_join_links today — the mint/list/revoke routes
   // deliberately do not call notifyDbSubscribers. This entry is here for the day
   // someone adds one: workspace_invites IS broadcast, so copying that pattern

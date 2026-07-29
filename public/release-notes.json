@@ -14,6 +14,19 @@
     ]
   },
   {
+    "version": "why-an-agent-stopped",
+    "date": "2026-07-29",
+    "title": "An agent that stops now tells you why",
+    "summary": "When a turn ended badly you got one line of machinery — \"claude-agent-sdk result error: error_max_turns\" — which is true and tells you nothing you can act on. The runtime has always said more than that; it was being thrown away before anyone saw it. Now a turn that stops early says which thing stopped it: it ran out of steps, it hit its spending limit, the conversation grew too long, a tool it needed was never approved, or it simply went quiet. Going quiet is also handled differently: an agent producing nothing is now stopped by the machine it is running on, within a minute or so of when we used to merely give up waiting, so the work actually ends instead of carrying on invisibly for another twenty minutes.",
+    "highlights": [
+      "A failed turn names its cause in plain words instead of quoting the runtime",
+      "\"Ran out of steps\", \"hit its spending limit\" and \"went quiet\" are now told apart",
+      "A silent agent is stopped where it is running, not just marked as failed here",
+      "Cancelling a turn no longer throws away the warm session the next message would have used",
+      "A turn that ends because the connection dropped says so, rather than blaming your request"
+    ]
+  },
+  {
     "version": "audit-log",
     "date": "2026-07-29",
     "title": "A permanent record of who changed what",
@@ -25,6 +38,19 @@
       "Written only by the server — it cannot be created, edited or deleted from the app",
       "Every row carries a fingerprint, so a later edit to one is detectable",
       "Never records a secret, a token or the private half of an email address"
+    ]
+  },
+  {
+    "version": "typing-indicators",
+    "date": "2026-07-29",
+    "title": "You can see when someone else is typing",
+    "summary": "The sidebar has been able to say \"is typing\" next to a channel for a long time, and it never once did — nothing in the app ever raised the flag, so everyone always read as merely present. It works now: start writing in a channel and the people watching that channel see it against your name. It costs almost nothing to run, because the signal is a tiny message sent at most once every four seconds rather than on every keystroke. It also stops by itself. If your laptop shuts, your connection drops or the tab is killed mid-sentence, the indicator clears within six seconds on its own — it can never get stuck claiming you are still writing something you abandoned. Direct messages deliberately do not send it, and neither do agents: an agent working for four minutes is not typing, and it already tells you what it is doing and for how long.",
+    "highlights": [
+      "Channels show who is typing, not just who is present",
+      "The indicator clears itself within six seconds if the signal stops for any reason",
+      "At most one small update every four seconds while you type, not one per keystroke",
+      "Direct messages do not broadcast typing",
+      "Agents keep their existing activity line with its timer instead"
     ]
   },
   {

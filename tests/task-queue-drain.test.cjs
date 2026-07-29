@@ -172,10 +172,13 @@ function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
       if (n.startsWith('select id, status, connection_id, metadata, started_at from agent_jobs where workspace_id')) {
         return state.jobs.filter((j) => j.workspace_id === String(params[0]) && j.agent_id === String(params[1]) && active(j));
       }
-      if (n.startsWith("update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now() where id = $1 and status in ('queued', 'running')")) {
+      // finalizeStuckJob. The write now also records WHY it reaped the job in
+      // metadata ($3), so this prefix stops at the error bind.
+      if (n.startsWith("update agent_jobs set status = 'error', error = $2")) {
         const job = state.jobs.find((j) => j.id === String(params[0]) && active(j));
         if (!job) return [];
         job.status = 'error';
+        if (params[2]) job.metadata = params[2];
         return [{ id: job.id }];
       }
       if (n.startsWith("update agent_jobs set status = 'cancelled'")) {
