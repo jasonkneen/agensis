@@ -7882,12 +7882,10 @@ function startBackendServer(port = DEFAULT_PORT) {
  });
  void reconcileAgentConnectionsAtStartup();
  void reconcileSchedulesAtStartup();
- // Automations ride the same 30s reaper tick as schedules and thread harvests,
- // and the drain is BOUNDED per tick for the same reason theirs are: everything
- // on this interval runs serially, so an unbounded drain would let one backlog
- // stall the job reapers behind it. sweepAutomationRuns reclaims runs whose
- // lease expired because the process died mid-run.
- const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void expireStalePermissionRequests(); void pruneOfflineConnections(); pruneExpiredPeerTickets(); void runDueSchedules(); void runDueThreadHarvests(); void sweepAutomationRuns(); void runDueAutomations(); }, 30_000);
+ // sweepAutomationRuns stays on the 30s tick: reclaiming a lease that expired
+ // because a process died is housekeeping, and running it every second would be
+ // 30x the query for no benefit. The DRAIN moved to its own 1s worker below.
+ const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void expireStalePermissionRequests(); void pruneOfflineConnections(); pruneExpiredPeerTickets(); void runDueSchedules(); void runDueThreadHarvests(); void sweepAutomationRuns(); }, 30_000);
  if (jobReaper.unref) jobReaper.unref();
  let flowDeliveryRunning = false;
  const flowDeliveryWorker = setInterval(() => {
@@ -7898,9 +7896,39 @@ function startBackendServer(port = DEFAULT_PORT) {
    .finally(() => { flowDeliveryRunning = false; });
  }, 1_000);
  flowDeliveryWorker.unref?.();
+
+ // Automations drain on their OWN 1s worker, a sibling of the flow delivery
+ // worker above rather than a passenger on the 30s reaper tick.
+ //
+ // WHY 1s: "when X happens, do Y" arriving up to 30 seconds later reads as
+ // broken. This is the cadence the shipped flowDeliveryWorker already runs at
+ // against the same database, with the same in-flight boolean, so it is a known
+ // quantity rather than a new risk.
+ //
+ // WHY A SIBLING AND NOT MERGED INTO IT: a slow automation must not delay a
+ // webhook delivery, and a slow webhook must not delay an automation.
+ //
+ // A FASTER TICK IS NOT A BIGGER TICK. runDueAutomations keeps its per-tick
+ // bound exactly as it was — the interval got 30x shorter and the batch did not
+ // grow, so peak work per tick is strictly lower than before. The in-flight
+ // boolean means a drain that outlives its interval simply skips the next one
+ // instead of stacking, and every other guard (compare-and-set lease, idempotent
+ // enqueue, fan-out cap, the rate limit that disables rather than throttles) is
+ // untouched and lives in server/automations.cjs, not here.
+ let automationRunning = false;
+ const automationWorker = setInterval(() => {
+  if (automationRunning) return;
+  automationRunning = true;
+  void runDueAutomations()
+   .catch(error => console.error('[automations] worker failed:', error.message || error))
+   .finally(() => { automationRunning = false; });
+ }, 1_000);
+ automationWorker.unref?.();
+
  server.on('close', () => {
   clearInterval(jobReaper);
   clearInterval(flowDeliveryWorker);
+  clearInterval(automationWorker);
   wss.close();
   realtime.reset();
  });

@@ -1,5 +1,19 @@
 [
   {
+    "version": "automations-window",
+    "date": "2026-07-30",
+    "title": "Set up a rule without writing anything",
+    "summary": "Rules that watch for something happening in a workspace and post a message existed, but the only way to make one was to talk to the server directly, which in practice meant nobody could. There is an Automations panel now, in the sidebar. Pick what to watch for, narrow it down if you want, choose where the message goes, and write it. A rule you make starts switched off so you can read it back before it does anything. Rules also react faster now — within about a second of the thing happening, rather than up to half a minute later. The panel is honest about the limits: a rule can post a message and nothing else, so it can never wake an agent or cost you anything however often it fires. A rule that starts firing far too often is switched off for you, and the panel says so plainly and explains why, rather than leaving it to quietly stop working. Creating and changing rules needs the admin role, and every change is written to the audit log.",
+    "highlights": [
+      "An Automations panel in the sidebar — no more setting rules up by hand",
+      "Rules react within about a second instead of up to thirty",
+      "New rules start switched off so you can read them back first",
+      "A rule that switched itself off says so clearly, and why",
+      "Says plainly that a rule can only post a message — it cannot wake an agent or spend anything",
+      "Creating or changing a rule needs the admin role, and is recorded in the audit log"
+    ]
+  },
+  {
     "version": "agent-templates",
     "date": "2026-07-30",
     "title": "Save an agent you have tuned, and start the next one from it",

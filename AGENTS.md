@@ -261,12 +261,16 @@ window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
     This is why there is no `depth` column on `messages`: a flat "automations do
     not chain" rule needs no schema change to the hottest table in the product.
     Relaxing it means adding that column, and the cycle risk comes back with it.
-  - **The drain is BOUNDED per tick** on the shared 30s reaper interval, for the
-    same reason `thread-harvest.cjs` bounds its own: everything on that interval
-    runs serially, so an unbounded drain would stall the job reapers behind it.
-    The bound is the invariant; the number is tuned to what the action costs.
-    Latency is therefore up to 30s — if that becomes a complaint, the fix is a
-    sibling 1s worker like `flowDeliveryWorker`, not removing the bound.
+  - **The drain runs on its OWN 1s worker**, a sibling of `flowDeliveryWorker`
+    rather than a passenger on the 30s reaper tick — "when X happens, do Y"
+    arriving up to 30 seconds later reads as broken. It is a sibling and not
+    merged into that worker because a slow automation must not delay a webhook
+    delivery. **A faster tick is not a bigger tick**: the per-tick drain bound is
+    unchanged, so peak work per tick is strictly lower than it was, and the
+    in-flight boolean makes a slow drain skip the next tick rather than stack.
+    `sweepAutomationRuns` stays on the 30s tick — reclaiming an expired lease is
+    housekeeping and does not need to run 30x more often. The BOUND is the
+    invariant, not the number; do not remove it to make the worker faster.
   - **Definitions are JSON. YAML is rendered, never parsed.** YAML's silent
     coercions (`on:` -> true, an unquoted `1.0` -> float) do not throw; they
     produce a different valid document that runs the wrong step. There is no
@@ -282,6 +286,15 @@ window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
     read-only to clients through `/backend/db` (same shape as `agent_schedules`),
     so the dedicated route stays the only place a definition is validated. Create,
     update, delete, enable and disable all write to the audit log.
+  - **The UI is `src/components/windows/AutomationsWindowContent.tsx`**, with the
+    display logic split into the pure `src/lib/automationView.ts` so it is
+    testable without mounting. Three things it must keep saying: that a rule can
+    only post a message (so it cannot wake an agent or spend a token), that
+    authoring needs `manage`, and — most importantly — that a rule the runaway
+    guard switched off is DIFFERENT from one a person paused. Both are
+    `enabled: false` in the database; a rule that silently stopped firing is the
+    worst outcome this feature has, so `automationState()` returns three states,
+    never two.
   - **The flag gates execution, not a button.** The enqueue hook, the worker and
     the routes all check `AGENSIS_AUTOMATIONS`. A flag that only hid the UI would
     still run automations.
