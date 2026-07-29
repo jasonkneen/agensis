@@ -32,7 +32,10 @@ A schema change is only correct when all three agree, or a fresh DB drifts:
 
 If a column is workspace-scoped, also confirm the table is in the access
 allowlists in `shared/backend-core.cjs` (`ALLOWED_TABLES`,
-`WORKSPACE_SCOPED_TABLES`, `DB_TABLE_ACCESS`). Array columns (e.g. `uuid[]`) need
+`WORKSPACE_SCOPED_TABLES`, `DB_TABLE_ACCESS`). **That confirmation is no longer
+on your honour** — if the table is broadcast, `tests/realtime-fanout-allowlist.test.cjs`
+fails until it is allowlisted or declared; see "Fanout and the allowlist" below.
+Array columns (e.g. `uuid[]`) need
 `ARRAY_COLUMNS_BY_TABLE` + the `toPgArrayLiteral` bind path in BOTH backends —
 postgres.js will not array-serialize a raw JS array bound via `.unsafe`.
 
@@ -43,6 +46,48 @@ Clients receive live updates via `notifyDbSubscribers(table, eventType, rows)` i
 Streaming agent output works by inserting a `Thinking …` placeholder message,
 then `UPDATE`-ing its content (each update broadcasts). Heavy fields are stripped
 from the fanout by `sanitizeRealtimeRow` — add to it, don't broadcast large bodies.
+
+### Fanout and the allowlist: the two halves that must agree
+
+Broadcasting a table and being able to subscribe to it are separate decisions in
+separate files, and **both failure directions are silent**. The server will
+happily `notifyDbSubscribers('x', …)` for a table no client can subscribe to; the
+client's subscribe is refused by `ensureTable` -> `ALLOWED_TABLES`, the server
+replies `{type:'error'}`, and `src/lib/backendClient.ts` drops that frame. Neither
+side logs anything. The surface just stays empty forever.
+
+That is not hypothetical. An audit found **eight** tables broadcast but not
+subscribable, two of them (`agent_schedules`, `gateway_configs`) with live client
+subscriptions that have never once worked — through 1471 backend and 2434
+frontend passing tests, because nothing asserted what the protocol is.
+
+So every table passed to `notifyDbSubscribers` must be exactly one of:
+
+- in `ALLOWED_TABLES` — clients may subscribe; the normal case;
+- declared in `FANOUT_EXEMPT` (`shared/realtime-fanout.cjs`) — deliberately not
+  subscribable, **with a written reason**;
+- declared in `FANOUT_BROKEN` — a known defect, with the concrete fix recorded.
+
+`tests/realtime-fanout-allowlist.test.cjs` enforces it, and also enforces that
+nothing in `src/` subscribes to an exempt table, that a `FANOUT_BROKEN` entry
+really does have a subscriber, and that declarations for tables no longer
+broadcast get pruned.
+
+**Do not "fix" a failure by adding the table to `ALLOWED_TABLES` reflexively.**
+That Set is a security boundary: adding a table also opens the generic
+`/backend/db` path to it on **both** backends (Fly and
+`netlify/functions/backend.mjs`), so it needs a `DB_TABLE_ACCESS` entry in the
+same commit or it falls through to `DEFAULT_TABLE_ACCESS` (read/write). Some
+tables are exempt precisely because they must never be subscribable —
+`workspace_secrets` is one, and `bridge_qr` carries a live device-linking QR.
+Read the reason in the declaration before changing a category.
+
+Related: if a broadcast row carries anything secret, strip it in
+`REALTIME_HEAVY_FIELDS` rather than relying on every call site to pass a
+projection. `channel_bridges.config` is the cautionary tale — the REST routes
+project it away, all four fanout calls pass raw `returning *` rows, and only the
+missing allowlist entry stood between that and a live Slack bot token on every
+subscriber's socket.
 
 ### Presence: two transports, merged only at the view layer
 
