@@ -10,6 +10,7 @@ import {
  enforceDbOperationAccess,
  assertWorkspaceRole,
  appendWorkspaceAccessClause,
+ appendSessionAccessClause,
  logMessageActivityIdempotent,
  createRateLimiter,
  createDbRateLimiter,
@@ -2012,9 +2013,11 @@ async function handleDb(pathname, req, userId) {
   const tableSql = ensureTable(table);
   await enforceDbOperationAccess({ userId, table, op: 'select', filters, db: query });
   // `workspaces` SELECT is scoped to rows the user owns or is a member of.
+  // chat_sessions / messages SELECT is scoped to sessions the user may read —
+  // enforceDbOperationAccess answers "may you", it cannot drop rows.
   const where = table === 'workspaces'
    ? appendWorkspaceAccessClause(buildWhereClause(filters, []), userId)
-   : buildWhereClause(filters, []);
+   : appendSessionAccessClause(buildWhereClause(filters, []), userId, table);
   const { clause, params } = where;
   const limitSql = Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : '';
   // M7: project the requested columns through the shared per-table read

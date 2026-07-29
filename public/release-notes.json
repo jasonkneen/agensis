@@ -1,5 +1,19 @@
 [
   {
+    "version": "private-direct-messages",
+    "date": "2026-07-30",
+    "title": "Your direct messages are now actually private",
+    "summary": "Until now, anyone you shared a workspace with could read every direct message in it, including yours. Not through a bug — there was simply no such thing as permission to read one conversation rather than another. Any member with read access could open any DM, search its contents, or watch it live. That is fixed: a direct message is now readable only by the people in it, and so is anything split out of one, like a sub-thread or a huddle held inside it. Nothing you could read before has been taken away — every existing DM stays with the person whose workspace it is, and your agents carry on reading and answering in their own DMs exactly as before. When someone genuinely does need to see a conversation they are not part of, an admin can grant them access to that one conversation, optionally with an expiry date, and every grant and withdrawal is written to the audit log. There is no silent way in: an admin cannot read your DM without leaving a record, and being given access to a conversation does not let you pass it on to anyone else.",
+    "highlights": [
+      "A direct message is readable only by the people in it — not by everyone in the workspace",
+      "Sub-threads and huddles split out of a DM stay private too",
+      "Nothing you could read before is gone, and agents still work in their own DMs as normal",
+      "An admin can grant access to one conversation when it is genuinely needed, with an optional expiry",
+      "Every grant and withdrawal is recorded, so nobody can look in silently",
+      "Being granted access does not let you pass it on to anyone else"
+    ]
+  },
+  {
     "version": "automations",
     "date": "2026-07-30",
     "title": "Rules that run themselves, without asking an agent",

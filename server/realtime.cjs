@@ -48,6 +48,11 @@ function createRealtime(deps = {}) {
   handlePeerListRequest,
   handlePeerTicketRequest,
   inferenceBroker,
+  // Is this session members-only, and who are they? Injected rather than
+  // imported so the read rule stays single-sourced in shared/backend-core.cjs —
+  // a second copy here is exactly how the fanout would drift back open.
+  isPrivateSessionRow = () => false,
+  sessionMemberUserIds = async () => new Set(),
   logMessageActivity,
   markAgentConnectionOffline,
   refreshConnectedAgentConfigs,
@@ -322,6 +327,35 @@ function createRealtime(deps = {}) {
    }
   }
 
+  // A PRIVATE chat_sessions row cannot ride the synchronous lane.
+  //
+  // Subscribing is gated (authorizeRealtimeBinding -> enforceDbOperationAccess),
+  // but a `chat_sessions` subscription filtered on workspace_id is legitimate —
+  // that is how the sidebar stays live — and every row matching that filter is
+  // fanned out below. Without this split, opening a DM would push its title and
+  // roster to every socket in the workspace, which is the same disclosure the
+  // bootstrap payload was just fixed to withhold. `messages` needs no equivalent:
+  // an unfiltered messages subscription cannot be established at all, so a
+  // message only ever reaches a socket that named its session.
+  //
+  // Answering "who may see this" needs the DB, and this function is synchronous
+  // and holds no handle (see emitAgentStatus above for the same constraint), so
+  // these rows leave through an async lane instead.
+  const privateRows = table === 'chat_sessions' ? rowList.filter(isPrivateSessionRow) : [];
+  const openRows = privateRows.length > 0 ? rowList.filter((row) => !isPrivateSessionRow(row)) : rowList;
+
+  const deliver = (ws, row) => {
+   const outRow = sanitizeRealtimeRow(table, row);
+   sendWs(ws, {
+    type: 'db_changes',
+    schema: 'public',
+    table,
+    payload: eventType === 'DELETE'
+     ? { eventType, new: {}, old: outRow }
+     : { eventType, new: outRow, old: {} },
+   });
+  };
+
   for (const ws of websocketClients) {
    const subscriptions = ws.subscriptions || [];
    for (const subscription of subscriptions) {
@@ -330,17 +364,46 @@ function createRealtime(deps = {}) {
     if (subscription.schema && subscription.schema !== 'public') continue;
     if (subscription.event && subscription.event !== '*' && subscription.event !== eventType) continue;
 
-    for (const row of rowList) {
+    for (const row of openRows) {
      if (!matchesFilter(subscription.filter, row)) continue;
-     const outRow = sanitizeRealtimeRow(table, row);
-     sendWs(ws, {
-      type: 'db_changes',
-      schema: 'public',
-      table,
-      payload: eventType === 'DELETE'
-       ? { eventType, new: {}, old: outRow }
-       : { eventType, new: outRow, old: {} },
-     });
+     deliver(ws, row);
+    }
+   }
+  }
+
+  if (privateRows.length > 0) void fanoutPrivateSessionRows(privateRows, eventType, deliver);
+ }
+
+ /**
+  * Fan private `chat_sessions` rows out to their members only.
+  *
+  * ONE membership query per row rather than one per (row, socket): a private
+  * session changes rarely compared with the message traffic this loop normally
+  * carries, so the cost lands where it is cheapest.
+  *
+  * Silence on failure is deliberate and is the fail-CLOSED direction: a member
+  * who misses a live update sees it on their next load, whereas guessing
+  * "deliver anyway" would publish the thing this exists to withhold.
+  */
+ async function fanoutPrivateSessionRows(rows, eventType, deliver) {
+  for (const row of rows) {
+   let allowed;
+   try {
+    allowed = await sessionMemberUserIds(row.id);
+   } catch (error) {
+    console.error('private session fanout membership lookup failed', error?.message || error);
+    continue;
+   }
+   if (!allowed || allowed.size === 0) continue;
+   for (const ws of websocketClients) {
+    if (!ws.userId || !allowed.has(String(ws.userId))) continue;
+    for (const subscription of ws.subscriptions || []) {
+     if (subscription.type !== 'db_changes') continue;
+     if (subscription.table && subscription.table !== 'chat_sessions') continue;
+     if (subscription.schema && subscription.schema !== 'public') continue;
+     if (subscription.event && subscription.event !== '*' && subscription.event !== eventType) continue;
+     if (!matchesFilter(subscription.filter, row)) continue;
+     deliver(ws, row);
     }
    }
   }

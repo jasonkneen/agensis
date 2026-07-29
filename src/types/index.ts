@@ -92,6 +92,17 @@ export interface ChatSession {
  split_at?: string | null;
  /** Soft-delete marker. Sessions are never hard-deleted so the data stays usable. */
  deleted_at?: string | null;
+ /**
+  * Who may READ this session, one level below the workspace role check:
+  * 'workspace' (every member with read — channels, and the default) or
+  * 'private' (only its members). DMs and anything derived from one — sub-thread
+  * splits, huddle transcripts — are 'private'.
+  *
+  * SERVER-DECIDED. Sending it on an insert does nothing: the backend overrides
+  * it from the parent session, because a client declaring itself public would
+  * be a one-line way to publish any DM by splitting a thread out of it.
+  */
+ visibility?: 'workspace' | 'private' | null;
  version?: number;
  created_at: string;
  updated_at: string;

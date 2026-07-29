@@ -1,4 +1,12 @@
 'use strict';
+
+// The ONE spelling of "may this user read this session", as SQL text. Requiring
+// it does not break this file's purity rule: backend-core holds no connection
+// and this export is a pure string builder. Copying the predicate in here
+// instead would give the rule a second home to drift from, which is exactly the
+// failure this whole change exists to prevent.
+const { sessionReadableSql } = require('../shared/backend-core.cjs');
+
 // ============================================================================
 // server/thread-inbox.cjs — the sidebar's Threads list.
 // ----------------------------------------------------------------------------
@@ -148,6 +156,12 @@ function buildThreadInboxSql(limit = THREAD_INBOX_DEFAULT_LIMIT) {
         on s.id = p.session_id
        and s.workspace_id = $1::uuid
        and s.deleted_at is null
+       -- Workspace read is no longer enough to see a thread: a thread inside a
+       -- private session (a DM, or a sub-thread split out of one) belongs to its
+       -- members. Applied to the PARENT's session only — a reply always lives in
+       -- the same session as the message it answers, so the replies CTE needs
+       -- no second copy of this and cannot disagree with it.
+       and ${sessionReadableSql('s', '$2')}
        -- Huddle transcripts are excluded for the same reason mainSessionsOf
        -- excludes them: a voice call is not a thread anyone reads back in a
        -- sidebar, and its @mention turns would otherwise flood this list. The
