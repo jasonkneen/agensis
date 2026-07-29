@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { Task } from '../../src/types';
+import type { Task, UploadedFile } from '../../src/types';
 import { TasksWindowContent } from '../../src/components/windows/TasksWindowContent';
 import { countOpenTasks } from '../../src/components/windows/taskSchedule';
 
@@ -73,7 +73,12 @@ beforeAll(() => {
 
 type Update = { id: string; updates: Partial<Task> };
 
-type RenderOptions = { focusTaskId?: string; onFocusTaskConsumed?: () => void; workspaceId?: string };
+type RenderOptions = {
+  focusTaskId?: string;
+  onFocusTaskConsumed?: () => void;
+  workspaceId?: string;
+  onUploadFiles?: (files: File[]) => Promise<UploadedFile[]>;
+};
 
 function render(tasks: Task[], updates: Update[] = [], options: RenderOptions = {}) {
   act(() => {
@@ -624,5 +629,146 @@ describe('open-task count matches what the window lists', () => {
 
   it('ignores an empty list rather than throwing', () => {
     expect(countOpenTasks([])).toBe(0);
+  });
+});
+
+// Drag-and-drop attachments: tasks had no attachment support at all before
+// this. The drop zone only appears when the caller can actually upload
+// (onUploadFiles provided) — a control that would silently do nothing is
+// worse than no control.
+describe('task editor: attachments', () => {
+  function makeUploaded(over: Partial<UploadedFile> & { id: string; name: string }): UploadedFile {
+    return {
+      workspace_id: 'ws-1',
+      size: 10,
+      type: 'application/pdf',
+      storage_path: `uploads/${over.id}`,
+      created_at: localIso(2026, 7, 20),
+      ...over,
+    };
+  }
+
+  function fileInput() {
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!input) throw new Error('no attachment file input');
+    return input;
+  }
+
+  function dropZone() {
+    const zone = container.querySelector('[data-testid="task-attachment-dropzone"]');
+    if (!zone) throw new Error('no attachment drop zone');
+    return zone;
+  }
+
+  /** jsdom has no DragEvent with a writable dataTransfer, so a plain Event is
+   * stood up with the one property React's onDrop/onDragOver actually read. */
+  function dropEvent(files: File[]) {
+    const event = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: { files, types: ['Files'] } });
+    return event;
+  }
+
+  it('offers no attachments section at all without onUploadFiles', () => {
+    render(CHAIN);
+    expandFirstRow();
+    expect(container.textContent).not.toContain('Attachments');
+    expect(container.querySelector('input[type="file"]')).toBeNull();
+  });
+
+  it('shows the drop zone once the caller can upload', () => {
+    render(CHAIN, [], { onUploadFiles: async () => [] });
+    expandFirstRow();
+    expect(container.textContent).toContain('Attachments');
+    expect(container.textContent).toContain('Drag files here');
+  });
+
+  it('uploads a file picked via browse and commits it onto the task', async () => {
+    const updates: Update[] = [];
+    const uploaded = makeUploaded({ id: 'file-1', name: 'spec.pdf' });
+    render(CHAIN, updates, { onUploadFiles: async () => [uploaded] });
+    expandFirstRow();
+
+    const input = fileInput();
+    const file = new File(['spec'], 'spec.pdf', { type: 'application/pdf' });
+    await act(async () => {
+      Object.defineProperty(input, 'files', { value: [file], configurable: true });
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      // uploadAttachments awaits onUploadFiles before committing.
+      await Promise.resolve();
+    });
+
+    expect(updates).toEqual([{
+      id: 'a',
+      updates: { attachments: [{ id: 'file-1', name: 'spec.pdf', type: 'application/pdf', size: 10 }] },
+    }]);
+  });
+
+  it('uploads a dropped file the same way', async () => {
+    const updates: Update[] = [];
+    const uploaded = makeUploaded({ id: 'file-2', name: 'design.png', type: 'image/png' });
+    render(CHAIN, updates, { onUploadFiles: async () => [uploaded] });
+    expandFirstRow();
+
+    const file = new File(['design'], 'design.png', { type: 'image/png' });
+    await act(async () => {
+      dropZone().dispatchEvent(dropEvent([file]));
+      await Promise.resolve();
+    });
+
+    expect(updates).toEqual([{
+      id: 'a',
+      updates: { attachments: [{ id: 'file-2', name: 'design.png', type: 'image/png', size: 10 }] },
+    }]);
+  });
+
+  it('appends to, rather than replaces, whatever the task already has attached', async () => {
+    const updates: Update[] = [];
+    const existing = { id: 'file-0', name: 'brief.pdf', type: 'application/pdf', size: 5 };
+    const uploaded = makeUploaded({ id: 'file-3', name: 'more.pdf' });
+    render(
+      [{ ...CHAIN[0], attachments: [existing] }, ...CHAIN.slice(1)],
+      updates,
+      { onUploadFiles: async () => [uploaded] },
+    );
+    expandFirstRow();
+
+    await act(async () => {
+      dropZone().dispatchEvent(dropEvent([new File(['x'], 'more.pdf', { type: 'application/pdf' })]));
+      await Promise.resolve();
+    });
+
+    expect(updates).toEqual([{
+      id: 'a',
+      updates: { attachments: [existing, { id: 'file-3', name: 'more.pdf', type: 'application/pdf', size: 10 }] },
+    }]);
+  });
+
+  it('removes an attachment via its remove control, committing the filtered list', () => {
+    const updates: Update[] = [];
+    const keep = { id: 'file-4', name: 'keep.pdf', type: 'application/pdf', size: 5 };
+    const drop = { id: 'file-5', name: 'drop.pdf', type: 'application/pdf', size: 5 };
+    render(
+      [{ ...CHAIN[0], attachments: [keep, drop] }, ...CHAIN.slice(1)],
+      updates,
+      { onUploadFiles: async () => [] },
+    );
+    expandFirstRow();
+
+    const remove = container.querySelector('[aria-label="Remove drop.pdf"]');
+    expect(remove).toBeTruthy();
+    click(remove!);
+
+    expect(updates).toEqual([{ id: 'a', updates: { attachments: [keep] } }]);
+  });
+
+  it('never lets a hostile attachment name reach the DOM as markup', () => {
+    render(
+      [{ ...CHAIN[0], attachments: [{ id: 'file-6', name: '<img src=x onerror=alert(1)>.pdf', type: 'application/pdf', size: 1 }] }, ...CHAIN.slice(1)],
+      [],
+      { onUploadFiles: async () => [] },
+    );
+    expandFirstRow();
+    expect(container.querySelectorAll('[onerror]')).toHaveLength(0);
+    expect(container.textContent).toContain('<img src=x onerror=alert(1)>.pdf');
   });
 });

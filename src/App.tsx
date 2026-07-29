@@ -3157,6 +3157,7 @@ function CanvasLayerScene({
                 onUpdateAgent={onUpdateAgent}
                 onOpenSession={onOpenSessionById}
                 focusTaskId={win.focusTaskId}
+                onUploadFiles={uploadFiles}
               />
             </FloatingWindowShell>
           );

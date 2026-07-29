@@ -296,6 +296,10 @@ export interface Task {
  source_type: TaskSourceType | null;
  source_id: string | null;
  completed_at: string | null;
+ // Same shape and same rules as Message.attachments — references to
+ // uploaded_files rows, never file bytes. Parse through parseMessageAttachments
+ // before rendering; see lib/messageAttachments.ts.
+ attachments?: MessageAttachment[] | null;
  version?: number;
  created_at: string;
  updated_at: string;
