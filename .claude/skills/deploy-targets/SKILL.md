@@ -5,6 +5,11 @@ description: Figure out which of the four separate deploy/restart/publish mechan
 
 # Which deploy target does this change need?
 
+> **This skill decides WHICH lanes apply. The `ship` skill RUNS them — and you
+> run all of them yourself.** You have working Fly, Netlify, npm and git
+> credentials. Never end a turn with "this needs a fly deploy" or "someone will
+> need to publish this"; that is the most repeated complaint in this project.
+
 A merged, typechecked, green-tests branch in this repo is not "live" until the
 right one of three *independent* mechanisms has run. They don't overlap and
 none of them implies another. Confusing them is how "backend+tests done" gets
