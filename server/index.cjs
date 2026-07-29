@@ -6841,6 +6841,7 @@ const {
  clearStrandedPlaceholders, handleAgentJobResult, handleAgentJobDelta,
  handleAgentJobStep, handleAgentJobSegment, agentStepParts, agentStepContent,
  finalizeAgentJobResult, ampResultMetadata, validateAmpJobResult, claimMcpJob, submitMcpJobResult, reapStuckMcpJobs,
+ normalizeStopReason, stopResultMetadata, failureSentence,
  dispatchFarmAgentJob, getFarmAgentJob, cancelFarmAgentJob,
 } = agentJobs;
 
@@ -7921,6 +7922,9 @@ module.exports = {
   reapStuckMcpJobs,
   finalizeAgentJobResult,
   ampResultMetadata,
+  normalizeStopReason,
+  stopResultMetadata,
+  failureSentence,
   validateAmpJobResult,
   dispatchFarmAgentJob,
   disableFarmIntegrationAgents,

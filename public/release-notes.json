@@ -1,5 +1,18 @@
 [
   {
+    "version": "why-an-agent-stopped",
+    "date": "2026-07-29",
+    "title": "An agent that stops now tells you why",
+    "summary": "When a turn ended badly you got one line of machinery — \"claude-agent-sdk result error: error_max_turns\" — which is true and tells you nothing you can act on. The runtime has always said more than that; it was being thrown away before anyone saw it. Now a turn that stops early says which thing stopped it: it ran out of steps, it hit its spending limit, the conversation grew too long, a tool it needed was never approved, or it simply went quiet. Going quiet is also handled differently: an agent producing nothing is now stopped by the machine it is running on, within a minute or so of when we used to merely give up waiting, so the work actually ends instead of carrying on invisibly for another twenty minutes.",
+    "highlights": [
+      "A failed turn names its cause in plain words instead of quoting the runtime",
+      "\"Ran out of steps\", \"hit its spending limit\" and \"went quiet\" are now told apart",
+      "A silent agent is stopped where it is running, not just marked as failed here",
+      "Cancelling a turn no longer throws away the warm session the next message would have used",
+      "A turn that ends because the connection dropped says so, rather than blaming your request"
+    ]
+  },
+  {
     "version": "audit-log",
     "date": "2026-07-29",
     "title": "A permanent record of who changed what",

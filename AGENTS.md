@@ -148,6 +148,40 @@ window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
     workspace is the most audit-worthy action there is, and `CASCADE` would erase
     the evidence of it as a side effect. Those rows become DB-only.
 
+- **Structured stop reasons, and two deadlines instead of one** — a finished or
+  failed turn now reports WHY it stopped, and the idle deadline is separated from
+  the hard one. Three things to know before touching any of it:
+  - **The vocabulary is duplicated on purpose, in two repos.** It lives in
+    `packages/agensis-cli/src/stopReasons.mjs` (agensis-agent) and as `STOP_REASONS`
+    in `server/agent-jobs.cjs`. There is no shared module across the repos, so the
+    two lists must be kept identical by hand — a value added on one side and not
+    the other is silently dropped rather than stored. The set is:
+    `completed | cancelled | max_tokens | max_turns | max_budget | refused |
+    idle_timeout | hard_timeout | permission_denied | agent_error | connection_lost`.
+  - **A daemon-supplied reason is untrusted and ends up in a human's transcript.**
+    It is matched against the closed set in `normalizeStopReason` and anything else
+    becomes `''` — never a passthrough, the same discipline `AMP_ERROR_CODE_RE`
+    uses next door. `stopDetail` is charset-restricted and length-capped. Nothing
+    lands in a message that did not come out of the server's own `STOP_REASON_TEXT`.
+  - **9 vs 10 minutes is a PAIR across two repos, and it silently inverts if
+    either moves.** `DEFAULT_IDLE_TIMEOUT_MS` (agensis-agent `agensis.mjs`) is nine
+    minutes; `AGENT_JOB_IDLE_REAP_MINUTES` (`server/agent-jobs.cjs`) is ten. The
+    daemon is deliberately first because only the daemon can actually stop the
+    work — the server can only rewrite the row. If the server ever wins the race,
+    a human is told "it stopped responding" while a CLI keeps running on someone's
+    laptop for another twenty minutes. `AGENT_JOB_HARD_CEILING_MINUTES` (30) pairs
+    with the daemon's `DEFAULT_TIMEOUT_MS` the same way.
+  - **`AGENSIS_SESSION_SLOTS` (default 1) is off for a reason.** `--max-concurrency`
+    was a no-op: the queue admitted two lanes and the keyed mutex funnelled them
+    onto one `sessionKey`, so real parallelism was 1. Slots
+    (`packages/agensis-cli/src/sessionSlots.mjs`) give the mutex more than one
+    connection. At 1 the key is `silo#0` and behaviour is byte-identical to before.
+    Raising it also stops separate conversations sharing one runtime history —
+    correct, but visible, hence opt-in. The allocator NEVER refuses a slot;
+    admission stays the queue's job, so a leaked claim can cost slot preference
+    but can never wedge a silo. `isDaemonIdle` counts jobs, not sessions, so
+    self-update's guard needs no change.
+
 - **Interactive tool approvals** — a daemon agent that hits a tool it isn't
   cleared for now ASKS, in the conversation it is working in, instead of erroring.
   `server/agent-permissions.cjs` owns the table (`agent_permission_requests`),

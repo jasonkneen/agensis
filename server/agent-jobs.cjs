@@ -147,7 +147,7 @@ function createAgentJobs(deps = {}) {
    // wedge the session. Finalize it now — awaited so the row is 'error' before the
    // caller dispatches a fresh turn, otherwise the M15 one-active-job unique index
    // would bounce the retry and the human would have to send again.
-   await finalizeStuckJob(job, 'the previous turn was abandoned');
+   await finalizeStuckJob(job, 'the previous turn was abandoned', 'connection_lost');
   }
   return blocking;
  }
@@ -195,8 +195,15 @@ function createAgentJobs(deps = {}) {
  // Finalize a stuck/abandoned daemon job: mark it failed and rewrite its still-
  // pending "Thinking …" placeholder with a clear message, so a chat never hangs on
  // a spinner when the daemon disconnects, crashes, or simply never answers.
- async function finalizeStuckJob(job, reason) {
+ async function finalizeStuckJob(job, reason, stopReason = 'connection_lost') {
   try {
+   // A reaped job is now distinguishable from one that ended on its own. The
+   // reason is server-authored here (not daemon-supplied), but it goes through
+   // the same validator so there is exactly one way a stopReason enters a row.
+   const stuckMetadata = {
+    ...parseJsonObject(job.metadata),
+    ...(normalizeStopReason(stopReason) ? { stopReason: normalizeStopReason(stopReason) } : {}),
+   };
    // Use 'error' (not 'failed'): the agent_jobs.status CHECK constraint only permits
    // queued/running/done/error/cancelled. Writing 'failed' throws a constraint
    // violation that the surrounding try/catch swallows, so the job would stay
@@ -208,8 +215,11 @@ function createAgentJobs(deps = {}) {
     // one-active-job unique index won't bounce the retry. A running-only guard
     // matched zero rows there, leaving the queued row holding the
     // (session_id, agent_id) active slot and silently dropping the next message.
-    `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now() where id = $1 and status in ('queued', 'running') returning *`,
-    [job.id, `Agent stopped responding (${reason})`],
+    // 'error' (not 'failed') is load-bearing — see the comment above.
+    // Bind the merged OBJECT, never JSON.stringify: a stringified bind becomes a
+    // jsonb string scalar and corrupts the column.
+    `update agent_jobs set status = 'error', error = $2, metadata = $3::jsonb, finished_at = now(), updated_at = now() where id = $1 and status in ('queued', 'running') returning *`,
+    [job.id, `Agent stopped responding (${reason})`, stuckMetadata],
    );
    if (updated.length === 0) return; // a real result already finalized it
    // The only job-terminating path that never notified subscribers. A wedged job's
@@ -225,7 +235,20 @@ function createAgentJobs(deps = {}) {
    const responseMessageId = meta.responseMessageId || null;
    if (responseMessageId) {
     const handle = meta.handle || 'agent';
-    const content = `@${handle} stopped responding (${reason}). Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`;
+    // "It produced nothing for several minutes" and "it hit the maximum time
+    // allowed for one turn" send a human to two different places, and the old
+    // text — one word, "timed out" — said neither.
+    //
+    // connection_lost deliberately keeps the ORIGINAL wording: "stopped
+    // responding" is exactly what happened there, and `reason` already carries
+    // the specific cause ("the daemon disconnected", "the backend restarted").
+    // Rewording it would be churn that tells the reader nothing new.
+    const stuckSentence = stuckMetadata.stopReason === 'connection_lost'
+     ? ''
+     : STOP_REASON_TEXT[stuckMetadata.stopReason] || '';
+    const content = stuckSentence
+     ? `@${handle} stopped: ${stuckSentence}. Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`
+     : `@${handle} stopped responding (${reason}). Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`;
     // Broadcast it for the same reason the reply is broadcast: the placeholder was
     // working inside a thread, and a channel that shows nothing at all after the
     // human's message reads as "still thinking" forever.
@@ -279,11 +302,28 @@ function createAgentJobs(deps = {}) {
     `select * from agent_jobs where connection_id = $1 and status = 'running'`,
     [connectionId],
    );
-   for (const job of rows) await finalizeStuckJob(job, reason);
+   for (const job of rows) await finalizeStuckJob(job, reason, 'connection_lost');
   } catch {
    // best effort
   }
  }
+
+ // The server's content-silence window. This is a BACKSTOP, not the primary
+ // control: the server can only rewrite the row, while the daemon is the only
+ // side that can actually stop the work.
+ //
+ // It is paired with DEFAULT_IDLE_TIMEOUT_MS in the agensis-agent repo
+ // (packages/agensis-cli/src/agensis.mjs), which is deliberately set to NINE
+ // minutes so the daemon always decides first and reports a real reason. If this
+ // number ever drops to or below the daemon's, the server starts winning the
+ // race and every silent turn is reported as a guess again — while a CLI keeps
+ // running on someone's laptop for another twenty minutes. Move the two together
+ // or not at all.
+ const AGENT_JOB_IDLE_REAP_MINUTES = 10;
+ // The absolute stop, measured from started_at, that no amount of ticking can
+ // extend. Matches the daemon's DEFAULT_TIMEOUT_MS (30 minutes).
+ const AGENT_JOB_HARD_CEILING_MINUTES = 30;
+ const AGENT_JOB_FARM_CEILING_MINUTES = 31;
 
  // Backstop: time out jobs whose result/progress has gone stale.
  //
@@ -306,17 +346,30 @@ function createAgentJobs(deps = {}) {
     `select * from agent_jobs
         where status = 'running'
           and (
-            ((metadata->>'mode') = 'farm' and updated_at < now() - interval '31 minutes')
+            ((metadata->>'mode') = 'farm' and updated_at < now() - make_interval(mins => $3::int))
             or (
               coalesce(metadata->>'mode', '') <> 'farm'
               and (
-                coalesce((metadata->>'lastContentAt')::timestamptz, started_at) < now() - interval '10 minutes'
-                or started_at < now() - interval '30 minutes'
+                coalesce((metadata->>'lastContentAt')::timestamptz, started_at) < now() - make_interval(mins => $1::int)
+                or started_at < now() - make_interval(mins => $2::int)
               )
             )
           )`,
+    // make_interval with an explicit ::int cast rather than building a string
+    // (`$1 || ' minutes'`). Both parse — checked against the real database, not
+    // just the mock — but this form states the parameter's type outright instead
+    // of leaving it to operator resolution, and reads as a number, which is what
+    // the constants above are.
+    [AGENT_JOB_IDLE_REAP_MINUTES, AGENT_JOB_HARD_CEILING_MINUTES, AGENT_JOB_FARM_CEILING_MINUTES],
    );
-   for (const job of rows) await finalizeStuckJob(job, 'timed out');
+   for (const job of rows) {
+    // Two different failures wear the same 'timed out' label today: a job that
+    // went SILENT (no content for AGENT_JOB_IDLE_REAP_MINUTES) and one that ran
+    // past the absolute ceiling. Only started_at can tell them apart here.
+    const startedAt = job.started_at ? new Date(job.started_at).getTime() : 0;
+    const hitCeiling = startedAt > 0 && Date.now() - startedAt >= AGENT_JOB_HARD_CEILING_MINUTES * 60_000;
+    await finalizeStuckJob(job, 'timed out', hitCeiling ? 'hard_timeout' : 'idle_timeout');
+   }
   } catch {
    // best effort
   }
@@ -328,6 +381,103 @@ function createAgentJobs(deps = {}) {
  // continue the channel turn loop. `job` must carry agent_name/agent_handle (join on load).
  const AMP_THREAD_ID_RE = /^T-[A-Za-z0-9-]{20,100}$/;
  const AMP_ERROR_CODE_RE = /^amp_[a-z0-9_]{1,80}$/;
+
+ // Why a turn ended, in the vocabulary the daemon reports it in
+ // (packages/agensis-cli/src/stopReasons.mjs in the agensis-agent repo). This
+ // list is the SERVER's copy and the two must stay identical — there is no
+ // shared module across the two repos, so a value added on one side and not the
+ // other is silently dropped here rather than stored.
+ const STOP_REASONS = new Set([
+  'completed', 'cancelled', 'max_tokens', 'max_turns', 'max_budget', 'refused',
+  'idle_timeout', 'hard_timeout', 'permission_denied', 'agent_error', 'connection_lost',
+ ]);
+
+ // One human sentence per reason, used in the chat message a failed turn leaves
+ // behind. This is the ONLY place the wording lives, and it is deliberately
+ // server-side: the text is baked into messages.content when the job finalizes,
+ // so the client renders a plain string and never has to know the vocabulary.
+ const STOP_REASON_TEXT = {
+  cancelled: 'the turn was cancelled',
+  max_tokens: 'the conversation grew past its context limit',
+  max_turns: 'it used up its allowed steps for one turn',
+  max_budget: 'it reached its spending limit for this turn',
+  refused: 'the model declined to answer',
+  idle_timeout: 'it produced nothing for several minutes',
+  hard_timeout: 'it hit the maximum time allowed for one turn',
+  permission_denied: 'a tool it needed was not approved',
+  agent_error: 'the coding agent errored',
+  connection_lost: 'the connection to the daemon dropped mid-turn',
+ };
+
+ /**
+  * A stop reason is UNTRUSTED input: it arrives on a websocket frame from
+  * someone else's machine and ends up rendered into a human's transcript. It is
+  * matched against the closed set above and anything else becomes '' — never a
+  * passthrough, exactly like AMP_ERROR_CODE_RE next door.
+  */
+ function normalizeStopReason(value) {
+  return typeof value === 'string' && STOP_REASONS.has(value) ? value : '';
+ }
+
+ /**
+  * The runtime's own wording for the same event, kept for diagnosis only. Never
+  * rendered, so the bar is "cannot corrupt the row": a conservative charset and
+  * a hard length cap. An empty result simply means no detail was stored.
+  */
+ // Reasons whose raw runtime message is jargon that merely restates the reason
+ // ("claude-agent-sdk result error: error_max_turns", "timed out after 1800000ms").
+ // For these the sentence REPLACES the raw text; for the rest it leads and the
+ // raw text follows, because there the raw text is the actual information.
+ const SELF_EXPLANATORY_STOP_REASONS = new Set([
+  'cancelled', 'max_tokens', 'max_turns', 'max_budget', 'refused',
+  'idle_timeout', 'hard_timeout', 'connection_lost',
+ ]);
+
+ function failureSentence(stopReason, errorText) {
+  const sentence = STOP_REASON_TEXT[stopReason] || '';
+  if (!sentence) return errorText; // no reason reported: exactly today's text
+  if (SELF_EXPLANATORY_STOP_REASONS.has(stopReason)) return sentence;
+  return errorText ? `${sentence} — ${errorText}` : sentence;
+ }
+
+ function normalizeStopDetail(value) {
+  const detail = typeof value === 'string' ? value.trim().slice(0, 120) : '';
+  return /^[a-z0-9_.:-]*$/i.test(detail) ? detail : '';
+ }
+
+ function finiteNumber(value, max) {
+  const num = Number(value);
+  return Number.isFinite(num) && num >= 0 ? Math.min(num, max) : 0;
+ }
+
+ /**
+  * The result metadata the daemon used to throw away, validated for storage.
+  *
+  * Returns an EMPTY object when there is no recognised reason, so a job from an
+  * older daemon (or from LocalExecutor, which has no structured result to read)
+  * produces byte-identical metadata to what it produced before this existed.
+  */
+ function stopResultMetadata(message) {
+  const stopReason = normalizeStopReason(message && message.stopReason);
+  if (!stopReason) return {};
+  const stopDetail = normalizeStopDetail(message && message.stopDetail);
+  // Normalize FIRST, then decide whether to store. Testing the raw value would
+  // store a 0 for input that is merely unusable (a negative count, 'lots'),
+  // which reads as a real measurement of zero rather than as "not reported".
+  const numTurns = finiteNumber(message.numTurns, 100_000);
+  // Per-turn spend is STORED but never rendered in v1. agent_jobs.metadata is
+  // fanned out to clients by notifyDbSubscribers, so putting a cost in front of
+  // a human is a product decision nobody has made yet.
+  const costUsd = finiteNumber(message.costUsd, 10_000);
+  const permissionDenials = finiteNumber(message.permissionDenials, 10_000);
+  return {
+   stopReason,
+   ...(stopDetail ? { stopDetail } : {}),
+   ...(numTurns ? { numTurns } : {}),
+   ...(costUsd ? { costUsd } : {}),
+   ...(permissionDenials ? { permissionDenials } : {}),
+  };
+ }
 
  // A daemon result is an untrusted websocket message. Persist only the Amp
  // fields Agensis understands, validate the opaque id, and derive the URL here
@@ -379,13 +529,16 @@ function createAgentJobs(deps = {}) {
   };
  }
 
- async function finalizeAgentJobResult(job, { responseText = '', errorText = '', fallbackName = null, fallbackHandle = null, resultMetadata = null } = {}) {
+ async function finalizeAgentJobResult(job, { responseText = '', errorText = '', fallbackName = null, fallbackHandle = null, resultMetadata = null, resultStop = null } = {}) {
   const jobMetadata = parseJsonObject(job.metadata);
   const validatedAmp = validateAmpJobResult(jobMetadata, resultMetadata, errorText);
   const finalErrorText = validatedAmp.errorText;
   const storedResponseText = !errorText && finalErrorText ? '' : responseText;
   const status = finalErrorText ? 'error' : 'done';
-  const mergedMetadata = { ...jobMetadata, ...validatedAmp.metadata };
+  // {} for a daemon that reported no reason, so an OLD daemon against this
+  // server produces byte-identical metadata to what it produced before.
+  const stopMetadata = stopResultMetadata(resultStop);
+  const mergedMetadata = { ...jobMetadata, ...validatedAmp.metadata, ...stopMetadata };
   const statusGuard = jobMetadata.mode === 'farm'
    ? "status in ('queued', 'running')"
    : "status in ('queued', 'running', 'error')";
@@ -414,7 +567,7 @@ function createAgentJobs(deps = {}) {
    ? `\n\n[Amp thread](${mergedMetadata.ampThreadUrl})`
    : '';
   const content = finalErrorText
-   ? `@${handle} failed: ${finalErrorText}`
+   ? `@${handle} failed: ${failureSentence(mergedMetadata.stopReason, finalErrorText)}`
    : `${responseText || `@${handle} finished without output.`}${ampThreadLink}`;
   const threadParentId = jobMetadata.threadParentId || null;
   const responseMessageId = jobMetadata.responseMessageId || null;
@@ -725,6 +878,9 @@ function createAgentJobs(deps = {}) {
    fallbackName: auth.name,
    fallbackHandle: auth.handle,
    resultMetadata: message.metadata,
+   // Untrusted, validated in stopResultMetadata. The whole frame is passed
+   // rather than pre-picked fields so there is one validator, not two.
+   resultStop: message,
   });
   await updateAgentHeartbeat(ws, { busy: false }).catch(() => { });
  }
@@ -1213,6 +1369,9 @@ function createAgentJobs(deps = {}) {
   agentStepContent,
   agentStepParts,
   ampResultMetadata,
+  normalizeStopReason,
+  stopResultMetadata,
+  failureSentence,
   validateAmpJobResult,
   cancelFarmAgentJob,
   claimMcpJob,
