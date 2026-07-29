@@ -1,11 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { backendClient } from '../lib/backendClient';
+import {
+  applyTypingFrame,
+  buildTypingFrame,
+  decideTypingEmit,
+  mergeTypingIntoPresence,
+  pruneExpiredTyping,
+  type TypingEmitState,
+  type TypingFrame,
+  type TypingState,
+} from '../lib/typingPresence';
 import type { FloatingWindow, ItemPresenceUser, WorkspaceInstanceShareMode } from '../types';
 import type { RealtimeChannel, BroadcastPayload } from '../types/realtime';
 
 interface PresenceSnapshotItem {
   type: 'chat' | 'document';
   itemId: string;
+  /**
+   * Legacy. Typing rides its own lean `typing` broadcast now — see
+   * src/lib/typingPresence.ts for why it is not folded back into this ~2 KB
+   * snapshot. Still read on the way in so a frame from an older tab is
+   * tolerated; never written on the way out.
+   */
   typing?: boolean;
 }
 
@@ -75,8 +91,9 @@ export function useItemPresence(
   shareMode: WorkspaceInstanceShareMode = 'all',
 ) {
   const [remotePresence, setRemotePresence] = useState<Record<string, RemotePresenceState>>({});
+  const [typingState, setTypingState] = useState<TypingState>({});
   const channelRef = useRef<RealtimeChannel | null>(null);
-  const typingRef = useRef<Record<string, boolean>>({});
+  const typingEmitRef = useRef<TypingEmitState>({});
   const windowsRef = useRef<FloatingWindow[]>(windows);
   const heartbeatRef = useRef<number | null>(null);
   const knownRemoteIdsRef = useRef<Set<string>>(new Set());
@@ -101,7 +118,6 @@ export function useItemPresence(
           items.push({
             type: 'chat',
             itemId: win.sessionId,
-            typing: !!typingRef.current[key],
           });
         }
 
@@ -112,7 +128,6 @@ export function useItemPresence(
           items.push({
             type: 'document',
             itemId: win.documentId,
-            typing: !!typingRef.current[key],
           });
         }
       });
@@ -165,19 +180,51 @@ export function useItemPresence(
     });
   }, []);
 
+  const pruneTyping = useCallback(() => {
+    setTypingState(prev => pruneExpiredTyping(prev, Date.now()));
+  }, []);
+
+  /**
+   * Safe to call on every keystroke — the throttle is here, not at the call
+   * site. `decideTypingEmit` lets at most one frame per TYPING_REARM_MS (4s)
+   * per target onto the wire, so a 60wpm typist produces 0.25 sends/sec.
+   *
+   * Do NOT route this through `sendSnapshot()` (which is what it used to do):
+   * that is a ~2 KB window payload and this is ~150 bytes. See the header of
+   * src/lib/typingPresence.ts.
+   */
   const setTyping = useCallback((type: 'chat' | 'document', itemId: string, typing: boolean) => {
-    const key = `${type}:${itemId}`;
-    if (typing) typingRef.current[key] = true;
-    else delete typingRef.current[key];
-    sendSnapshot();
-  }, [sendSnapshot]);
+    if (!channelRef.current || !userId || !itemId) return;
+    const decision = decideTypingEmit(typingEmitRef.current, type, itemId, typing, Date.now());
+    typingEmitRef.current = decision.state;
+    if (!decision.emit) return;
+
+    const payload: TypingFrame = buildTypingFrame({
+      userId,
+      name: displayName,
+      color,
+      scope: type,
+      itemId,
+      typing,
+    });
+
+    channelRef.current.send({
+      type: 'broadcast',
+      event: 'typing',
+      payload,
+    });
+  }, [color, displayName, userId]);
 
   useEffect(() => {
     if (!workspaceId || !userId) {
       setRemotePresence({});
+      setTypingState({});
       return;
     }
 
+    // Narrowing does not survive into the callbacks below, and the self-echo
+    // check depends on this being a definite string.
+    const localUserId: string = userId;
     const channel = backendClient.channel(`item-presence:${workspaceId}`);
     channelRef.current = channel;
 
@@ -201,6 +248,11 @@ export function useItemPresence(
         }));
         if (isNewPeer) sendSnapshot();
       })
+      .on('broadcast', { event: 'typing' }, ({ payload }: BroadcastPayload<TypingFrame>) => {
+        // The deadline is computed HERE, from this browser's clock, so a peer
+        // with a skewed clock cannot shorten or extend the indicator.
+        setTypingState(prev => applyTypingFrame(prev, payload, localUserId, Date.now()));
+      })
       .on('broadcast', { event: 'presence_leave' }, ({ payload }: BroadcastPayload<{ userId?: string }>) => {
         const leavingId = payload.userId;
         if (!leavingId) return;
@@ -209,6 +261,21 @@ export function useItemPresence(
           const next = { ...prev };
           delete next[leavingId];
           return next;
+        });
+        setTypingState(prev => {
+          let changed = false;
+          const next: TypingState = {};
+          for (const [key, bucket] of Object.entries(prev)) {
+            if (!bucket[leavingId]) {
+              next[key] = bucket;
+              continue;
+            }
+            changed = true;
+            const kept = { ...bucket };
+            delete kept[leavingId];
+            if (Object.keys(kept).length > 0) next[key] = kept;
+          }
+          return changed ? next : prev;
         });
       })
       .subscribe((status: string) => {
@@ -240,21 +307,31 @@ export function useItemPresence(
     sendSnapshot();
   }, [workspaceId, userId, windows, activeLayerId, sendSnapshot]);
 
-  const hasRemotePeers = Object.keys(remotePresence).length > 0;
+  // A typing frame is itself proof of a peer, and it may arrive before that
+  // peer's first snapshot does. Counting it here keeps the heartbeat — and so
+  // the typing prune that rides it — at 2s rather than 10s, which is what
+  // bounds an indicator's life to its TTL plus one tick instead of plus ten
+  // seconds.
+  const hasRemotePeers = Object.keys(remotePresence).length > 0 || Object.keys(typingState).length > 0;
 
   useEffect(() => {
     if (!workspaceId || !userId) return;
 
+    // Typing expiry rides the existing heartbeat rather than adding a timer:
+    // it ticks every 2s while there are peers, which bounds an indicator's
+    // overshoot past its 6s TTL to one tick. With no peers it drops to 10s,
+    // and with no peers nobody can be typing at you anyway.
     heartbeatRef.current = window.setInterval(() => {
       sendSnapshot();
       pruneStaleUsers();
+      pruneTyping();
     }, hasRemotePeers ? 2000 : 10000);
 
     return () => {
       if (heartbeatRef.current) window.clearInterval(heartbeatRef.current);
       heartbeatRef.current = null;
     };
-  }, [workspaceId, userId, hasRemotePeers, sendSnapshot, pruneStaleUsers]);
+  }, [workspaceId, userId, hasRemotePeers, sendSnapshot, pruneStaleUsers, pruneTyping]);
 
   const { documentPresence, chatPresence, remotePresenceUsers, sharedWindows } = useMemo(() => {
     const documents: Record<string, ItemPresenceUser[]> = {};
@@ -281,13 +358,18 @@ export function useItemPresence(
       });
     });
 
+    // Expiry is applied here as well as on the prune tick: a render triggered
+    // by anything else must not resurrect an indicator whose deadline passed
+    // between ticks.
+    const now = Date.now();
+
     return {
-      documentPresence: documents,
-      chatPresence: chats,
+      documentPresence: mergeTypingIntoPresence(documents, typingState, 'document', now),
+      chatPresence: mergeTypingIntoPresence(chats, typingState, 'chat', now),
       remotePresenceUsers: users,
       sharedWindows: remoteWindows,
     };
-  }, [remotePresence]);
+  }, [remotePresence, typingState]);
 
   return {
     documentPresence,
