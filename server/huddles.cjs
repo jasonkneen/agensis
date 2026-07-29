@@ -590,6 +590,13 @@ const HUDDLES_SCHEMA_SQL = `
     -- the column above is for fresh ones. Nullable on purpose: an old huddle
     -- has no transcript and every reader falls back to session_id.
     ALTER TABLE huddles ADD COLUMN IF NOT EXISTS transcript_session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL;
+    -- Shared notes for the call — the Notes tab in the dock. Plain text, not
+    -- jsonb: there is no structure to it, just what whoever is typing wrote.
+    -- Written ONLY through PATCH .../huddles/:id/notes (gated to 'write'), never
+    -- through the generic /backend/db path — that path is 'manage'-only for this
+    -- table on purpose (see DB_TABLE_ACCESS.huddles), and notes should be
+    -- editable by anyone who could speak in the call, not just workspace admins.
+    ALTER TABLE huddles ADD COLUMN IF NOT EXISTS notes text NOT NULL DEFAULT '';
     CREATE INDEX IF NOT EXISTS idx_huddles_workspace_id ON huddles(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_huddles_session_started ON huddles(session_id, started_at DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_huddles_one_live_per_session ON huddles(session_id) WHERE ended_at IS NULL;
@@ -716,7 +723,12 @@ async function deleteLivekitRoom(roomName) {
 // Routes
 // ---------------------------------------------------------------------------
 
-const HUDDLE_COLUMNS = 'id, workspace_id, session_id, room_name, started_by, started_at, ended_at, transcript_session_id';
+const HUDDLE_COLUMNS = 'id, workspace_id, session_id, room_name, started_by, started_at, ended_at, transcript_session_id, notes';
+// Notes are quick call notes, not a document editor — generous enough for a
+// long meeting's worth of typing, small enough that nobody can park megabytes
+// of text on a huddle row through a request the 50mb express.json limit would
+// otherwise wave through.
+const NOTES_MAX_LENGTH = 20000;
 const EVENT_COLUMNS = 'id, huddle_id, workspace_id, session_id, kind, identity, display_name, event_id, seq, created_at';
 const PRESENCE_COLUMNS = 'huddle_id, identity, connection_epoch, last_seen_at, heartbeat_at, reaped_at';
 
@@ -1486,6 +1498,43 @@ function mountHuddleRoutes(app, deps = {}) {
   }
  });
 
+ // --- notes -----------------------------------------------------------------
+
+ // Shared notes for the call. Deliberately its OWN route rather than a generic
+ // /backend/db/update: huddles writes are locked to 'manage' there (see
+ // DB_TABLE_ACCESS.huddles in shared/backend-core.cjs) because the row also
+ // carries LiveKit/webhook authority an editor must never touch. Notes are
+ // just text anyone in the call could have said out loud, so this gates on
+ // 'write' — the same bar as posting in the channel the huddle was called
+ // from — and touches nothing but the one column.
+ app.post('/backend/workspaces/:id/huddles/:huddleId/notes', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   const huddleId = String(req.params.huddleId || '').trim();
+   if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
+   await enforceWorkspaceRole(req.userId, workspaceId, 'write');
+   await ensureSchemaOnce();
+
+   const notes = typeof req.body?.notes === 'string' ? req.body.notes : '';
+   if (notes.length > NOTES_MAX_LENGTH) {
+    return jsonError(res, 400, new Error(`notes must be ${NOTES_MAX_LENGTH} characters or fewer`));
+   }
+
+   const existing = await huddleInWorkspace(huddleId, workspaceId);
+   if (!existing) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+
+   const rows = await getDb().unsafe(
+    `update huddles set notes = $1 where id = $2 and workspace_id = $3 returning ${HUDDLE_COLUMNS}`,
+    [notes, huddleId, workspaceId],
+   );
+   const huddle = rows[0] || existing;
+   if (rows[0]) fanout('huddles', 'UPDATE', [huddle]);
+   res.json({ data: await huddlePayload(huddle), error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  // --- webhook -------------------------------------------------------------
 
  // LiveKit webhook receiver. This — not the browser — is the authority on who
@@ -1575,6 +1624,7 @@ module.exports = {
  HUDDLE_PRESENCE_STALE_MS,
  HUDDLE_EMPTY_GRACE_MS,
  HUDDLES_SCHEMA_SQL,
+ NOTES_MAX_LENGTH,
  ensureHuddlesSchema,
  mountHuddleRoutes,
  // Exported for tests and for reuse by the MCP/netlify surfaces later.

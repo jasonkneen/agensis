@@ -1007,6 +1007,9 @@ CREATE TABLE IF NOT EXISTS huddles (
   transcript_session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL
 );
 ALTER TABLE huddles ADD COLUMN IF NOT EXISTS transcript_session_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL;
+-- Shared call notes (the dock's Notes tab). Written only through
+-- POST /backend/workspaces/:id/huddles/:huddleId/notes — see server/huddles.cjs.
+ALTER TABLE huddles ADD COLUMN IF NOT EXISTS notes text NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_huddles_workspace_id ON huddles(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_huddles_session_started ON huddles(session_id, started_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_huddles_one_live_per_session ON huddles(session_id) WHERE ended_at IS NULL;

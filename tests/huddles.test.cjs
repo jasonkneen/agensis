@@ -215,6 +215,13 @@ function makeDb({
         row.ended_at = new Date().toISOString();
         return [row];
       }
+      if (n.startsWith('update huddles set notes = $1')) {
+        const [notes, huddleId, workspaceId] = params;
+        const row = state.huddles.find((h) => h.id === huddleId && h.workspace_id === workspaceId);
+        if (!row) return [];
+        row.notes = notes;
+        return [row];
+      }
       // --- liveness -------------------------------------------------------
       if (n.startsWith('select huddle_id, identity, connection_epoch, last_seen_at, heartbeat_at, reaped_at from huddle_presence')) {
         return state.presence.filter((p) => p.huddle_id === params[0]);
@@ -336,6 +343,7 @@ function liveHuddleRow(overrides = {}) {
     started_at: new Date(Date.now() - 60_000).toISOString(),
     ended_at: null,
     transcript_session_id: TRANSCRIPT,
+    notes: '',
     ...overrides,
   };
 }
@@ -1910,4 +1918,187 @@ test('the liveness decision is a PURE function, not a WHERE clause', () => {
     false,
     'presence staleness must not be decided inside a query',
   );
+});
+
+// --- 5. notes ----------------------------------------------------------------
+//
+// Shared call notes. Deliberately gated at 'write' (posting-in-the-channel
+// strength), NOT the 'manage' the generic /backend/db path enforces for this
+// table — huddles rows also carry LiveKit/webhook authority an editor must
+// never touch, which is why that path stays locked down. Notes are just text;
+// anyone who could speak in the call should be able to jot them.
+
+test('notes: unauthenticated is rejected and nothing is written', async () => {
+  const db = makeDb({ huddleRows: [liveHuddleRow()] });
+  __test.setTestDb(db);
+  const { app, broadcasts } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes: 'hi' }),
+    });
+    assert.equal(res.status, 401);
+    assert.equal(db.state.huddles[0].notes, '');
+    assert.equal(broadcasts.length, 0);
+  });
+});
+
+test('notes: a non-member is rejected 403, a viewer (read-only) too', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor', [`${WS}:${VIEWER}`]: 'viewer' },
+    huddleRows: [liveHuddleRow()],
+  });
+  __test.setTestDb(db);
+  const { app, broadcasts } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    for (const userId of [STRANGER, VIEWER]) {
+      const token = await __test.issueToken(userId, '1');
+      const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ notes: 'sneaky' }),
+      });
+      assert.equal(res.status, 403, `expected 403 for ${userId}`);
+    }
+    assert.equal(db.state.huddles[0].notes, '');
+    assert.equal(broadcasts.length, 0);
+  });
+});
+
+test('notes: an editor (write capability) can save them, and it broadcasts', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' }, huddleRows: [liveHuddleRow()] });
+  __test.setTestDb(db);
+  const { app, broadcasts } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ notes: 'Bring the deck next time.' }),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.data.huddle.notes, 'Bring the deck next time.');
+    assert.equal(db.state.huddles[0].notes, 'Bring the deck next time.');
+    // Live for every OTHER viewer of the call: the same fanout every other
+    // huddle mutation broadcasts through, so the Notes tab updates the same
+    // way join/leave/end already do — no bespoke channel to get wrong.
+    assert.equal(broadcasts.length, 1);
+    assert.deepEqual(broadcasts[0].table, 'huddles');
+    assert.equal(broadcasts[0].eventType, 'UPDATE');
+  });
+});
+
+test('notes: a commenter (comment capability, not write) is turned away today', async () => {
+  // Pinning the ACTUAL rule rather than assuming: a commenter role carries
+  // 'read' + 'comment', not 'write', so this route currently refuses them even
+  // though they could speak in the call itself. If that gap is ever closed
+  // deliberately, this test is the one that has to change with it — not
+  // silently start failing somewhere else.
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'commenter' }, huddleRows: [liveHuddleRow()] });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ notes: 'hi' }),
+    });
+    assert.equal(res.status, 403);
+  });
+});
+
+test('notes: a huddle from another workspace 404s rather than leaking', async () => {
+  const db = makeDb({
+    roles: { [`${OTHER_WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow()], // lives in WS, not OTHER_WS
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const res = await fetch(`${baseUrl}/backend/workspaces/${OTHER_WS}/huddles/${HUDDLE_ID}/notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ notes: 'hi' }),
+    });
+    assert.equal(res.status, 404);
+    assert.equal(db.state.huddles[0].notes, '');
+  });
+});
+
+test('notes: a huge payload is rejected rather than parked on the row', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' }, huddleRows: [liveHuddleRow()] });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ notes: 'x'.repeat(huddles.NOTES_MAX_LENGTH + 1) }),
+    });
+    assert.equal(res.status, 400);
+    assert.equal(db.state.huddles[0].notes, '');
+  });
+});
+
+test('notes: clearing them back to empty is allowed (not treated as "no change")', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' }, huddleRows: [liveHuddleRow({ notes: 'old note' })] });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ notes: '' }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(db.state.huddles[0].notes, '');
+  });
+});
+
+test('every huddle response carries notes (read routes were not left behind)', async () => {
+  // The exact "blank-column trap" the transcript_session_id test above guards
+  // against, for the newer column: every read route uses HUDDLE_COLUMNS, so
+  // this is really a HUDDLE_COLUMNS assertion, pinned via the actual response.
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow({ notes: 'agenda: ship it' })],
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const auth = { Authorization: `Bearer ${token}` };
+    const bySession = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, { headers: auth });
+    assert.equal((await bySession.json()).data.huddle.notes, 'agenda: ship it');
+    const byId = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}`, { headers: auth });
+    assert.equal((await byId.json()).data.huddle.notes, 'agenda: ship it');
+  });
+});
+
+test('huddles.notes is declared in all three schema places', () => {
+  const runtime = huddles.HUDDLES_SCHEMA_SQL;
+  const canonical = read('database/neon-schema.sql');
+  const named = fs.readdirSync(path.join(root, 'supabase/migrations')).filter((n) => n.endsWith('_huddle_notes.sql'));
+  assert.equal(named.length, 1, 'expected exactly one huddle-notes migration');
+  const migration = read(path.join('supabase/migrations', named[0]));
+
+  for (const [label, source] of [['runtime', runtime], ['neon-schema', canonical], ['migration', migration]]) {
+    assert.match(source, /ALTER TABLE huddles ADD COLUMN IF NOT EXISTS notes text NOT NULL DEFAULT ''/, label);
+  }
+});
+
+test('notes stay off the generic /backend/db path — huddles writes are manage-only there', () => {
+  // The whole reason this is its own route: DB_TABLE_ACCESS.huddles.update is
+  // 'manage', not 'write', so an editor reaching /backend/db/update for this
+  // table is refused before a single column is inspected. If this ever
+  // silently loosened to 'write', an editor could rewrite room_name/started_by
+  // — the LiveKit-authority fields the dedicated routes exist to protect.
+  assert.equal(core.DB_TABLE_ACCESS.huddles.update, 'manage');
+  assert.equal(core.ALLOWED_TABLES.has('huddles'), true);
 });
