@@ -180,7 +180,7 @@ async function register(ws) {
     handle: 'coder',
     name: 'Coder',
     host: 'example-host.local',
-    cwd: '/Users/alex/Documents/GitHub/agensis',
+    cwd: '/Users/alice/Documents/GitHub/agensis',
   });
   await new Promise((resolve) => setImmediate(resolve));
 }

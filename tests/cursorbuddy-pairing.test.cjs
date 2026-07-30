@@ -32,9 +32,9 @@ function makeDb() {
           id: 'ws-1',
           name: 'CursorBuddy Workspace',
           description: '',
-          local_path: '/Users/alex/projects/example-app',
+          local_path: '/Users/alice/projects/example-app',
           project_kind: 'web',
-          git_root: '/Users/alex/projects/example-app',
+          git_root: '/Users/alice/projects/example-app',
           git_remote: 'git@example.com:cursorbuddy.git',
           role: 'owner',
           created_at: null,
@@ -222,7 +222,7 @@ test('CursorBuddy setup lists real Agensis workspaces, mints a one-time key, and
         key: createBody.data.key,
         baseUrl,
         host: 'example-host',
-        cwd: '/Users/alex/projects/example-app',
+        cwd: '/Users/alice/projects/example-app',
         runtimeKind: 'agensis-cli',
         permissionMode: 'accept_edits',
       }),
@@ -254,7 +254,7 @@ test('CursorBuddy setup lists real Agensis workspaces, mints a one-time key, and
         key: secondCreateBody.data.key,
         baseUrl,
         host: 'example-host',
-        cwd: '/Users/alex/projects/example-app',
+        cwd: '/Users/alice/projects/example-app',
         runtimeKind: 'agensis-cli',
       }),
     });
@@ -270,7 +270,7 @@ test('CursorBuddy setup lists real Agensis workspaces, mints a one-time key, and
   );
   assert.ok(db.calls.some((call) => call.normalized.includes('update workspace_agents set handle = $2')), 'claim rotates an aga_ daemon token');
   assert.deepEqual(asJson(db.agents[0].tools), ['cursorbuddy']);
-  assert.equal(asJson(db.agents[0].metadata).cursorbuddyRuntime.cwd, '/Users/alex/projects/example-app');
+  assert.equal(asJson(db.agents[0].metadata).cursorbuddyRuntime.cwd, '/Users/alice/projects/example-app');
 });
 
 test('CursorBuddy Provider registration creates a reusable built-in workspace agent', async () => {
@@ -355,7 +355,7 @@ test('Agensis CLI setup creates or reuses a primary daemon agent and returns dae
       body: JSON.stringify({
         workspaceId: 'ws-1',
         host: 'example-host.local',
-        cwd: '/Users/alex/projects/example-app',
+        cwd: '/Users/alice/projects/example-app',
         handle: 'mac',
         name: 'mac',
         baseUrl,
@@ -375,7 +375,7 @@ test('Agensis CLI setup creates or reuses a primary daemon agent and returns dae
       agent: 'agent-1',
       handle: 'mac',
       name: 'mac',
-      cwd: '/Users/alex/projects/example-app',
+      cwd: '/Users/alice/projects/example-app',
       model: 'claude-opus-4-8',
       permissionMode: 'default',
     });

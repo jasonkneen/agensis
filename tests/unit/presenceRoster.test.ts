@@ -23,7 +23,7 @@ import type { AgentConnection, PresenceVisibilityMode } from '../../src/types';
 //      rendered text, because the chips came back the moment the strings were
 //      in reach of the row.
 
-const AGENT_CWD = '/Users/alex/Documents/GitHub/agensis';
+const AGENT_CWD = '/Users/alice/Documents/GitHub/agensis';
 const AGENT_HOST = 'example-host.local';
 
 function agentConnection(overrides: Partial<AgentConnection> = {}): AgentConnection {

@@ -29,7 +29,7 @@ import { Separator } from '../ui/separator';
  * It was a settings form wearing a list's clothes. Every participant rendered
  * as four-plus lines: a name, then a wrapped stack of pill chips carrying
  * whatever `activityItems` happened to hold ("Connected daemon",
- * "Host: example-host.local", "Folder: /Users/alex/Docu…"), then a row of
+ * "Host: example-host.local", "Folder: /Users/alice/Docu…"), then a row of
  * message/favourite/View buttons, then a second row of Visible/Dim/Muted
  * buttons. Six controls per participant, all at equal visual weight, none
  * primary — and three agents were enough to make a 384px panel scroll.
