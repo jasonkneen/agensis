@@ -6,6 +6,16 @@ export interface UserProfile {
   email: string;
   display_name: string;
   accent_color: string;
+  /**
+   * The read-receipts opt-out, and it is RECIPROCAL: false means your markers
+   * are never written AND you stop seeing anyone else's. Both halves are
+   * enforced server-side in SQL (shared/read-receipts.cjs) — this value is what
+   * the settings toggle renders and what stops the client asking, never the
+   * thing that protects anybody.
+   *
+   * Optional because a client can reach a backend whose column predates it.
+   */
+  share_read_receipts?: boolean;
   created_at: string;
 }
 
@@ -30,7 +40,7 @@ export function useUserProfile(userId: string | null | undefined) {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  const updateProfile = useCallback(async (updates: { display_name?: string; accent_color?: string }) => {
+  const updateProfile = useCallback(async (updates: { display_name?: string; accent_color?: string; share_read_receipts?: boolean }) => {
     const res = await fetch(apiUrl('/backend/users/me'), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },

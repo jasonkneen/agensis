@@ -1571,6 +1571,7 @@ async function ensureAppUserProfileColumns() {
     ALTER TABLE app_users ADD COLUMN IF NOT EXISTS display_name text DEFAULT '';
     ALTER TABLE app_users ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '';
     ALTER TABLE app_users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 1;
+    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS share_read_receipts boolean NOT NULL DEFAULT true;
   `);
  appUserProfileColumnsEnsured = true;
 }
@@ -1841,7 +1842,7 @@ async function handleOAuthAuth() {
 
 async function handleGetMyProfile(userId) {
  await ensureAppUserProfileColumns();
- const rows = await query('select id, email, display_name, accent_color, created_at from app_users where id = $1 limit 1', [userId]);
+ const rows = await query('select id, email, display_name, accent_color, share_read_receipts, created_at from app_users where id = $1 limit 1', [userId]);
  if (!rows[0]) return jsonError(404, new Error('User not found'));
  return json({ data: rows[0], error: null });
 }
@@ -1860,12 +1861,18 @@ async function handleUpdateMyProfile(req, userId) {
   }
   updates.accent_color = color;
  }
+ if (body?.share_read_receipts !== undefined) {
+  // Coerced to a real boolean, mirroring server/auth-routes.cjs: the column is
+  // NOT NULL and a string 'false' is truthy in every language that reads it.
+  updates.share_read_receipts = body.share_read_receipts === true
+   || String(body.share_read_receipts).toLowerCase() === 'true';
+ }
  const fields = Object.keys(updates);
  if (fields.length === 0) return jsonError(400, new Error('No fields to update'));
 
  const setClause = fields.map((field, i) => `${field} = $${i + 2}`).join(', ');
  const rows = await query(
-  `update app_users set ${setClause} where id = $1 returning id, email, display_name, accent_color, created_at`,
+  `update app_users set ${setClause} where id = $1 returning id, email, display_name, accent_color, share_read_receipts, created_at`,
   [userId, ...fields.map(field => updates[field])],
  );
  if (!rows[0]) return jsonError(404, new Error('User not found'));

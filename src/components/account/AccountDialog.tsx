@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -31,6 +32,7 @@ export function AccountDialog({ open, onOpenChange, userId, userEmail, defaultTa
   const [tab, setTab] = useState(defaultTab);
   const [displayName, setDisplayName] = useState('');
   const [accentColor, setAccentColor] = useState(ACCOUNT_ACCENT_CHOICES[0]);
+  const [shareReadReceipts, setShareReadReceipts] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileMessage, setProfileMessage] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
 
@@ -47,6 +49,7 @@ export function AccountDialog({ open, onOpenChange, userId, userEmail, defaultTa
   useEffect(() => {
     setDisplayName(profile?.display_name || '');
     setAccentColor(profile?.accent_color || ACCOUNT_ACCENT_CHOICES[0]);
+    setShareReadReceipts(profile?.share_read_receipts !== false);
   }, [profile]);
 
   const initial = (displayName || userEmail || 'U').trim().charAt(0).toUpperCase();
@@ -55,7 +58,11 @@ export function AccountDialog({ open, onOpenChange, userId, userEmail, defaultTa
   const saveProfile = async () => {
     setSavingProfile(true);
     setProfileMessage(null);
-    const { error } = await updateProfile({ display_name: displayName.trim(), accent_color: accentColor });
+    const { error } = await updateProfile({
+      display_name: displayName.trim(),
+      accent_color: accentColor,
+      share_read_receipts: shareReadReceipts,
+    });
     setSavingProfile(false);
     setProfileMessage(error ? { type: 'error', text: error } : { type: 'ok', text: 'Profile updated.' });
   };
@@ -142,6 +149,30 @@ export function AccountDialog({ open, onOpenChange, userId, userEmail, defaultTa
                     title={choice}
                   />
                 ))}
+              </div>
+            </Field>
+
+            <Field>
+              <FieldLabel htmlFor="account-read-receipts">Read receipts</FieldLabel>
+              <div className="flex items-start gap-2">
+                <Checkbox
+                  id="account-read-receipts"
+                  checked={shareReadReceipts}
+                  onCheckedChange={value => setShareReadReceipts(value === true)}
+                />
+                <FieldDescription className="m-0">
+                  {/* Blunt about the reciprocity, because that is the whole
+                      reason the setting is trustworthy: the cost of hiding is
+                      symmetric, so switching it off is not a one-way mirror.
+                      And explicit that unread counts are UNAFFECTED — receipts
+                      live in their own table, separate from the inbox's read
+                      markers, so "off" costs you nothing except seeing other
+                      people's. Someone deciding whether to switch this off needs
+                      to know that without having to try it. */}
+                  Let other people see how far you have read a conversation. Switching this off
+                  also hides everyone else&rsquo;s from you. Your own unread counts are not
+                  affected.
+                </FieldDescription>
               </div>
             </Field>
 

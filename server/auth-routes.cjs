@@ -114,12 +114,19 @@ function mountAuthRoutes(app, deps = {}) {
   }
  });
 
- // ── Account profile (display name, accent color, password) ──────────────
+ // ── Account profile (display name, accent color, receipts, password) ─────
+ //
+ // `share_read_receipts` is an ACCOUNT setting rather than a workspace one, and
+ // it belongs here for the same reason accent_color does: it follows the person,
+ // not the room. It is RECIPROCAL — switching it off stops your read markers
+ // being written AND stops you seeing anybody else's — and both halves are
+ // enforced in SQL (shared/read-receipts.cjs), never by the client honouring the
+ // value it reads back from here.
 
  app.get('/backend/users/me', requireAuth, async (req, res) => {
   try {
    const rows = await getDb().unsafe(
-    'select id, email, display_name, accent_color, created_at from app_users where id = $1 limit 1',
+    'select id, email, display_name, accent_color, share_read_receipts, created_at from app_users where id = $1 limit 1',
     [req.userId],
    );
    if (!rows[0]) return jsonError(res, 404, new Error('User not found'));
@@ -142,12 +149,18 @@ function mountAuthRoutes(app, deps = {}) {
     }
     updates.accent_color = color;
    }
+   if (req.body?.share_read_receipts !== undefined) {
+    // Coerced to a real boolean rather than passed through: the column is NOT
+    // NULL, and a string 'false' is truthy in every language that later reads it.
+    updates.share_read_receipts = req.body.share_read_receipts === true
+     || String(req.body.share_read_receipts).toLowerCase() === 'true';
+   }
    const fields = Object.keys(updates);
    if (fields.length === 0) return jsonError(res, 400, new Error('No fields to update'));
 
    const setClause = fields.map((field, i) => `${field} = $${i + 2}`).join(', ');
    const rows = await getDb().unsafe(
-    `update app_users set ${setClause} where id = $1 returning id, email, display_name, accent_color, created_at`,
+    `update app_users set ${setClause} where id = $1 returning id, email, display_name, accent_color, share_read_receipts, created_at`,
     [req.userId, ...fields.map(field => updates[field])],
    );
    if (!rows[0]) return jsonError(res, 404, new Error('User not found'));

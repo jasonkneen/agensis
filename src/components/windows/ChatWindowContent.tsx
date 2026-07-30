@@ -35,7 +35,6 @@ import {
   Rocket,
   Send,
   ShieldCheck,
-  Smile,
   Sparkles,
   Terminal,
   Trash2,
@@ -110,6 +109,12 @@ import {
   type SlashActionId,
 } from '../../lib/slashCommands';
 import { apiAuthHeaders, apiUrl, backendClient, getSlashCommands, type SystemCapabilities } from '../../lib/backendClient';
+import { ReactionBar, ReactionPicker } from '../chat/ReactionBar';
+import { ReadReceipt } from '../chat/ReadReceipt';
+import { frequentReactions, noteReactionUse, reactionPills, reactionToggleOp, type ReactionUse } from '../../lib/reactionBar';
+import { useReadReceipts } from '../../hooks/useReadReceipts';
+import { useUserProfile } from '../../hooks/useUserProfile';
+import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import type {
   CanvasGroup,
@@ -869,6 +874,75 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     threadMessages[0]?.session_id ||
     null
   ), [messages, threadMessages, topLevelMessages]);
+
+  // --- Reactions and read receipts ------------------------------------------
+  //
+  // The workspace roster is what turns a uuid into a name in a reaction tooltip
+  // and a receipt tooltip. Where an id will not resolve the helpers render
+  // "Someone" — a raw uuid is useless to the reader and a small identifier leak
+  // into any screenshot of it.
+  const { members: workspaceMembers } = useWorkspaceUsers(workspaceId || null);
+  const resolveUserName = useCallback((userId: string) => {
+    const member = workspaceMembers.find(row => String(row.user_id) === String(userId));
+    if (!member) return null;
+    return member.email ? member.email.split('@')[0] : null;
+  }, [workspaceMembers]);
+
+  // The user's own reciprocal opt-out. The SERVER enforces both halves — an
+  // opted-out marker is never stored, and the read returns nothing — so this is
+  // only what stops the client asking.
+  const { profile: myProfile } = useUserProfile(currentUserId || null);
+  const receiptsEnabled = myProfile ? myProfile.share_read_receipts !== false : true;
+
+  const receipts = useReadReceipts({
+    sessionId: inferredSessionId,
+    currentUserId: currentUserId || null,
+    // Only the focused conversation. A background window has been read by
+    // nobody, and the indicator is only drawn where it is focused.
+    active: !readOnly,
+    enabled: receiptsEnabled,
+  });
+
+  // Picker history, per account and local only: nobody else's ranking is
+  // affected by what you reach for.
+  const [reactionUses, setReactionUses] = useState<ReactionUse[]>([]);
+
+  // Advance the read marker as messages arrive while this conversation is on
+  // screen. The POLICY decides whether anything is written (src/lib/readReceipts.ts):
+  // a hidden tab, an unchanged newest id, your own message and the re-arm window
+  // all suppress it. The model does the rest of the work — a high-water mark
+  // means scrolling past two hundred messages is one write, not two hundred.
+  const noteVisibleRead = receipts.noteVisible;
+  const newestVisibleMessage = visibleMessages.length > 0
+    ? visibleMessages[visibleMessages.length - 1]
+    : null;
+  useEffect(() => {
+    noteVisibleRead(newestVisibleMessage);
+  }, [noteVisibleRead, newestVisibleMessage]);
+
+  // One flush on the way out of the PAGE, so closing a tab records what was
+  // actually read rather than losing up to RECEIPT_REARM_MS of it.
+  //
+  // Deliberately not on unmount: by the time a conversation switch has
+  // re-rendered, the newest message already belongs to the conversation being
+  // opened, so a flush there would post the new session's message id against the
+  // old session's route — which the server's `m.session_id = $1` guard correctly
+  // refuses. Nothing is lost, because the marker advanced through the normal
+  // path the whole time the conversation was being read.
+  const newestVisibleRef = useRef(newestVisibleMessage);
+  newestVisibleRef.current = newestVisibleMessage;
+  useEffect(() => {
+    const flush = () => noteVisibleRead(newestVisibleRef.current, { flush: true });
+    window.addEventListener('pagehide', flush);
+    return () => window.removeEventListener('pagehide', flush);
+  }, [noteVisibleRead]);
+
+  // Only the LAST message of each of your contiguous runs carries an indicator;
+  // a five-message burst would otherwise draw five identical eyes.
+  const receiptAnchors = useMemo(
+    () => receipts.anchorIds(visibleMessages),
+    [receipts, visibleMessages],
+  );
   // Floating thread widgets. The rail shows itself once the session's widgets
   // have content and hides again on the toolbar toggle — see
   // `src/lib/threadWidgetRail.ts` for the whole decision, including why the
@@ -1493,23 +1567,48 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
     setMessageActionBusy(null);
   };
 
-  const handleToggleReaction = async (message: ChatMessage, emoji: string) => {
-    const uid = currentUserId || 'me';
-    const prev: Record<string, string[]> = message.reactions ?? {};
-    const users = prev[emoji] ?? [];
-    const next: Record<string, string[]> = {
-      ...prev,
-      [emoji]: users.includes(uid) ? users.filter(u => u !== uid) : [...users, uid],
-    };
-    if (next[emoji].length === 0) delete next[emoji];
-    setMessageOverride(message.id, { reactions: next });
-    const { error } = await backendClient
-      .from('messages')
-      .update({ reactions: next })
-      .eq('id', message.id)
-      .eq('session_id', message.session_id);
-    if (error) setMessageOverride(message.id, { reactions: message.reactions });
-    else clearMessageOverride(message.id, ['reactions']);
+  // Reacting is ONE request naming ONE reaction and ONE operation. It is not a
+  // whole-map PUT any more, and that is the fix for a live bug rather than a
+  // tidy-up: the old version read the map out of React state, spliced this
+  // user's id in or out and wrote the whole thing back, so two people reacting
+  // inside the realtime propagation window each built a map from a stale base
+  // and the second write silently erased the first. The same shape let any
+  // client write any user's id into the map.
+  //
+  // The server now owns the mutation (one atomic statement, reactor bound from
+  // the session), so the arithmetic below is only a PREDICTION for the moment
+  // before the response lands. A wrong prediction is safe: the statement is a
+  // no-op when the world already matches, and the acknowledgement lets realtime
+  // put the row back to whatever actually holds.
+  const handleToggleReaction = async (message: ChatMessage, reaction: string, op: 'add' | 'remove') => {
+    const uid = currentUserId;
+    if (uid) {
+      const prev: Record<string, string[]> = message.reactions ?? {};
+      const users = prev[reaction] ?? [];
+      const next: Record<string, string[]> = {
+        ...prev,
+        [reaction]: op === 'add' ? [...new Set([...users, uid])] : users.filter(u => u !== uid),
+      };
+      if (next[reaction].length === 0) delete next[reaction];
+      setMessageOverride(message.id, { reactions: next });
+    }
+    // Remember the pick for the picker's "Frequently used" row. Local only —
+    // nobody else's ranking is affected by what you reach for.
+    if (op === 'add') setReactionUses(prev => noteReactionUse(prev, reaction, Date.now()));
+    try {
+      const res = await fetch(apiUrl(`/backend/messages/${encodeURIComponent(message.id)}/reactions`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+        body: JSON.stringify({ reaction, op }),
+      });
+      if (!res.ok) throw new Error('reaction failed');
+      // Drop the optimistic key rather than pinning the server's map in place:
+      // an override left behind masks every later realtime UPDATE for this row,
+      // including somebody else reacting to it. See clearMessageOverride.
+      clearMessageOverride(message.id, ['reactions']);
+    } catch {
+      setMessageOverride(message.id, { reactions: message.reactions });
+    }
   };
 
   const handleStartEdit = (message: ChatMessage) => {
@@ -2059,7 +2158,15 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           onCreateSubThread={onCreateSubThread ? () => setSubThreadPickerMessageId(msg.id) : undefined}
                           widgetsOverlaying={railOverlaying}
                           currentUserId={currentUserId}
-                          onToggleReaction={(emoji) => void handleToggleReaction(msg, emoji)}
+                          onToggleReaction={(reaction, op) => void handleToggleReaction(msg, reaction, op)}
+                          resolveUserName={resolveUserName}
+                          reactionUses={reactionUses}
+                          // The receipt is drawn only on your OWN messages, and
+                          // only on the last of a run: it answers "did what I
+                          // just said land", so an eye on somebody else's
+                          // message is noise on every row.
+                          readerIds={receiptAnchors.has(msg.id) ? receipts.readersOfMessage(msg) : undefined}
+                          isDirectMessage={isDirectMessage}
                         />
                       </MessageScrollerItem>
                       );
@@ -2853,6 +2960,10 @@ function ChatMessageBubble({
   widgetsOverlaying,
   currentUserId,
   onToggleReaction,
+  resolveUserName,
+  reactionUses,
+  readerIds,
+  isDirectMessage,
 }: {
   msg: ChatMessage;
   avatar?: string;
@@ -2877,7 +2988,17 @@ function ChatMessageBubble({
   onCreateSubThread?: () => void;
   widgetsOverlaying?: boolean;
   currentUserId?: string;
-  onToggleReaction?: (emoji: string) => void;
+  onToggleReaction?: (reaction: string, op: 'add' | 'remove') => void;
+  resolveUserName?: (userId: string) => string | null;
+  reactionUses?: readonly ReactionUse[];
+  /**
+   * Who has read this message. `undefined` means "do not draw an indicator here"
+   * — which is every message except the last of each of your own runs — and is
+   * deliberately distinct from `[]`, which means "your message, nobody has read
+   * it yet" and DOES draw one in a DM.
+   */
+  readerIds?: string[];
+  isDirectMessage?: boolean;
 }) {
   const isUser = msg.role === 'user';
   const rawContent = safeMessageText(msg.content);
@@ -2906,9 +3027,15 @@ function ChatMessageBubble({
     ? ({ '--agent-accent': validAgentAccentColor(accent) } as React.CSSProperties & { '--agent-accent': string })
     : undefined;
 
-  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const reactions = msg.reactions ?? {};
-  const uid = currentUserId || 'me';
+  // No 'me' fallback any more. The old default meant an anonymous or
+  // not-yet-loaded viewer matched the literal string 'me' in the map, so every
+  // pill rendered as though they had reacted.
+  const uid = currentUserId || null;
+  const pills = useMemo(() => reactionPills(reactions, uid), [reactions, uid]);
+  // Quick picks in the hover rail: the three most-used reactions, so the common
+  // case is one click instead of open-picker-then-click.
+  const quickReactions = useMemo(() => frequentReactions(reactionUses ?? [], 3), [reactionUses]);
 
   return (
     <div
@@ -3049,25 +3176,34 @@ function ChatMessageBubble({
             })}
           </div>
         ) : null}
-        {/* Reaction pills — always visible when reactions exist */}
-        {Object.keys(reactions).length > 0 && (
-          <div className="mt-1 flex flex-wrap items-center gap-1">
-            {Object.entries(reactions).map(([emoji, users]) => (
-              <button
-                key={emoji}
-                type="button"
-                onClick={() => onToggleReaction?.(emoji)}
-                className={cn(
-                  'chat-reaction-chip control-outer-ring inline-flex h-6 items-center gap-1 rounded-md border px-2 text-sm transition-colors',
-                  users.includes(uid)
-                    ? 'border-primary/40 bg-primary/10 text-foreground'
-                    : 'border-border bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground',
-                )}
-              >
-                {emoji}
-                <span className="text-[11px] font-medium">{users.length}</span>
-              </button>
-            ))}
+        {/* Reaction pills — rendered only when reactions exist, so a message
+            with none costs no vertical space and hovering shifts nothing.
+            Everything about ordering, own-reaction state and the tooltip lives
+            in src/lib/reactionBar.ts, because logic in this file cannot be
+            tested under this repo's runners. */}
+        {onToggleReaction && (
+          <ReactionBar
+            reactions={reactions}
+            currentUserId={uid}
+            resolveName={resolveUserName || (() => null)}
+            onToggle={onToggleReaction}
+            reactionUses={reactionUses}
+          />
+        )}
+        {/* "Seen". An SVG, never 👀 — nobody chose it, so it is chrome, and 👀
+            is already in the reaction picker (the same glyph would mean two
+            different things in one row). Never a per-reader timestamp. */}
+        {/* The emptiness check is HERE and not only inside ReadReceipt: the
+            wrapper carries `mt-1`, so rendering it around a component that
+            returns null would add 4px under every one of your messages in a
+            channel nobody has read yet. */}
+        {readerIds !== undefined && (isDirectMessage || readerIds.length > 0) && (
+          <div className="mt-1 flex items-center justify-end">
+            <ReadReceipt
+              readerIds={readerIds}
+              resolveName={resolveUserName || (() => null)}
+              isDirect={isDirectMessage}
+            />
           </div>
         )}
       </div>
@@ -3076,28 +3212,35 @@ function ChatMessageBubble({
           instead of scrolling off the top with the message header. */}
       <div className={cn('pointer-events-none absolute inset-y-0 flex items-start', widgetsOverlaying ? 'right-[288px]' : 'right-3')}>
         <div className="pointer-events-auto sticky top-2 hidden items-center gap-1 rounded-md border bg-popover p-0.5 shadow-sm group-hover:flex group-focus-within:flex">
+          {/* The one-click quick picks, then the full picker. The quick row is
+              the common case made cheap: reacting used to be two clicks every
+              time, and the most-used reaction is nearly always one of these. */}
+          {onToggleReaction && quickReactions.map(reaction => {
+            const pill = pills.find(entry => entry.reaction === reaction);
+            return (
+              <Button
+                key={reaction}
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-pressed={Boolean(pill?.mine)}
+                aria-label={`React with ${reaction}`}
+                title={`React with ${reaction}`}
+                className={cn('text-base', pill?.mine && 'bg-primary/10')}
+                onClick={() => onToggleReaction(reaction, reactionToggleOp(pill, uid))}
+              >
+                {reaction}
+              </Button>
+            );
+          })}
           {onToggleReaction && (
-            <Popover open={reactionPickerOpen} onOpenChange={setReactionPickerOpen}>
-              <PopoverTrigger asChild>
-                <Button type="button" variant="ghost" size="icon-xs" aria-label="Add reaction" title="Add reaction">
-                  <Smile />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent side="top" align="end" className="w-auto p-1.5">
-                <div className="grid grid-cols-8 gap-0.5">
-                  {['👍', '👎', '❤️', '😂', '🎉', '🔥', '👀', '✅', '🙏', '💯', '😮', '😢', '🤔', '🚀', '⭐', '🐛'].map(e => (
-                    <button
-                      key={e}
-                      type="button"
-                      className="flex h-7 w-7 items-center justify-center rounded text-base hover:bg-muted"
-                      onClick={() => { onToggleReaction(e); setReactionPickerOpen(false); }}
-                    >
-                      {e}
-                    </button>
-                  ))}
-                </div>
-              </PopoverContent>
-            </Popover>
+            <ReactionPicker
+              reactionUses={reactionUses}
+              onPick={reaction => onToggleReaction(
+                reaction,
+                reactionToggleOp(pills.find(entry => entry.reaction === reaction), uid),
+              )}
+            />
           )}
           {onOpenThread && (
             <Button type="button" variant="ghost" size="icon-xs" onClick={onOpenThread} disabled={isStreaming || actionBusy} aria-label={replyCount ? 'Open thread' : 'Start thread'} title={replyCount ? 'Open thread' : 'Start thread'}>
