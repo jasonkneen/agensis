@@ -15,13 +15,16 @@
 //   - Idempotent + safe to re-run.
 //
 // First-run backfill (important):
-//   The live DB already has every current migration applied (historically via
+//   Most of the live DB's schema already exists (historically via
 //   ensureRuntimeSchema + manual pushes). A brand-new `_schema_migrations` table
 //   starts EMPTY, which would otherwise re-run every .sql file. To avoid that we
 //   detect "fresh tracking table + a COMPLETE core schema" and BACKFILL
-//   `_schema_migrations` with all current filenames WITHOUT running them. The
-//   runner then only applies FUTURE migrations. On a truly empty database (no
-//   core schema at all) nothing is backfilled and all migrations run normally.
+//   `_schema_migrations`, WITHOUT running them, for the subset of current
+//   filenames listed in the frozen `.baseline-manifest.json` (see H7 below —
+//   this is NOT "every file currently on disk"). Everything else — including
+//   any migration not in that manifest — is left pending and actually runs,
+//   same as any other pass. On a truly empty database (no core schema at all)
+//   nothing is backfilled and all migrations run normally.
 //
 //   H5 (2026-07 review): "complete" used to mean a single probe — does the
 //   `workspaces` table exist. A database left half-built by an aborted
@@ -31,14 +34,32 @@
 //   requires EVERY table in CORE_BOOTSTRAP_TABLES; a partially-provisioned
 //   database is loudly refused instead, and only an explicit `--baseline` flag
 //   can record migrations as applied over a schema that is missing core tables.
+//
+//   H7 (2026-07-30 incident): the backfill above used to mark EVERY .sql file
+//   *currently on disk* as applied-without-running — including one added in
+//   the very same deploy that first creates `_schema_migrations`. That bit for
+//   real: 20260730210000_rename_skills_folder_to_playbooks.sql shipped with
+//   this runner's first-ever production run, got silently recorded as
+//   "already applied," and its UPDATE never executed (caught by hand, fixed
+//   out of band). "It's a file in supabase/migrations/" is not evidence a
+//   migration's effect already exists anywhere else — only migrations present
+//   in the FROZEN `.baseline-manifest.json` (files known, at the time that
+//   manifest was written, to already be true via ensureRuntimeSchema() or
+//   database/neon-schema.sql) are eligible for silent backfill. Anything not
+//   in that manifest — including every future migration, forever, since the
+//   manifest is never auto-grown — is left pending and actually runs, even on
+//   a first-ever run. `--baseline` is gated the same way: it can still assert
+//   "the schema is fine despite looking incomplete" for manifest files, but it
+//   cannot wave through a migration the manifest doesn't vouch for.
 
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import postgres from 'postgres';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, '..', 'supabase', 'migrations');
+const BASELINE_MANIFEST_PATH = join(MIGRATIONS_DIR, '.baseline-manifest.json');
 // Serializes concurrent `npm run migrate` runs (e.g. parallel deploys) via a
 // session-scoped Postgres advisory lock so two processes can't apply the same
 // migration at once.
@@ -58,6 +79,37 @@ const CORE_BOOTSTRAP_TABLES = [
   'document_comments',
   'activity_events',
 ];
+
+/**
+ * Splits `files` into what's safe to silently mark applied ("eligible" — it
+ * appears in the frozen manifest) versus what must actually run even on a
+ * first-ever `_schema_migrations` run ("notEligible" — anything the manifest
+ * doesn't vouch for, most importantly a migration nobody has run yet). Pure
+ * and DB-free on purpose so it's unit-testable without postgres.
+ */
+export function partitionForBaseline(files, manifestFiles) {
+  const manifest = new Set(manifestFiles);
+  const eligible = files.filter((f) => manifest.has(f));
+  const notEligible = files.filter((f) => !manifest.has(f));
+  return { eligible, notEligible };
+}
+
+/**
+ * Reads the frozen baseline manifest. Throws (rather than returning an empty
+ * list) when it's missing or malformed — silently treating "no manifest" as
+ * "nothing is eligible" would be the safer failure mode data-wise, but this
+ * runner's whole house style (see H5 above) is to refuse loudly rather than
+ * guess, so a missing manifest stops the run instead of quietly changing
+ * behavior.
+ */
+export async function loadBaselineManifest() {
+  const raw = await readFile(BASELINE_MANIFEST_PATH, 'utf8');
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed.files)) {
+    throw new Error(`${BASELINE_MANIFEST_PATH} is malformed: expected a "files" array`);
+  }
+  return parsed.files;
+}
 
 async function main() {
   // Explicit opt-in to record every migration as already-applied even when the
@@ -130,16 +182,39 @@ async function main() {
         process.exitCode = 1;
         return;
       } else {
-        await sql`
-          INSERT INTO _schema_migrations ${sql(files.map((name) => ({ name })))}
-          ON CONFLICT (name) DO NOTHING
-        `;
+        let manifestFiles;
+        try {
+          manifestFiles = await loadBaselineManifest();
+        } catch (error) {
+          console.error('[migrate] REFUSING TO RUN: could not read the baseline manifest.');
+          console.error(`[migrate]   ${BASELINE_MANIFEST_PATH}`);
+          console.error(`[migrate]   ${error.message || error}`);
+          console.error('[migrate] Without it there is no way to tell which migrations are');
+          console.error('[migrate] already true elsewhere versus brand new — see the H7 note at');
+          console.error('[migrate] the top of this file. Restore the manifest before retrying.');
+          process.exitCode = 1;
+          return;
+        }
+
+        const { eligible, notEligible } = partitionForBaseline(files, manifestFiles);
         const reason = missing.length > 0
           ? `--baseline over an incomplete schema (missing: ${missing.join(', ')})`
           : 'First run on an existing database';
+
+        if (eligible.length > 0) {
+          await sql`
+            INSERT INTO _schema_migrations ${sql(eligible.map((name) => ({ name })))}
+            ON CONFLICT (name) DO NOTHING
+          `;
+        }
         console.log(
-          `[migrate] ${reason}: backfilled ${files.length} migration(s) as already-applied (not re-run).`,
+          `[migrate] ${reason}: backfilled ${eligible.length} migration(s) from the baseline manifest as already-applied (not re-run).`,
         );
+        if (notEligible.length > 0) {
+          console.log(
+            `[migrate] ${notEligible.length} migration(s) NOT in the baseline manifest will run normally, this pass: ${notEligible.join(', ')}`,
+          );
+        }
       }
     }
 
@@ -181,7 +256,13 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error('[migrate] Unexpected error:', error.message || error);
-  process.exit(1);
-});
+// Only run as a side effect when executed directly (`node scripts/migrate.mjs`
+// / `npm run migrate`), never on import — lets tests import the pure helpers
+// above without opening a DB connection or calling process.exit().
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  main().catch((error) => {
+    console.error('[migrate] Unexpected error:', error.message || error);
+    process.exit(1);
+  });
+}
