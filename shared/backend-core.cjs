@@ -1407,22 +1407,38 @@ async function logMessageActivityIdempotent(rows, { db }) {
 
    const messageId = message.id != null ? String(message.id) : null;
 
-   const sessionRows = await db('select workspace_id from chat_sessions where id = $1 limit 1', [sessionId]);
-   const workspaceId = sessionRows[0]?.workspace_id || null;
+   // `visibility` and `folder` come back with the workspace because this feed
+   // row outlives the caller's knowledge of where the message came from:
+   // `activity_events` is workspace-scoped, `appendSessionAccessClause` skips
+   // every table but chat_sessions/messages, and the realtime private lane only
+   // splits chat_sessions. Nothing downstream can tell that a row began life in
+   // a members-only conversation, so the check has to happen here, at write.
+   const sessionRows = await db(
+    'select workspace_id, visibility, folder from chat_sessions where id = $1 limit 1',
+    [sessionId],
+   );
+   const sessionRow = sessionRows[0] || null;
+   const workspaceId = sessionRow?.workspace_id || null;
    if (!workspaceId) continue;
+   const isPrivate = isPrivateSessionRow(sessionRow);
 
    const role = message.role || '';
    const senderName = message.sender_name || (role === 'user' ? 'You' : 'Agent');
    const content = typeof message.content === 'string' ? message.content : '';
-   const title = `${senderName}: ${content.slice(0, 80)}`.slice(0, 120);
    const senderId = typeof message.sender_id === 'string' ? message.sender_id : '';
    const userId = role === 'user' && ACTIVITY_UUID_RE.test(senderId) ? senderId : null;
+   // A members-only session contributes that a message happened, never its
+   // words. `title` has to go too, not just `metadata.content` — it was the
+   // first 80 characters of the same body.
+   const title = isPrivate
+    ? `${senderName}: (private conversation)`.slice(0, 120)
+    : `${senderName}: ${content.slice(0, 80)}`.slice(0, 120);
    const metadata = {
     session_id: sessionId,
     role,
     sender_kind: message.sender_kind || '',
     sender_name: message.sender_name || '',
-    content,
+    ...(isPrivate ? {} : { content }),
    };
    await db(
     `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
