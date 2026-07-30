@@ -50,11 +50,17 @@ test('three kinds land in three stores, each of which is actually writable', () 
   assert.equal(harvestAcceptTarget({ kind: 'memory' }).category, 'suggested',
     'its own category, so a suggested fact is distinguishable from a typed one');
   assert.equal(harvestAcceptTarget({ kind: 'doc' }).table, 'documents');
-  // A skill has no app-side store — agent_skill_documents is daemon-owned and
-  // read-only — so it becomes a written page rather than a claim nobody checked.
-  assert.equal(harvestAcceptTarget({ kind: 'skill' }).table, 'documents');
-  assert.equal(harvestAcceptTarget({ kind: 'skill' }).folder, 'Playbooks');
-  assert.notEqual(harvestAcceptTarget({ kind: 'doc' }).folder, harvestAcceptTarget({ kind: 'skill' }).folder);
+  // A skill used to land in `documents`, in a "Playbooks" folder, because there
+  // was no app-side skill store to accept into: agent_skill_documents is
+  // daemon-owned, read-only in-app and keyed per agent. `workspace_skills` is
+  // that store, so an accepted skill is now a SKILL — the procedure lands
+  // somewhere `read_skill` can find it, rather than as a page nothing consults.
+  //
+  // FORWARD-ONLY. Skills accepted before this change stay as Documents and are
+  // not migrated; see the comment on harvestAcceptTarget for why moving rows
+  // between tables under people is the worse of the two one-way doors.
+  assert.equal(harvestAcceptTarget({ kind: 'skill' }).table, 'workspace_skills');
+  assert.notEqual(harvestAcceptTarget({ kind: 'doc' }).table, harvestAcceptTarget({ kind: 'skill' }).table);
   assert.equal(harvestAcceptTarget({ kind: 'wat' }), null);
   assert.equal(harvestAcceptTarget(null), null);
 });

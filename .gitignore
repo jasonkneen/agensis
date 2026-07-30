@@ -50,3 +50,7 @@ SCRATCHPAD.md
 # Refactor gate's recorded node-test count (see scripts/refactor-gate.sh)
 .refactor-baseline
 /.worktrees
+
+# Internal cleanup plan. Stays on disk, never in the published snapshot — it
+# names the products being removed and describes the scrub itself.
+opensourceplan.md
