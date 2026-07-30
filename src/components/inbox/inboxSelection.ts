@@ -5,7 +5,7 @@ import type { InboxGroup } from './inboxModel';
 // inboxModel.ts, so every decision below is unit-testable.
 //
 // Three things are worth stating up front, because they are the parts a reader
-// will otherwise have to reverse-engineer from the renderer:
+// will otherwise have to infer from the renderer:
 //
 //   1. SELECTION MODE IS DERIVED, not stored. `keys.size > 0` IS the mode. That
 //      makes "deselecting the last row leaves selection mode" fall out of the

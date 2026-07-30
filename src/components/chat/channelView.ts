@@ -7,8 +7,8 @@ import type { Message as ChatMessage } from '../../types';
  * tool-step chips and its intermediate text blocks all live in a thread hanging
  * off the human message that started the turn (see resolveWorkThreadParent in
  * server/index.cjs). Only the final answer is flagged `broadcast_to_channel`, and
- * that flag is what lifts it back into this view — following Slack's "Also send to
- * channel". Humans get the same switch from the thread composer.
+ * that flag is what lifts it back into this view. Humans get the same switch
+ * from the thread composer ("Send to channel").
  *
  * A broadcast reply KEEPS its thread_parent_id, so it appears in BOTH views: the
  * thread it was written in, and the channel. That is deliberate — the channel row

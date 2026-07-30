@@ -32,9 +32,9 @@ function makeDb() {
           id: 'ws-1',
           name: 'CursorBuddy Workspace',
           description: '',
-          local_path: '/Users/jkneen/Documents/GitHub/3Dpet',
+          local_path: '/Users/alex/projects/example-app',
           project_kind: 'web',
-          git_root: '/Users/jkneen/Documents/GitHub/3Dpet',
+          git_root: '/Users/alex/projects/example-app',
           git_remote: 'git@example.com:cursorbuddy.git',
           role: 'owner',
           created_at: null,
@@ -221,8 +221,8 @@ test('CursorBuddy setup lists real Agensis workspaces, mints a one-time key, and
       body: JSON.stringify({
         key: createBody.data.key,
         baseUrl,
-        host: 'OzBook',
-        cwd: '/Users/jkneen/Documents/GitHub/3Dpet',
+        host: 'example-host',
+        cwd: '/Users/alex/projects/example-app',
         runtimeKind: 'agensis-cli',
         permissionMode: 'accept_edits',
       }),
@@ -253,8 +253,8 @@ test('CursorBuddy setup lists real Agensis workspaces, mints a one-time key, and
       body: JSON.stringify({
         key: secondCreateBody.data.key,
         baseUrl,
-        host: 'OzBook',
-        cwd: '/Users/jkneen/Documents/GitHub/3Dpet',
+        host: 'example-host',
+        cwd: '/Users/alex/projects/example-app',
         runtimeKind: 'agensis-cli',
       }),
     });
@@ -270,7 +270,7 @@ test('CursorBuddy setup lists real Agensis workspaces, mints a one-time key, and
   );
   assert.ok(db.calls.some((call) => call.normalized.includes('update workspace_agents set handle = $2')), 'claim rotates an aga_ daemon token');
   assert.deepEqual(asJson(db.agents[0].tools), ['cursorbuddy']);
-  assert.equal(asJson(db.agents[0].metadata).cursorbuddyRuntime.cwd, '/Users/jkneen/Documents/GitHub/3Dpet');
+  assert.equal(asJson(db.agents[0].metadata).cursorbuddyRuntime.cwd, '/Users/alex/projects/example-app');
 });
 
 test('CursorBuddy Provider registration creates a reusable built-in workspace agent', async () => {
@@ -354,8 +354,8 @@ test('Agensis CLI setup creates or reuses a primary daemon agent and returns dae
       headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({
         workspaceId: 'ws-1',
-        host: 'OzBook-M3-4.local',
-        cwd: '/Users/jkneen/Documents/GitHub/3Dpet',
+        host: 'example-host.local',
+        cwd: '/Users/alex/projects/example-app',
         handle: 'mac',
         name: 'mac',
         baseUrl,
@@ -375,7 +375,7 @@ test('Agensis CLI setup creates or reuses a primary daemon agent and returns dae
       agent: 'agent-1',
       handle: 'mac',
       name: 'mac',
-      cwd: '/Users/jkneen/Documents/GitHub/3Dpet',
+      cwd: '/Users/alex/projects/example-app',
       model: 'claude-opus-4-8',
       permissionMode: 'default',
     });

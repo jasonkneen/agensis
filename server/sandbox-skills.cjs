@@ -170,7 +170,7 @@
 //     `sandbox.attacker.example` has an A record pointing at 169.254.169.254.
 //     The RESOLVED-address check is `assertSafeOutboundUrl` in server/index.cjs,
 //     which the caller runs on the built URL before the fetch. That is
-//     deliberately NOT reimplemented here: this repo already has one live SSRF
+//     deliberately NOT duplicated here: this repo already has one live SSRF
 //     finding from an unvalidated `base_url`, and the fix for it is that function.
 //     A second copy of the predicate is a second thing to get wrong.
 //   - REDIRECTS ARE REFUSED, NOT RE-VALIDATED. Per-hop re-validation is the
@@ -1289,7 +1289,7 @@ function renderSkillBlock(skill, configuredKeys) {
       : `MCP server \`${skill.mcp.name}\` (${skill.mcp.transport}): ${skill.mcp.url}. Use its tools in preference to raw HTTP when it is connected.`);
   }
   if (skill.code) {
-    lines.push('', `Script \`${skill.code.entry}\` (${skill.code.language}) — run it rather than reimplementing it:`, '```' + skill.code.language, skill.code.source, '```');
+    lines.push('', `Script \`${skill.code.entry}\` (${skill.code.language}) — run it rather than writing your own:`, '```' + skill.code.language, skill.code.source, '```');
   }
   if (skill.notes?.length) {
     lines.push('', 'Notes:');

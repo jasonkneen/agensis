@@ -29,14 +29,14 @@ import { Separator } from '../ui/separator';
  * It was a settings form wearing a list's clothes. Every participant rendered
  * as four-plus lines: a name, then a wrapped stack of pill chips carrying
  * whatever `activityItems` happened to hold ("Connected daemon",
- * "Host: OzBook-M3-5.local", "Folder: /Users/jkneen/Docu…"), then a row of
+ * "Host: example-host.local", "Folder: /Users/alex/Docu…"), then a row of
  * message/favourite/View buttons, then a second row of Visible/Dim/Muted
  * buttons. Six controls per participant, all at equal visual weight, none
  * primary — and three agents were enough to make a 384px panel scroll.
  *
  * The chips were the tell. `activityItems` was one `string[]` carrying two
  * unrelated things (see the type in `useWorkspacePresence`), so the panel could
- * not distinguish "reading the roadmap doc" from "runs on OzBook-M3-5" and
+ * not distinguish "reading the roadmap doc" from "runs on example-host" and
  * rendered both as chips. A truncated absolute path is not information; it is
  * noise that costs a line. That is fixed at the source — the hook now hands
  * over structured `host`/`cwd` — and this file answers the three questions a

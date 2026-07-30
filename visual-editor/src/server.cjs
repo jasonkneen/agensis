@@ -462,7 +462,7 @@ function opMoveTo(source, doc, op) {
 /**
  * Re-indent a multi-line snippet for its new depth.
  *
- * A template lifted from elsewhere in the page carries that spot's
+ * A template reused from elsewhere in the page carries that spot's
  * indentation on every line but the first (the first is placed by the caller).
  * Without this, inserting a card three levels deep writes its children at the
  * old depth and the file reads as garbage even though it parses.

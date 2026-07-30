@@ -258,7 +258,7 @@ describe('workspace rows', () => {
 // The bug: the title fell back to the email when there was no display name, and
 // the line beneath it was the email unconditionally. In the overwhelmingly
 // common case (nobody sets a display name) that rendered
-// `trumanfuller@gmail.com` as BOTH lines, spending the pane's two most valuable
+// `user@example.com` as BOTH lines, spending the pane's two most valuable
 // lines saying one thing.
 // ---------------------------------------------------------------------------
 

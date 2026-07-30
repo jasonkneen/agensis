@@ -60,7 +60,7 @@ function fakeClient(userId, subscriptions = []) {
   };
 }
 
-// The binding shapes are COPIED from the hooks rather than paraphrased — the
+// The binding shapes below are byte-identical to the hooks', not paraphrases — the
 // point of this file is that what the client actually sends is accepted, so a
 // drift between these and the hooks is a real regression, not a test detail.
 // useSchedules.ts:53-61 and useGateways.ts:35-43.

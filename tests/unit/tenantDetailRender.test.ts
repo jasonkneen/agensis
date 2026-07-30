@@ -19,7 +19,7 @@ import { EMPTY_STATS, type TenantMeteringWindow } from '../../src/lib/tenantStat
 
 const ACCOUNT: TenantAccount = {
   id: 'acc-1',
-  email: 'trumanfuller@gmail.com',
+  email: 'user@example.com',
   display_name: '',
   accent_color: '',
   created_at: '2026-01-15T10:00:00.000Z',
@@ -142,7 +142,7 @@ describe('TenantDetailPane', () => {
     renderPane();
     // The email is the heading (no display name), so it must appear ONCE and
     // the second line must carry facts instead.
-    const occurrences = (container.textContent || '').split('trumanfuller@gmail.com').length - 1;
+    const occurrences = (container.textContent || '').split('user@example.com').length - 1;
     // Once in the header band, once as the identity title. Never a third time
     // as a subtitle immediately beneath its own heading.
     expect(occurrences).toBeLessThanOrEqual(2);

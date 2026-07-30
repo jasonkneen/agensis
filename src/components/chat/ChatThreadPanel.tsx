@@ -112,8 +112,8 @@ export function ChatThreadPanel({
   const m = useComposerMentions({ agents, documents, workspaceId, inputRef });
   const [model, setModel] = useState('auto');
   const [autoScroll, setAutoScroll] = useState(true);
-  // "Send to channel" (Slack's "Also send to channel"): a thread reply stays in the
-  // thread but is ALSO shown in the channel. Off by default — a thread exists
+  // "Send to channel": a thread reply stays in the thread but is ALSO shown in
+  // the channel. Off by default — a thread exists
   // precisely so the working conversation stays out of the channel — and reset
   // after each send so it can never silently broadcast the next reply too.
   const [broadcastToChannel, setBroadcastToChannel] = useState(false);

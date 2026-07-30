@@ -199,8 +199,8 @@ async function register(ws, { permissionRequestIds } = {}) {
     agentId: ws.agentAuth.agentId,
     handle: 'coder',
     name: 'Coder',
-    host: 'OzBook-M3-5.local',
-    cwd: '/Users/jkneen/Documents/GitHub/agensis',
+    host: 'example-host.local',
+    cwd: '/Users/alex/Documents/GitHub/agensis',
     ...(permissionRequestIds ? { permissionRequestIds } : {}),
   });
   await settle();

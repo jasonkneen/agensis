@@ -217,7 +217,7 @@
  color-scheme: light;
 }
 
-:root[data-ui-theme="tinyworld"][data-theme="light"] {
+:root[data-ui-theme="paper"][data-theme="light"] {
  /* Four distinct warm tiers (base ↔ raised were near-identical before, so
      surfaces read as one flat cream). Paper carries a touch more gold. */
  --canvas-base: #f2e9d7;
@@ -263,7 +263,7 @@
  --ring: var(--primary);
 }
 
-:root[data-ui-theme="tinyworld"][data-theme="dark"] {
+:root[data-ui-theme="paper"][data-theme="dark"] {
  /* Warmer espresso ramp — surfaces lean into brown/gold rather than neutral
      grey-black, so the dark mode reads as warm-dark with dimension. */
  --canvas-base: #17150f;
@@ -314,7 +314,7 @@
    Neo-brutalist theme — standardised system
    A single ink token drives every hard border and offset shadow;
    the offset scale is colour-agnostic, so light/dark swap the ink
-   automatically. Mirrors the --tw-* token structure of tinyworld.
+   automatically. Mirrors the --tw-* token structure of paper.
    ============================================================ */
 :root[data-ui-theme="neo"] {
  --radius-sm: 4px;
@@ -497,19 +497,19 @@
  --home-bg-overlay: linear-gradient(to bottom, rgba(20, 20, 20, 0.3) 0%, rgba(20, 20, 20, 0.55) 60%, var(--canvas-base) 100%);
 }
 
-:root[data-ui-theme="tinyworld"] body,
-:root[data-ui-theme="tinyworld"] button,
-:root[data-ui-theme="tinyworld"] input,
-:root[data-ui-theme="tinyworld"] textarea,
-:root[data-ui-theme="tinyworld"] select,
-:root[data-ui-theme="tinyworld"] [data-floating-window],
-:root[data-ui-theme="tinyworld"] [data-slot="dialog-content"],
-:root[data-ui-theme="tinyworld"] [data-slot="alert-dialog-content"],
-:root[data-ui-theme="tinyworld"] [data-slot="popover-content"] {
+:root[data-ui-theme="paper"] body,
+:root[data-ui-theme="paper"] button,
+:root[data-ui-theme="paper"] input,
+:root[data-ui-theme="paper"] textarea,
+:root[data-ui-theme="paper"] select,
+:root[data-ui-theme="paper"] [data-floating-window],
+:root[data-ui-theme="paper"] [data-slot="dialog-content"],
+:root[data-ui-theme="paper"] [data-slot="alert-dialog-content"],
+:root[data-ui-theme="paper"] [data-slot="popover-content"] {
  font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
 }
 
-:root[data-ui-theme="tinyworld"][data-theme="light"] {
+:root[data-ui-theme="paper"][data-theme="light"] {
  --tw-control-outline: #4a3f2e;
  --tw-control-fill: rgba(255, 255, 255, 0.58);
  --tw-control-hover: rgba(255, 255, 255, 0.74);
@@ -518,7 +518,7 @@
  --tw-control-shadow: 0 2px 3px -1px rgba(50, 36, 16, 0.22);
  /* Accent-driven controls follow --primary (so accent presets flow through);
      the neutral --tw-control-* and the decorative --tw-gold-* flourish stay
-     fixed to preserve TinyWorld's warm-paper character. Outline is a dark shade
+     fixed to preserve Paper's warm-paper character. Outline is a dark shade
      (legible as text/border), fills are light washes. */
  --tw-control-ring: color-mix(in srgb, var(--primary) 40%, transparent);
  --tw-accent-outline: color-mix(in srgb, var(--primary) 72%, var(--foreground) 28%);
@@ -528,7 +528,7 @@
  --tw-gold-fill: #fff3c1;
 }
 
-:root[data-ui-theme="tinyworld"][data-theme="dark"] {
+:root[data-ui-theme="paper"][data-theme="dark"] {
  --tw-control-outline: #c2ad8f;
  --tw-control-fill: rgba(46, 41, 31, 0.7);
  --tw-control-hover: rgba(62, 54, 40, 0.84);
@@ -546,11 +546,11 @@
  --tw-gold-fill: rgba(118, 79, 28, 0.82);
 }
 
-:root[data-ui-theme="tinyworld"] [data-slot="input-group"],
-:root[data-ui-theme="tinyworld"] [data-slot="dialog-content"],
-:root[data-ui-theme="tinyworld"] [data-slot="alert-dialog-content"],
-:root[data-ui-theme="tinyworld"] [data-slot="card"],
-:root[data-ui-theme="tinyworld"] [data-slot="select-content"] {
+:root[data-ui-theme="paper"] [data-slot="input-group"],
+:root[data-ui-theme="paper"] [data-slot="dialog-content"],
+:root[data-ui-theme="paper"] [data-slot="alert-dialog-content"],
+:root[data-ui-theme="paper"] [data-slot="card"],
+:root[data-ui-theme="paper"] [data-slot="select-content"] {
  border-color: color-mix(in srgb, var(--tw-control-outline) 18%, transparent);
  background: var(--tw-control-fill);
  box-shadow:
@@ -560,18 +560,18 @@
  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
 }
 
-:root[data-ui-theme="tinyworld"] [data-slot="button"],
-:root[data-ui-theme="tinyworld"] [data-slot="select-trigger"],
-:root[data-ui-theme="tinyworld"] [data-slot="toggle-group-item"] {
+:root[data-ui-theme="paper"] [data-slot="button"],
+:root[data-ui-theme="paper"] [data-slot="select-trigger"],
+:root[data-ui-theme="paper"] [data-slot="toggle-group-item"] {
  border-radius: 12px;
  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
 }
 
-:root[data-ui-theme="tinyworld"] [data-slot="button"][data-size^="icon"],
-:root[data-ui-theme="tinyworld"] [data-slot="select-trigger"],
-:root[data-ui-theme="tinyworld"] [data-slot="button"][data-variant="outline"],
-:root[data-ui-theme="tinyworld"] [data-slot="button"][data-variant="secondary"],
-:root[data-ui-theme="tinyworld"] [data-slot="toggle-group-item"] {
+:root[data-ui-theme="paper"] [data-slot="button"][data-size^="icon"],
+:root[data-ui-theme="paper"] [data-slot="select-trigger"],
+:root[data-ui-theme="paper"] [data-slot="button"][data-variant="outline"],
+:root[data-ui-theme="paper"] [data-slot="button"][data-variant="secondary"],
+:root[data-ui-theme="paper"] [data-slot="toggle-group-item"] {
  color: var(--tw-control-outline);
  border-color: var(--tw-control-outline);
  border-width: 1px;
@@ -582,7 +582,7 @@
   var(--tw-control-shadow);
 }
 
-:root[data-ui-theme="tinyworld"] [data-slot="button"][data-variant="default"] {
+:root[data-ui-theme="paper"] [data-slot="button"][data-variant="default"] {
  border-color: var(--tw-accent-outline);
  background: linear-gradient(180deg, var(--tw-accent-fill), color-mix(in srgb, var(--tw-accent-fill) 72%, var(--accent) 28%));
  color: var(--tw-accent-outline);
@@ -592,13 +592,13 @@
   var(--tw-control-shadow);
 }
 
-:root[data-ui-theme="tinyworld"] [data-slot="button"][data-variant="ghost"]:not(.settings-nav-row) {
+:root[data-ui-theme="paper"] [data-slot="button"][data-variant="ghost"]:not(.settings-nav-row) {
  border-color: transparent;
  background: transparent;
  box-shadow: none;
 }
 
-:root[data-ui-theme="tinyworld"] [data-slot="button"][data-size^="icon"][data-variant="ghost"] {
+:root[data-ui-theme="paper"] [data-slot="button"][data-size^="icon"][data-variant="ghost"] {
  border-color: var(--tw-control-outline);
  background: var(--tw-control-fill);
  box-shadow:
@@ -607,24 +607,24 @@
   var(--tw-control-shadow);
 }
 
-:root[data-ui-theme="tinyworld"] [data-slot="button"]:hover,
-:root[data-ui-theme="tinyworld"] [data-slot="select-trigger"]:hover,
-:root[data-ui-theme="tinyworld"] [data-slot="toggle-group-item"]:hover {
+:root[data-ui-theme="paper"] [data-slot="button"]:hover,
+:root[data-ui-theme="paper"] [data-slot="select-trigger"]:hover,
+:root[data-ui-theme="paper"] [data-slot="toggle-group-item"]:hover {
  background: var(--tw-control-hover);
 }
 
-:root[data-ui-theme="tinyworld"] [data-slot="button"]:active {
+:root[data-ui-theme="paper"] [data-slot="button"]:active {
  transform: translateY(1px);
 }
 
-:root[data-ui-theme="tinyworld"] .settings-nav-row {
+:root[data-ui-theme="paper"] .settings-nav-row {
  border-color: transparent;
  background: transparent;
  box-shadow: none;
  justify-content: flex-start;
 }
 
-:root[data-ui-theme="tinyworld"] .settings-nav-row[data-variant="secondary"] {
+:root[data-ui-theme="paper"] .settings-nav-row[data-variant="secondary"] {
  border-color: var(--tw-accent-outline);
  background: var(--tw-accent-fill);
  color: var(--tw-accent-outline);
@@ -635,7 +635,7 @@
 }
 
 /* THE SEARCH FIELD is a control and keeps the full treatment. Rows do not. */
-:root[data-ui-theme="tinyworld"] .sidebar-search {
+:root[data-ui-theme="paper"] .sidebar-search {
  position: relative;
  overflow: hidden;
  border-width: 1px !important;
@@ -656,11 +656,11 @@
    a stack of identical pills with no hierarchy and nothing to distinguish the
    row you are actually on — which is the one thing the frame is FOR.
    Hover and selected (below) put the treatment back. */
-:root[data-ui-theme="tinyworld"] .sidebar-action-row {
+:root[data-ui-theme="paper"] .sidebar-action-row {
  /* Height is --sidebar-action-row-h, set to 2rem for this theme at the top of
     the file. The reason is unchanged: the selected row is a bar of the same
     family as the search bar directly above it, and at the base 1.55rem it read
-    as a shorter, meaner pill sitting under a taller one. Only tinyworld frames
+    as a shorter, meaner pill sitting under a taller one. Only paper frames
     the selection, so the frame's proportions matter here. */
  position: relative;
  overflow: hidden;
@@ -672,7 +672,7 @@
  box-shadow: none !important;
 }
 
-:root[data-ui-theme="tinyworld"] .sidebar-rail-button::before {
+:root[data-ui-theme="paper"] .sidebar-rail-button::before {
  content: "";
  position: absolute;
  top: 0.42rem;
@@ -687,7 +687,7 @@
 /* .knowledge-context-trigger used to be a header button here; the Knowledge
    control is now a submenu row inside the channel overflow menu and must not
    pick up the gold button skin. */
-:root[data-ui-theme="tinyworld"] .channel-header [data-slot="button"][data-variant="secondary"] {
+:root[data-ui-theme="paper"] .channel-header [data-slot="button"][data-variant="secondary"] {
  border-color: color-mix(in srgb, var(--tw-gold-outline) 74%, transparent) !important;
  color: var(--tw-gold-outline) !important;
  background:
@@ -699,8 +699,8 @@
   var(--tw-control-shadow) !important;
 }
 
-:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-action-row,
-:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-search {
+:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-action-row,
+:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-search {
  border-color: color-mix(in srgb, var(--tw-accent-outline) 66%, transparent) !important;
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 14%, transparent), transparent 32%, rgba(0, 0, 0, 0.18) 100%),
@@ -711,9 +711,9 @@
   0 2px 5px -2px rgba(0, 0, 0, 0.58) !important;
 }
 
-:root[data-ui-theme="tinyworld"] .sidebar-action-row:hover,
-:root[data-ui-theme="tinyworld"] .sidebar-search:hover,
-:root[data-ui-theme="tinyworld"] .sidebar-action-row[data-active="true"] {
+:root[data-ui-theme="paper"] .sidebar-action-row:hover,
+:root[data-ui-theme="paper"] .sidebar-search:hover,
+:root[data-ui-theme="paper"] .sidebar-action-row[data-active="true"] {
  border-color: color-mix(in srgb, var(--tw-accent-outline) 72%, transparent) !important;
  color: var(--tw-accent-outline) !important;
  background:
@@ -725,25 +725,25 @@
   var(--tw-control-shadow) !important;
 }
 
-:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-action-row:hover,
-:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-search:hover,
-:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-action-row[data-active="true"] {
+:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-action-row:hover,
+:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-search:hover,
+:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-action-row[data-active="true"] {
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 16%, transparent), transparent 30%, rgba(0, 0, 0, 0.22) 100%),
   var(--tw-accent-hover) !important;
 }
 
-:root[data-ui-theme="tinyworld"] .sidebar-item-row {
+:root[data-ui-theme="paper"] .sidebar-item-row {
  border-color: transparent !important;
  background: transparent !important;
  box-shadow: none !important;
 }
 
-:root[data-ui-theme="tinyworld"] .sidebar-item-row:hover {
+:root[data-ui-theme="paper"] .sidebar-item-row:hover {
  background: var(--tw-control-hover) !important;
 }
 
-:root[data-ui-theme="tinyworld"] .home-suggestion-pill {
+:root[data-ui-theme="paper"] .home-suggestion-pill {
  border-color: var(--tw-control-outline);
  color: var(--tw-control-outline);
  box-shadow:
@@ -1232,7 +1232,7 @@
    (position:relative + contain, plus backdrop-filter on the non-neo families),
    so the negative index cannot escape behind the panel.
    Colour comes from --accent, which every family defines for both schemes:
-   classic/base sets it literally, neo + tinyworld + normal map it to the
+   classic/base sets it literally, neo + paper + normal map it to the
    per-theme --primary (see expand() in showcase/neoThemes.ts). */
 /* The @supports guard is load-bearing, not decoration: Lightning CSS compiles a
    plain-colour fallback for every color-mix() it sees, and for a gradient that
@@ -1598,7 +1598,7 @@
 
 /* (The neo softening of that guide line went with the line itself.) */
 
-/* ── Rules that bracket the collapsible sections (Slack's pattern) ───────────
+/* ── Rules that bracket the collapsible sections ────────────────────────────
    A hairline with room either side. Used TWICE, so the five collapsible
    sections read as one band: once below the fixed top block (Inbox, Desktop,
    Tasks, Memory) and once below ARCHIVE, above the remaining standalone rows
@@ -1626,7 +1626,7 @@
    6px on the right for offset-shadow clearance (see the width rules below), so
    the rule ends where the rows do instead of overhanging them. */
 :root[data-ui-theme="neo"] .sidebar-group-divider,
-:root[data-ui-theme="tinyworld"] .sidebar-group-divider {
+:root[data-ui-theme="paper"] .sidebar-group-divider {
  flex-basis: 2px;
  height: 2px;
  margin-inline: 0 6px;
@@ -1639,7 +1639,7 @@
    Every row height in this column used to be restated per theme: neo carried
    its own `min-height` for the action row (2.2rem), the item row (34px), the
    session row (30px), the document row (34px) and the section header (2rem),
-   and tinyworld its own for the header. So a base-scope density change reached
+   and paper its own for the header. So a base-scope density change reached
    exactly one theme — which is what happened when `.sidebar-action-row` went
    1.8rem -> 1.55rem and the sidebar the owner actually looks at did not move a
    pixel. Measured in the compiled CSS at a 15px UI font, neo's row pitch was
@@ -1671,9 +1671,9 @@
  --sidebar-agent-row-h: 2.1rem;
 }
 
-:root[data-ui-theme="tinyworld"] {
+:root[data-ui-theme="paper"] {
  /* Match the SEARCH FIELD's height (min-h-8 = 2rem) — see the action-row rule
-    in the tinyworld block. Stated as the SHARED variable, not as a
+    in the paper block. Stated as the SHARED variable, not as a
     `min-height: … !important` on the row: a theme adjusting the metric is part
     of the system, a theme restating a height is what put neo 1.6x out and made
     a base-scope change a no-op. */
@@ -2018,7 +2018,7 @@
  box-shadow: var(--shadow-lg);
 }
 
-:root[data-ui-theme="tinyworld"] [data-floating-window] {
+:root[data-ui-theme="paper"] [data-floating-window] {
  box-shadow:
   inset 0 1px 0 var(--tw-control-inset),
   var(--shadow-window);
@@ -2029,12 +2029,12 @@
    Full-bleed panels don't float — kill the wrapper shadow (matches the inner
    surface's shadow-none in FloatingWindowShell). */
 :root[data-ui-theme="neo"] [data-floating-window][data-window-view-mode="full"],
-:root[data-ui-theme="tinyworld"] [data-floating-window][data-window-view-mode="full"] {
+:root[data-ui-theme="paper"] [data-floating-window][data-window-view-mode="full"] {
  box-shadow: none;
 }
 
 :root[data-ui-theme="neo"] [data-slot="input-group-addon"][data-align="block-end"],
-:root[data-ui-theme="tinyworld"] [data-slot="input-group-addon"][data-align="block-end"] {
+:root[data-ui-theme="paper"] [data-slot="input-group-addon"][data-align="block-end"] {
  min-height: 44px;
  align-items: center;
  padding-top: 6px;
@@ -2042,14 +2042,14 @@
 }
 
 :root[data-ui-theme="neo"] [data-slot="input-group-addon"]>div,
-:root[data-ui-theme="tinyworld"] [data-slot="input-group-addon"]>div {
+:root[data-ui-theme="paper"] [data-slot="input-group-addon"]>div {
  align-items: center;
 }
 
 :root[data-ui-theme="neo"] [data-slot="button"][data-size^="icon"],
-:root[data-ui-theme="tinyworld"] [data-slot="button"][data-size^="icon"],
+:root[data-ui-theme="paper"] [data-slot="button"][data-size^="icon"],
 :root[data-ui-theme="neo"] .canvas-toolbar [data-slot="toggle-group-item"],
-:root[data-ui-theme="tinyworld"] .canvas-toolbar [data-slot="toggle-group-item"] {
+:root[data-ui-theme="paper"] .canvas-toolbar [data-slot="toggle-group-item"] {
  display: inline-grid;
  place-items: center;
  line-height: 1;
@@ -2057,17 +2057,17 @@
 }
 
 :root[data-ui-theme="neo"] [data-slot="button"] svg,
-:root[data-ui-theme="tinyworld"] [data-slot="button"] svg,
+:root[data-ui-theme="paper"] [data-slot="button"] svg,
 :root[data-ui-theme="neo"] [data-slot="select-trigger"] svg,
-:root[data-ui-theme="tinyworld"] [data-slot="select-trigger"] svg,
+:root[data-ui-theme="paper"] [data-slot="select-trigger"] svg,
 :root[data-ui-theme="neo"] .canvas-toolbar [data-slot="toggle-group-item"] svg,
-:root[data-ui-theme="tinyworld"] .canvas-toolbar [data-slot="toggle-group-item"] svg {
+:root[data-ui-theme="paper"] .canvas-toolbar [data-slot="toggle-group-item"] svg {
  display: block;
  margin: 0;
 }
 
 :root[data-ui-theme="neo"] .canvas-toolbar,
-:root[data-ui-theme="tinyworld"] .canvas-toolbar {
+:root[data-ui-theme="paper"] .canvas-toolbar {
  align-items: center;
 }
 
@@ -2106,19 +2106,19 @@
 }
 
 :root[data-ui-theme="neo"] .canvas-toolbar [data-slot="toggle-group-item"],
-:root[data-ui-theme="tinyworld"] .canvas-toolbar [data-slot="toggle-group-item"] {
+:root[data-ui-theme="paper"] .canvas-toolbar [data-slot="toggle-group-item"] {
  min-width: 36px;
  height: 36px;
 }
 
 :root[data-ui-theme="neo"] .model-selector-trigger,
-:root[data-ui-theme="tinyworld"] .model-selector-trigger {
+:root[data-ui-theme="paper"] .model-selector-trigger {
  min-width: 128px;
  align-items: center;
  line-height: 1;
 }
 
-:root[data-ui-theme="tinyworld"] .model-selector-trigger {
+:root[data-ui-theme="paper"] .model-selector-trigger {
  min-height: 36px;
 }
 
@@ -2148,7 +2148,7 @@
    search bars, command palettes, etc.) is untouched. */
 .channel-composer [data-slot="input-group"] {
  /* Soft inset shadow for the well's depth. This one stays at THIS specificity
-     (0,2,0) rather than moving into the :not() rule below: tinyworld gives every
+     (0,2,0) rather than moving into the :not() rule below: paper gives every
      control its own inset highlight from a (0,3,0) selector, and hoisting this
      to (0,4,0) silently outranked it and flattened the world's controls. */
  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--foreground) 8%, transparent);
@@ -2282,7 +2282,7 @@
    - The ITEMS keep NO border (see .thread-widget-item-row below). Boxing every
      to-do inside a boxed card made six items read as six nested cards.
 
-   This was neo-only, which is why every other family — tinyworld included —
+   This was neo-only, which is why every other family — paper included —
    was showing the conversation straight through the widget body. A card's
    frame belongs to the component, not to one theme; the per-family part is
    only how heavy the edge is. */
@@ -2453,7 +2453,7 @@
  box-shadow: var(--shadow-window);
 }
 
-/* Window corner radius is theme-aware: 20px base, 12px neo/tinyworld (so windows
+/* Window corner radius is theme-aware: 20px base, 12px neo/paper (so windows
    match the sidebar's brutal frame instead of being softer). The Tailwind
    rounded-*-xl utilities bake a literal 20px at build time, so these higher-
    specificity rules re-point them at --radius-xl. Because --radius-xl is now
@@ -2489,56 +2489,56 @@
  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%) !important;
 }
 
-:root[data-ui-theme="tinyworld"],
+:root[data-ui-theme="paper"],
 :root[data-ui-theme="neo"] {
  --theme-glass-surface: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent);
  --theme-glass-raised: color-mix(in srgb, var(--popover) var(--agensis-panel-alpha, 88%), transparent);
  --theme-glass-muted: color-mix(in srgb, var(--muted) calc(var(--agensis-panel-alpha, 88%) - 18%), transparent);
 }
 
-:root[data-ui-theme="tinyworld"] [data-window-surface],
+:root[data-ui-theme="paper"] [data-window-surface],
 :root[data-ui-theme="neo"] [data-window-surface],
-:root[data-ui-theme="tinyworld"] .channel-shell,
+:root[data-ui-theme="paper"] .channel-shell,
 :root[data-ui-theme="neo"] .channel-shell,
-:root[data-ui-theme="tinyworld"] .channel-message-surface,
+:root[data-ui-theme="paper"] .channel-message-surface,
 :root[data-ui-theme="neo"] .channel-message-surface,
-:root[data-ui-theme="tinyworld"] .channel-message-surface [data-slot="message-scroller-viewport"],
+:root[data-ui-theme="paper"] .channel-message-surface [data-slot="message-scroller-viewport"],
 :root[data-ui-theme="neo"] .channel-message-surface [data-slot="message-scroller-viewport"],
-:root[data-ui-theme="tinyworld"] .channel-message-surface [data-slot="message-scroller-content"],
+:root[data-ui-theme="paper"] .channel-message-surface [data-slot="message-scroller-content"],
 :root[data-ui-theme="neo"] .channel-message-surface [data-slot="message-scroller-content"] {
  background: var(--theme-glass-surface) !important;
  backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
 }
 
-:root[data-ui-theme="tinyworld"] .channel-header,
+:root[data-ui-theme="paper"] .channel-header,
 :root[data-ui-theme="neo"] .channel-header,
-:root[data-ui-theme="tinyworld"] .channel-composer,
+:root[data-ui-theme="paper"] .channel-composer,
 :root[data-ui-theme="neo"] .channel-composer,
-:root[data-ui-theme="tinyworld"] .channel-side-panel,
+:root[data-ui-theme="paper"] .channel-side-panel,
 :root[data-ui-theme="neo"] .channel-side-panel,
-:root[data-ui-theme="tinyworld"] [data-slot="dialog-content"],
+:root[data-ui-theme="paper"] [data-slot="dialog-content"],
 :root[data-ui-theme="neo"] [data-slot="dialog-content"],
-:root[data-ui-theme="tinyworld"] [data-slot="popover-content"],
+:root[data-ui-theme="paper"] [data-slot="popover-content"],
 :root[data-ui-theme="neo"] [data-slot="popover-content"],
-:root[data-ui-theme="tinyworld"] [data-slot="dropdown-menu-content"],
+:root[data-ui-theme="paper"] [data-slot="dropdown-menu-content"],
 :root[data-ui-theme="neo"] [data-slot="dropdown-menu-content"],
-:root[data-ui-theme="tinyworld"] [data-slot="command"],
+:root[data-ui-theme="paper"] [data-slot="command"],
 :root[data-ui-theme="neo"] [data-slot="command"],
-:root[data-ui-theme="tinyworld"] [data-slot="card"],
+:root[data-ui-theme="paper"] [data-slot="card"],
 :root[data-ui-theme="neo"] [data-slot="card"] {
  background: var(--theme-glass-raised) !important;
  backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
  -webkit-backdrop-filter: blur(var(--agensis-glass-blur, 16px)) saturate(140%);
 }
 
-:root[data-ui-theme="tinyworld"] .activity-row,
+:root[data-ui-theme="paper"] .activity-row,
 :root[data-ui-theme="neo"] .activity-row,
-:root[data-ui-theme="tinyworld"] .task-row,
+:root[data-ui-theme="paper"] .task-row,
 :root[data-ui-theme="neo"] .task-row,
-:root[data-ui-theme="tinyworld"] [data-slot="item"],
+:root[data-ui-theme="paper"] [data-slot="item"],
 :root[data-ui-theme="neo"] [data-slot="item"],
-:root[data-ui-theme="tinyworld"] [class*="bg-card"],
+:root[data-ui-theme="paper"] [class*="bg-card"],
 :root[data-ui-theme="neo"] [class*="bg-card"] {
  background-color: var(--theme-glass-muted) !important;
  backdrop-filter: blur(calc(var(--agensis-glass-blur, 16px) * 0.75)) saturate(140%);
@@ -2973,7 +2973,7 @@
  }
 }
 
-:root[data-ui-theme="tinyworld"] [data-slot="badge"] {
+:root[data-ui-theme="paper"] [data-slot="badge"] {
  min-height: 1.35rem;
  border-color: color-mix(in srgb, var(--border) 82%, transparent) !important;
  background: color-mix(in srgb, var(--secondary) 82%, transparent) !important;
@@ -3008,10 +3008,10 @@
  color: var(--primary-foreground) !important;
 }
 
-/* tinyworld: restore the filled accent look for active/selected badges,
-   matching the tinyworld primary button treatment (the base badge rule above
+/* paper: restore the filled accent look for active/selected badges,
+   matching the paper primary button treatment (the base badge rule above
    forces a secondary fill on every badge, which would otherwise flatten this). */
-:root[data-ui-theme="tinyworld"] [data-slot="badge"][data-variant="default"] {
+:root[data-ui-theme="paper"] [data-slot="badge"][data-variant="default"] {
  border-color: var(--tw-accent-outline) !important;
  background: linear-gradient(180deg, var(--tw-accent-fill), color-mix(in srgb, var(--tw-accent-fill) 72%, var(--accent) 28%)) !important;
  color: var(--tw-accent-outline) !important;
@@ -4060,8 +4060,8 @@ body {
 }
 
 /* ---- dark-mode outer ring on light-lined controls -------------------------
-   Lifted from the presence/avatar cluster, which is the only place that
-   already reads right on a mid-tone panel: an avatar carries a light 1px
+   The presence/avatar cluster is the only place that already reads right on a
+   mid-tone panel, and this generalises what it does: an avatar carries a light 1px
    INNER line (avatar.tsx — `after:border after:border-border`) *and* a dark
    OUTER ring (`ring-2 ring-background` on AvatarGroup / AvatarBadge). The
    outer ring is what stops the control dissolving into the surface behind it.
@@ -4382,7 +4382,7 @@ select {
  border-radius: 12px !important;
 }
 
-/* Brutalist rows (neo + tinyworld) have a hard OFFSET shadow that extends down-right.
+/* Brutalist rows (neo + paper) have a hard OFFSET shadow that extends down-right.
    The sidebar scroll viewport clips overflow-x, so each row must reserve right+bottom
    room or the shadow's right edge gets cut flat (the reported clipping). */
 :root[data-ui-theme="neo"] .sidebar-action-row,
@@ -4415,15 +4415,15 @@ select {
  box-shadow: var(--neo-shadow-sm) !important;
 }
 
-:root[data-ui-theme="tinyworld"] .sidebar-action-row,
-:root[data-ui-theme="tinyworld"] .sidebar-search,
-:root[data-ui-theme="tinyworld"] .sidebar-section-trigger,
-:root[data-ui-theme="tinyworld"] .sidebar-folder-trigger,
-:root[data-ui-theme="tinyworld"] .sidebar-item-row,
+:root[data-ui-theme="paper"] .sidebar-action-row,
+:root[data-ui-theme="paper"] .sidebar-search,
+:root[data-ui-theme="paper"] .sidebar-section-trigger,
+:root[data-ui-theme="paper"] .sidebar-folder-trigger,
+:root[data-ui-theme="paper"] .sidebar-item-row,
 /* The DM row, for the same reason it was added to neo's list: left out, it is
    the ONE row that runs the full panel width, so the selected DM's fill reaches
    the panel edge while every other selected row stops 6px short of it. */
-:root[data-ui-theme="tinyworld"] .sidebar-agent-row {
+:root[data-ui-theme="paper"] .sidebar-agent-row {
  width: calc(100% - 6px) !important;
  max-width: calc(100% - 6px) !important;
  margin-left: 0 !important;
@@ -4438,7 +4438,7 @@ select {
  transform: translate(1px, 1px) !important;
 }
 
-/* Neo / TinyWorld: section headers and folder triggers match action-row card style */
+/* Neo / Paper: section headers and folder triggers match action-row card style */
 
 /* ── Neo: section header (Channels, Direct messages, …) — plain label, not a
    card. Only the item a person actually selects should read as a "button";
@@ -4522,9 +4522,9 @@ select {
  background: var(--secondary) !important;
 }
 
-/* ── TinyWorld: section-header card ── */
-:root[data-ui-theme="tinyworld"] .sidebar-section-header {
- /* A SECTION HEADING IS NOT A CONTROL. tinyworld frames its controls, and
+/* ── Paper: section-header card ── */
+:root[data-ui-theme="paper"] .sidebar-section-header {
+ /* A SECTION HEADING IS NOT A CONTROL. paper frames its controls, and
     applying that to every heading turned the sidebar into a stack of identical
     boxes with no hierarchy left. Selections keep their frame — that is what the
     frame is FOR: showing which one you are on. */
@@ -4552,7 +4552,7 @@ select {
  padding-inline: 0.3rem 0.2rem !important;
 }
 
-:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-section-header {
+:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-section-header {
  border-color: color-mix(in srgb, var(--tw-accent-outline) 66%, transparent) !important;
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 14%, transparent), transparent 32%, rgba(0, 0, 0, 0.18) 100%),
@@ -4563,7 +4563,7 @@ select {
   0 2px 5px -2px rgba(0, 0, 0, 0.58) !important;
 }
 
-:root[data-ui-theme="tinyworld"] .sidebar-section-header:hover {
+:root[data-ui-theme="paper"] .sidebar-section-header:hover {
  border-color: color-mix(in srgb, var(--tw-accent-outline) 72%, transparent) !important;
  color: var(--tw-accent-outline) !important;
  background:
@@ -4575,14 +4575,14 @@ select {
   var(--tw-control-shadow) !important;
 }
 
-:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-section-header:hover {
+:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-section-header:hover {
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 16%, transparent), transparent 30%, rgba(0, 0, 0, 0.22) 100%),
   var(--tw-accent-hover) !important;
 }
 
 /* Trigger inside TW header owns no border/shadow */
-:root[data-ui-theme="tinyworld"] .sidebar-section-header .sidebar-section-trigger {
+:root[data-ui-theme="paper"] .sidebar-section-header .sidebar-section-trigger {
  width: auto !important;
  max-width: none !important;
  margin-right: 0 !important;
@@ -4591,12 +4591,12 @@ select {
  box-shadow: none !important;
 }
 
-:root[data-ui-theme="tinyworld"] .sidebar-section-header .sidebar-section-trigger:hover {
+:root[data-ui-theme="paper"] .sidebar-section-header .sidebar-section-trigger:hover {
  background: transparent !important;
 }
 
 /* TW folder triggers: card style */
-:root[data-ui-theme="tinyworld"] .sidebar-folder-trigger {
+:root[data-ui-theme="paper"] .sidebar-folder-trigger {
  position: relative;
  overflow: hidden;
  border-width: 1px !important;
@@ -4613,7 +4613,7 @@ select {
  min-height: 1.9rem !important;
 }
 
-:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-folder-trigger {
+:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-folder-trigger {
  border-color: color-mix(in srgb, var(--tw-accent-outline) 66%, transparent) !important;
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 14%, transparent), transparent 32%, rgba(0, 0, 0, 0.18) 100%),
@@ -4624,7 +4624,7 @@ select {
   0 2px 5px -2px rgba(0, 0, 0, 0.58) !important;
 }
 
-:root[data-ui-theme="tinyworld"] .sidebar-folder-trigger:hover {
+:root[data-ui-theme="paper"] .sidebar-folder-trigger:hover {
  border-color: color-mix(in srgb, var(--tw-accent-outline) 72%, transparent) !important;
  color: var(--tw-accent-outline) !important;
  background:
@@ -4636,7 +4636,7 @@ select {
   var(--tw-control-shadow) !important;
 }
 
-:root[data-ui-theme="tinyworld"][data-theme="dark"] .sidebar-folder-trigger:hover {
+:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-folder-trigger:hover {
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 16%, transparent), transparent 30%, rgba(0, 0, 0, 0.22) 100%),
   var(--tw-accent-hover) !important;
@@ -5110,8 +5110,8 @@ select {
  background: var(--muted) !important;
 }
 
-/* Light mode (base theme only — not neo, not tinyworld) panels get a white border */
-:root[data-theme="light"]:not([data-ui-theme="neo"]):not([data-ui-theme="tinyworld"]) [data-window-surface] {
+/* Light mode (base theme only — not neo, not paper) panels get a white border */
+:root[data-theme="light"]:not([data-ui-theme="neo"]):not([data-ui-theme="paper"]) [data-window-surface] {
  border-color: rgba(255, 255, 255, 0.85) !important;
 }
 

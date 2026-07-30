@@ -85,7 +85,7 @@ export interface AgensisAppletInit {
  * canonical names go stale on live switch (baked once into srcDoc). Reading the
  * `--agensis-*` alias keeps both paths coherent. Any applet that includes
  * AGENSIS_APPLET_BASE_CSS + AGENSIS_APPLET_THEME_JS inherits themed controls
- * (radius, shadow, border weight, accent) across classic / neo / tinyworld.
+ * (radius, shadow, border weight, accent) across classic / neo / paper.
  */
 export const AGENSIS_APPLET_BASE_CSS = `
     :root {
@@ -106,7 +106,7 @@ export const AGENSIS_APPLET_BASE_CSS = `
       --app-warn: var(--agensis-warning, #d6942c);
       --app-err: var(--agensis-error, #d64c4c);
       /* Shape — flow straight from the active theme (0px+hard-shadow in neo-brutal,
-         rounded+soft in classic/tinyworld). */
+         rounded+soft in classic/paper). */
       --app-radius: var(--agensis-radius-md, 8px);
       --app-radius-sm: var(--agensis-radius-sm, 6px);
       --app-radius-lg: var(--agensis-radius-lg, 12px);
@@ -401,7 +401,7 @@ function buildCalculatorAppHtml() {
 ${AGENSIS_APPLET_BASE_CSS}
   /* Calculator palette derives entirely from the shared theme contract, so the
      control colours, radius and border weight track the active app theme
-     (classic / neo-brutal / tinyworld, light + dark). */
+     (classic / neo-brutal / paper, light + dark). */
   :root {
     --bg: var(--app-bg);
     --surface: var(--app-panel);

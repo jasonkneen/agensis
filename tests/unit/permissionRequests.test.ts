@@ -139,13 +139,13 @@ describe('settledApprovalFromMessage', () => {
     message_kind: PERMISSION_REQUEST_KIND,
     permission_request_id: 'req-1',
     tool_name: 'Read',
-    tool_detail: '/Users/jkneen/Documents/GitHub/agensis/src/App.tsx',
+    tool_detail: '/Users/alex/Documents/GitHub/agensis/src/App.tsx',
     content,
     ...overrides,
   });
 
   it('reads back every scope the server writes over the message', () => {
-    const summary = 'Read · /Users/jkneen/Documents/GitHub/agensis/src/App.tsx';
+    const summary = 'Read · /Users/alex/Documents/GitHub/agensis/src/App.tsx';
     for (const [sentence, scope] of [
       ['Always allowed by Jason', 'always'],
       ['Allowed for this session by Jason', 'session'],
@@ -161,7 +161,7 @@ describe('settledApprovalFromMessage', () => {
   });
 
   it('reads a denial and an expiry, which name nobody', () => {
-    const summary = 'Read · /Users/jkneen/Documents/GitHub/agensis/src/App.tsx';
+    const summary = 'Read · /Users/alex/Documents/GitHub/agensis/src/App.tsx';
     expect(settledApprovalFromMessage(decided(`Denied: ${summary}`))?.status).toBe('denied');
     expect(settledApprovalFromMessage(decided(`Expired: ${summary}`))?.status).toBe('expired');
     expect(settledApprovalFromMessage(decided(`Denied: ${summary}`))?.decidedByName).toBe('');
@@ -171,7 +171,7 @@ describe('settledApprovalFromMessage', () => {
     // The summary is stripped off the END using the message's own columns, so a
     // name like this cannot cut the sentence in the wrong place.
     const request = settledApprovalFromMessage(
-      decided('Always allowed by Ops: On-call: Read · /Users/jkneen/Documents/GitHub/agensis/src/App.tsx'),
+      decided('Always allowed by Ops: On-call: Read · /Users/alex/Documents/GitHub/agensis/src/App.tsx'),
     );
     expect(request?.decidedByName).toBe('Ops: On-call');
   });
@@ -179,7 +179,7 @@ describe('settledApprovalFromMessage', () => {
   it('refuses anything that is not a settled approval', () => {
     // A pending request must keep its card and its buttons — reconstructing a
     // "decided" row from it would silently remove the only way to answer.
-    expect(settledApprovalFromMessage(decided('Read · /Users/jkneen/Documents/GitHub/agensis/src/App.tsx'))).toBeNull();
+    expect(settledApprovalFromMessage(decided('Read · /Users/alex/Documents/GitHub/agensis/src/App.tsx'))).toBeNull();
     // Not a permission row at all.
     expect(settledApprovalFromMessage(message({ content: 'Allowed by Jason: Read · x.ts' }))).toBeNull();
     // A colon-bearing sentence with no recognised verb.
@@ -190,7 +190,7 @@ describe('settledApprovalFromMessage', () => {
     // Only the live row can still be pending, and only it carries the rules and
     // scopes a card needs to draw buttons.
     const live: PermissionRequest = { ...BASE, id: 'req-1', status: 'pending' };
-    const msg = decided('Always allowed by Jason: Read · /Users/jkneen/Documents/GitHub/agensis/src/App.tsx');
+    const msg = decided('Always allowed by Jason: Read · /Users/alex/Documents/GitHub/agensis/src/App.tsx');
     expect(resolvePermissionRequest(msg, new Map([['req-1', live]]))).toBe(live);
     expect(resolvePermissionRequest(msg, new Map())?.status).toBe('allowed');
   });
@@ -229,8 +229,8 @@ describe('transcript placement', () => {
         message_kind: PERMISSION_REQUEST_KIND,
         permission_request_id: 'req-9',
         tool_name: 'Read',
-        tool_detail: '/Users/jkneen/Documents/GitHub/agensis/src/App.tsx',
-        content: 'Always allowed by Jason: Read · /Users/jkneen/Documents/GitHub/agensis/src/App.tsx',
+        tool_detail: '/Users/alex/Documents/GitHub/agensis/src/App.tsx',
+        content: 'Always allowed by Jason: Read · /Users/alex/Documents/GitHub/agensis/src/App.tsx',
       }),
       message({ id: 'b', message_kind: 'tool_step', tool_name: 'Read', tool_detail: 'src/App.tsx' }),
     ], undefined, () => undefined);

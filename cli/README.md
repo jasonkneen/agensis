@@ -204,10 +204,10 @@ CI for this project also runs here, which is where "post a build result into
 #releases" actually happens.
 
 The cost, stated plainly: **it is not on `PATH` on daemon hosts**, and the
-daemon's `agentBackendUrl()` dev-port rewrite had to be reimplemented (ten lines
+daemon's `agentBackendUrl()` dev-port rewrite is duplicated here (ten lines
 in `cli/src/auth.mjs`, covering the `5173`/`8888` → `127.0.0.1:3142` cases). If
 the on-`PATH` ergonomics turn out to matter more than the blast radius, the six
-modules are plain ESM with no dependency on anything in this repo and port to
+modules are plain ESM with no dependency on anything in this repo and move to
 `packages/agensis-cli/src/ops/` unchanged.
 
 ## Endpoint

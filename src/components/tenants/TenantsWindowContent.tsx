@@ -36,7 +36,7 @@ import { TenantRow } from './TenantRow';
 // ---------------------------------------------------------------------------
 // TENANTS — every registered account, and what each one has.
 //
-// The owner-only admin surface. Master-detail, borrowed wholesale from the inbox
+// The owner-only admin surface. Master-detail, in the same language as the inbox
 // (InboxWindowContent): a searchable column of roomy rows on the left, the
 // selected account on the right, ONE hairline between them, drag to resize, and
 // a single-column fallback below 42rem where the detail replaces the list.

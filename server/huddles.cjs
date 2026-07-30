@@ -809,7 +809,7 @@ function mountHuddleRoutes(app, deps = {}) {
  //   - the browser folds `events` locally so a realtime join/leave updates the
  //     card with no round-trip (and so a websocket reconnect re-derives state
  //     from the log instead of reconciling a diff),
- //   - `state` is the same fold for consumers that should not reimplement it
+ //   - `state` is the same fold for consumers that should not duplicate it
  //     (tests, and the MCP surface when huddles are exposed there).
  // They are two readers of one source of truth, not two sources of truth.
  async function huddlePayload(huddle) {

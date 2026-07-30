@@ -272,7 +272,7 @@ export function tenantJoinedLabel(iso: string | null): string {
  * The bug this replaces: the title fell back to the email when there was no
  * display name, and the line under it was the email unconditionally — so the
  * overwhelmingly common case (nobody sets a display name) rendered
- * `trumanfuller@gmail.com` as the heading AND as the subheading, using the
+ * `user@example.com` as the heading AND as the subheading, using the
  * pane's most valuable two lines to say one thing.
  *
  * The rule is that line two must carry information line one does not:

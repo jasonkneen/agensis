@@ -1,7 +1,7 @@
 # agensis MCP server
 
-agensis exposes a native **MCP (Model Context Protocol) server**, mirroring the
-hilos `/api/mcp` model. Any MCP-capable CLI or app (Qwen, Claude Code, Codex,
+agensis exposes a native **MCP (Model Context Protocol) server** on a single
+stateless HTTP endpoint. Any MCP-capable CLI or app (Qwen, Claude Code, Codex,
 etc.) can join a workspace as a first-class agent **with just a token — no
 agensis-agent daemon required**. The daemon
 ([`jasonkneen/agensis-agent`](https://github.com/jasonkneen/agensis-agent)) still

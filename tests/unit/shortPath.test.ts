@@ -9,10 +9,10 @@ import { SHORT_PATH_BUDGET, shortenPath, shortenPathsIn } from '../../src/lib/sh
 
 describe('shortenPath', () => {
   it('collapses a home directory to ~ and leaves the rest alone', () => {
-    expect(shortenPath('/Users/jkneen/Documents/notes.md')).toBe('~/Documents/notes.md');
-    expect(shortenPath('/home/jkneen/src/main.rs')).toBe('~/src/main.rs');
+    expect(shortenPath('/Users/alex/Documents/notes.md')).toBe('~/Documents/notes.md');
+    expect(shortenPath('/home/alex/src/main.rs')).toBe('~/src/main.rs');
     // The home directory itself, with nothing under it.
-    expect(shortenPath('/Users/jkneen')).toBe('~');
+    expect(shortenPath('/Users/alex')).toBe('~');
   });
 
   it('does not mistake a sibling of the home root for a home directory', () => {
@@ -22,7 +22,7 @@ describe('shortenPath', () => {
   });
 
   it('drops leading segments from a long nested path so the file survives', () => {
-    const long = '/Users/jkneen/Documents/GitHub/agensis-agent/.worktrees/x/src/App.tsx';
+    const long = '/Users/alex/Documents/GitHub/agensis-agent/.worktrees/x/src/App.tsx';
     expect(shortenPath(long)).toBe('…/agensis-agent/.worktrees/x/src/App.tsx');
     expect(shortenPath(long).length).toBeLessThanOrEqual(SHORT_PATH_BUDGET);
     // The distinguishing end is intact, byte for byte.
@@ -30,7 +30,7 @@ describe('shortenPath', () => {
   });
 
   it('shortens two sibling paths to something that still tells them apart', () => {
-    const base = '/Users/jkneen/Documents/GitHub/agensis-agent/.worktrees';
+    const base = '/Users/alex/Documents/GitHub/agensis-agent/.worktrees';
     expect(shortenPath(`${base}/alpha/src/App.tsx`)).not.toBe(shortenPath(`${base}/beta/src/App.tsx`));
   });
 
@@ -53,13 +53,13 @@ describe('shortenPath', () => {
   });
 
   it('never cuts below the filename and one parent, however long they are', () => {
-    const huge = `/Users/jkneen/deep/${'a'.repeat(40)}/${'b'.repeat(40)}`;
+    const huge = `/Users/alex/deep/${'a'.repeat(40)}/${'b'.repeat(40)}`;
     expect(shortenPath(huge)).toBe(`…/${'a'.repeat(40)}/${'b'.repeat(40)}`);
   });
 
   it('handles Windows paths with backslashes', () => {
-    expect(shortenPath('C:\\Users\\jkneen\\Documents\\notes.md')).toBe('~\\Documents\\notes.md');
-    expect(shortenPath('C:\\Users\\jkneen\\Documents\\GitHub\\agensis-agent\\.worktrees\\x\\src\\App.tsx'))
+    expect(shortenPath('C:\\Users\\alex\\Documents\\notes.md')).toBe('~\\Documents\\notes.md');
+    expect(shortenPath('C:\\Users\\alex\\Documents\\GitHub\\agensis-agent\\.worktrees\\x\\src\\App.tsx'))
       .toBe('…\\agensis-agent\\.worktrees\\x\\src\\App.tsx');
     // A drive root that is not a home directory still elides from the head.
     expect(shortenPath('D:\\builds\\nightly\\2026\\07\\artifacts\\output\\bundle.zip'))
@@ -74,7 +74,7 @@ describe('shortenPath', () => {
   });
 
   it('honours a caller-supplied budget', () => {
-    const path = '/Users/jkneen/Documents/GitHub/agensis/src/App.tsx';
+    const path = '/Users/alex/Documents/GitHub/agensis/src/App.tsx';
     expect(shortenPath(path, { budget: 200 })).toBe('~/Documents/GitHub/agensis/src/App.tsx');
     expect(shortenPath(path, { budget: 20 })).toBe('…/src/App.tsx');
   });
@@ -82,12 +82,12 @@ describe('shortenPath', () => {
 
 describe('shortenPathsIn', () => {
   it('shortens the path inside an agent step line and keeps everything else', () => {
-    expect(shortenPathsIn('Coder: Edit · /Users/jkneen/Documents/GitHub/agensis-agent/.worktrees/x/src/App.tsx'))
+    expect(shortenPathsIn('Coder: Edit · /Users/alex/Documents/GitHub/agensis-agent/.worktrees/x/src/App.tsx'))
       .toBe('Coder: Edit · …/agensis-agent/.worktrees/x/src/App.tsx');
   });
 
   it('shortens every path in a shell line', () => {
-    expect(shortenPathsIn('cd /Users/jkneen/Documents/GitHub/agensis-agent/.worktrees/self-update && npm test'))
+    expect(shortenPathsIn('cd /Users/alex/Documents/GitHub/agensis-agent/.worktrees/self-update && npm test'))
       .toBe('cd …/agensis-agent/.worktrees/self-update && npm test');
   });
 
@@ -106,7 +106,7 @@ describe('shortenPathsIn', () => {
   });
 
   it('keeps quotes and trailing punctuation outside the shortened path', () => {
-    expect(shortenPathsIn('wrote "/Users/jkneen/Documents/GitHub/agensis-agent/.worktrees/x/src/App.tsx",'))
+    expect(shortenPathsIn('wrote "/Users/alex/Documents/GitHub/agensis-agent/.worktrees/x/src/App.tsx",'))
       .toBe('wrote "…/agensis-agent/.worktrees/x/src/App.tsx",');
   });
 

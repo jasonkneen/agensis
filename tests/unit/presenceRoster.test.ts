@@ -23,8 +23,8 @@ import type { AgentConnection, PresenceVisibilityMode } from '../../src/types';
 //      rendered text, because the chips came back the moment the strings were
 //      in reach of the row.
 
-const AGENT_CWD = '/Users/jkneen/Documents/GitHub/agensis';
-const AGENT_HOST = 'OzBook-M3-5.local';
+const AGENT_CWD = '/Users/alex/Documents/GitHub/agensis';
+const AGENT_HOST = 'example-host.local';
 
 function agentConnection(overrides: Partial<AgentConnection> = {}): AgentConnection {
   return {
@@ -158,7 +158,7 @@ describe('presence roster: the row', () => {
   };
   const SELF: WorkspacePresenceUser = {
     id: 'user-1',
-    name: 'jkneen',
+    name: 'alex',
     color: '#ef4444',
     isCurrentUser: true,
   };

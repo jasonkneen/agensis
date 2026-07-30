@@ -778,7 +778,7 @@ async function copyInheritedSessionMembers(row) {
 // huddle transcript derived from one) is readable only by its members. Always
 // called AFTER enforceWorkspaceRole, never instead of it — it narrows, it does
 // not grant. Same wrapper shape as enforceWorkspaceRole so route modules keep
-// taking one injected function and cannot reimplement the rule.
+// taking one injected function and cannot duplicate the rule.
 async function enforceSessionRead(userId, sessionId, sessionRow = null) {
  return sharedEnforceSessionReadAccess({ userId, sessionId, sessionRow, db: sharedDbAdapter });
 }
@@ -2052,7 +2052,7 @@ async function ensureRuntimeSchema() {
  // --------------------------------------------------------------------------
  // Groupable workspaces — workspaces.parent_id (foundation; no UI yet).
  //
- // A workspace is the Slack account; channels are the projects. Grouping is
+ // A workspace is the ACCOUNT and its channels are the projects. Grouping is
  // EMERGENT rather than a new tier: the same entity gains a nullable
  // self-reference, so a workspace with children renders as a group and one
  // without renders as a leaf. A parent may hold its own content as well as
@@ -7514,7 +7514,7 @@ function coreDeps() {
   // Responses
   jsonError, forbidden, badRequest,
   // Auth + RBAC. These stay single-sourced here and in shared/backend-core.cjs;
-  // an extracted module must never reimplement one.
+  // an extracted module must never duplicate one.
   requireAuth, requireUserOrFarm, enforceWorkspaceRole, enforceDbOperationAccess,
   // The read gate below the workspace. Injected next to enforceWorkspaceRole so
   // a route that does one and not the other is visible at the call site.
@@ -7680,7 +7680,7 @@ function createApp() {
  // Native MCP server endpoint. Any MCP-capable CLI (Qwen, Claude Code, Codex)
  // points its config at this URL with `Authorization: Bearer <agent connect
  // token>` and gets the full workspace toolset — no agensis-agent daemon needed.
- // Mirrors the hilos /api/mcp model. See server/mcp.cjs.
+ // Transport, auth and the tool surface all live in server/mcp.cjs.
  const mcpHandler = createMcpHandler({
   // The tool-facing capabilities, shared verbatim with the builtin tool loop
   // (see mcpToolDeps / getBuiltinToolset). Only the transport concerns below are
