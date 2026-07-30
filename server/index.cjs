@@ -7332,25 +7332,6 @@ const {
  enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
 });
 
-// The app-side skill store. Same shape and same reasoning as agent templates:
-// the validator is shared/workspaceSkills.cjs, its output is REBUILT from a
-// carried-field list, and the table has no column a privilege-bearing field
-// could land in. `writeSkill` is destructured too because the thread-harvest
-// accept path uses it — accepting a proposed skill must go through the SAME
-// validator and the SAME insert as authoring one by hand, or the store grows a
-// second door with different rules.
-const {
- listSkills: listWorkspaceSkillRows,
- createSkill: createWorkspaceSkill,
- updateSkill: updateWorkspaceSkill,
- deleteSkill: deleteWorkspaceSkill,
- writeSkill: writeWorkspaceSkill,
-} = createWorkspaceSkills({
- getDb: () => getDb(),
- notifyDbSubscribers: (...a) => notifyDbSubscribers(...a),
- enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
-});
-
 // Agent jobs hold no in-process state — a job's liveness is a database fact, so
 // a restart cannot lose it. See server/agent-jobs.cjs.
 const agentJobs = createAgentJobs({
