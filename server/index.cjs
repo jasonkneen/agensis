@@ -8450,7 +8450,14 @@ function createApp() {
  return app;
 }
 
-function startBackendServer(port = DEFAULT_PORT) {
+// `handleSignals` is OFF by default and turned on only by the standalone entry
+// point at the bottom of this file. electron/main.cjs also calls this function,
+// in the Electron MAIN process, where it already owns shutdown through
+// app.on('before-quit') -> backendServer.close(). Installing our own SIGINT/
+// SIGTERM handlers there would hijack that: Ctrl-C would exit(0) out of the
+// drain below and skip Electron's own quit path entirely. The desktop app is
+// not the deploy that needed this.
+function startBackendServer(port = DEFAULT_PORT, { handleSignals = false } = {}) {
  // Last-resort process guards. A single malformed frame, a rejected background
  // promise, or a throw from a detached callback must not take the whole backend
  // down — every request path already reports its own errors, so log and stay up.
@@ -8474,7 +8481,45 @@ function startBackendServer(port = DEFAULT_PORT) {
  // sweepAutomationRuns stays on the 30s tick: reclaiming a lease that expired
  // because a process died is housekeeping, and running it every second would be
  // 30x the query for no benefit. The DRAIN moved to its own 1s worker below.
- const jobReaper = setInterval(() => { void reapStuckAgentJobs(); void reapStuckMcpJobs(); void expireStalePermissionRequests(); void pruneOfflineConnections(); pruneExpiredPeerTickets(); void runDueSchedules(); void runDueThreadHarvests(); void sweepAutomationRuns(); }, 30_000);
+ // Every sweep on this tick is independently re-entrancy guarded.
+ //
+ // The three workers below each carry their own in-flight boolean; this tick
+ // carried none, and it is the tick with the slow passengers on it —
+ // runDueThreadHarvests makes model calls (3 per tick) and runDueSchedules and
+ // sweepAutomationRuns are DB scans that grow with the workspace. A sweep that
+ // outlives its 30s interval used to simply start again on top of itself, so the
+ // slower the database got the more concurrent copies of the same scan it was
+ // asked to serve — the failure mode that turns a slow database into a dead one.
+ //
+ // PER-SWEEP and not one boolean for the whole tick: a slow harvest must not be
+ // able to stop stuck jobs from being reaped. That is the same reasoning that
+ // put the automation drain on its own worker rather than merging it into this
+ // one.
+ //
+ // The .catch is not decoration. These were bare `void fn()` calls, so a
+ // rejection became an unhandledRejection — survivable only because of the
+ // last-resort process guard installed above, and invisible as to which sweep
+ // failed.
+ const sweepsInFlight = new Set();
+ const guardedSweep = (name, fn) => {
+  if (sweepsInFlight.has(name)) return;
+  sweepsInFlight.add(name);
+  void Promise.resolve()
+   .then(fn)
+   .catch((error) => console.error(`[reaper] ${name} failed:`, error?.message || error))
+   .finally(() => { sweepsInFlight.delete(name); });
+ };
+ const jobReaper = setInterval(() => {
+  guardedSweep('reapStuckAgentJobs', reapStuckAgentJobs);
+  guardedSweep('reapStuckMcpJobs', reapStuckMcpJobs);
+  guardedSweep('expireStalePermissionRequests', expireStalePermissionRequests);
+  guardedSweep('pruneOfflineConnections', pruneOfflineConnections);
+  guardedSweep('runDueSchedules', runDueSchedules);
+  guardedSweep('runDueThreadHarvests', runDueThreadHarvests);
+  guardedSweep('sweepAutomationRuns', sweepAutomationRuns);
+  // Synchronous and in-memory — no guard needed, and no reason to pay for one.
+  try { pruneExpiredPeerTickets(); } catch (error) { console.error('[reaper] pruneExpiredPeerTickets failed:', error?.message || error); }
+ }, 30_000);
  if (jobReaper.unref) jobReaper.unref();
  let flowDeliveryRunning = false;
  const flowDeliveryWorker = setInterval(() => {
@@ -8545,11 +8590,78 @@ function startBackendServer(port = DEFAULT_PORT) {
   wss.close();
   realtime.reset();
  });
+
+ // Graceful shutdown.
+ //
+ // Fly sends SIGTERM on every deploy, restart and machine move. Node's DEFAULT
+ // SIGTERM action is to exit immediately, and until now that is exactly what
+ // happened: no handler existed anywhere in this process. Every WebSocket died
+ // as a 1006 abnormal close, which is the one close code that carries no reason
+ // and no intent — so every daemon and every browser learned about the deploy by
+ // having its socket vanish mid-frame, and every in-flight agent turn sat as
+ // 'running' until the 30s reaper failed it. A deploy cost users their work.
+ //
+ // What this does instead, in the order that matters:
+ //  1. Stop accepting new connections, so the load balancer drains us.
+ //  2. Tell every open socket WHY, with a close code that means "come back".
+ //     1012 (Service Restart) is chosen deliberately: the daemon treats only
+ //     `1008 + /agent deactivated|authentication failed/` as terminal, so 1012
+ //     lands in its normal reconnect path, and the browser client's 'close'
+ //     handler drives its usual backoff. Neither is told to give up.
+ //  3. Give the close frames a moment to actually leave, then exit.
+ //
+ // SHUTDOWN_GRACE_MS must stay under fly.toml's kill_timeout or Fly SIGKILLs us
+ // mid-drain and we are back to 1006.
+ const SHUTDOWN_GRACE_MS = Number(process.env.AGENSIS_SHUTDOWN_GRACE_MS || 3_000);
+ let shuttingDown = false;
+ const shutdown = (signal) => {
+  // A second signal during the drain means someone is impatient (or Fly is
+  // escalating). Go now rather than restarting the timer.
+  if (shuttingDown) {
+   console.log(`[backend] ${signal} during shutdown — exiting now`);
+   process.exit(0);
+   return;
+  }
+  shuttingDown = true;
+  console.log(`[backend] ${signal} received — draining ${wss.clients.size} websocket client(s)`);
+  // Stops new connections and fires the 'close' handler above, which clears
+  // every interval so nothing new is started while we drain.
+  server.close();
+  if (wss.clients.size === 0) {
+   console.log('[backend] shutdown complete');
+   process.exit(0);
+   return;
+  }
+  for (const client of wss.clients) {
+   try { client.close(1012, 'Server restarting'); } catch { /* already closing */ }
+  }
+  // Deliberately NOT unref'd: this timer is the thing keeping us alive long
+  // enough for those close frames to leave the box. Unref'ing it would let the
+  // process exit the instant the last other handle drops, which is the 1006 we
+  // are here to stop sending.
+  setTimeout(() => {
+   // Anything still holding a socket open past the grace window gets cut; we
+   // have already said why, and Fly's kill_timeout is not negotiable.
+   for (const client of wss.clients) {
+    try { client.terminate(); } catch { /* already gone */ }
+   }
+   console.log('[backend] shutdown complete');
+   process.exit(0);
+  }, SHUTDOWN_GRACE_MS);
+ };
+ if (handleSignals) {
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+ }
+
  return server;
 }
 
 if (require.main === module) {
- startBackendServer();
+ // The standalone deploy (Fly, Docker, `npm run backend`) — the only caller that
+ // owns the whole process, and therefore the only one allowed to install signal
+ // handlers. See startBackendServer's `handleSignals`.
+ startBackendServer(DEFAULT_PORT, { handleSignals: true });
 }
 
 function setTestDb(nextDb) {

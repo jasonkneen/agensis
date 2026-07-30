@@ -37,6 +37,51 @@ const STRIP_FROM_TARGET = new Set([
 const STRIP_FROM_CLIENT = new Set(['host', 'connection', 'content-length', 'accept-encoding']);
 
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
+// The RESPONSE cap. The request body has been capped since this shipped; the
+// response was not, and it is the dangerous direction — the request body is
+// bounded by what a logged-in client can be bothered to upload, whereas the
+// response is whatever URL they name. `await upstream.arrayBuffer()` on a
+// 4GB asset is an OOM of a 2GB Fly machine (fly.toml [[vm]] memory = "2gb")
+// triggered by one POST, and the rate limiter allows 900 a minute.
+//
+// Same number as the request cap: this relay exists to fetch PAGES for the web
+// browser panel, and 25MB is already generous for one.
+const MAX_RESPONSE_BYTES = 25 * 1024 * 1024;
+// Wall-clock ceiling for one upstream fetch. Without it a slow-loris target
+// holds a Node request, an undici connection and this handler's buffers open
+// indefinitely — no timeout exists anywhere else on this path.
+const UPSTREAM_TIMEOUT_MS = 30_000;
+
+// Read a fetch Response with a hard byte ceiling, without ever materialising
+// more than the ceiling. `arrayBuffer()` cannot do this: it commits to the whole
+// body before returning, so by the time you could check a length you have
+// already allocated it. Content-Length is checked first as a cheap early out,
+// but it is client-controlled data from a foreign server and is NOT trusted as
+// the enforcement point — the streaming tally below is.
+async function readCapped(upstream, limit) {
+ const declared = Number(upstream.headers.get('content-length') || 0);
+ if (declared > limit) {
+  const error = new Error(`upstream response too large (${declared} bytes)`);
+  error.code = 'ERELAYTOOLARGE';
+  throw error;
+ }
+ if (!upstream.body) return Buffer.alloc(0);
+ const chunks = [];
+ let total = 0;
+ for await (const chunk of upstream.body) {
+  total += chunk.length;
+  if (total > limit) {
+   // Stop pulling. Cancelling the body is what actually releases the socket
+   // back to undici rather than leaving it draining in the background.
+   await upstream.body.cancel().catch(() => { });
+   const error = new Error('upstream response too large');
+   error.code = 'ERELAYTOOLARGE';
+   throw error;
+  }
+  chunks.push(Buffer.from(chunk));
+ }
+ return Buffer.concat(chunks, total);
+}
 
 function packHeaders(value) {
  return encodeURIComponent(JSON.stringify(value));
@@ -101,12 +146,17 @@ function installBrowserProxy(app, { requireAuth, rateLimiter, rateLimitBlocked, 
   }
   const body = chunks.length ? Buffer.concat(chunks) : undefined;
 
+  // Cleared in `finally` — an abort timer that outlives its request is a leak on
+  // a path that runs up to 900 times a minute.
+  const abort = new AbortController();
+  const abortTimer = setTimeout(() => abort.abort(), UPSTREAM_TIMEOUT_MS);
   try {
    const upstream = await fetch(url.href, {
     method,
     headers,
     body: method === 'GET' || method === 'HEAD' ? undefined : body,
     dispatcher: guardedFetchAgent(),
+    signal: abort.signal,
     // The CALLER follows redirects: scramjet must see the 3xx so it can rewrite
     // Location into a proxied URL. Following here would also mean re-validating
     // every hop, and the guarded dispatcher only covers what we ask it to dial.
@@ -126,7 +176,7 @@ function installBrowserProxy(app, { requireAuth, rateLimiter, rateLimitBlocked, 
     outHeaders[key] = value;
    }
 
-   const buffer = Buffer.from(await upstream.arrayBuffer());
+   const buffer = await readCapped(upstream, MAX_RESPONSE_BYTES);
    res.set('x-relay-status', String(upstream.status));
    res.set('x-relay-statustext', encodeURIComponent(upstream.statusText || ''));
    res.set('x-relay-headers', packHeaders(outHeaders));
@@ -135,13 +185,33 @@ function installBrowserProxy(app, { requireAuth, rateLimiter, rateLimitBlocked, 
   } catch (error) {
    const cause = error && error.cause;
    const blocked = cause && cause.code === 'ESSRFBLOCKED';
+   if (error && error.code === 'ERELAYTOOLARGE') {
+    res.set('x-relay-error', encodeURIComponent(error.message));
+    return res.status(502).end();
+   }
+   // An abort here is OUR deadline firing, not the target refusing. Say so —
+   // "The operation was aborted" in a relay error tells the caller nothing.
+   if (error && error.name === 'AbortError') {
+    res.set('x-relay-error', encodeURIComponent(`upstream timed out after ${UPSTREAM_TIMEOUT_MS}ms`));
+    return res.status(504).end();
+   }
    const message = blocked
     ? `blocked at connect: ${cause.message}`
     : String((error && error.message) || error);
    res.set('x-relay-error', encodeURIComponent(message));
    return res.status(502).end();
+  } finally {
+   clearTimeout(abortTimer);
   }
  });
 }
 
-module.exports = { installBrowserProxy };
+module.exports = {
+ installBrowserProxy,
+ // Test seam. The route itself cannot be driven from a test: assertSafeBrowsingUrl
+ // blocks 127.0.0.0/8, so there is no upstream a test is allowed to point it at —
+ // and adding an escape hatch to the SSRF guard to make a test convenient would
+ // trade the thing that matters for the thing that is easy. The cap is the part
+ // with logic in it, so the cap is what is exported.
+ __test: { readCapped, MAX_RESPONSE_BYTES, UPSTREAM_TIMEOUT_MS },
+};

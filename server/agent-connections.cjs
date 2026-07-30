@@ -420,6 +420,24 @@ function createAgentConnections(deps = {}) {
  // Auto-cleanup: remove offline connection rows dead for a while, so the daemon
  // "Other connections" list self-prunes instead of piling up stale entries.
  async function pruneOfflineConnections() {
+  // In-memory first, and unconditionally: it must not be skipped by the DB
+  // statement below throwing into the catch.
+  //
+  // mcpAgentPresence is written by touchMcpPresence on every MCP call and read
+  // by hasMcpPresence, which compares against MCP_PRESENCE_TTL_MS. That TTL
+  // makes a stale entry harmless to READ but does nothing to remove it — there
+  // was no delete on this Map anywhere, so every agent id that ever made one MCP
+  // call stayed resident for the lifetime of the process. Bounded by the number
+  // of distinct agents rather than by traffic, so it is a slow leak rather than
+  // a runaway one, but it is one that only ever grows and it already has the
+  // sweep it needs sitting right here.
+  //
+  // Expire on the same TTL the reader uses: anything hasMcpPresence would call
+  // absent is exactly what there is no reason to keep.
+  const presenceCutoff = Date.now() - MCP_PRESENCE_TTL_MS;
+  for (const [agentId, seenAt] of mcpAgentPresence) {
+   if (seenAt < presenceCutoff) mcpAgentPresence.delete(agentId);
+  }
   try {
    const rows = await getDb().unsafe(
     `delete from agent_connections where status = 'offline' and last_seen_at < now() - interval '120 seconds' returning *`,

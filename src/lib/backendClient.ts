@@ -480,14 +480,34 @@ class RealtimeManager {
       return;
     }
 
+    let socket: WebSocket;
     try {
-      this.socket = new WebSocket(getWsUrl());
+      socket = new WebSocket(getWsUrl());
     } catch {
       this.enterUnavailableCooldown();
       return;
     }
+    this.socket = socket;
 
-    this.socket.addEventListener('open', () => {
+    // Every handler below is bound to `socket`, the socket it was registered on,
+    // and no-ops once `this.socket` has moved on.
+    //
+    // Without that guard a SUPERSEDED socket's handlers still act on the manager.
+    // The check above only skips reconnecting while the current socket is OPEN or
+    // CONNECTING, so a socket in state CLOSING falls through and we build a
+    // replacement while the old one is still alive enough to emit. When the old
+    // one finally emits 'close' it ran `this.socket = null` — discarding the
+    // REPLACEMENT — then scheduled yet another reconnect, so the healthy socket
+    // was orphaned (still open, still delivering into this.channels, now
+    // unreachable and never closed) and a third socket was built on top. Each
+    // pass leaks one socket and doubles delivery of every realtime row.
+    const isCurrent = () => this.socket === socket;
+
+    socket.addEventListener('open', () => {
+      if (!isCurrent()) {
+        try { socket.close(); } catch { /* already closing */ }
+        return;
+      }
       // H3: authenticate via a first frame instead of a token in the URL. Channel
       // (re)subscription is deferred until the server acknowledges auth (see the
       // 'authenticated' branch in the message handler) so we never push
@@ -495,7 +515,7 @@ class RealtimeManager {
       const token = getStoredSession()?.access_token;
       if (token) {
         try {
-          this.socket?.send(JSON.stringify({ type: 'auth', token }));
+          socket.send(JSON.stringify({ type: 'auth', token }));
         } catch {
           // socket went away between open and send — close will trigger reconnect
         }
@@ -506,7 +526,8 @@ class RealtimeManager {
       this.onAuthenticated();
     });
 
-    this.socket.addEventListener('message', (event) => {
+    socket.addEventListener('message', (event) => {
+      if (!isCurrent()) return;
       try {
         const message = JSON.parse(String(event.data || '{}'));
         if (message?.type === 'system' && message?.event === 'authenticated') {
@@ -525,7 +546,7 @@ class RealtimeManager {
       }
     });
 
-    this.socket.addEventListener('error', () => {
+    socket.addEventListener('error', () => {
       // A WS 'error' fires on transient failures (failed connect, 1006 abnormal
       // close from a deploy or a mobile network drop) and is always followed by
       // 'close'. Do NOT permanently disable realtime here — let the 'close'
@@ -533,7 +554,10 @@ class RealtimeManager {
       // on the most common failure mode killed all realtime until a page reload.
     });
 
-    this.socket.addEventListener('close', () => {
+    socket.addEventListener('close', () => {
+      // A superseded socket closing is bookkeeping for a socket nobody is using;
+      // it must not null out the live one or schedule a reconnect on its behalf.
+      if (!isCurrent()) return;
       this.socket = null;
       if (realtimeDisabledOnThisHost() || this.permanentlyUnavailable) return;
       if (this.channels.size === 0) return;
@@ -542,16 +566,40 @@ class RealtimeManager {
         this.enterUnavailableCooldown();
         return;
       }
-      const delay = Math.min(
-        RealtimeManager.INITIAL_RECONNECT_DELAY_MS * 2 ** this.reconnectAttempts,
-        RealtimeManager.MAX_RECONNECT_DELAY_MS,
-      );
-      this.reconnectAttempts += 1;
       this.reconnectTimer = window.setTimeout(() => {
         this.reconnectTimer = null;
         this.ensureConnected();
-      }, delay);
+      }, this.nextReconnectDelay());
     });
+  }
+
+  /**
+   * Backoff delay for the next reconnect, with jitter, and consumes an attempt.
+   *
+   * The exponential curve was already here; the jitter is the new part, and it
+   * is not a micro-optimisation. Every client of a given backend loses its socket
+   * at the SAME INSTANT — that is what a deploy is, and the server now makes it
+   * exactly simultaneous by closing every socket itself on SIGTERM. A purely
+   * exponential delay is deterministic, so all of them then retry at the same
+   * 800ms, the same 1600ms, the same 3200ms: a synchronised herd that hits the
+   * new process hardest precisely while it is still warming up, and stays
+   * synchronised because a failed reconnect advances every client identically.
+   *
+   * The jitter is ADDITIVE — `base + random(0, base)` — so a reconnect is never
+   * scheduled SOONER than the delay this used to use. Spreading a herd only
+   * requires the clients to differ from each other; nothing requires them to be
+   * faster, and "faster" is not a free change — it shortens the window in which
+   * the app is knowingly offline, which is the window other code races against.
+   * The base ladder therefore tops out at half MAX_RECONNECT_DELAY_MS, so the
+   * longest delay is still MAX_RECONNECT_DELAY_MS rather than twice it.
+   */
+  private nextReconnectDelay(): number {
+    const base = Math.min(
+      RealtimeManager.INITIAL_RECONNECT_DELAY_MS * 2 ** this.reconnectAttempts,
+      RealtimeManager.MAX_RECONNECT_DELAY_MS / 2,
+    );
+    this.reconnectAttempts += 1;
+    return Math.round(base + Math.random() * base);
   }
 
   // Runs once the socket is usable: either the server acknowledged the auth frame
