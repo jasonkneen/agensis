@@ -49,9 +49,12 @@ function emitVersionJson() {
 // NOTE: the web build used to emit a proxy "browser runtime" here — a prebuilt
 // rewriter plus bare-mux, copied verbatim out of node_modules into
 // /scramjet-runtime/ so a browser tab could render sites that refuse framing.
-// It was removed: @mercuryworkshop/scramjet ships no usable licence grant (the
-// upstream repo has no LICENSE at all, npm metadata claims MIT, and the tarball
-// contains AGPL-3.0 text), so it cannot be redistributed in our build output.
+// It was removed because we could not establish redistribution rights for
+// @mercuryworkshop/scramjet: the upstream repo carries no LICENSE file and the
+// GitHub API reports `license: null`, the npm metadata field claims MIT, and the
+// published tarball contains AGPL-3.0 text. Three different answers, and none of
+// them is a grant we could rely on for our own build output. Nothing here is a
+// claim about that project's intent — only about what we could verify.
 //
 // The browser panel is now desktop-only, which is where it always worked best:
 // the Electron shell renders <webview>, a real top-level browsing context that

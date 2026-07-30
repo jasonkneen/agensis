@@ -29,8 +29,6 @@
         "npm:@fontsource/space-mono@^5.2.9",
         "npm:@lezer/highlight@^1.2.3",
         "npm:@livekit/components-react@^2.9.9",
-        "npm:@mercuryworkshop/bare-mux@^2.1.9",
-        "npm:@mercuryworkshop/scramjet@^1.1.0",
         "npm:@netlify/blobs@^10.7.10",
         "npm:@netlify/database@^1.1.0",
         "npm:@netlify/identity@^1.2.0",

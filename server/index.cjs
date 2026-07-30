@@ -8143,7 +8143,8 @@ function createApp() {
 
  // NOTE: /backend/browser/fetch used to live here — web-only egress for the
  // browser panel's rewriting proxy. Both are gone: the proxy depended on
- // @mercuryworkshop/scramjet, which ships no usable licence grant, so the panel
+ // @mercuryworkshop/scramjet, whose redistribution terms we could not
+ // establish (see vite.config.ts for the three conflicting signals), so the panel
  // is desktop-only now and the desktop shell's <webview> dials out itself. The
  // route had no other caller, and an authenticated relay that can fetch an
  // arbitrary URL from inside this machine is not worth keeping without one.

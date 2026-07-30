@@ -17,10 +17,11 @@ import { hasWebviewTag } from '@/lib/desktopShell';
  * surface. A browser tab has only `<iframe>`, which the framing headers above
  * do block, so the tab build previously carried a rewriting proxy
  * (@mercuryworkshop/scramjet in a service worker, egressing through
- * server/browser-proxy.cjs). That proxy was removed: scramjet ships no usable
- * licence grant — the upstream repo has no LICENSE, npm metadata claims MIT and
- * the tarball contains AGPL-3.0 text — so it cannot be redistributed in our
- * build output. A plain `<iframe>` was not kept as a consolation engine: the
+ * server/browser-proxy.cjs). That proxy was removed because we could not
+ * establish redistribution rights for scramjet — the upstream repo has no
+ * LICENSE, npm metadata claims MIT and the tarball contains AGPL-3.0 text, three
+ * different answers and no grant we could rely on. A plain `<iframe>` was not
+ * kept as a consolation engine: the
  * sites people reach for here are exactly the ones that refuse framing, so it
  * would be a surface that looks alive and is blank in practice.
  *
