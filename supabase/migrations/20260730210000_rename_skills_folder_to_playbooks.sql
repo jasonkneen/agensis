@@ -1,0 +1,12 @@
+-- Rename the harvest/suggestions "Skills" documents folder to "Playbooks".
+--
+-- The suggestions/thread-harvest feature (server/thread-harvest.cjs) files
+-- accepted "skill" findings as documents in a folder literally named
+-- "Skills". That name implied these were real agent skills (a SKILL.md in
+-- the daemon-owned skill store), when they are actually just written pages —
+-- there is no app-side skill store to accept into. The code-side rename
+-- (folder now "Playbooks") only affects future writes; this backfills the
+-- existing rows so there isn't a stray "Skills" folder left behind.
+--
+-- Safe to re-run: a no-op once no row has folder = 'Skills'.
+UPDATE documents SET folder = 'Playbooks' WHERE folder = 'Skills';

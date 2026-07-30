@@ -208,10 +208,12 @@ export interface AcceptTarget {
  * product is a SKILL.md a daemon owns on its own disk and mirrors up read-only,
  * so there is no app-side skill store to accept into; a written page is the
  * honest landing place and the person clicking deserves to know that first.
+ * The folder is "Playbooks", not "Skills" — the old name implied this WAS the
+ * real skill registry, which is exactly the mistake the label is trying to avoid.
  */
 export function acceptTarget(kind: SuggestionKind): AcceptTarget {
   if (kind === 'memory') return { table: 'memory_facts', label: 'Team memory' };
-  if (kind === 'skill') return { table: 'documents', label: 'Documents · Skills' };
+  if (kind === 'skill') return { table: 'documents', label: 'Documents · Playbooks' };
   return { table: 'documents', label: 'Documents · Suggestions' };
 }
 

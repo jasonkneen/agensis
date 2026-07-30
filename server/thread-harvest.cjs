@@ -339,23 +339,18 @@ function findingDecision(finding) {
  * - "memory" -> memory_facts, under its own category so a suggested fact is
  *   distinguishable from one a human typed.
  * - "doc"    -> documents.
- * - "skill"  -> workspace_skills, the app-side skill store.
- *
- * THE SKILL ROW USED TO POINT AT `documents`, in a "Skills" folder, and the
- * reason it no longer does is the whole point of that store. The old comment
- * here read: "There is no app-side skill store to accept into, and attaching a
- * bare name to `workspace_agents.skills` would record a claim without the
- * procedure that makes it true." Both halves are now false — `workspace_skills`
- * holds the PROCEDURE, keyed to the workspace rather than to one agent, and any
- * agent can read it with `read_skill`. Accepting a proposed skill therefore
- * produces a skill.
- *
- * MIGRATION, stated because it is a one-way door either way: skills accepted
- * BEFORE this change stay as Documents. They are not moved. A document in a
- * folder is a thing a person may have since edited, its provenance line is baked
- * into its body, and a silent bulk move between tables would break every link
- * anyone had to one. This change is FORWARD-ONLY; an old accepted page can be
- * re-authored as a skill by hand, visibly, if somebody wants it to be one.
+ * - "skill"  -> documents too, in a Playbooks folder (was "Skills" — renamed
+ *   because that name claimed to be the real thing). THIS IS DELIBERATE: a
+ *   skill in this product is a SKILL.md a daemon owns on its own disk and
+ *   mirrors up into `agent_skill_documents`, which is read-only in-app and
+ *   keyed per agent. There is no app-side skill store to accept into, and
+ *   attaching a bare name to `workspace_agents.skills` would record a claim
+ *   without the procedure that makes it true. A written page is the honest
+ *   landing place, and the UI says so before the click rather than after —
+ *   but "Skills" as a folder name still implied it *was* the real registry,
+ *   so it's named "Playbooks" instead. Promoting a Playbook into a real
+ *   skill is a separate, human-triggered step once an app-side skill store
+ *   exists (see feat/skill-store).
  */
 function harvestAcceptTarget(finding) {
   const kind = String(finding?.kind || '').trim().toLowerCase();
@@ -363,7 +358,7 @@ function harvestAcceptTarget(finding) {
     return { table: 'memory_facts', label: 'Team memory', category: 'suggested', folder: '' };
   }
   if (kind === 'skill') {
-    return { table: 'workspace_skills', label: 'Skills', category: '', folder: '' };
+    return { table: 'documents', label: 'Documents · Playbooks', category: '', folder: 'Playbooks' };
   }
   if (kind === 'doc') {
     return { table: 'documents', label: 'Documents · Suggestions', category: '', folder: 'Suggestions' };
