@@ -31,7 +31,7 @@ const {
 // in the `encodeJsonb` bind (porsager wants the object, @netlify/database the
 // string).
 const { emitReactionFlowEventsForUpdate } = require('../shared/reaction-events.cjs');
-const { SESSION_READ_STATE_DDL, SHARE_READ_RECEIPTS_DDL } = require('../shared/read-receipts.cjs');
+const { ensureSessionReadStateShape, SHARE_READ_RECEIPTS_DDL } = require('../shared/read-receipts.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const {
  agentNextSteps,
@@ -1782,7 +1782,10 @@ async function ensureRuntimeSchema() {
  //
  // Comments stay OUT of the SQL string, same reason as the block below: several
  // tests mock the DB and classify a bootstrap statement by its first keyword.
- await db.unsafe(SESSION_READ_STATE_DDL);
+ // Table + the in-place upgrade to agent-capable read state, one statement per
+ // db.unsafe() (see ensureSessionReadStateShape — a multi-statement string throws
+ // on the extended protocol and would kill boot before the server listens).
+ await ensureSessionReadStateShape(db);
  await db.unsafe(SHARE_READ_RECEIPTS_DDL);
  // Owner broadcasts (shared/tenant-campaigns.cjs). The only rows in this
  // database addressed to ACCOUNTS rather than scoped to a workspace, which is why

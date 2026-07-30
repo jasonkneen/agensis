@@ -149,32 +149,59 @@ const SESSION_READ_STATE_SQL = `select r.session_id,
 // (session, reader)" guarantee. There is no plain PRIMARY KEY any more because a
 // PK column cannot be null and each reader column is null for the other kind.
 //
-// The ALTERs after the CREATE upgrade a table that still has the original
-// (session_id, user_id) PK in place: drop the not-null and the PK, add agent_id,
-// add the CHECK once, and build the partial indexes. All idempotent, so a fresh
-// boot and a live upgrade converge on the same shape.
+// This constant is ONE statement on purpose. ensureRuntimeSchema runs each DDL
+// string through a single db.unsafe(), which postgres.js sends on the extended
+// (prepared) protocol — and that protocol rejects a string carrying more than one
+// command ("cannot insert multiple commands into a prepared statement"), which
+// would throw at boot before the server ever listens. The in-place UPGRADE for a
+// table still on the old (session_id, user_id) shape is therefore a LIST of
+// single statements, applied one db.unsafe() at a time by ensureSessionReadStateShape.
 const SESSION_READ_STATE_DDL = `
     CREATE TABLE IF NOT EXISTS session_read_state (
       session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
       user_id uuid REFERENCES app_users(id) ON DELETE CASCADE,
       agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
       read_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz DEFAULT now()
-    );
-    ALTER TABLE session_read_state ADD COLUMN IF NOT EXISTS agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE;
-    ALTER TABLE session_read_state ALTER COLUMN user_id DROP NOT NULL;
-    ALTER TABLE session_read_state DROP CONSTRAINT IF EXISTS session_read_state_pkey;
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'session_read_state_one_reader') THEN
-        ALTER TABLE session_read_state ADD CONSTRAINT session_read_state_one_reader
-          CHECK ((user_id IS NOT NULL) <> (agent_id IS NOT NULL));
-      END IF;
-    END $$;
-    CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_user_uidx
-      ON session_read_state (session_id, user_id) WHERE user_id IS NOT NULL;
-    CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_agent_uidx
-      ON session_read_state (session_id, agent_id) WHERE agent_id IS NOT NULL;
+      updated_at timestamptz DEFAULT now(),
+      CONSTRAINT session_read_state_one_reader CHECK ((user_id IS NOT NULL) <> (agent_id IS NOT NULL))
+    )
 `;
+
+// Idempotent upgrade steps for a database whose session_read_state predates
+// agent readers. Each entry is a SINGLE statement (see the note above). Order is
+// load-bearing: the PK (session_id, user_id) must be DROPPED before user_id can
+// have its NOT NULL removed — Postgres refuses "DROP NOT NULL" on a column that
+// is still part of a primary key ("column is in a primary key"), which a mocked
+// DB cannot reproduce and a real one does. So drop the PK, then widen user_id,
+// then add the CHECK (guarded — old rows all satisfy it) and the partial unique
+// indexes that stand in for the dropped PK.
+const SESSION_READ_STATE_UPGRADE_STEPS = [
+ `ALTER TABLE session_read_state ADD COLUMN IF NOT EXISTS agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE`,
+ `ALTER TABLE session_read_state DROP CONSTRAINT IF EXISTS session_read_state_pkey`,
+ `ALTER TABLE session_read_state ALTER COLUMN user_id DROP NOT NULL`,
+ `ALTER TABLE session_read_state ADD CONSTRAINT session_read_state_one_reader CHECK ((user_id IS NOT NULL) <> (agent_id IS NOT NULL))`,
+ `CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_user_uidx ON session_read_state (session_id, user_id) WHERE user_id IS NOT NULL`,
+ `CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_agent_uidx ON session_read_state (session_id, agent_id) WHERE agent_id IS NOT NULL`,
+];
+
+// Create the table, then apply each upgrade step. Steps are individually
+// best-effort: every one is written to be a no-op on an already-current table
+// (IF NOT EXISTS / IF EXISTS / an already-nullable column), and the single
+// exception — ADD CONSTRAINT, which has no IF NOT EXISTS form — is swallowed only
+// for the "already exists" (duplicate_object, 42710) case so a second boot does
+// not crash on it. Any other error still propagates, because a DDL failure we did
+// not anticipate must not be hidden.
+async function ensureSessionReadStateShape(db) {
+ await db.unsafe(SESSION_READ_STATE_DDL);
+ for (const step of SESSION_READ_STATE_UPGRADE_STEPS) {
+  try {
+   await db.unsafe(step);
+  } catch (error) {
+   if (error && (error.code === '42710' || error.code === '42P07')) continue; // duplicate object/table
+   throw error;
+  }
+ }
+}
 
 // Reciprocal by design (see SESSION_READ_STATE_SQL). Defaults to true: receipts
 // are the product's normal behaviour and an opt-out that starts switched off is
@@ -206,6 +233,8 @@ module.exports = {
  ADVANCE_READ_MARKER_SQL,
  ADVANCE_AGENT_READ_MARKER_SQL,
  SESSION_READ_STATE_DDL,
+ SESSION_READ_STATE_UPGRADE_STEPS,
+ ensureSessionReadStateShape,
  SESSION_READ_STATE_SQL,
  SHARE_READ_RECEIPTS_DDL,
  toReadMarker,
