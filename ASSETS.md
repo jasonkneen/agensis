@@ -270,20 +270,21 @@ obligation here. There are no `@font-face` rules pointing at a remote host.
 
 ## Vendored runtime assets
 
-None. Every file emitted into the build output is either authored in this
-repository or produced by the bundler from source that is.
+| Path | Origin | Notes |
+| --- | --- | --- |
+| `public/scramjet-runtime/relay-transport.mjs` | Authored in this repository | The custom `BareTransport` implementation. MIT, same as the rest of the repo. |
+| `public/scramjet-sw.js` | Authored in this repository | Service-worker entry point for the browser panel. |
 
-This section previously listed the web browser panel's proxy runtime. Three of
-those files (`scramjet.all.js`, `scramjet.sync.js`, `scramjet.wasm.wasm`) were
-never committed — `vite.config.ts` copied them out of
-`node_modules/@mercuryworkshop/scramjet/dist/` at build time, so they shipped in
-built artifacts without appearing in the git tree, which is exactly how an
-unlicensed dependency escapes a source-tree audit.
+The browser panel's rewriter itself (`scramjet.all.js`, `scramjet.sync.js`,
+`scramjet.wasm.wasm`) is **not committed**. `vite.config.ts:60-62` copies it out
+of `node_modules/@mercuryworkshop/scramjet/dist/` into the build output, so it
+ships in built artifacts but not in the git tree.
 
-That package gave no usable redistribution grant (no LICENSE upstream, MIT in
-npm metadata, AGPL-3.0 in the tarball), so the panel is now desktop-only and the
-whole runtime is gone: the dependency, the copy step, the service worker and the
-custom `BareTransport`. See [NOTICE](./NOTICE) for the full record.
+**That package's licensing is unresolved and is a blocker.** See the
+[Unresolved licensing](#unresolved-scramjet) note in [NOTICE](./NOTICE): its
+`package.json` declares MIT while the `LICENSE` file it ships is the GNU Affero
+General Public License v3. This must be settled before any artifact built from
+this repository is distributed.
 
 ---
 
@@ -293,9 +294,7 @@ custom `BareTransport`. See [NOTICE](./NOTICE) for the full record.
 | --- | --- | --- |
 | Workspace background images (`images/*.jpg` + `*.webp`) | 14 files / 7 images | **Yes** — shipped in every build. |
 | Agent avatars (`public/agent-avatars/*.png`) | 40 | **Yes** — shipped in every build. |
-
-Resolved since the last revision: the `@mercuryworkshop/scramjet` licence
-conflict, by removing the package and everything that shipped it.
+| `@mercuryworkshop/scramjet` licence conflict | 1 package | **Yes** — see [NOTICE](./NOTICE). |
 
 Everything else in this inventory is either authored in this repository or
 covered by a licence whose terms are discharged by [NOTICE](./NOTICE).

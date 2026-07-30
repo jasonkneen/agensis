@@ -114,6 +114,7 @@ const {
 const TASK_MENTION_CLAIM_MS = 5_000;
 const { mountFeedbackRoutes } = require('./feedback-routes.cjs');
 const { mountAiChatRoutes } = require('./ai-chat-routes.cjs');
+const { installBrowserProxy } = require('./browser-proxy.cjs');
 const { mountVaultRoutes } = require('./vault-routes.cjs');
 const { mountAuditRoutes } = require('./audit-routes.cjs');
 const { mountTenantsRoutes } = require('./tenants-routes.cjs');
@@ -2643,6 +2644,10 @@ const mcpRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 // our key attached. Keyed per-agent, and tighter than mcpRateLimiter on purpose —
 // the general MCP limiter still applies on top.
 const providerCallRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+// One page view is many requests — a single site load in the spike was 230-460
+// subresources — so this is sized per-page, not per-click. It exists to stop the
+// route being used as a general-purpose relay, not to ration browsing.
+const browserProxyRateLimiter = createRateLimiter({ windowMs: 60_000, max: 900 });
 // The voice preview spends real money per press, so it is capped harder than
 // anything else here. Twenty presses a minute is far more than auditioning
 // voices needs and far less than a stuck retry loop would cost.
@@ -8405,15 +8410,11 @@ function createApp() {
 
  mountTtsRoutes(app, { ...coreDeps(), cartesiaApiKey, cartesiaSpeak, cartesiaVoices, normalizeVoicePreference, ttsPreviewRateLimiter });
 
- // NOTE: /backend/browser/fetch used to live here — web-only egress for the
- // browser panel's rewriting proxy. Both are gone: the proxy depended on
- // @mercuryworkshop/scramjet, whose redistribution terms we could not
- // establish (see vite.config.ts for the three conflicting signals), so the panel
- // is desktop-only now and the desktop shell's <webview> dials out itself. The
- // route had no other caller, and an authenticated relay that can fetch an
- // arbitrary URL from inside this machine is not worth keeping without one.
- // `assertSafeBrowsingUrl`/`guardedFetchAgent` stay in server/lib/net-guard.cjs
- // (still covered by tests/browser-proxy-ssrf.test.cjs) for whatever needs them next.
+ // Web-only egress for the browser panel; the desktop shell uses <webview> and
+ // never calls this. Auth + rate limit are both mandatory — see the module header.
+ installBrowserProxy(app, {
+  requireAuth, rateLimiter: browserProxyRateLimiter, rateLimitBlocked, clientIpFromReq,
+ });
 
  mountAiChatRoutes(app, {
   ...coreDeps(),
