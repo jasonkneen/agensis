@@ -43,7 +43,7 @@ npm run ci
 ```
 
 That is the single gate: typecheck, then the backend suite, then the frontend
-unit suite, then the visual-editor suite, then the smoke gate, then lint — in
+unit suite, then the smoke gate, then lint — in
 that order, stopping at the first failure.
 
 Run it **locally**. Do not infer "tests passed" from CI; see
@@ -80,7 +80,6 @@ Two further runners exist and are wired into `npm run ci`:
 | Runner | Command | Scope |
 | --- | --- | --- |
 | Smoke | `npm run smoke` | `vitest.smoke.config.ts` — renders the app. Not optional; it catches the class of bug where every other check is green and the UI is broken. |
-| Visual editor | `npm run test:visual-editor` | The `visual-editor/` sub-package's own suite. |
 
 ## Working on the code
 

@@ -109,7 +109,7 @@ const CATEGORY = {
 // (a declared third-party integration with its own routes).
 const PROHIBITED_IDENTITIES = [
   { word: 'hilo[s]', why: 'source product whose API model was mirrored' },
-  { word: 'openpat[h]', why: 'source product credited in a visual-editor comment' },
+  { word: 'openpat[h]', why: 'source product once credited in a code comment' },
   { word: 'buz[z]', why: 'source product named in opensourceplan.md §2' },
   { word: 'vibecla[w]', why: 'source product named in opensourceplan.md §2' },
   { word: 'almostnod[e]', why: 'source product named in opensourceplan.md §2' },
@@ -735,14 +735,14 @@ test('anti-vacuity: the scan covers this file and every major source tree', () =
   for (const sentinel of [
     'package.json', 'AGENTS.md', 'README.md',
     'server/index.cjs', 'src/App.tsx', 'shared/backend-core.cjs',
-    'tests/backend-auth.test.cjs', 'visual-editor/src/client.js',
+    'tests/backend-auth.test.cjs',
   ]) {
     assert.ok(set.has(sentinel), `${sentinel} was not scanned — a whole tree is missing from the file list`);
   }
   // Every top-level directory that holds text must be represented, so a scan
   // that silently drops a subtree fails here rather than passing green.
   const topLevel = new Set(scan.textFiles.filter((p) => p.includes('/')).map((p) => p.split('/')[0]));
-  for (const dir of ['src', 'server', 'shared', 'tests', 'cli', 'scripts', 'database', 'public', 'visual-editor']) {
+  for (const dir of ['src', 'server', 'shared', 'tests', 'cli', 'scripts', 'database', 'public']) {
     assert.ok(topLevel.has(dir), `no file under ${dir}/ was scanned`);
   }
 });

@@ -783,7 +783,7 @@ and the egress allowlist. Full reference: `cli/README.md`.
 
 - `npm test` — Node's built-in runner over `tests/*.test.cjs` (backend/integration,
   mock DBs). 334 tests. Note the glob is **top-level only** — a `.test.cjs` in a
-  subdirectory is never run (`visual-editor/test/` is invisible to both runners).
+  subdirectory is never run, and is invisible to both runners.
 - `npm run test:unit` — Vitest over `tests/unit/**/*.test.ts` (frontend/pure). 205.
 - `npm run smoke` — Vitest over `tests/smoke/**/*.smoke.ts` (jsdom, its own
   config). Mounts each main surface with data in it and fails if an **empty

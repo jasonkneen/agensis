@@ -41,7 +41,6 @@ export default tseslint.config(
       'cli/**/*.mjs',
       'netlify/functions/**/*.mjs',
       'electron/**/*.cjs',
-      'visual-editor/src/**/*.cjs',
       // The test harness's own machinery. tests/helpers/test-env.cjs is what
       // keeps a developer's real credentials out of every test process, so it is
       // the last file in tests/ that should run with zero rules. (The 1200-odd
