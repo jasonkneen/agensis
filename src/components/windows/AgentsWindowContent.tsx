@@ -2258,6 +2258,8 @@ function AgentDetailPane({
             )}
           </AgentDetailSection>
 
+          <AmbientRepliesSection agent={agent} onUpdateAgent={onUpdateAgent} />
+
           <VoiceSection agent={agent} roster={roster} mode="view" />
 
           {agent.run_mode === 'daemon' && (
@@ -3339,6 +3341,50 @@ function AccessSection({
         </p>
       )}
       {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
+    </AgentDetailSection>
+  );
+}
+
+/**
+ * The per-agent half of the ambient-addressing off switch. The per-CHANNEL half
+ * is conversation_mode in the Edit Channel dialog; this one travels with the
+ * agent instead of the room.
+ *
+ * Reads fail-open (`!== false`), matching shared/ambientAddressing.cjs and both
+ * backends' projections: an agent row written before the column existed must
+ * render as ON, not as an opt-out nobody chose.
+ *
+ * The copy states the limit explicitly because it is the thing people get wrong
+ * about a switch like this: turning it off does NOT make the agent unreachable.
+ * @mentions, @channel, DMs and thread replies all still dispatch.
+ */
+function AmbientRepliesSection({ agent, onUpdateAgent }: {
+  agent: WorkspaceAgent;
+  onUpdateAgent: (agentId: string, updates: Partial<WorkspaceAgent>) => void | Promise<unknown>;
+}) {
+  const on = agent.ambient_replies !== false;
+  return (
+    <AgentDetailSection title="Chat">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">Join conversations unprompted</div>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {on
+              ? `${agent.name} can pick up a channel message that mentions nobody, when it is clearly relevant or continues a conversation you were already having.`
+              : `${agent.name} only replies when it is addressed. @mentions, @channel, direct messages and replies in its own thread still reach it.`}
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant={on ? 'secondary' : 'outline'}
+          size="sm"
+          className="shrink-0"
+          onClick={() => { void onUpdateAgent(agent.id, { ambient_replies: !on }); }}
+          aria-pressed={on}
+        >
+          {on ? 'On' : 'Off'}
+        </Button>
+      </div>
     </AgentDetailSection>
   );
 }

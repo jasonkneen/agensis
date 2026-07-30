@@ -584,6 +584,12 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   run_mode text NOT NULL DEFAULT 'builtin',
   memory_dir text DEFAULT '',
   enabled boolean NOT NULL DEFAULT true,
+  -- May this agent be drawn into a channel post that named nobody?
+  -- DEFAULT true because unprompted replies already ship for every 'auto'
+  -- channel; defaulting to false would silently silence every existing agent.
+  -- Explicit addressing (@mention, @channel, DM, thread reply) ignores this
+  -- column entirely — see shared/ambientAddressing.cjs.
+  ambient_replies boolean NOT NULL DEFAULT true,
   permission_mode text NOT NULL DEFAULT 'default',
   version integer NOT NULL DEFAULT 1,
   created_by uuid,
