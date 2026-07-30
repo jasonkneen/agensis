@@ -143,6 +143,20 @@ const ALLOWED_TABLES = new Set([
  //     the assertSafeOutboundUrl SSRF guard on the dedicated routes cannot be
  //     stepped around by POSTing to /backend/db/insert.
  'gateway_configs',
+ // Read receipts. READ through the generic /db path for the same reason
+ // agent_schedules is: a client cannot SUBSCRIBE to a table it cannot select
+ // (authorizeRealtimeBinding -> ensureTable -> enforceDbOperationAccess), and the
+ // whole point of a receipt is that it appears while you are looking at the
+ // conversation. Every WRITE is 'manage' below and goes through POST
+ // /backend/sessions/:id/read, which is the ONLY place `user_id` is stamped from
+ // req.userId and the marker's timestamp is resolved from the message row — a
+ // generic insert would let anyone claim anyone read anything, at any time.
+ //
+ // The table has NO workspace_id column, ON PURPOSE (see shared/read-receipts.cjs):
+ // that makes an unscoped subscription inexpressible, so a receipt can only ever
+ // reach a socket that named its session and passed enforceSessionReadAccess for
+ // it. DM read state therefore never fans out workspace-wide.
+ 'session_read_state',
 ]);
 
 // F4: superset lifted VERBATIM from server/index.cjs (the reference). Both runtimes
@@ -241,6 +255,12 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  // rows. gateway_configs rows carry an encrypted provider API key, so that would
  // be a cross-tenant leak, not a cosmetic one.
  'gateway_configs',
+ // Same rule, and the entry that also switches ON the session gate: the `select`
+ // branch of enforceDbOperationAccess (which is what runs enforceSessionReadAccess
+ // for a session_id-filtered read) sits BELOW the early return this Set guards.
+ // Without this line a read of session_read_state is neither workspace-scoped nor
+ // DM-scoped — every signed-in user could read who-read-what in every tenant.
+ 'session_read_state',
 ]);
 
 const WORKSPACE_ROLE_CAPABILITIES = {
@@ -364,11 +384,37 @@ const DB_TABLE_ACCESS = {
  // workspace server-side and runs the server's own redaction pass. A generic
  // insert would let a client choose the workspace and skip both.
  feedback_reports: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // SELECT is 'read': every member who can read a conversation may see who else
+ // has read it, and the session gate below narrows that to members for a DM.
+ // Every WRITE is 'manage' — deliberately UNREACHABLE in the product — because
+ // the dedicated route is the only place two things happen: `user_id` comes from
+ // req.userId rather than the body, and `read_at` is resolved from the named
+ // message's own created_at rather than from a client clock. A generic insert
+ // would let a caller claim any user read any conversation at any moment, which
+ // is a fabricated social signal about another person.
+ session_read_state: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
 };
 
 // Columns that must never be set via generic /backend/db/* write by non-dedicated
 // routes (editors could otherwise approve MCP agents, rewrite storage paths, etc.).
 const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
+ // `messages.reactions` is a jsonb MAP the browser used to compute and PUT whole.
+ // That is a read-modify-write across a network round trip: two people reacting
+ // inside the realtime propagation window each built a full map from a stale base
+ // and the second write erased the first. It also accepted an ARBITRARY map, so
+ // any client could write any user's id into it — shared/reaction-events.cjs
+ // documents that as the reason `userId` and `actorUserId` are separate fields.
+ //
+ // POST /backend/messages/:id/reactions now owns the mutation: one atomic SQL
+ // statement (no stale base) with the reactor bound from req.userId (nothing to
+ // forge). Stripping the column here is what makes that the ONLY door — without
+ // it the racy path stays open beside the fixed one and the forgeable
+ // attribution goes with it. Stripped rather than refused, like every entry
+ // here: an ordinary message edit that happens to echo `reactions` back still
+ // saves, it just cannot set it.
+ messages: new Set([
+  'reactions',
+ ]),
  workspace_agents: new Set([
   'mcp_approved',
   'connect_token_hash',
@@ -505,6 +551,11 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
   'id', 'workspace_id', 'name', 'title', 'summary', 'body', 'revision',
   'source', 'origin', 'created_by', 'created_at', 'updated_at',
  ],
+ // Strictly LESS than the dedicated route returns, which is the rule for every
+ // entry here. `updated_at` is dropped: it records when a marker last MOVED,
+ // which is a finer clock than "read up to this point" and is not a disclosure
+ // this feature makes. It stays an operational column, readable only in psql.
+ session_read_state: ['session_id', 'user_id', 'read_at'],
 };
 
 /**
