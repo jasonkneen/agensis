@@ -13,7 +13,7 @@ import {
 // postgres.js encodes a second time. So the unwrap is not defensive politeness —
 // it is the only reason the detail pane has anything readable to show.
 
-const STEP_LINE = 'Bash · cd /Users/alex/Documents/GitHub/agensis-agent/.worktrees/self-update && npm test';
+const STEP_LINE = 'Bash · cd /Users/alice/Documents/GitHub/agensis-agent/.worktrees/self-update && npm test';
 
 function row(overrides: Record<string, unknown> = {}) {
   return {

@@ -272,6 +272,19 @@ const RULES = [
     id: 'prohibited-identity',
     category: CATEGORY.IDENTITY,
     pattern: new RegExp('\\b(?:' + IDENTITY_ALTERNATION + ')\\b', 'gi'),
+    // One narrow allowance, and it is required by opensourceplan.md §2 itself:
+    // the rename must "retain backward-compatible reads for existing persisted
+    // settings". A theme mode already sits in real users' localStorage under
+    // its old name, so the migration map has to spell that old name literally
+    // to recognise it. Assembling the string at runtime to dodge this scan is
+    // the exact "make the grep come back clean" move this gate exists to
+    // prevent, so it is allowed openly instead.
+    //
+    // Deliberately narrow: the whole line must BE a theme-mode migration pair,
+    // `'<old>-light': '<new>-light',` and nothing else. A prose mention, an
+    // import, a comment or a string used for anything but this mapping is still
+    // a finding. Widening this is how the gate would quietly stop working.
+    allow: [/^\s*'[a-z0-9-]+-(?:light|dark)':\s*'[a-z0-9-]+-(?:light|dark)',?\s*$/],
   },
   {
     id: 'closed-source-claim',
@@ -350,9 +363,25 @@ function listRepoFiles() {
   return out.split('\0').filter(Boolean).filter((p) => !EXCLUDED_PATHS.has(p));
 }
 
+// Extensions that are text BY DEFINITION, whatever bytes they happen to hold.
+// Source legitimately embeds a NUL: `shared/reaction-events.cjs` uses one as a
+// hash field delimiter (so a reaction id and a user id cannot be concatenated
+// into the same digest), and `tests/unit/messageAttachments.test.ts` plants NUL
+// and ESC in a fixture precisely to prove `safeAttachmentName` strips control
+// characters. Both were reported as undocumented binary assets before this
+// check existed, which is a false positive that would push someone to silence
+// the whole rule.
+const TEXT_EXTENSIONS = new Set([
+  '.js', '.cjs', '.mjs', '.jsx', '.ts', '.tsx', '.json', '.md', '.markdown',
+  '.css', '.scss', '.html', '.htm', '.svg', '.sql', '.yml', '.yaml', '.toml',
+  '.sh', '.bash', '.zsh', '.txt', '.env', '.example', '.lock', '.cf', '.plist',
+]);
+
 function isBinaryPath(relPath, buffer) {
-  if (BINARY_EXTENSIONS.has(path.extname(relPath).toLowerCase())) return true;
-  // Backstop for extensionless binaries: a NUL byte in the first 8 KiB.
+  const ext = path.extname(relPath).toLowerCase();
+  if (BINARY_EXTENSIONS.has(ext)) return true;
+  if (TEXT_EXTENSIONS.has(ext)) return false;
+  // Backstop for extensionless binaries only: a NUL byte in the first 8 KiB.
   return buffer.subarray(0, 8192).includes(0);
 }
 
@@ -375,6 +404,10 @@ function scanText(relPath, text) {
       while ((m = rule.pattern.exec(line)) !== null) {
         if (m[0] === '') { rule.pattern.lastIndex += 1; continue; }
         if (rule.reject && !rule.reject(m)) continue;
+        // An `allow` pattern suppresses a match on the same line. The rules
+        // header has always documented this; it was never actually wired up,
+        // so every `allow` was dead config until now.
+        if (rule.allow && rule.allow.some((re) => re.test(line))) continue;
         findings.push({
           file: relPath,
           line: i + 1,

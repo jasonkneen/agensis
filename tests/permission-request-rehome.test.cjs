@@ -200,7 +200,7 @@ async function register(ws, { permissionRequestIds } = {}) {
     handle: 'coder',
     name: 'Coder',
     host: 'example-host.local',
-    cwd: '/Users/alex/Documents/GitHub/agensis',
+    cwd: '/Users/alice/Documents/GitHub/agensis',
     ...(permissionRequestIds ? { permissionRequestIds } : {}),
   });
   await settle();

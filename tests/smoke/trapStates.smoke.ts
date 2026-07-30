@@ -241,13 +241,6 @@ const NOT_A_FILTER: Record<string, string> = {
   // both. Pinned by the "stored in a tall window, restored in a short one" and
   // "neither pane below its minimum" cases in tests/unit/agentsView.test.ts.
   'agents.split': 'grid/map divider position, re-clamped against the live container every render — hides no data',
-  // NOTE: 'memory.files-split' was listed here and was removed on 2026-07-29.
-  // It belonged to src/lib/memorySplit.ts — a second, parallel implementation of
-  // the Memory divider that never reached a component. The shipped one is
-  // 'memory.file-split' below (singular), read in AgentMemoryBrowser.tsx through
-  // src/lib/memoryBrowserView.ts. The stale-entry assertion at the bottom is
-  // exactly what caught it, so leave that assertion alone: it is the only thing
-  // standing between this list and a comment that describes nothing.
   'tasks.view': 'chooses list/kanban/gantt — every view shows the same tasks',
   'sidebar.dm-filter': 'scoped to the DM list in the sidebar, which is not one of the seeded surfaces',
   'memory.category-filter': 'MemorySection facts pane; the file browser is the seeded Memory surface',
