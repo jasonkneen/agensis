@@ -1,6 +1,0 @@
-HUMAN: Plan ready — 4 edits across 3 files, defaults preserved by construction.
-PLAN P1<-F3 op=replace at=src/showcase/neoThemes.ts:322 why=lift-untuned-dark-shadow-to-hand-tuned-level from="mix(ink,22,`${paper} 78%`)" to="mix(ink,34,`${paper} 66%`)" verify=34%-derived(#655861)==hand-tuned-ref(#6b6258) order=1
-PLAN P2<-F1 op=insert at=src/hooks/useTheme.ts:after-syncNormalTheme why=re-assert-preset-so-scheme-toggle-cant-strip-it add="if(family!=='neo'&&mode!=='normal-light'&&mode!=='normal-dark')applyThemePreset(getStoredPreset())" ref=import{applyThemePreset,getStoredPreset} order=2
-PLAN P3<-F2 op=replace at=src/index.css:tw-light+tw-dark why=derive-accent-tokens-from-var(--primary) tokens="--accent,--accent-hover,--accent-subtle,--accent-border,--ring,--tw-control-ring,--tw-accent-outline,--tw-accent-fill,--tw-accent-hover" keep-fixed="--tw-control-*,--tw-gold-*,--warning/success/error" verify=default-gold-derived≈original(#59472a~#5d4421,#f3c67d~#f3cf8a) order=3
-PLAN P4<-F4 op=replace at=src/index.css:tw-dark:muted-foreground from="#c8bba7" to="#a89c88" why=restore-3-step-ramp order=4
-DONE stage=O plan=4 tok~=300

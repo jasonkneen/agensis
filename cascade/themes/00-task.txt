@@ -1,9 +1,0 @@
-Review Normal + Brutal(neo) theme palettes; improve TinyWorld(TW) dark; let TW
-be influenced by the other color themes (accent presets); improve Brutal dark.
-
-Families ([data-ui-theme]): classic(normal) | neo(brutal) | tinyworld.
-Registries: src/showcase/{normalThemes,neoThemes,themePresets}.ts.
-TW is CSS-only (src/index.css blocks) — no registry, no per-theme palettes.
-Reconcile: src/hooks/useTheme.ts applyTheme() → syncNeoTheme() → syncNormalTheme().
-Picker: src/components/settings/SettingsDialog.tsx (Normal|Brutal tabs; TW = two
-scheme options under Normal; accent-preset picker shown when !isNormalFamily).
