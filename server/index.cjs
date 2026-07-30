@@ -22,7 +22,9 @@ const {
 const { createAutomations, mountAutomationRoutes } = require('./automations.cjs');
 const { createAgentTemplates, mountAgentTemplateRoutes } = require('./agent-templates-routes.cjs');
 const { createWorkspaceSkills, mountWorkspaceSkillRoutes } = require('./workspace-skills-routes.cjs');
-const { normalizeAgentTemplate, agentToTemplateDraft } = require('../shared/agentTemplates.cjs');
+const {
+ normalizeAgentTemplate, agentToTemplateDraft, readTemplateExport, templateFingerprint,
+} = require('../shared/agentTemplates.cjs');
 // Reactions are written through the generic /backend/db/update route as a whole
 // jsonb map, so their flow events come from diffing that map — see the module
 // header. Shared with netlify/functions/backend.mjs; the two lanes differ only
