@@ -432,7 +432,7 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
           {days.map(group => (
             <section key={group.label} className="flex flex-col">
               <Marker variant="separator" className="px-1.5 py-1">
-                <MarkerContent className="text-[10px] uppercase tracking-wide text-muted-foreground">{group.label}</MarkerContent>
+                <MarkerContent className="text-[11px] uppercase tracking-wide text-muted-foreground">{group.label}</MarkerContent>
               </Marker>
               <div className="flex flex-col">
                 {group.items.map(event => {
@@ -458,18 +458,18 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
                       onClick={() => setSelectedId(selected ? null : event.id)}
                       title={`${full}\n${formatFullDate(event.created_at)}`}
                       className={cn(
-                        'group flex w-full items-center gap-2 rounded-md border-l-2 border-transparent px-1.5 py-1 text-left text-xs transition-colors',
+                        'group flex w-full items-center gap-2 rounded-md border-l-2 border-transparent px-1.5 py-1.5 text-left text-sm transition-colors',
                         selected ? 'border-l-primary bg-primary/10' : 'hover:bg-muted/50',
                       )}
                     >
-                      <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{formatClock(event.created_at)}</span>
-                      <span className="shrink-0 text-muted-foreground [&_svg]:size-3.5">{iconFor(event.event_type)}</span>
+                      <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">{formatClock(event.created_at)}</span>
+                      <span className="shrink-0 text-muted-foreground [&_svg]:size-4">{iconFor(event.event_type)}</span>
                       <span className="min-w-0 flex-1 truncate">{activityEntryLabel(event)}</span>
                       {/* Shrinkable, not fixed: the label absorbs every pixel of
                           shrink first, so this only gives at the 320px window
                           minimum — where the alternative is the badge hanging
                           outside the pane. */}
-                      <Badge variant="secondary" className="min-w-0 shrink overflow-hidden text-[10px]">{event.event_type.replace(/_/g, ' ')}</Badge>
+                      <Badge variant="secondary" className="min-w-0 shrink overflow-hidden text-[11px]">{event.event_type.replace(/_/g, ' ')}</Badge>
                     </button>
                     </div>
                   );
