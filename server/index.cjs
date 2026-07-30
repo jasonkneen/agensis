@@ -6801,22 +6801,46 @@ function workspaceSessionCacheSet(sessionId, workspaceId) {
  }
 }
 
-async function resolveWorkspaceIdForSession(sessionId) {
+/**
+ * Resolve a session's workspace AND whether only its members may read it.
+ *
+ * Both travel together because `activity_events` is a WORKSPACE-scoped feed:
+ * `appendSessionAccessClause` returns untouched for any table that is not
+ * `chat_sessions`/`messages`, and the realtime private lane at
+ * server/realtime.cjs only splits `chat_sessions` rows. So nothing downstream
+ * of this function can re-derive "that came out of a DM" — if the privacy of
+ * the source session does not ride along with the row at WRITE time, it is
+ * gone, and a members-only conversation ends up in a feed every `read` member
+ * can select.
+ *
+ * One query and one cache entry for both, so the privacy check is free.
+ */
+async function resolveSessionActivityContext(sessionId) {
  if (!sessionId) return null;
  const cached = workspaceSessionCacheGet(sessionId);
  if (cached !== undefined) return cached;
  try {
   const rows = await getDb().unsafe(
-   'select workspace_id from chat_sessions where id = $1 limit 1',
+   'select workspace_id, visibility, folder from chat_sessions where id = $1 limit 1',
    [sessionId],
   );
-  const workspaceId = rows[0]?.workspace_id || null;
-  if (workspaceId) workspaceSessionCacheSet(sessionId, workspaceId);
-  return workspaceId;
+  const row = rows[0];
+  const workspaceId = row?.workspace_id || null;
+  if (!workspaceId) return null;
+  // Fail closed: an unreadable/absent row is treated as private by
+  // isPrivateSessionRow's own folder backstop rather than assumed open.
+  const context = { workspaceId, isPrivate: isPrivateSessionRow(row) };
+  workspaceSessionCacheSet(sessionId, context);
+  return context;
  } catch (error) {
-  console.error('resolveWorkspaceIdForSession failed', error);
+  console.error('resolveSessionActivityContext failed', error);
   return null;
  }
+}
+
+async function resolveWorkspaceIdForSession(sessionId) {
+ const context = await resolveSessionActivityContext(sessionId);
+ return context ? context.workspaceId : null;
 }
 
 // Logs an `activity_events` row for each inserted/finalized chat message so it
@@ -6829,20 +6853,30 @@ async function logMessageActivity(rows) {
   if (isAgentPlaceholder(message)) continue;
   try {
    const sessionId = message.session_id;
-   const workspaceId = await resolveWorkspaceIdForSession(sessionId);
-   if (!workspaceId) continue;
+   const sessionContext = await resolveSessionActivityContext(sessionId);
+   if (!sessionContext) continue;
+   const { workspaceId, isPrivate } = sessionContext;
    const role = message.role || '';
    const senderName = message.sender_name || (role === 'user' ? 'You' : 'Agent');
    const content = typeof message.content === 'string' ? message.content : '';
-   const title = `${senderName}: ${content.slice(0, 80)}`.slice(0, 120);
    const senderId = typeof message.sender_id === 'string' ? message.sender_id : '';
    const userId = role === 'user' && ACTIVITY_UUID_RE.test(senderId) ? senderId : null;
+   // A members-only session contributes the FACT of a message, never its words.
+   // Both carriers have to be cut, not just one: `metadata.content` is the whole
+   // body, and `title` was the first 80 characters of that same body — which is
+   // still the message, just shorter. What survives is enough for the feed to
+   // say something happened and to link to it; a reader who is not a member
+   // follows that link and gets nothing, because the session gate does hold on
+   // the transcript route.
+   const title = isPrivate
+    ? `${senderName}: (private conversation)`.slice(0, 120)
+    : `${senderName}: ${content.slice(0, 80)}`.slice(0, 120);
    const metadata = {
     session_id: sessionId,
     role,
     sender_kind: message.sender_kind || '',
     sender_name: message.sender_name || '',
-    content,
+    ...(isPrivate ? {} : { content }),
    };
    // C3: idempotent insert. ON CONFLICT DO NOTHING against the partial unique
    // index uq_activity_events_message_sent means a retried finalization for the
