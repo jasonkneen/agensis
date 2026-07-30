@@ -40,6 +40,7 @@ const {
   ADVANCE_AGENT_READ_MARKER_SQL,
   SESSION_READ_STATE_SQL,
   SESSION_READ_STATE_DDL,
+  SESSION_READ_STATE_UPGRADE_STEPS,
 } = require('../shared/read-receipts.cjs');
 const {
   ALLOWED_TABLES,
@@ -526,17 +527,22 @@ test('an UNFILTERED select cannot be expressed, because the table has no workspa
   });
 });
 
-test('the upgrade DDL drops the primary key BEFORE dropping user_id NOT NULL', () => {
+test('the upgrade steps drop the primary key BEFORE dropping user_id NOT NULL', () => {
   // Regression guard for a live-only failure the mock DB cannot surface: on a
   // table that still carries the original PRIMARY KEY (session_id, user_id),
   // Postgres refuses `ALTER COLUMN user_id DROP NOT NULL` while the column is
   // still part of a primary key ("column ... is in a primary key"). The fresh
   // CREATE TABLE has no PK, so a mock/fresh boot never hits it — only a real
-  // in-place upgrade does. Order is therefore a property of the statement text.
-  const ddl = SESSION_READ_STATE_DDL;
-  const dropPk = ddl.indexOf('DROP CONSTRAINT IF EXISTS session_read_state_pkey');
-  const dropNotNull = ddl.indexOf('ALTER COLUMN user_id DROP NOT NULL');
-  assert.ok(dropPk >= 0, 'the DDL must drop the legacy primary key');
-  assert.ok(dropNotNull >= 0, 'the DDL must make user_id nullable');
+  // in-place upgrade does. The steps are also applied ONE db.unsafe() at a time
+  // (the extended protocol rejects a multi-statement string), so ordering is a
+  // property of the step LIST, not of one string.
+  const steps = SESSION_READ_STATE_UPGRADE_STEPS;
+  const dropPk = steps.findIndex(s => s.includes('DROP CONSTRAINT IF EXISTS session_read_state_pkey'));
+  const dropNotNull = steps.findIndex(s => s.includes('ALTER COLUMN user_id DROP NOT NULL'));
+  assert.ok(dropPk >= 0, 'a step must drop the legacy primary key');
+  assert.ok(dropNotNull >= 0, 'a step must make user_id nullable');
   assert.ok(dropPk < dropNotNull, 'DROP CONSTRAINT pkey must come before DROP NOT NULL');
+  // And the CREATE itself must be a single statement — no ALTER smuggled in, or
+  // ensureRuntimeSchema's single db.unsafe() would throw on the extended protocol.
+  assert.ok(!/;\s*\S/.test(SESSION_READ_STATE_DDL.trim().replace(/;\s*$/, '')), 'the CREATE DDL is one statement');
 });

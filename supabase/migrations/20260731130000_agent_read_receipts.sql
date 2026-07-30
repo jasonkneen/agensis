@@ -16,10 +16,8 @@
 -- All idempotent: a fresh DB gets the new shape from the CREATE above it, an
 -- existing one is upgraded in place here.
 
--- Order matters: drop the (session_id, user_id) primary key BEFORE dropping
--- user_id's NOT NULL. Postgres refuses DROP NOT NULL while the column is still
--- part of a primary key, so doing it the other way aborts the whole upgrade on
--- any table that still has the original PK.
+-- Order matters: drop the PK before widening user_id — Postgres refuses to
+-- remove NOT NULL from a column that is still part of a primary key.
 ALTER TABLE session_read_state ADD COLUMN IF NOT EXISTS agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE;
 ALTER TABLE session_read_state DROP CONSTRAINT IF EXISTS session_read_state_pkey;
 ALTER TABLE session_read_state ALTER COLUMN user_id DROP NOT NULL;
