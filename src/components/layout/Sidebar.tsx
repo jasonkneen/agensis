@@ -487,6 +487,21 @@ export const Sidebar = React.memo(function Sidebar({
  // different things (see server/thread-inbox.cjs), and it is the message
  // threads a person means when they ask what they still need to read.
  const threadInbox = useThreadInbox(workspace?.id ?? null);
+ // The Threads list fetches once per (workspace, reloadToken) and nothing ever
+ // bumped the token, so it was a load-time snapshot frozen at whenever the page
+ // opened while Activity kept moving. Refetch whenever the newest session
+ // activity advances — that is exactly when a followed thread may have a new
+ // reply — so the two views stop disagreeing.
+ const latestActivitySig = React.useMemo(
+  () => uniqueSessions.reduce((acc, session) => {
+   const stamp = String(session.updated_at || session.created_at || '');
+   return stamp > acc ? stamp : acc;
+  }, ''),
+  [uniqueSessions],
+ );
+ React.useEffect(() => {
+  threadInbox.refetch();
+ }, [latestActivitySig, threadInbox.refetch]);
  const groupedSessions = React.useMemo(() => groupSessionsByFolder(activeChannelSessions), [activeChannelSessions]);
  const groupedDocuments = React.useMemo(() => groupDocumentsByFolder(uniqueRecents), [uniqueRecents]);
  const focusedWindow = floatingWindows
@@ -1081,7 +1096,13 @@ function directAgentParticipantForSession(session?: ChatSession | null) {
   participant?.kind === 'agent' && (participant.agent_id || participant.handle || participant.name)
  );
  if (agentParticipants.length === 0) return null;
- return agentParticipants.find(participant => participant.direct) || (agentParticipants.length === 1 ? agentParticipants[0] : null);
+ // A single agent participant only means "this is that agent's DM" when the
+ // session is actually a DM (folder 'Direct messages') or the participant is
+ // direct-flagged. A CHANNEL with one agent member is still a channel — the old
+ // unconditional sole-agent fallback made it resolve a "direct participant",
+ // which collapsed the channel onto the agent's DM row and shadowed the real DM.
+ return agentParticipants.find(participant => participant.direct)
+  || (session?.folder === 'Direct messages' && agentParticipants.length === 1 ? agentParticipants[0] : null);
 }
 
 function getParticipantAvatar(participant: ReturnType<typeof directAgentParticipantForSession>) {
@@ -1092,13 +1113,14 @@ function getParticipantAvatar(participant: ReturnType<typeof directAgentParticip
 }
 
 function isDirectSession(session: ChatSession) {
- if (directAgentParticipantForSession(session)) return true;
+ // Mirror the server's DM definition (server/index.cjs ~5736): a DM is the
+ // 'Direct messages' folder OR a direct-flagged agent participant. The old code
+ // also treated ANY single-agent session as a DM, which mis-filed one-agent
+ // channels into the DM section — where the per-agent row collapse then hid the
+ // real DM behind the newly-created channel. A channel is not a DM.
  if (session.folder === 'Direct messages') return true;
  const participants = Array.isArray(session.participants) ? session.participants : [];
- const agentParticipants = participants.filter(participant => participant.kind === 'agent');
- if (agentParticipants.length !== 1) return false;
- const personParticipants = participants.filter(participant => participant.kind === 'user');
- return personParticipants.length <= 1;
+ return participants.some(participant => participant?.kind === 'agent' && participant.direct);
 }
 
 function isThreadSession(session: ChatSession) {
