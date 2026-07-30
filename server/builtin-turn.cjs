@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { ADVANCE_AGENT_READ_MARKER_SQL } = require('../shared/read-receipts.cjs');
 
 // The builtin agent turn: the tool-use loop, the Anthropic stream, and the
 // toolset an in-process agent reaches.
@@ -368,11 +369,41 @@ function createBuiltinTurn(deps = {}) {
    : { id: 'amp' };
  }
 
+ // Mirrors advanceAgentReadMarker in server/mcp.cjs. Deliberately a second small
+ // copy rather than a shared import: the two differ only in how they reach the
+ // db and the broadcaster, and the SQL — the part that must not drift — is
+ // already single-sourced in shared/read-receipts.cjs.
+ async function advanceAgentReadMarker(sessionId, agentId) {
+  if (!sessionId || !agentId) return;
+  try {
+   const rows = await getDb().unsafe(ADVANCE_AGENT_READ_MARKER_SQL, [String(sessionId), String(agentId)]);
+   if (rows.length > 0) notifyDbSubscribers('session_read_state', 'INSERT', rows);
+  } catch {
+   // Swallowed on purpose: a receipt that fails to record is invisible, never
+   // wrong, and must not take the turn down with it.
+  }
+ }
+
  async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [], isDirectMessage = false, broadcastToChannel: broadcastOverride = null }) {
   if (!isAgentEnabled(agent)) return { ok: false, pending: false };
   const handle = slugHandle(agent.handle || agent.name);
   const runMode = resolveRunTarget(agent);
   const contextMessages = await buildAgentTurnContext(sessionId, agent, threadParentId);
+
+  // The agent has just READ the conversation, so mark it read. Without this the
+  // eye never fills for a daemon-backed agent: advanceAgentReadMarker existed
+  // only on the MCP path (server/mcp.cjs), and `agensis connect` agents do not
+  // go through MCP — they pick a turn up here. So they read the message, replied
+  // to it, and left no receipt, which reads as the feature being broken.
+  //
+  // Placed immediately after the context load because that IS the read: whatever
+  // was in the transcript is now in front of the model.
+  //
+  // Best-effort, exactly as on the MCP side — a receipt is a courtesy signal and
+  // must never fail the turn someone actually asked for. The marker is monotonic
+  // (`where read_at < excluded.read_at`), so a dropped write self-heals on the
+  // next turn rather than going backwards.
+  await advanceAgentReadMarker(sessionId, agent.id);
   // The agent works in a thread and only broadcasts its answer. A turn seeded at
   // channel level opens (or re-uses) the thread on the human message that started
   // it, so the "Thinking …" placeholder, its tool chips and its intermediate text
