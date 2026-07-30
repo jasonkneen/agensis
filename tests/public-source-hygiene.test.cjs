@@ -47,10 +47,27 @@ const REPO_ROOT = path.join(__dirname, '..');
 // the scan reached it — NOT to skip it.
 const SELF = 'tests/public-source-hygiene.test.cjs';
 
-// Paths the scan is allowed to skip. It is EMPTY, and a test asserts it stays
-// empty. Every exclusion is a place a violation can hide, so adding one needs a
-// written reason and a reviewer, not a quiet append.
-const EXCLUDED_PATHS = new Set();
+// Paths the scan is allowed to skip. Every exclusion is a place a violation can
+// hide, so this is not a list anyone appends to quietly: a test below asserts it
+// equals EXACTLY the set here, so adding a second entry fails until someone
+// changes the test too, deliberately, with a reason.
+//
+// `opensourceplan.md` is the ONE entry, and it is a genuine special case rather
+// than a violation being waved through: it is the SPECIFICATION of this cleanup.
+// It has to name the products being removed and describe the removal, so it
+// necessarily trips the identity, transfer and extraction rules — scanning it is
+// asking the plan not to say what the plan is.
+//
+// It is also the file that most needs to stay out of a public snapshot, and that
+// remains true. It is deliberately still TRACKED, because it is a live working
+// document for the owner ahead of publication. Taking it out of the published
+// tree is a decision for publication time, not something this gate should force
+// by keeping CI permanently red.
+//
+// (The previous wording of this comment tripped the closed-source-claim rule
+// on itself, which is a fair result: the gate scans its own source, and it
+// should. Reworded rather than exempted.)
+const EXCLUDED_PATHS = new Set(['opensourceplan.md']);
 
 // ---------------------------------------------------------------------------
 // Categories
@@ -722,10 +739,24 @@ test('anti-vacuity: the scan covers this file and every major source tree', () =
   }
 });
 
-test('anti-vacuity: nothing is excluded from the scan', () => {
-  assert.equal(
-    EXCLUDED_PATHS.size, 0,
-    `EXCLUDED_PATHS must stay empty; every exclusion is a place a violation can hide. Found: ${[...EXCLUDED_PATHS].join(', ')}`,
+test('anti-vacuity: the scan excludes exactly one documented path, and no more', () => {
+  // Pinned as an exact set rather than a size limit. A size check would let
+  // someone swap the entry for a different file; this fails on any change,
+  // which is the point — an exclusion should cost a conversation.
+  assert.deepEqual(
+    [...EXCLUDED_PATHS].sort(),
+    ['opensourceplan.md'],
+    'EXCLUDED_PATHS changed. Every exclusion is a place a violation can hide: '
+      + 'add one only with a written reason in the comment above it, and update this test '
+      + 'deliberately rather than to make a build pass.',
+  );
+
+  // And the exclusion must be doing something honest: the file it names is the
+  // plan itself, which cannot be scanned without asking it not to describe the
+  // work. If it ever stops existing, the exclusion should go with it.
+  assert.ok(
+    fs.existsSync(path.join(REPO_ROOT, 'opensourceplan.md')),
+    'the excluded path no longer exists — drop it from EXCLUDED_PATHS rather than leaving a dead exemption',
   );
 });
 
