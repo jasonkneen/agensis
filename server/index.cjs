@@ -151,6 +151,7 @@ const {
 const { mountBridgeAdminRoutes } = require('./bridge-admin-routes.cjs');
 const { mountPetsRoutes } = require('./pets-routes.cjs');
 const { mountHealthRoutes } = require('./health-routes.cjs');
+const { mountStaticSite } = require('./static-site.cjs');
 const {
  detectSkillLibraries,
  mergeSlashCommands,
@@ -8434,6 +8435,14 @@ function createApp() {
   assertSafeOutboundUrl, resolveGatewayRoute,
   recordAnthropicUsage, createAnthropicUsageAccumulator,
  });
+
+ // LAST, deliberately — see server/static-site.cjs. The self-hosted container
+ // sets AGENSIS_STATIC_ROOT to the built frontend so one origin serves the app,
+ // the API and the websocket; fly.toml does not set it, so the split deploy
+ // (Netlify frontend + this backend) behaves exactly as before.
+ if (process.env.AGENSIS_STATIC_ROOT) {
+  mountStaticSite(app, { root: process.env.AGENSIS_STATIC_ROOT });
+ }
 
  return app;
 }

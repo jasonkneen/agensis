@@ -1,0 +1,66 @@
+# Self-hosted agensis: the app plus its database.
+#
+#   cp .env.docker.example .env
+#   docker compose up
+#
+# Every value below has a working default, so that is the whole setup. See the
+# "Run with Docker" section of README.md.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: agensis
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agensis}
+      POSTGRES_DB: agensis
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    # No `ports:`. The database is reachable from the app container and nowhere
+    # else — publishing 5432 would put it on the host's network with the
+    # default password above.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agensis -d agensis"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      args:
+        # Empty unless you are serving over HTTPS on a non-localhost hostname.
+        # Baked into the bundle, so changing it needs `docker compose build`.
+        VITE_BACKEND_BASE_URL: ${VITE_BACKEND_BASE_URL:-}
+    depends_on:
+      db:
+        # Not `service_started`: the entrypoint's very first act is to apply the
+        # schema, so starting before Postgres accepts connections is a race the
+        # app loses.
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://agensis:${POSTGRES_PASSWORD:-agensis}@db:5432/agensis
+      # Optional. Left empty, the server generates a secret on first boot and
+      # persists it in the database — correct for a single instance.
+      AGENSIS_AUTH_SECRET: ${AGENSIS_AUTH_SECRET:-}
+      # Optional. Can also be set later in the app under Settings → Secret keys.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AGENSIS_APP_URL: ${AGENSIS_APP_URL:-}
+    ports:
+      - "${APP_PORT:-3142}:3142"
+    volumes:
+      # Uploaded files. Named rather than bind-mounted so it is owned by the
+      # container's user and survives `docker compose down` (but not `down -v`).
+      - uploads:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3142/backend/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  uploads:

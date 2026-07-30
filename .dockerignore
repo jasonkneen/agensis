@@ -1,4 +1,8 @@
-# Keep the Fly build context small: only the backend is copied in the Dockerfile.
+# Shared by both images. Dockerfile.fly copies only the backend directories by
+# name, so nothing here changes what that image contains — but Dockerfile (the
+# self-hosting image) does `COPY . .` to build the frontend, so `src`, `public`
+# and `images` must NOT be excluded. images/ holds the wallpapers that
+# src/lib/backgrounds.ts imports; excluding it fails the build.
 node_modules
 **/node_modules
 dist
@@ -9,9 +13,6 @@ release
 .git
 .github
 landing
-images
-public
-src
 electron
 .playwright-mcp
 .qwen

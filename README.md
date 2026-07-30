@@ -70,6 +70,19 @@ npm run dev:full          # backend + frontend together
 Any Postgres works — [Neon](https://neon.tech) is what the hosted instance uses,
 but a local instance is fine.
 
+### Or run it with Docker
+
+Skips the database setup entirely — one command brings up the app and Postgres
+together:
+
+```bash
+cp .env.docker.example .env
+docker compose up
+```
+
+Then open <http://localhost:3142>. Full details, including how to reset the
+volumes, are in [docs/DOCKER.md](./docs/DOCKER.md).
+
 ### The pieces separately
 
 | Command | What it does |
