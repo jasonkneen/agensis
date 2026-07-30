@@ -1169,8 +1169,14 @@ function AppContent() {
   const [newChannelOpen, setNewChannelOpen] = useState(false);
   const handleNewChat = useCallback(() => { setNewChannelOpen(true); }, []);
 
+  // RETURNS the created session. BridgeSetup reads `.id` off this to attach a
+  // transport to the channel it just made — it always did, but this function
+  // returned undefined on every path, so that read was against a value that did
+  // not exist and the bridge failed with "its id came back empty". Returning the
+  // row is the fix, not a convenience.
   const createChannelFromTemplate = useCallback(async (draft: {
     title: string; icon: string; description: string; intent: string; conversation_mode: string;
+    participants?: import('./types').ChannelParticipant[];
   }) => {
     const { session, failure } = await createSession('auto', {
       canvas_id: activeLayerId,
@@ -1178,11 +1184,15 @@ function AppContent() {
       ...(draft.icon ? { icon: draft.icon } : {}),
       ...(draft.description ? { description: draft.description } : {}),
       ...(draft.intent ? { intent: draft.intent } : {}),
+      // Only when there ARE any: an empty array and an absent key mean the same
+      // thing to the roster, and sending the key on every create would overwrite
+      // nothing while adding a column to every insert.
+      ...(draft.participants?.length ? { participants: draft.participants } : {}),
       conversation_mode: draft.conversation_mode,
     } as Partial<import('./types').ChatSession>);
     if (!session) {
       reportWriteFailure('create the channel', failure);
-      return;
+      return null;
     }
     openWindow('chat', { title: session.title || 'Untitled', sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
     logEvent({
@@ -1191,6 +1201,7 @@ function AppContent() {
       entity_id: session.id,
       title: `New chat: ${session.title || 'Untitled'}`,
     });
+    return session;
   }, [createSession, openWindow, activeLayerId, user?.id, logEvent]);
 
   const handleNewDocument = useCallback(async () => {
@@ -2733,6 +2744,10 @@ function AppContent() {
         open={newChannelOpen}
         onOpenChange={setNewChannelOpen}
         onCreate={createChannelFromTemplate}
+        workspaceId={activeWorkspaceId || null}
+        agents={agents}
+        agentConnections={agentConnections}
+        sessions={sessions}
       />
       <RegistrationApprovalPopup workspaceId={activeWorkspaceId || null} />
       <FeedbackButton
