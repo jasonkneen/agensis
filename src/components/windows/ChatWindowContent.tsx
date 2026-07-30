@@ -1,4 +1,4 @@
-import { buildChannelRoster, participantAgentKey } from '../../lib/sessionParticipants';
+import { buildChannelRoster, participantAgentKey, toPersistedParticipant } from '../../lib/sessionParticipants';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
@@ -4530,19 +4530,6 @@ function participantCandidateRank(candidate: ParticipantCandidate): number {
   if (candidate.handle) rank += 2;
   if (candidate.subtitle) rank += 1;
   return rank;
-}
-
-function toPersistedParticipant(participant: ParticipantCandidate): ChannelParticipant {
-  return {
-    id: participant.id,
-    name: participant.name,
-    kind: participant.kind,
-    status: participant.status || null,
-    handle: participant.handle || null,
-    user_id: participant.user_id || null,
-    agent_id: participant.agent_id || null,
-    added_at: new Date().toISOString(),
-  };
 }
 
 function buildCatchUpSummary(messages: ChatMessage[], channelTitle: string) {
