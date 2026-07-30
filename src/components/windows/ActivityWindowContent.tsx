@@ -213,7 +213,7 @@ function ActivityFilterTabs({
             onClick={() => onChange(tab.id)}
             aria-pressed={active}
             className={cn(
-              'flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-[11px] font-medium transition-colors',
+              'flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-xs font-medium transition-colors',
               'focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2',
               active ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
             )}
@@ -425,7 +425,7 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
           onWheel={hiddenCount > 0 ? (e) => { if (e.deltaY > 0) setExpanded(true); } : undefined}
         >
           {days.length === 0 && (
-            <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+            <p className="px-2 py-6 text-center text-sm text-muted-foreground">
               Nothing in this category yet.
             </p>
           )}
@@ -458,7 +458,7 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
                       onClick={() => setSelectedId(selected ? null : event.id)}
                       title={`${full}\n${formatFullDate(event.created_at)}`}
                       className={cn(
-                        'group flex w-full items-center gap-2 rounded-md border-l-2 border-transparent px-1.5 py-1.5 text-left text-sm transition-colors',
+                        'group flex w-full items-center gap-2 rounded-md border-l-2 border-transparent px-1.5 py-1 text-left text-[14px] transition-colors',
                         selected ? 'border-l-primary bg-primary/10' : 'hover:bg-muted/50',
                       )}
                     >
@@ -481,7 +481,7 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
             <button
               type="button"
               onClick={() => setExpanded(true)}
-              className="mt-0.5 rounded-md px-1.5 py-1.5 text-center text-[11px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+              className="mt-0.5 rounded-md px-1.5 py-1.5 text-center text-sm text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
             >
               {`Show ${hiddenCount} earlier`}
             </button>
