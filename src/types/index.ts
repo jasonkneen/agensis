@@ -608,7 +608,8 @@ export interface GatewayConfig {
 
 export const AI_MODELS: AIModel[] = [
  { id: 'auto', label: 'Auto', description: 'Uses the workspace default model' },
- { id: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Most capable model' },
+ { id: 'claude-opus-5', label: 'Opus 5', description: 'Most capable model' },
+ { id: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Previous flagship model' },
  { id: 'claude-fable-5', label: 'Fable 5', description: 'Claude 5 family model' },
  { id: 'claude-sonnet-5', label: 'Sonnet 5', description: 'Latest balanced model' },
  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', description: 'Balanced performance' },
