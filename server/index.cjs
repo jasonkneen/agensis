@@ -5695,7 +5695,17 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
    }
    if (startIdx === -1) return { started, reason: 'no_seed' }; // no human seed; nothing to do
    const burst = rows.slice(startIdx);
-   const agentTurns = burst.filter((row) => row.sender_kind === 'agent').length;
+   // A TURN, not a row. Tool chips carry sender_kind 'agent' too, so counting
+   // rows meant one reply that used ten tools spent ten turns of the budget and
+   // returned budget_exhausted before any election branch ran — in a threaded
+   // conversation the agent would simply stop answering, with no visible cause.
+   //
+   // The direction was always safe (over-tight, never looser, so the loop bound
+   // was never weakened), which is why this survived: it fails silently rather
+   // than badly. `message_kind` is already in the projection.
+   const agentTurns = burst.filter(
+    (row) => row.sender_kind === 'agent' && row.message_kind !== 'tool_step',
+   ).length;
    if (agentTurns >= maxTurns) return { started, reason: 'budget_exhausted' }; // budget exhausted
 
    const latest = rows[rows.length - 1];
