@@ -67,7 +67,15 @@ const SELF = 'tests/public-source-hygiene.test.cjs';
 // (The previous wording of this comment tripped the closed-source-claim rule
 // on itself, which is a fair result: the gate scans its own source, and it
 // should. Reworded rather than exempted.)
-const EXCLUDED_PATHS = new Set(['opensourceplan.md']);
+// Conditional on the file existing, so ONE copy of this test works in both the
+// working repository and a published snapshot. The plan is a work record and
+// does not ship, so in a published tree the path is simply absent — and an
+// exemption naming a file that is not there is a dead exemption, which is its
+// own small lie about what the gate covers.
+const EXCLUDABLE_WORK_RECORDS = ['opensourceplan.md'];
+const EXCLUDED_PATHS = new Set(
+  EXCLUDABLE_WORK_RECORDS.filter((p) => fs.existsSync(path.join(REPO_ROOT, p))),
+);
 
 // ---------------------------------------------------------------------------
 // Categories
@@ -739,25 +747,32 @@ test('anti-vacuity: the scan covers this file and every major source tree', () =
   }
 });
 
-test('anti-vacuity: the scan excludes exactly one documented path, and no more', () => {
-  // Pinned as an exact set rather than a size limit. A size check would let
+test('anti-vacuity: the scan excludes only documented work records, and only if present', () => {
+  // The CANDIDATE list is pinned exactly, not by size. A size check would let
   // someone swap the entry for a different file; this fails on any change,
   // which is the point — an exclusion should cost a conversation.
   assert.deepEqual(
-    [...EXCLUDED_PATHS].sort(),
+    [...EXCLUDABLE_WORK_RECORDS].sort(),
     ['opensourceplan.md'],
-    'EXCLUDED_PATHS changed. Every exclusion is a place a violation can hide: '
+    'EXCLUDABLE_WORK_RECORDS changed. Every exclusion is a place a violation can hide: '
       + 'add one only with a written reason in the comment above it, and update this test '
       + 'deliberately rather than to make a build pass.',
   );
 
-  // And the exclusion must be doing something honest: the file it names is the
-  // plan itself, which cannot be scanned without asking it not to describe the
-  // work. If it ever stops existing, the exclusion should go with it.
-  assert.ok(
-    fs.existsSync(path.join(REPO_ROOT, 'opensourceplan.md')),
-    'the excluded path no longer exists — drop it from EXCLUDED_PATHS rather than leaving a dead exemption',
-  );
+  // And what is ACTUALLY excluded must be a subset of that, containing only
+  // files that really exist. In a published snapshot the plan does not ship, so
+  // this set is empty and the scan covers everything — which is the stronger
+  // guarantee, and exactly where you want it.
+  for (const p of EXCLUDED_PATHS) {
+    assert.ok(
+      EXCLUDABLE_WORK_RECORDS.includes(p),
+      `${p} is excluded but is not a documented work record`,
+    );
+    assert.ok(
+      fs.existsSync(path.join(REPO_ROOT, p)),
+      `${p} is excluded but does not exist — a dead exemption overstates what the gate skips`,
+    );
+  }
 });
 
 test('anti-vacuity: every rule fires on a planted violation', () => {
