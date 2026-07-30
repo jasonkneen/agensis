@@ -211,7 +211,7 @@ describe('saying what accepting does, before the click', () => {
     const target = acceptTarget('skill');
     expect(target.table).toBe('documents');
     expect(target.label).toMatch(/Documents/);
-    expect(target.label).toMatch(/Skills/);
+    expect(target.label).toMatch(/Playbooks/);
   });
 
   it('labels kinds in words, never emoji', () => {
