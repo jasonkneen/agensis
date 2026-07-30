@@ -22,9 +22,7 @@ const {
 const { createAutomations, mountAutomationRoutes } = require('./automations.cjs');
 const { createAgentTemplates, mountAgentTemplateRoutes } = require('./agent-templates-routes.cjs');
 const { createWorkspaceSkills, mountWorkspaceSkillRoutes } = require('./workspace-skills-routes.cjs');
-const {
- normalizeAgentTemplate, agentToTemplateDraft, readTemplateExport, templateFingerprint,
-} = require('../shared/agentTemplates.cjs');
+const { normalizeAgentTemplate, agentToTemplateDraft } = require('../shared/agentTemplates.cjs');
 // Reactions are written through the generic /backend/db/update route as a whole
 // jsonb map, so their flow events come from diffing that map — see the module
 // header. Shared with netlify/functions/backend.mjs; the two lanes differ only
@@ -7313,6 +7311,25 @@ const {
  // Authoring is not: a template cannot carry privilege, so writing one is a
  // non-event and logging it would bury the rows that matter.
  recordAudit: (...a) => recordAudit(...a),
+});
+
+// The app-side skill store. Same shape and same reasoning as agent templates:
+// the validator is shared/workspaceSkills.cjs, its output is REBUILT from a
+// carried-field list, and the table has no column a privilege-bearing field
+// could land in. `writeSkill` is destructured too because the thread-harvest
+// accept path uses it — accepting a proposed skill must go through the SAME
+// validator and the SAME insert as authoring one by hand, or the store grows a
+// second door with different rules.
+const {
+ listSkills: listWorkspaceSkillRows,
+ createSkill: createWorkspaceSkill,
+ updateSkill: updateWorkspaceSkill,
+ deleteSkill: deleteWorkspaceSkill,
+ writeSkill: writeWorkspaceSkill,
+} = createWorkspaceSkills({
+ getDb: () => getDb(),
+ notifyDbSubscribers: (...a) => notifyDbSubscribers(...a),
+ enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
 });
 
 // The app-side skill store. Same shape and same reasoning as agent templates:
