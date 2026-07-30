@@ -54,8 +54,6 @@
     "@fontsource/space-mono": "^5.2.9",
     "@lezer/highlight": "^1.2.3",
     "@livekit/components-react": "^2.9.9",
-    "@mercuryworkshop/bare-mux": "^2.1.9",
-    "@mercuryworkshop/scramjet": "^1.1.0",
     "@netlify/blobs": "^10.7.10",
     "@netlify/database": "^1.1.0",
     "@netlify/identity": "^1.2.0",

@@ -16,68 +16,36 @@ Media assets (images, avatars, icons, fonts) are inventoried separately in
 ASSETS.md.
 
 --------------------------------------------------------------------------------
-UNRESOLVED LICENSING — read before distributing a build
+Previously flagged and now removed
 --------------------------------------------------------------------------------
 
-@mercuryworkshop/scramjet 1.1.0
-  https://github.com/MercuryWorkshop/scramjet
+@mercuryworkshop/scramjet — REMOVED. No longer a dependency, and no longer
+present in any build output.
 
-  This package's metadata and its licence text disagree with each other:
+  Earlier revisions of this file carried an "UNRESOLVED LICENSING" warning
+  against this package, because it gave three contradictory signals and no
+  reading of them granted redistribution rights:
 
-    - package.json declares:  "license": "MIT"
-    - the LICENSE file it ships is the 661-line
-      GNU AFFERO GENERAL PUBLIC LICENSE, Version 3 (19 November 2007)
+    - the upstream repository (https://github.com/MercuryWorkshop/scramjet)
+      contains no LICENSE file, and the GitHub API reports `license: null`
+    - its npm package.json declares "license": "MIT"
+    - the published tarball ships a 661-line GNU AFFERO GENERAL PUBLIC LICENSE,
+      Version 3 (19 November 2007)
 
-  This is not a transitive or dev-only dependency. vite.config.ts copies
-  dist/scramjet.all.js, dist/scramjet.sync.js and dist/scramjet.wasm.wasm out of
-  this package into the build output at public/scramjet-runtime/, so it ships in
-  every built artifact and executes in the user's browser.
+  No licence at all defaults to all rights reserved; a metadata field is not a
+  grant; and AGPL-3.0 cannot be sublicensed under MIT. Since vite.config.ts
+  copied its prebuilt bundles into every web build, that question rode along in
+  each distributed artifact.
 
-  If the AGPL-3.0 text is the operative licence, it is incompatible with
-  distributing this project under MIT, and AGPL section 13 additionally reaches
-  users who interact with the software over a network. If the MIT declaration is
-  the operative licence, there is no obstacle and only this notice is required.
+  It backed the web-only rewriting proxy behind the browser panel. That panel is
+  now desktop-only — the Electron shell's <webview> needs no proxy — so the
+  package, its runtime files and the server-side egress route it fed were all
+  removed rather than shipped under an unresolved claim.
 
-  This cannot be resolved from the package contents. It requires confirmation
-  from the upstream project. Until then, treat any distributed build as carrying
-  an unresolved copyleft question.
-
-  Note that vite.config.ts:49 currently carries a comment asserting
-  "scramjet's rewriter (MIT) plus bare-mux (MIT)". That comment states the
-  package.json field, not the shipped LICENSE file, and should not be read as a
-  verification.
-
---------------------------------------------------------------------------------
-Required attribution
---------------------------------------------------------------------------------
-
-@mercuryworkshop/bare-mux 2.1.9
-  https://github.com/MercuryWorkshop/bare-mux
-
-  This package ships MIT licence text but declares no "license" field in its
-  package.json. The MIT licence requires that its copyright notice and
-  permission notice be reproduced in all copies or substantial portions of the
-  software, so the notice is reproduced here in full:
-
-    Copyright 2024 Mercury Workshop Inc.
-
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to
-    deal in the Software without restriction, including without limitation the
-    rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
-    sell copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
-
-    The above copyright notice and this permission notice shall be included in
-    all copies or substantial portions of the Software.
-
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-    IN THE SOFTWARE.
+  @mercuryworkshop/bare-mux was removed at the same time. It was a genuine
+  MIT-licensed package (it shipped real MIT text, Copyright 2024 Mercury
+  Workshop Inc., merely omitting the metadata field) and was NOT removed on
+  licensing grounds — only because nothing used it once the proxy was gone.
 
 --------------------------------------------------------------------------------
 Fonts — SIL Open Font License 1.1
@@ -247,8 +215,9 @@ licences:
     npx license-checker-rseidelsohn --production --summary
 
 Note that a package's declared "license" field is not authoritative — the
-scramjet entry at the top of this file is exactly that failure mode. Any
-verification worth relying on reads the LICENSE file text, not the metadata.
+removed scramjet entry at the top of this file is exactly that failure mode: it
+declared MIT and shipped AGPL. Any verification worth relying on reads the
+LICENSE file text, not the metadata, and checks the upstream repository too.
 
 --------------------------------------------------------------------------------
 Verification method for the copyleft claim
@@ -272,7 +241,13 @@ including nested node_modules):
          positives. Both are MPL-2.0; the match is on MPL-2.0's own definition
          of "Secondary License", which names the GPL, LGPL and AGPL.
        - @mercuryworkshop/scramjet/LICENSE — a genuine AGPL-3.0 text, in a
-         package that declares MIT. See the top of this file.
+         package that declares MIT. That package has since been removed; see
+         the top of this file.
 
 Pass 1 alone reports a clean tree. Pass 2 is what found the scramjet conflict.
 Any future licence audit of this repository must read file text, not fields.
+
+Both passes read node_modules, so both would have MISSED the third signal that
+mattered here: the upstream repository carried no LICENSE file at all, which no
+amount of reading the published tarball reveals. A dependency that ships a
+licence its own repository never granted is worth checking at the source.

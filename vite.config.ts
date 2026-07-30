@@ -46,69 +46,16 @@ function emitVersionJson() {
   };
 }
 
-// The web browser panel's runtime: scramjet's rewriter (MIT) plus bare-mux (MIT).
-// These are prebuilt bundles that must be fetched by URL at runtime — the service
-// worker `importScripts` them and bare-mux imports its SharedWorker by path — so
-// they cannot go through Rollup. They are emitted verbatim instead.
+// NOTE: the web build used to emit a proxy "browser runtime" here — a prebuilt
+// rewriter plus bare-mux, copied verbatim out of node_modules into
+// /scramjet-runtime/ so a browser tab could render sites that refuse framing.
+// It was removed: @mercuryworkshop/scramjet ships no usable licence grant (the
+// upstream repo has no LICENSE at all, npm metadata claims MIT, and the tarball
+// contains AGPL-3.0 text), so it cannot be redistributed in our build output.
 //
-// They live at /scramjet-runtime/, deliberately OUTSIDE the `/browse/` scope the
-// proxy service worker owns, so a proxied URL can never collide with a runtime file.
-//
-// Desktop skips all of it: the Electron shell renders <webview>, which is a real
-// top-level browsing context and needs no proxy — so ~1.6MB stays out of that build.
-const BROWSER_RUNTIME_FILES: Array<[string, string]> = [
-  ['@mercuryworkshop/scramjet/dist/scramjet.all.js', 'scramjet.all.js'],
-  ['@mercuryworkshop/scramjet/dist/scramjet.sync.js', 'scramjet.sync.js'],
-  ['@mercuryworkshop/scramjet/dist/scramjet.wasm.wasm', 'scramjet.wasm.wasm'],
-  ['@mercuryworkshop/bare-mux/dist/index.js', 'baremux.js'],
-  ['@mercuryworkshop/bare-mux/dist/worker.js', 'baremux-worker.js'],
-];
-
-function browserRuntimeAssets() {
-  // Resolved by PATH, not by `require.resolve`. Neither package lists
-  // "./package.json" in its exports map, so the usual
-  // `dirname(require.resolve(pkg + '/package.json'))` trick throws
-  // ERR_PACKAGE_PATH_NOT_EXPORTED — and inside generateBundle that produced a
-  // build with the runtime assets simply missing, which is far worse than a
-  // failure. Hence the explicit existsSync check below.
-  const fs = require('node:fs') as typeof import('node:fs');
-  const resolve = (spec: string) => {
-    const full = path.resolve(__dirname, 'node_modules', spec);
-    if (!fs.existsSync(full)) {
-      throw new Error(
-        `browser runtime asset missing: ${spec}. Run npm install — the web browser panel cannot work without it.`,
-      );
-    }
-    return full;
-  };
-
-  return {
-    name: 'agensis-browser-runtime-assets',
-    // Dev has no build step, so serve them straight off disk.
-    configureServer(server: { middlewares: { use: (fn: unknown) => void } }) {
-      server.middlewares.use((req: { url?: string }, res: import('node:http').ServerResponse, next: () => void) => {
-        const match = BROWSER_RUNTIME_FILES.find(([, out]) => req.url === `/scramjet-runtime/${out}`);
-        if (!match) return next();
-        try {
-          res.setHeader('Content-Type', match[1].endsWith('.wasm') ? 'application/wasm' : 'text/javascript');
-          fs.createReadStream(resolve(match[0])).pipe(res);
-        } catch {
-          next();
-        }
-      });
-    },
-    generateBundle(this: { emitFile: (f: unknown) => void }) {
-      if (isDesktopBuild) return;
-      for (const [spec, out] of BROWSER_RUNTIME_FILES) {
-        this.emitFile({
-          type: 'asset',
-          fileName: `scramjet-runtime/${out}`,
-          source: fs.readFileSync(resolve(spec)),
-        });
-      }
-    },
-  };
-}
+// The browser panel is now desktop-only, which is where it always worked best:
+// the Electron shell renders <webview>, a real top-level browsing context that
+// needs no proxy at all. See src/components/windows/BrowserPanel.tsx.
 
 export default defineConfig({
   define: {
@@ -158,7 +105,6 @@ export default defineConfig({
     react(),
     tailwindcss(),
     emitVersionJson(),
-    browserRuntimeAssets(),
     VitePWA({
       // 'prompt' (not 'autoUpdate') so an open tab is never force-reloaded out
       // from under the user mid-session — the update surface is our themed
@@ -220,15 +166,6 @@ export default defineConfig({
         // swap.
         skipWaiting: true,
         clientsClaim: true,
-        // The web browser panel's proxy handler, pulled into THIS worker rather
-        // than registered as its own. A worker scoped to /browse/ was measured
-        // and does not work: a proxied page requests things at the origin root
-        // (Next.js chunk URLs built at runtime) that a scoped worker never sees,
-        // so they escape to Netlify and come back as HTML. A second root-scope
-        // worker is not an option either — only one worker controls a client.
-        // Workbox emits these imports at the top of the generated worker, so the
-        // proxy's fetch listener is registered before Workbox's own.
-        importScripts: ['/scramjet-sw.js'],
         globPatterns: ['index.html', 'assets/{index,vendor-react,vendor-ui}-*.{js,css}', '**/*.{svg,png,woff2}'],
         // Allowlist, not denylist: Workbox matches these against
         // `url.pathname + url.search`, so a denylist entry like /^\/$/ misses
