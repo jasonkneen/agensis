@@ -19,7 +19,7 @@
     "test": "node --require ./tests/helpers/test-env.cjs --experimental-test-module-mocks --test tests/*.test.cjs",
     "test:unit": "vitest run",
     "smoke": "vitest run --config vitest.smoke.config.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
     "test:visual-editor": "npm --prefix visual-editor test",
     "ci": "npm run typecheck && npm test && npm run test:unit && npm run test:visual-editor && npm run smoke && npm run lint",
     "hooks:install": "git config core.hooksPath .githooks",

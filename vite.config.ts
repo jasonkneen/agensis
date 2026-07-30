@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -33,7 +33,12 @@ const isDesktopBuild = process.env.AGENSIS_DESKTOP_BUILD === '1';
 // client's fetch simply no-ops). Kept out of the Workbox precache because it's
 // JSON (globPatterns below only precaches js/css/html/svg/png/woff2), so the
 // version check always sees the true latest, never a cached copy.
-function emitVersionJson() {
+// Typed as `Plugin` rather than inferred: without it TypeScript types `this`
+// inside generateBundle from the object literal, which has no `emitFile`, and
+// the call below is an error. It works at runtime — Rollup binds the plugin
+// context — so this was latent, and invisible because `npm run typecheck` only
+// covered tsconfig.app.json. See the typecheck script in package.json.
+function emitVersionJson(): Plugin {
   return {
     name: 'agensis-emit-version-json',
     generateBundle() {
