@@ -687,6 +687,39 @@ CREATE TABLE IF NOT EXISTS workspace_agent_templates (
 CREATE INDEX IF NOT EXISTS idx_workspace_agent_templates_workspace_id
   ON workspace_agent_templates(workspace_id);
 
+-- WORKSPACE-AUTHORED SKILLS. The app-side skill store.
+--
+-- agent_skill_documents (above) is daemon-owned: written by an agent_skill_sync
+-- push, keyed per agent, read-only in-app and absent from ALLOWED_TABLES. This
+-- table is the writable, workspace-scoped half. Sync direction is UNCHANGED --
+-- skills still flow UP from daemons; nothing here is written down onto anyone's
+-- disk. Agents read these bodies at turn time through the `read_skill` MCP tool,
+-- which fences them as untrusted data.
+--
+-- THE ABSENT COLUMNS ARE THE SECURITY CONTROL: no base_url, no credential, no
+-- endpoints, no mcp, no code, no path, no agent_id, no tools, no
+-- permission_mode. A workspace skill carries PROSE and never AUTHORITY. The
+-- privilege-bearing skill shape lives in workspace_agents.metadata.sandbox_skills,
+-- which is MANAGE_ONLY. See shared/workspaceSkills.cjs.
+CREATE TABLE IF NOT EXISTS workspace_skills (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  title text NOT NULL,
+  summary text DEFAULT '',
+  body text NOT NULL,
+  revision integer NOT NULL DEFAULT 1,
+  source text NOT NULL DEFAULT 'authored',
+  origin jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_by uuid,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE (workspace_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_skills_workspace_id
+  ON workspace_skills(workspace_id);
+
 CREATE TABLE IF NOT EXISTS uploaded_files (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -1360,12 +1393,16 @@ CREATE INDEX IF NOT EXISTS idx_messages_huddle ON messages(huddle_id) WHERE hudd
 ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS is_system boolean NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_workspaces_system ON workspaces (is_system) WHERE is_system;
 
--- 'feedback' provenance. Dropped and re-added because Postgres has no ALTER for
--- a CHECK constraint; the name is deterministic (matching the inline column
--- check above), so re-running this file is idempotent.
+-- 'feedback' and 'automation' provenance. Dropped and re-added because Postgres
+-- has no ALTER for a CHECK constraint; the name is deterministic (matching the
+-- inline column check above), so re-running this file is idempotent.
+--
+-- Widening is safe on a populated table because it only ADDS permitted values:
+-- every existing row already satisfies the wider predicate, so the validation
+-- scan on ADD CONSTRAINT cannot fail. Narrowing would need a data migration.
 ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_source_type_check;
 ALTER TABLE tasks ADD CONSTRAINT tasks_source_type_check
-  CHECK (source_type IN ('manual', 'chat', 'document', 'canvas', 'ai', 'feedback'));
+  CHECK (source_type IN ('manual', 'chat', 'document', 'canvas', 'ai', 'feedback', 'automation'));
 
 -- The bulky half of a report. Kept out of `tasks` deliberately: task rows are
 -- fanned out over realtime to every workspace client, and a few hundred console

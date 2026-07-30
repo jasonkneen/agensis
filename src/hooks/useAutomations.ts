@@ -27,8 +27,13 @@ export interface AutomationCondition {
 
 export interface AutomationStep {
   action: string;
+  /** post_message. */
   channelId?: string;
   text?: string;
+  /** create_task. There is deliberately no assignee field — see
+   *  AUTOMATION_ACTIONS in shared/automation-rules.cjs. */
+  title?: string;
+  description?: string;
 }
 
 export interface AutomationDefinition {

@@ -221,19 +221,41 @@ async function execute(argv, io, out, err) {
 }
 
 /**
- * v1 pagination is pass-through: `--limit` reaches the tool, and if a returned
- * array is exactly that long the caller is told the page may be short of the
- * truth. There is no cursor to offer — no read tool accepts `before` or an
- * offset today, so anything more would be invented rather than reported.
+ * Say when a page is not the whole answer, and how to get the rest.
+ *
+ * `next_cursor` is the SERVER's answer and is preferred over anything inferred
+ * here: it is non-null exactly when the page came back full, which is a fact
+ * about the query rather than a guess from the row count. The tool surface
+ * grew keyset cursors (see server/mcp.cjs), so there is now a real next step to
+ * offer instead of "raise --limit".
+ *
+ * THE SILENT CASE IS THE ONE THAT MATTERED. Before this, the warning fired only
+ * when `--limit` was passed explicitly — so the common invocation, with no
+ * flag at all, hit the server's default of 50 and reported a truncated list as
+ * though it were complete. `next_cursor` is present either way, so the default
+ * is now exactly as loud as an explicit limit.
+ *
+ * The row-count fallback stays for a server that predates the cursor: the CLI
+ * ships independently of the backend, so an older Fly deploy returns no
+ * `next_cursor` at all and must still warn rather than going quiet.
  */
 function warnIfTruncated(args, value, note) {
+  if (!value || typeof value !== 'object') return;
+
+  if (Object.prototype.hasOwnProperty.call(value, 'next_cursor')) {
+    if (value.next_cursor) {
+      note('this is one page, and there is more behind it. '
+        + `Continue with --cursor ${value.next_cursor}`);
+    }
+    return;
+  }
+
   const limit = Number(args?.limit);
   if (!Number.isFinite(limit) || limit <= 0) return;
-  if (!value || typeof value !== 'object') return;
   for (const [key, rows] of Object.entries(value)) {
     if (Array.isArray(rows) && rows.length === limit) {
       note(`"${key}" hit the requested limit of ${limit}; there may be more. `
-        + 'This surface has no cursor yet, so raise --limit to see further back.');
+        + 'This server has no cursor on that tool, so raise --limit to see further back.');
       return;
     }
   }

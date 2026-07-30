@@ -49,6 +49,8 @@
 
 // A transcript is prompt input, so it is bounded twice: per message (one long
 // paste cannot crowd out fifty short exchanges) and in total.
+const { normalizeWorkspaceSkill } = require('../shared/workspaceSkills.cjs');
+
 const HARVEST_MAX_MESSAGES = 120;
 const HARVEST_MAX_MESSAGE_CHARS = 1500;
 const HARVEST_MAX_TRANSCRIPT_CHARS = 60_000;
@@ -332,7 +334,7 @@ function findingDecision(finding) {
 /**
  * Where accepting a finding actually writes.
  *
- * Only two stores are writable from here, so three kinds map onto two tables:
+ * Three kinds, three stores:
  *
  * - "memory" -> memory_facts, under its own category so a suggested fact is
  *   distinguishable from one a human typed.
@@ -430,6 +432,13 @@ function createThreadHarvest(deps = {}) {
   // constructs in tests that inject nothing but a fake db and a fake model.
   enforceWorkspaceRole = async () => {},
   badRequest = (message) => Object.assign(new Error(message), { status: 400 }),
+  // The app-side skill store's writer (server/workspace-skills-routes.cjs).
+  // Injected rather than imported so accepting a skill goes through the SAME
+  // validator and the SAME insert as authoring one by hand — a second door with
+  // different rules is how a store ends up with rows its own loader cannot read.
+  // Undefined in tests that only exercise the worker half; the accept path says
+  // so rather than writing a malformed row.
+  writeWorkspaceSkill = null,
  } = deps;
 
  /**
@@ -939,6 +948,44 @@ function createThreadHarvest(deps = {}) {
    );
    notifyDbSubscribers('memory_facts', 'INSERT', rows);
    return rows[0];
+  }
+  if (target.table === 'workspace_skills') {
+   if (typeof writeWorkspaceSkill !== 'function') {
+    throw Object.assign(new Error('The skill store is not available on this backend'), { status: 501 });
+   }
+   // THROUGH THE SAME VALIDATOR AS AUTHORING ONE BY HAND. A model's proposal is
+   // the least trusted input this store has — it is text mined out of a
+   // conversation — so it must not get a shortcut past the name rule, the body
+   // cap, or the never-carried-field refusal. `source: 'suggested'` and the
+   // origin block are set HERE and cannot be influenced by the finding: a
+   // procedure an agent will later follow must carry an honest record of the
+   // fact that a model wrote it and a person waved it through.
+   const result = normalizeWorkspaceSkill({
+    title: String(finding.title || '').trim() || 'Untitled skill',
+    summary: String(finding.summary || '').trim(),
+    body: harvestDocumentContent(finding, {
+     threadTitle: harvest.session_title,
+     discardedAt: harvest.session_deleted_at ? String(harvest.session_deleted_at) : String(harvest.created_at || ''),
+     reason: harvest.reason,
+    }),
+   });
+   if (!result.ok) {
+    throw Object.assign(new Error(`This proposal cannot be saved as a skill: ${result.errors.join('; ')}`), { status: 400 });
+   }
+   const row = await writeWorkspaceSkill({
+    workspaceId: harvest.workspace_id,
+    skill: result.skill,
+    userId: null,
+    source: 'suggested',
+    origin: {
+     harvestId: String(harvest.id || ''),
+     sessionId: harvest.session_id ? String(harvest.session_id) : '',
+     acceptedAt: new Date().toISOString(),
+    },
+   });
+   if (!row) throw new Error('The skill could not be saved');
+   notifyDbSubscribers('workspace_skills', 'INSERT', [row]);
+   return row;
   }
   const content = harvestDocumentContent(finding, {
    threadTitle: harvest.session_title,
