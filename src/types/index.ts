@@ -722,6 +722,15 @@ export interface WorkspaceAgent {
  sandbox_provider?: string | null;
  sandbox_config?: Record<string, unknown>;
  enabled?: boolean;
+ /**
+  * May this agent be drawn into a channel post that named nobody?
+  *
+  * Optional and read fail-open (`!== false`) on every side — server, Netlify
+  * mirror and UI — so a row written before the column existed reads as ON. It
+  * governs ONLY the un-addressed case: @mentions, @channel, DMs and thread
+  * replies dispatch regardless. See shared/ambientAddressing.cjs.
+  */
+ ambient_replies?: boolean;
  permission_mode?: AgentPermissionMode;
  version?: number;
  created_by: string | null;

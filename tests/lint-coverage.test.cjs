@@ -59,6 +59,11 @@ const MUST_BE_LINTED = [
   // agents nobody addressed or lets an agent capture the mention meant for
   // everyone.
   'shared/channelMentions.cjs',
+  // Decides which agent an un-addressed post wakes, and whether a paid
+  // relevance call is made at all. Every function in it is a suppressor, so an
+  // unlinted mistake — a shadowed variable, an inverted condition — either
+  // spends model turns nobody asked for or silences an agent invisibly.
+  'shared/ambientAddressing.cjs',
   // Decides what a reaction event carries out of the workspace, and which
   // Flows connections are entitled to receive it. Both backends call it, so an
   // unlinted mistake here is a delivery to the wrong tenant on both lanes.

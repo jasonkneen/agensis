@@ -918,6 +918,10 @@ function publicWorkspaceAgent(row) {
   permissionFlags: agentPermissionFlags(permissionMode),
   version: Number(row.version || 0),
   enabled: row.enabled !== false,
+  // Fail-open: an absent column (a row predating the migration) reads as ON.
+  // Mirrors ambientRepliesEnabled in shared/ambientAddressing.cjs — the two
+  // backends must agree or the toggle flips itself on reload.
+  ambient_replies: row.ambient_replies !== false,
  };
 }
 
@@ -1087,7 +1091,7 @@ async function handleWorkspaceAgents(workspaceId, userId) {
  // extracts and diffs both, so a column added on one side fails until it is
  // added here too.
  const rows = await query(
-  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, created_by
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, ambient_replies, created_by
      from workspace_agents
      where workspace_id = $1
      order by created_at asc, name asc`,
@@ -1594,6 +1598,7 @@ async function ensureAgentRuntimeTables() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS permission_mode text NOT NULL DEFAULT 'default';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT true;
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS ambient_replies boolean NOT NULL DEFAULT true;
   `);
  await query('CREATE INDEX IF NOT EXISTS idx_workspace_agents_handle ON workspace_agents(workspace_id, handle)');
  await query('CREATE INDEX IF NOT EXISTS idx_workspace_agents_connect_token_hash ON workspace_agents(connect_token_hash)');
