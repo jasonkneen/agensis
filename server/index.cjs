@@ -4622,7 +4622,10 @@ async function dispatchCommentMentions({ table, row, authorUserId, run = continu
     // awaiting costs no request latency.
     let outcome = null;
     try {
-     outcome = await run({ workspaceId, sessionId: session.id, threadParentId });
+     // Same as task dispatch: this opens a thread on the agent's behalf after a
+     // comment @mention, so the reply must surface in the conversation rather
+     // than only inside a thread nobody has opened.
+     outcome = await run({ workspaceId, sessionId: session.id, threadParentId, broadcastToChannel: true });
     } catch (error) {
      console.error('continueConversation (task subthread mention) failed', error);
      outcome = { started: false, reason: 'error' };
@@ -5601,7 +5604,7 @@ async function resolveWorkThreadParent(sessionId) {
 // agent turn in flight (or ran one to completion). Task dispatch reads it to tell
 // "the agent is on it" from "the turn was refused — put the task back in the
 // queue"; every other caller ignores it.
-async function continueConversation({ workspaceId, sessionId, threadParentId = null }) {
+async function continueConversation({ workspaceId, sessionId, threadParentId = null, broadcastToChannel = null }) {
  if (!workspaceId || !sessionId) return { started: false, reason: 'missing_input' };
  const lockKey = `${sessionId}::${threadParentId || ''}`;
  if (conversationLocks.has(lockKey)) return { started: false, reason: 'locked' };
@@ -5847,7 +5850,7 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     .filter((agent) => String(agent.id) !== String(nextAgent.id))
     .map((agent) => ({ handle: slugHandle(agent.handle || agent.name), name: agent.name }));
 
-   const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants, isDirectMessage });
+   const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants, isDirectMessage, broadcastToChannel });
    if (result && result.ok) started = true;
    // `ok:false, pending:true` is the one that matters to the task queue: the
    // one-active-job unique index bounced the insert, so NO job exists and nothing

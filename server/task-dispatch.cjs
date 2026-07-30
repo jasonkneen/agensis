@@ -424,7 +424,11 @@ function createTaskDispatch(deps = {}) {
    // started.
    let outcome = null;
    try {
-    outcome = await run({ workspaceId: wsId, sessionId: session.id, threadParentId });
+    // We are OPENING this thread, not answering inside one somebody is reading.
+    // Whoever assigned the task is on the task board, so the answer has to reach
+    // the conversation itself; without this it lands in a thread the DM view
+    // cannot render and the task looks like it went nowhere.
+    outcome = await run({ workspaceId: wsId, sessionId: session.id, threadParentId, broadcastToChannel: true });
    } catch (error) {
     console.error('continueConversation (task assignment) failed', error);
     outcome = { started: false, reason: 'error' };
