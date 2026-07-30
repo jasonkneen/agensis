@@ -19,11 +19,14 @@ export const DEFAULT_BASE_URL = 'https://agensis-backend.fly.dev';
 const PROFILE_NAME_RE = /^[A-Za-z0-9._-]+$/;
 
 /**
- * The daemon's dev-port rewrite, reimplemented in ~10 lines.
+ * Local dev-port rewrite, in ~10 lines.
  *
  * A local `npm run dev:full` puts vite on 5173 (or netlify dev on 8888) and the
  * real backend on 3142. Somebody who exports AGENSIS_URL=http://localhost:5173
  * and runs a CLI command would otherwise get the vite dev server's index.html.
+ *
+ * The daemon applies the same rule in `agentBackendUrl()`. The CLI carries its
+ * own ten lines because the two ship as separate packages with no shared module.
  */
 function rewriteLocalDevPort(url) {
   const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1';

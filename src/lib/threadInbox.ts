@@ -99,9 +99,9 @@ export function threadReplyLabel(replyCount: number, toolCount = 0): string {
  * this only lifts the unread block — a stable partition rather than a re-sort,
  * so two threads that are both unread keep their recency order.
  *
- * Slack does the same thing, and the reason is worth stating: a list sorted
- * purely by recency buries an unread reply from this morning under read
- * chatter from this afternoon, which defeats the section.
+ * The reason is worth stating: a list sorted purely by recency buries an
+ * unread reply from this morning under read chatter from this afternoon,
+ * which defeats the point of the section.
  */
 export function sortThreadInbox(items: readonly ThreadInboxItem[]): ThreadInboxItem[] {
   const unread: ThreadInboxItem[] = [];

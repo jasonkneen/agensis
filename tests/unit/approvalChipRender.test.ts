@@ -13,7 +13,7 @@ import type { Message, PermissionRequest } from '../../src/types';
 // class of event — a full-width bubble carrying a raw absolute path, plus a chip
 // — decided only by whether the tab was open when the human clicked.
 
-const LONG = '/Users/jkneen/Documents/GitHub/agensis/src/components/windows/TasksWindowContent.tsx';
+const LONG = '/Users/alex/Documents/GitHub/agensis/src/components/windows/TasksWindowContent.tsx';
 
 const message = (over: Partial<Message>): Message => ({
   id: 'm1',
@@ -82,7 +82,7 @@ describe('an approved call renders as one chip, not a chip and a bubble', () => 
     const chip = container.querySelector('li > span')!;
     expect(chip.textContent).toContain('…/components/windows/TasksWindowContent.tsx');
     // The machine-specific prefix is gone from what is DRAWN...
-    expect(chip.textContent).not.toContain('/Users/jkneen');
+    expect(chip.textContent).not.toContain('/Users/alex');
     // ...but never lost: the untouched path is one hover away.
     expect(chip.getAttribute('title')).toContain(LONG);
   });

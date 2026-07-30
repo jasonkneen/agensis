@@ -54,9 +54,9 @@ const crypto = require('node:crypto');
 const net = require('node:net');
 const dnsPromises = require('node:dns').promises;
 
-// How many URLs one message may unfurl. Slack shows one or two; the cap is here
-// because a message pasting forty links would otherwise be forty outbound
-// fetches and forty cards.
+// How many URLs one message may unfurl. Two is enough to be useful, and the
+// cap is here because a message pasting forty links would otherwise be forty
+// outbound fetches and forty cards.
 const LINK_PREVIEW_MAX_PER_MESSAGE = 2;
 // Ceiling on one batched request from the client (several messages' worth).
 const LINK_PREVIEW_MAX_PER_REQUEST = 8;

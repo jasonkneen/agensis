@@ -78,8 +78,8 @@ describe('workspaceInitials', () => {
 describe('workspaceGlyph', () => {
   // No emoji in the rail, ever. Emoji renders as a different typeface at a
   // different weight on every platform, so a column of tiles stops reading as
-  // one control — and it is illegible at tile size. Initials plus a solid
-  // colour (Slack's approach) instead.
+  // one control — and it is illegible at tile size. Initials on a solid colour
+  // instead: identical on every platform and still legible at 20px.
   it('ignores the icon column entirely and always uses initials', () => {
     expect(workspaceGlyph({ name: 'Personal', icon: '🌱' })).toEqual({ glyph: 'PE', fromIcon: false });
     expect(workspaceGlyph({ name: 'Work', icon: '💼' })).toEqual({ glyph: 'WO', fromIcon: false });

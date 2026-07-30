@@ -17,7 +17,7 @@ import { GALLERY_SLIDES, orderGallerySlides } from '@/lib/wireframeScenes';
 // The "larger panel" behind the update toast. Presentational only — open state,
 // notes, and the reload action are owned by useAppUpdate/AppUpdateManager.
 // Built on the shared Dialog primitive so it inherits every theme (brutal /
-// tinyworld / dark / light) with no per-theme code.
+// paper / dark / light) with no per-theme code.
 export interface UpdateDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;

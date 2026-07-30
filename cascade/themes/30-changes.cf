@@ -1,7 +1,0 @@
-HUMAN: 4 changes applied, typecheck clean; visual QA of dark aesthetics pending (no dev server in daemon).
-CHG C1<-P1 st=ok ver=math file=src/showcase/neoThemes.ts what="derived dark shadow 22%->34%; 34% lands #655861==hand-tuned #6b6258; tuned themes bypass (set seed.shadow) so only ~14 Pop/Pastel dark themes change"
-CHG C2<-P2 st=ok ver=typecheck file=src/hooks/useTheme.ts what="+import applyThemePreset,getStoredPreset; re-assert preset after syncNormalTheme for non-neo/non-normal so scheme toggle no longer drops accent (classic+TW)"
-CHG C3<-P3 st=ok ver=math file=src/index.css what="TW light+dark accent/ring/tw-accent-*/tw-control-ring now derive from var(--primary); default-gold derived≈original within a hair; --tw-gold-* + semantics kept fixed = TW keeps warm-paper identity, accent presets now flow through"
-CHG C4<-P4 st=ok ver=reasoned file=src/index.css what="TW dark --muted-foreground #c8bba7->#a89c88 (was == text-secondary)"
-BLOCK Q1 open=1 what="#3 scope A(presets-flow,impl'd) vs B(full TW registry)" awaiting=human
-DONE stage=S ok=4 blk=0 esc=0 open-q=1 tok~=260

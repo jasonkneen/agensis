@@ -107,8 +107,8 @@ export function workspaceInitials(name: string | null | undefined): string {
  *
  * The rail is chrome, and emoji in chrome renders as a different typeface at a
  * different weight on every platform, so a row of tiles stops looking like one
- * control. Slack's solid-colour-plus-letters is the pattern this follows, and
- * it is also legible at 20px in a way a colour emoji is not.
+ * control. Solid colour plus letters renders identically everywhere, and it is
+ * also legible at 20px in a way a colour emoji is not.
  *
  * `icon` is deliberately ignored rather than removed from the type: it is still
  * the workspace's own emoji elsewhere, and a picker for a real image is coming.

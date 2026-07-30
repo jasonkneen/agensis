@@ -962,7 +962,7 @@ export const Sidebar = React.memo(function Sidebar({
           Archive is open and directly below the ARCHIVE label when it is
           closed. Correct in both states, which is why it is placed here rather
           than "after the Archive header". Paired with the rule above THREADS —
-          together they bracket the sections, which is the Slack shape. */}
+          together they bracket the sections so the five read as one band. */}
       <div aria-hidden="true" className="sidebar-group-divider" />
       {onOpenSkills && <ActionTile icon={<Sparkles />} label="Skills" active={focusedWindowType === 'skills'} onClick={onOpenSkills} />}
       {onOpenActivity && <ActionTile icon={<RotateCcw />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}

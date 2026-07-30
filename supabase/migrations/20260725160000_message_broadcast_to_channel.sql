@@ -6,9 +6,9 @@
   The channel therefore carried the whole working session — a spinner, four tool
   chips, three intermediate text blocks — for one answer.
 
-  This inverts it, following Slack's "Also send to channel": the agent WORKS in a
-  thread hanging off the human message that started the turn, and only its final
-  answer is explicitly broadcast into the channel.
+  This inverts it: the agent WORKS in a thread hanging off the human message
+  that started the turn, and only its final answer is explicitly broadcast into
+  the channel.
 
   broadcast_to_channel is that explicit flag. A broadcast reply KEEPS its
   thread_parent_id — it is still a thread message, and still shows in the thread —

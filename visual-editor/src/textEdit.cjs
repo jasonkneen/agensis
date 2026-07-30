@@ -20,7 +20,7 @@ function lineIndentBefore(source, offset) {
 }
 
 /**
- * Re-indent a multi-line snippet for a new depth. A template lifted from
+ * Re-indent a multi-line snippet for a new depth. A template reused from
  * elsewhere carries that spot's indentation on every line but the first (the
  * first is positioned by the caller), so without this an inserted subtree
  * writes its children at the old depth.

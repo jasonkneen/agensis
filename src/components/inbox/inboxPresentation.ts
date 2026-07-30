@@ -5,8 +5,8 @@ import type { InboxCategory } from '../../types';
 // ---------------------------------------------------------------------------
 // Shared presentation constants for the inbox surface.
 //
-// The design rests on one idea, borrowed wholesale: a row is three lines of
-// text and a face. One 32px avatar column at a 10px gutter puts every line of
+// The design rests on one idea: a row is three lines of text and a face, and
+// nothing else. One 32px avatar column at a 10px gutter puts every line of
 // every row on the SAME left edge (12 + 32 + 10 = 54px), and nothing else
 // structural is drawn — no rules between rows, no gaps, no cards, no radii, no
 // shadows. Separation is done with whitespace and a ~3% background wash.

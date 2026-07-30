@@ -27,7 +27,7 @@
 // workspace owner, which restores exactly the access people already had.
 //
 // The mock below answers queries from fixture data and does NOT restate the
-// rule — a stub that reimplements the WHERE clause measures the stub. The
+// rule — a stub that duplicates the WHERE clause measures the stub. The
 // membership fixture is a plain list of (session, user) pairs; the SQL that
 // decides what to do with it is the code under test.
 // ============================================================================

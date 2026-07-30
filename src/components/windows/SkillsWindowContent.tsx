@@ -44,8 +44,8 @@ import {
 } from '@/components/ui/empty';
 
 // One agent on a skill row. Initials on the agent's own accent colour — the
-// Slack-style identity the workspace tiles and agent avatars already use, and
-// never an emoji.
+// same identity the workspace tiles and agent avatars already use, and never
+// an emoji.
 //
 // The advertised/configured distinction is FILL vs OUTLINE, because it is the
 // answer to "which agents can actually use this": a filled chip is a live

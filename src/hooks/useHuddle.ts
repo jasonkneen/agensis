@@ -178,8 +178,7 @@ export function useHuddleRecord(workspaceId: string | null, huddleId: string | n
 /**
  * The huddle for one channel.
  *
- * State model (copied from a prior hand-rolled implementation that got this
- * part right): the server owns an APPEND-ONLY event log and this hook folds it.
+ * State model: the server owns an APPEND-ONLY event log and this hook folds it.
  * Realtime `huddle_events` INSERTs are appended to the local log and the state
  * is re-derived, so:
  *   - a duplicate/redelivered event is a no-op,

@@ -1947,8 +1947,9 @@
       [h('span', { class: 'plabel nodrag', title: prop, text: label }), swatch, input, resetBtn(el, prop)]);
   }
 
-  /** Shadow preset ladder (borrowed from openpath's inspector): named
-   * box-shadow presets in a select; the raw row below covers custom values. */
+  /** Shadow preset ladder: named box-shadow presets in a select, ordered flat
+   * to most elevated so choosing depth is one decision rather than four numbers
+   * and a colour; the raw row below still covers arbitrary custom values. */
   var SHADOW_PRESETS = [
     { label: 'none', v: 'none' },
     { label: 'subtle', v: '0 1px 2px rgba(0,0,0,.05)' },

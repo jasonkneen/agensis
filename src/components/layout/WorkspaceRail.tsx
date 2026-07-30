@@ -18,7 +18,7 @@ import {
 } from '../../lib/workspaceRail';
 
 /**
- * The Slack-shaped workspace switcher: a vertical strip pinned to the far left,
+ * The workspace switcher: a vertical strip pinned to the far left,
  * outside the sidebar, one rounded-square tile per workspace.
  *
  * It is RESIZABLE. Collapsed it is the icon strip it has always been; dragged
@@ -41,7 +41,7 @@ import {
  * Keyboard: the tiles are a single tab stop with a roving tabindex (arrows move
  * between tiles, Enter/Space switches). The resize handle is its own tab stop
  * and owns its arrow keys. The rail deliberately binds **no global chord**:
- * Cmd/Ctrl+1…9, the obvious Slack choice, already belongs to the huddle agent
+ * Cmd/Ctrl+1…9, the obvious chord for a numbered switcher, already belongs to the huddle agent
  * switcher (`src/lib/huddleAgents.ts`), and two features fighting over one
  * binding is worse than one feature having none.
  *
@@ -391,7 +391,7 @@ function WorkspaceRow({
           : 'w-9 justify-center',
       )}
     >
-      {/* Bright left-edge marker, the way Slack signals the current workspace.
+      {/* Bright left-edge marker for the workspace you are currently in.
           It lives in the 8px channel between the rail's left edge and the tile —
           pushed any further left it lands outside the rail and the scroll
           container clips it away. The button's left edge is the padding edge in
@@ -402,8 +402,8 @@ function WorkspaceRow({
           className="absolute -left-1.5 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-foreground"
         />
       )}
-      {/* Rounded SQUARE, never a circle. Slack's tell: the active tile squares
-          off further, the rest stay softer. Shape carries the state; the fill is
+      {/* Rounded SQUARE, never a circle. The active tile squares off further
+          and the rest stay softer. Shape carries the state; the fill is
           the workspace's identity and stays constant so a tile is recognisable
           at a glance in a rail of a dozen. Inactive tiles are dimmed rather than
           recoloured, so "which one am I in" never competes with "which is which".

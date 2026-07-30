@@ -7,7 +7,7 @@ import {
 } from '../../src/showcase/twThemes';
 
 // The default "Gold" world MUST reproduce the current hardcoded CSS
-// (index.css [data-ui-theme="tinyworld"] blocks) byte-for-byte, so introducing
+// (index.css [data-ui-theme="paper"] blocks) byte-for-byte, so introducing
 // the world registry is a zero-regression change. These expected maps are
 // transcribed directly from index.css — if a token drifts, this fails.
 

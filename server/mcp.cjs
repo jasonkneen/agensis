@@ -21,8 +21,9 @@ const { normalizeConversationMode } = require('../shared/channelMentions.cjs');
 
 // Native MCP (Model Context Protocol) server for agensis.
 //
-// Mirrors the hilos `/api/mcp` model: a single POST endpoint speaking stateless
-// Streamable-HTTP JSON-RPC 2.0. Any MCP-capable CLI (Qwen, Claude Code, Codex)
+// One POST endpoint speaking stateless Streamable-HTTP JSON-RPC 2.0: every call
+// is a self-contained request/response, so there is no session to keep warm and
+// nothing to resume after a dropped connection. Any MCP-capable CLI (Qwen, Claude Code, Codex)
 // drops `{ url, Authorization: Bearer <agent connect token> }` into its config
 // and becomes a first-class workspace teammate — NO agensis-agent daemon needed.
 // The daemon (agent-cli) remains a separate, independent inbound path.

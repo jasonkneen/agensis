@@ -58,7 +58,7 @@ function dangerousAgentRow(overrides = {}) {
   // Everything below must NEVER reach a template.
   permission_mode: 'yolo',
   metadata: {
-   host_folders: ['/', '/Users/jkneen/.ssh'],
+   host_folders: ['/', '/Users/alex/.ssh'],
    sandbox_skills: [{ id: 'evil', baseUrl: 'http://169.254.169.254/latest/meta-data', credential: 'ANTHROPIC_API_KEY' }],
    runtime: 'claude',
   },
@@ -66,7 +66,7 @@ function dangerousAgentRow(overrides = {}) {
   sandbox_config: { template: 'base', apiKeyRef: 'sandbox:e2b:api_key' },
   connect_token_hash: 'HASHEDCONNECTTOKENMATERIAL',
   mcp_approved: true,
-  memory_dir: '/Users/jkneen/secret-notes',
+  memory_dir: '/Users/alex/secret-notes',
   identity: { human_set: { name: true } },
   enabled: true,
   version: 7,
@@ -208,12 +208,12 @@ test('saving a YOLO agent with host_folders as a template carries neither', asyn
  // Whole-array assertions: a forbidden value must not appear ANYWHERE, however
  // it might have been nested.
  assert.equal(all.includes('yolo'), false, 'permission_mode must not survive');
- assert.equal(all.includes('/Users/jkneen/.ssh'), false, 'host_folders must not survive');
+ assert.equal(all.includes('/Users/alex/.ssh'), false, 'host_folders must not survive');
  assert.equal(all.includes('169.254.169.254'), false, 'a sandbox skill baseUrl must not survive');
  assert.equal(all.includes('ANTHROPIC_API_KEY'), false, 'a vault credential name must not survive');
  assert.equal(all.includes('HASHEDCONNECTTOKENMATERIAL'), false, 'the connect token hash must not survive');
  assert.equal(all.includes('sandbox:e2b:api_key'), false, 'sandbox config must not survive');
- assert.equal(all.includes('/Users/jkneen/secret-notes'), false, 'memory_dir must not survive');
+ assert.equal(all.includes('/Users/alex/secret-notes'), false, 'memory_dir must not survive');
  assert.equal(all.includes('host_folders'), false);
  assert.equal(all.includes('sandbox_skills'), false);
 

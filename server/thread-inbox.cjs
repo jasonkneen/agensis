@@ -32,11 +32,11 @@ const { sessionReadableSql } = require('../shared/backend-core.cjs');
 //
 // THE FOLLOW RULE
 //
-// Slack shows threads you follow, and auto-follows one you started or replied
-// in. The same rule holds here, with one adjustment for this product: almost
-// every reply is written by an AGENT, so "threads you replied in" would be
-// nearly empty and "all threads with replies" would be a firehose of
-// agent-to-agent chatter nobody asked for.
+// The obvious rule — follow a thread you started or replied in — does not
+// survive contact with this product: almost every reply here is written by an
+// AGENT, so "threads you replied in" would be nearly empty and "all threads
+// with replies" would be a firehose of agent-to-agent chatter nobody asked
+// for.
 //
 // So a thread is followed when a HUMAN turn is in it — the parent was written
 // by a person, or a person replied. Agent replies then make it unread, which is

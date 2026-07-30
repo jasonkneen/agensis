@@ -53,7 +53,7 @@ export interface SkillAgentRef {
   source: SkillClaimSource;
   /** A live daemon connection is advertising this agent's capabilities now. */
   connected: boolean;
-  /** Slack-style chip identity: initials on a solid colour. NEVER an emoji. */
+  /** Chip identity: initials on a solid colour. NEVER an emoji. */
   initials: string;
   color: string;
 }

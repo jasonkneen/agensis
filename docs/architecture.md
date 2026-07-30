@@ -84,7 +84,7 @@ flowchart TB
 
 | Layer | What it is | Where |
 |---|---|---|
-| **Clients** | React + TypeScript SPA (Vite, Tailwind, shadcn/radix). Same bundle powers the Electron desktop app and a PWA. Windowed canvas UI, chat, docs, tasks, themes (classic/neo/tinyworld). | `src/` (components, hooks, lib, providers) |
+| **Clients** | React + TypeScript SPA (Vite, Tailwind, shadcn/radix). Same bundle powers the Electron desktop app and a PWA. Windowed canvas UI, chat, docs, tasks, themes (classic/neo/paper). | `src/` (components, hooks, lib, providers) |
 | **Client data plane** | Custom query builder over the backend (`backendClient.ts`), realtime subscriptions (`realtimeManager.ts`), MCP connect (`mcpConnect.ts`), offline cache (`offlineDb.ts`). | `src/lib/`, `src/hooks/` |
 | **Edge / hosting** | Netlify serves the static build (auto-deploys on push to `main`) and provides identity/auth via `@netlify/identity`. | `netlify/`, Netlify |
 | **Backend hub** | One Express process on Fly.io = REST + a `ws` WebSocket hub at `/backend/ws` + the agent orchestrator + an MCP server + a file service. Single always-on machine (`min_machines_running=1`). | `server/index.cjs`, `server/mcp.cjs`, `shared/backend-core.mjs`, `fly.toml`, `Dockerfile.fly` |

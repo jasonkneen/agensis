@@ -328,7 +328,7 @@ test('insert leaves every other byte untouched', () => {
 });
 
 test('insert re-indents a multi-line snippet to its new depth', () => {
-  // A template lifted from two levels up must not keep the old indentation.
+  // A template reused from two levels up must not keep the old indentation.
   const snippet = '<article class="card">\n  <h3>T</h3>\n  <p>body</p>\n</article>';
   const out = applyEdit(FIXTURE, { op: 'insert', parentPath: [1, 0], index: 3, html: snippet });
   assert.ok(out.includes(

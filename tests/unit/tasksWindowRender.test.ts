@@ -582,7 +582,7 @@ describe('the toolbar remembers how you left it', () => {
 // workspace had 5 open tasks but 3 top-level, another 4 open but 1.
 //
 // These assert the badge against what the window actually presents, not against
-// a reimplementation of the rule.
+// a second copy of the rule.
 describe('open-task count matches what the window lists', () => {
   // Two top-level open, one top-level closed, and three subtasks — the shape
   // that produced the bug. `openTasks`-style counting says 5 here.

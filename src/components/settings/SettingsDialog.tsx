@@ -431,7 +431,7 @@ function AppearancePanel({
   const [twTheme, setTwTheme] = useState(() => getStoredTwTheme());
   const isNeoFamily = themeMode === 'neo-light' || themeMode === 'neo-dark';
   const isNormalFamily = themeMode === 'normal-light' || themeMode === 'normal-dark';
-  const isTinyWorld = themeMode === 'tinyworld-light' || themeMode === 'tinyworld-dark';
+  const isPaper = themeMode === 'paper-light' || themeMode === 'paper-dark';
   // Derive which style tab is active from the current mode
   const themeStyleTab: 'normal' | 'brutal' = isNeoFamily ? 'brutal' : 'normal';
   const [panelTranslucency, setPanelTranslucency] = useState(initialSettings.ui_panel_translucency);
@@ -444,8 +444,8 @@ function AppearancePanel({
     { id: 'light', label: 'Light' },
     { id: 'dark', label: 'Dark' },
     { id: 'system', label: 'System' },
-    { id: 'tinyworld-light', label: 'TW Light' },
-    { id: 'tinyworld-dark', label: 'TW Dark' },
+    { id: 'paper-light', label: 'Paper Light' },
+    { id: 'paper-dark', label: 'Paper Dark' },
   ];
   // Active scheme value for normal tab: map normal-* back to plain light/dark
   const normalSchemeValue: ThemeMode = themeMode === 'normal-light' ? 'light' : themeMode === 'normal-dark' ? 'dark' : themeMode;
@@ -583,11 +583,11 @@ function AppearancePanel({
               </div>
             )}
 
-            {/* TinyWorld world grid — repaints the paper; composes with the
+            {/* Paper world grid — repaints the paper; composes with the
                 accent preset above (world paper + your picked accent). */}
-            {isTinyWorld && (
+            {isPaper && (
               <div className="space-y-1.5">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">TinyWorld</div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Paper</div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {TW_WORLDS.map(w => {
                     const active = twTheme === w.id;
@@ -620,7 +620,7 @@ function AppearancePanel({
                   })}
                 </div>
                 <FieldDescription>
-                  Repaints TinyWorld’s paper. Your accent (above) stays on top — pick a world for the mood, an accent for the highlight.
+                  Repaints the Paper theme’s surfaces. Your accent (above) stays on top — pick a world for the mood, an accent for the highlight.
                 </FieldDescription>
               </div>
             )}

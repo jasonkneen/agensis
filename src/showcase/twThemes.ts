@@ -1,10 +1,10 @@
-// TinyWorld "world" registry.
+// Paper "world" registry.
 //
-// TinyWorld (see index.css, [data-ui-theme="tinyworld"]) is the warm-paper UI
-// theme: soft cream surfaces, a signature flourish hue, gently bevelled
+// The Paper family (see index.css, [data-ui-theme="paper"]) is the warm-paper
+// UI theme: soft cream surfaces, a signature flourish hue, gently bevelled
 // controls. It has always been ONE hardcoded palette (gold). This module keeps
-// TinyWorld a single theme but lets you re-paint its *paper* — every "world"
-// is the same TinyWorld chrome wearing a different warm-tinted paper + flourish.
+// Paper a single theme but lets you re-paint its *surfaces* — every "world"
+// is the same Paper chrome wearing a different warm-tinted paper + flourish.
 //
 // Two-tone by design: a world owns the paper (canvas ramp, borders, text,
 // semantics, flourish, control outline) — but NOT --primary / --ring /
@@ -65,8 +65,8 @@ export const TW_MANAGED_KEYS = [
   '--tw-gold-outline', '--tw-gold-fill', '--tw-control-outline',
 ] as const;
 
-// Keys ONLY TinyWorld sets — no other family (neo/normal) touches these. When
-// leaving TinyWorld, only these need explicit removal: every *shared* key above
+// Keys ONLY Paper sets — no other family (neo/normal) touches these. When
+// leaving Paper, only these need explicit removal: every *shared* key above
 // (canvas/border/text/semantics) is already cleared by syncNeoTheme +
 // syncNormalTheme, whose managed-key clears run before syncTwTheme in
 // applyTheme and together cover all of them. Blanket-removing the shared keys
@@ -180,7 +180,7 @@ function makeWorld(
 }
 
 // The default world — an exact copy of the current hardcoded CSS (index.css
-// [data-ui-theme="tinyworld"] blocks). Verified byte-for-byte by twThemes.test.
+// [data-ui-theme="paper"] blocks). Verified byte-for-byte by twThemes.test.
 const GOLD: TwWorld = {
   id: 'gold',
   label: 'Gold',
@@ -285,7 +285,7 @@ function currentScheme(): TwScheme {
 }
 
 /**
- * Remove TinyWorld's own tokens. Only the TW-unique keys are stripped here; the
+ * Remove Paper's own tokens. Only the TW-unique keys are stripped here; the
  * shared canvas/border/text keys are owned+cleared by neo/normal and would wipe
  * an active normal theme if removed here (see TW_UNIQUE_KEYS).
  */
@@ -301,27 +301,27 @@ function applyTwThemeVars(world: TwWorld, scheme: TwScheme) {
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
 }
 
-/** True when the TinyWorld family is currently active. */
-export function isTinyWorldActive(): boolean {
-  return document.documentElement.getAttribute('data-ui-theme') === 'tinyworld';
+/** True when the Paper family is currently active. */
+export function isPaperActive(): boolean {
+  return document.documentElement.getAttribute('data-ui-theme') === 'paper';
 }
 
-/** Select a world (persists + applies if the TinyWorld family is active). */
+/** Select a world (persists + applies if the Paper family is active). */
 export function applyTwTheme(id: string) {
   persist(id);
-  if (!isTinyWorldActive()) return;
+  if (!isPaperActive()) return;
   applyTwThemeVars(findTwTheme(id), currentScheme());
 }
 
 /**
  * Reconcile the world paper with the current family + scheme. Called from
  * applyTheme after [data-ui-theme] / [data-theme] settle:
- *  - tinyworld family → apply the stored world for the active scheme
+ *  - paper family → apply the stored world for the active scheme
  *  - other family     → drop world overrides (the CSS / preset defaults return)
  * Re-applying on scheme change is what swaps a world's light/dark paper.
  */
 export function syncTwTheme(mode: string) {
-  if (mode === 'tinyworld-light' || mode === 'tinyworld-dark') {
+  if (mode === 'paper-light' || mode === 'paper-dark') {
     applyTwThemeVars(findTwTheme(getStoredTwTheme()), currentScheme());
   } else {
     clearTwTheme();

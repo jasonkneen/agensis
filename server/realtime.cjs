@@ -57,7 +57,7 @@ function createRealtime(deps = {}) {
   markAgentConnectionOffline,
   refreshConnectedAgentConfigs,
   registerAgentConnection,
-  // Resolves a session's workspace. Injected rather than reimplemented: the
+  // Resolves a session's workspace. Injected rather than duplicated: the
   // caller's resolveWorkspaceIdForSession already owns a bounded LRU, and a
   // second cache here would be a second thing to keep correct.
   resolveWorkspaceIdForSession,

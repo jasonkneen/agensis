@@ -179,8 +179,8 @@ async function register(ws) {
     agentId: AGENT,
     handle: 'coder',
     name: 'Coder',
-    host: 'OzBook-M3-5.local',
-    cwd: '/Users/jkneen/Documents/GitHub/agensis',
+    host: 'example-host.local',
+    cwd: '/Users/alex/Documents/GitHub/agensis',
   });
   await new Promise((resolve) => setImmediate(resolve));
 }
