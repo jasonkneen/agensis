@@ -18,6 +18,26 @@ const { toPgArrayLiteral, createFirstUseWindow } = require('../shared/backend-co
 const KINDS_TO_RECORD = Object.freeze(new Set(['user']));
 const { normalizeTaskTitle, resolveTaskParentByTitle } = require('../shared/taskTitle.cjs');
 const { normalizeConversationMode } = require('../shared/channelMentions.cjs');
+const { ADVANCE_AGENT_READ_MARKER_SQL } = require('../shared/read-receipts.cjs');
+
+// Advance an agent's read marker to the newest inbound message in a session, and
+// broadcast it so a human watching sees the eye fill. Best-effort by design: a
+// read receipt is a courtesy signal, never a reason to fail the tool that was
+// actually asked for, and the marker is monotonic so a dropped write self-heals
+// on the next read. The participation gate on the calling tool
+// (assertChannelInWorkspace) has already proven this agent may see the session,
+// so no extra authorization is needed here.
+async function advanceAgentReadMarker(db, deps, sessionId, agentId) {
+ if (!sessionId || !agentId) return;
+ try {
+  const rows = await db.unsafe(ADVANCE_AGENT_READ_MARKER_SQL, [String(sessionId), String(agentId)]);
+  if (rows.length > 0 && deps && typeof deps.notifyDbSubscribers === 'function') {
+   deps.notifyDbSubscribers('session_read_state', 'INSERT', rows);
+  }
+ } catch {
+  // Swallowed: see above. A marker that fails to advance is invisible, never wrong.
+ }
+}
 
 // Native MCP (Model Context Protocol) server for agensis.
 //
@@ -453,13 +473,19 @@ function buildTools() {
    required: ['channel_id'],
    additionalProperties: false,
   },
-  async run(args, { db, identity }) {
+  async run(args, { db, identity, deps }) {
    const channelId = requireString(args, 'channel_id');
    const limit = optInt(args?.limit, 50, 200);
    const cursor = decodeCursor(args?.cursor);
    const threadParentId = typeof args?.thread_parent_id === 'string' && args.thread_parent_id.trim()
     ? args.thread_parent_id.trim() : null;
    await assertChannelInWorkspace(db, channelId, identity);
+   // Reading the channel IS the agent seeing it — advance its read marker to the
+   // newest inbound message so a human watching gets the eye. Gated already by
+   // assertChannelInWorkspace above; best-effort so it never fails the read.
+   if (identity?.kind === 'agent' && identity.agentId) {
+    await advanceAgentReadMarker(db, deps, channelId, identity.agentId);
+   }
    const params = [channelId];
    let where;
    if (threadParentId) {
@@ -1859,6 +1885,11 @@ async function insertAgentMessage(ctx, channelId, content, threadParentId, actin
   [channelId, content, threadParentId || null, senderKind, senderId, senderName, broadcast]);
  deps.notifyDbSubscribers('messages', 'INSERT', rows);
  await db.unsafe('update chat_sessions set updated_at = now() where id = $1', [channelId]).catch(() => { });
+ // Posting a reply proves the agent read what came before it — advance its marker
+ // to the newest message it did not author (the SQL excludes its own posts).
+ if (senderKind === 'agent' && senderId) {
+  await advanceAgentReadMarker(db, deps, channelId, senderId);
+ }
  return rows[0];
 }
 

@@ -1237,13 +1237,22 @@ CREATE INDEX IF NOT EXISTS idx_inbox_read_state_workspace ON inbox_read_state(wo
 --
 -- session_id leads the PK because every read is "all markers for THIS session",
 -- and that prefix is covered by the PK btree — so no second index is created.
+-- A reader is EITHER a human (user_id -> app_users) or an agent (agent_id ->
+-- workspace_agents). "Has this agent seen it" is a first-class receipt, so the
+-- table carries both nullable FKs, a CHECK that exactly one is set, and a partial
+-- unique index per kind in place of the old (session_id, user_id) primary key.
 CREATE TABLE IF NOT EXISTS session_read_state (
   session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-  user_id uuid NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  user_id uuid REFERENCES app_users(id) ON DELETE CASCADE,
+  agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
   read_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz DEFAULT now(),
-  PRIMARY KEY (session_id, user_id)
+  CONSTRAINT session_read_state_one_reader CHECK ((user_id IS NOT NULL) <> (agent_id IS NOT NULL))
 );
+CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_user_uidx
+  ON session_read_state (session_id, user_id) WHERE user_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_agent_uidx
+  ON session_read_state (session_id, agent_id) WHERE agent_id IS NOT NULL;
 
 -- The receipts opt-out, and it is RECIPROCAL: switching it off stops your
 -- markers being written AND stops you seeing anyone else's (both halves are in

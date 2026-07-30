@@ -29,8 +29,8 @@ function message(overrides: Partial<ReceiptMessage> = {}): ReceiptMessage {
   return { id: 'm1', created_at: '2026-07-01T12:00:00.000Z', sender_kind: 'human', sender_id: THEM, ...overrides };
 }
 
-function marker(userId: string, readAt: string): SessionReadMarker {
-  return { session_id: 's1', user_id: userId, read_at: readAt };
+function marker(readerId: string, readAt: string, readerKind = 'human'): SessionReadMarker {
+  return { session_id: 's1', reader_id: readerId, reader_kind: readerKind, read_at: readAt };
 }
 
 describe('decideReceiptEmit', () => {
@@ -154,6 +154,23 @@ describe('readersOf', () => {
     expect(readersOf(sent, [
       marker(THEM, '2026-07-01T12:00:05.000Z'),
       marker(THEM, '2026-07-01T12:00:06.000Z'),
+    ])).toEqual([THEM]);
+  });
+
+  it('counts an AGENT reader the same as a human one', () => {
+    // A reader id is opaque — human or agent, readersOf does not branch on kind.
+    const AGENT = 'agent-9';
+    expect(readersOf(sent, [marker(AGENT, '2026-07-01T12:00:05.000Z', 'agent')])).toEqual([AGENT]);
+  });
+
+  it('excludes an agent that authored the message it read', () => {
+    // Agents mark their own replies read; that self-read is not information, so
+    // the author (of either kind) is excluded by the shared sender_id equality.
+    const AGENT = 'agent-9';
+    const agentSent = message({ id: 'm7', sender_kind: 'agent', sender_id: AGENT });
+    expect(readersOf(agentSent, [
+      marker(AGENT, '2026-07-01T12:00:05.000Z', 'agent'),
+      marker(THEM, '2026-07-01T12:00:05.000Z'),
     ])).toEqual([THEM]);
   });
 });
