@@ -53,7 +53,7 @@ test('three kinds land in the two stores that are actually writable', () => {
   // A skill has no app-side store — agent_skill_documents is daemon-owned and
   // read-only — so it becomes a written page rather than a claim nobody checked.
   assert.equal(harvestAcceptTarget({ kind: 'skill' }).table, 'documents');
-  assert.equal(harvestAcceptTarget({ kind: 'skill' }).folder, 'Skills');
+  assert.equal(harvestAcceptTarget({ kind: 'skill' }).folder, 'Playbooks');
   assert.notEqual(harvestAcceptTarget({ kind: 'doc' }).folder, harvestAcceptTarget({ kind: 'skill' }).folder);
   assert.equal(harvestAcceptTarget({ kind: 'wat' }), null);
   assert.equal(harvestAcceptTarget(null), null);

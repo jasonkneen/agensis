@@ -337,13 +337,18 @@ function findingDecision(finding) {
  * - "memory" -> memory_facts, under its own category so a suggested fact is
  *   distinguishable from one a human typed.
  * - "doc"    -> documents.
- * - "skill"  -> documents too, in a Skills folder. THIS IS DELIBERATE: a skill
- *   in this product is a SKILL.md a daemon owns on its own disk and mirrors up
- *   into `agent_skill_documents`, which is read-only in-app and keyed per agent.
- *   There is no app-side skill store to accept into, and attaching a bare name
- *   to `workspace_agents.skills` would record a claim without the procedure that
- *   makes it true. A written page is the honest landing place, and the UI says
- *   so before the click rather than after.
+ * - "skill"  -> documents too, in a Playbooks folder (was "Skills" — renamed
+ *   because that name claimed to be the real thing). THIS IS DELIBERATE: a
+ *   skill in this product is a SKILL.md a daemon owns on its own disk and
+ *   mirrors up into `agent_skill_documents`, which is read-only in-app and
+ *   keyed per agent. There is no app-side skill store to accept into, and
+ *   attaching a bare name to `workspace_agents.skills` would record a claim
+ *   without the procedure that makes it true. A written page is the honest
+ *   landing place, and the UI says so before the click rather than after —
+ *   but "Skills" as a folder name still implied it *was* the real registry,
+ *   so it's named "Playbooks" instead. Promoting a Playbook into a real
+ *   skill is a separate, human-triggered step once an app-side skill store
+ *   exists (see feat/skill-store).
  */
 function harvestAcceptTarget(finding) {
   const kind = String(finding?.kind || '').trim().toLowerCase();
@@ -351,7 +356,7 @@ function harvestAcceptTarget(finding) {
     return { table: 'memory_facts', label: 'Team memory', category: 'suggested', folder: '' };
   }
   if (kind === 'skill') {
-    return { table: 'documents', label: 'Documents · Skills', category: '', folder: 'Skills' };
+    return { table: 'documents', label: 'Documents · Playbooks', category: '', folder: 'Playbooks' };
   }
   if (kind === 'doc') {
     return { table: 'documents', label: 'Documents · Suggestions', category: '', folder: 'Suggestions' };
