@@ -241,16 +241,6 @@ const NOT_A_FILTER: Record<string, string> = {
   // both. Pinned by the "stored in a tall window, restored in a short one" and
   // "neither pane below its minimum" cases in tests/unit/agentsView.test.ts.
   'agents.split': 'grid/map divider position, re-clamped against the live container every render — hides no data',
-  // The Memory window's files/preview divider, in px of list width. Same shape
-  // as 'agents.split' and clamped by the same shared function
-  // (clampPaneSplit + MEMORY_SPLIT_BOUNDS), re-derived from the measured
-  // container on every render rather than read out of storage as a layout. It
-  // also cannot hide the file list in the narrow layout, because below
-  // MEMORY_SPLIT_WIDE_PX there is no split at all — the preview replaces the
-  // list and a back arrow returns. Pinned by "clamps a wide-window list width
-  // into a narrow window" and "keeps the document readable no matter how far
-  // the divider is dragged" in tests/unit/paneSplit.test.ts.
-  'memory.files-split': 'files/preview divider position, re-clamped against the live container every render — hides no data',
   'tasks.view': 'chooses list/kanban/gantt — every view shows the same tasks',
   'sidebar.dm-filter': 'scoped to the DM list in the sidebar, which is not one of the seeded surfaces',
   'memory.category-filter': 'MemorySection facts pane; the file browser is the seeded Memory surface',
