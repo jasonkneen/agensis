@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { ADVANCE_AGENT_READ_MARKER_SQL } = require('../shared/read-receipts.cjs');
 
 // Agent jobs: the row that says a turn is RUNNING, everything that streams into
 // it, and the reapers that close one out when the process behind it stops.
@@ -57,6 +58,22 @@ function createAgentJobs(deps = {}) {
   textFromValue,
   verifyThreadParent,
  } = deps;
+
+ // Advance an agent's read high-water mark to the newest message it did not
+ // author, and fan the row out on the same lane as any other read receipt so the
+ // eye lights up live. Mirrors advanceAgentReadMarker in server/mcp.cjs; kept
+ // local because that one closes over the MCP handler's deps. Failures are
+ // swallowed on purpose — a marker that fails to advance is invisible, never
+ // wrong, and must never take a finished turn down with it.
+ async function advanceAgentReadMarker(sessionId, agentId) {
+  if (!sessionId || !agentId) return;
+  try {
+   const rows = await getDb().unsafe(ADVANCE_AGENT_READ_MARKER_SQL, [String(sessionId), String(agentId)]);
+   if (rows.length > 0) notifyDbSubscribers('session_read_state', 'INSERT', rows);
+  } catch (error) {
+   console.error('advanceAgentReadMarker (job finalize) failed', error);
+  }
+ }
 
  // Insert an agent_job, tolerating the partial unique index that enforces one
  // active job per (session, agent) (M15). A unique violation means a concurrent
@@ -671,6 +688,13 @@ function createAgentJobs(deps = {}) {
    notifyDbSubscribers('messages', 'INSERT', messageRows);
    void mirrorAgentReplyToTaskComment(messageRows[0]);
   }
+  // The agent has just answered, which means it read what it is answering — so
+  // advance its read marker to the newest inbound message here at the finalize
+  // choke point, once for all three write branches above. The MCP HTTP tool
+  // server does this in read_channel/post_message, but a daemon-served DM or
+  // channel turn (this path) went through NEITHER, so the eye never appeared for
+  // any agent reply the daemon produced. Same SQL, same fanout as mcp.cjs.
+  await advanceAgentReadMarker(job.session_id, job.agent_id);
   // The turn is over, so nothing in it may still be counting. The branches above
   // resolve the placeholder the job was TRACKING; a segmented turn rotated through
   // others, and a tick that raced this finalization can re-create one moments after
