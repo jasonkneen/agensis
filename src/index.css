@@ -3379,7 +3379,13 @@ body {
  background-color: var(--canvas-base);
  color: var(--text-primary);
  font-family: 'Space Grotesk', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
- font-size: 14px;
+ /* 1rem, NOT a hard px: `html` is set to var(--agensis-ui-font-size) (see the
+    html rule near the end of this file), which the user's `ui_base_font_size`
+    setting drives (settings.ts applyUiAppearanceSettings). A fixed px here was
+    the one baseline that ignored that slider while every rem-based `text-*`
+    class scaled — so bumping the setting grew the UI but left body prose
+    behind. `1rem` ties prose to the same single source. Default is 15px. */
+ font-size: 1rem;
  line-height: 1.5;
  /* 500, matching the settings nav the owner pointed at as the reference
     thickness — those rows are Buttons, which carry font-medium. Body text sat
