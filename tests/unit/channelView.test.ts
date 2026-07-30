@@ -129,3 +129,38 @@ describe('isBroadcastFromThread (the "from a thread" affordance)', () => {
     expect(isBroadcastFromThread(block)).toBe(false);
   });
 });
+
+describe('tool steps are never channel content', () => {
+  // The server threads tool steps, but agent-jobs.cjs has a fallback path: when
+  // the placeholder row is gone AND neither recorded parent verifies, the step is
+  // written with a null thread_parent_id — which the "top level OR broadcast"
+  // rule reads as an ordinary channel message. One live DM accumulated 119 of
+  // them, burying the conversation under context-free `Bash · …` / `Read · …`
+  // chips and pushing real messages off the page.
+  it('a tool step with NO thread parent is still kept out of the channel', () => {
+    const orphan = message({ id: 'step-orphan', message_kind: 'tool_step', thread_parent_id: null });
+    expect(isChannelMessage(orphan)).toBe(false);
+  });
+
+  it('a tool step is excluded even if something flagged it broadcast', () => {
+    const flagged = message({ id: 'step-flagged', message_kind: 'tool_step', broadcast_to_channel: true });
+    expect(isChannelMessage(flagged)).toBe(false);
+  });
+
+  it('CONTROL: an ordinary top-level message is untouched by the kind filter', () => {
+    // Without this, "return false" would pass both tests above and empty the
+    // channel entirely.
+    expect(isChannelMessage(message({ id: 'plain' }))).toBe(true);
+    expect(isChannelMessage(message({ id: 'bcast', thread_parent_id: 'x', broadcast_to_channel: true }))).toBe(true);
+  });
+
+  it('filters orphaned steps out of a real transcript, keeping everything else', () => {
+    const all = [
+      message({ id: 'human', role: 'user' }),
+      message({ id: 'step-1', message_kind: 'tool_step', thread_parent_id: null }),
+      message({ id: 'step-2', message_kind: 'tool_step', thread_parent_id: 'human' }),
+      message({ id: 'answer', thread_parent_id: 'human', broadcast_to_channel: true }),
+    ];
+    expect(channelMessages(all).map(m => m.id)).toEqual(['human', 'answer']);
+  });
+});

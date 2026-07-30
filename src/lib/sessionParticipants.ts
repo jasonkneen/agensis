@@ -1,3 +1,5 @@
+import type { ChannelParticipant } from '../types';
+
 // Reading `chat_sessions.participants` without trusting its shape.
 //
 // The column is jsonb, but two server write sites bound `JSON.stringify(...)`
@@ -76,6 +78,35 @@ export function dedupeSessionParticipants<T>(participants: readonly T[]): T[] {
     }
   }
   return out;
+}
+
+/**
+ * The ONE shape a participant is written in, whoever is writing it.
+ *
+ * Lives here rather than beside either dialog because there are now two writers
+ * — the add-people dialog inside an open channel, and the member step of channel
+ * creation — and two writers producing two shapes for the same agent is exactly
+ * the bug documented above `participantAgentKey`. A third writer should import
+ * this, not rewrite it.
+ *
+ * Every field is written explicitly, including the nulls: a row that omits
+ * `agent_id` is indistinguishable from one whose agent could not be resolved,
+ * and `dedupeSessionParticipants` treats absent and null differently when it
+ * merges duplicates.
+ */
+export function toPersistedParticipant(
+  candidate: Pick<ChannelParticipant, 'id' | 'name' | 'kind'> & Partial<ChannelParticipant>,
+): ChannelParticipant {
+  return {
+    id: candidate.id,
+    name: candidate.name,
+    kind: candidate.kind,
+    status: candidate.status || null,
+    handle: candidate.handle || null,
+    user_id: candidate.user_id || null,
+    agent_id: candidate.agent_id || null,
+    added_at: new Date().toISOString(),
+  };
 }
 
 /**

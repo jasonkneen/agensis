@@ -288,6 +288,13 @@ const {
  slugMentionHandle,
 } = require('../shared/channelMentions.cjs');
 const { replyCadencePlan } = require('../shared/replyCadence.cjs');
+const {
+ ambientRepliesEnabled,
+ createAmbientElectionBudget,
+ isHumanAuthored,
+ isStructurallyTrivial,
+ openInterlocutor,
+} = require('../shared/ambientAddressing.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -1097,6 +1104,16 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS permission_mode text NOT NULL DEFAULT 'default';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT true;
+    -- May this agent be drawn into a channel post that named nobody?
+    --
+    -- DEFAULT true on purpose: unprompted replies have been live for every
+    -- 'auto' channel since the conversation_mode work, and defaulting to false
+    -- would silently switch that off for everyone. Explicit addressing — an
+    -- @mention, @channel, a DM, a reply in the agent's own thread — is NEVER
+    -- affected by this column; an off switch that made an agent unreachable by
+    -- name would be a bug, not a setting. Read fail-open in
+    -- shared/ambientAddressing.cjs so a row predating this column stays audible.
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS ambient_replies boolean NOT NULL DEFAULT true;
     ALTER TABLE workspace_agents ALTER COLUMN avatar SET DEFAULT 'AI';
     CREATE INDEX IF NOT EXISTS idx_workspace_agents_handle ON workspace_agents(workspace_id, handle);
     CREATE INDEX IF NOT EXISTS idx_workspace_agents_connect_token_hash ON workspace_agents(connect_token_hash);
@@ -3756,6 +3773,9 @@ function agentRuntimePayload(agent) {
   permissionFlags: agentPermissionFlags(permissionMode),
   version: Number(agent.version || 0),
   enabled: isAgentEnabled(agent),
+  // Fail-open, like the reader in shared/ambientAddressing.cjs: a row from
+  // before the column existed must not read as "opted out of ambient replies".
+  ambient_replies: ambientRepliesEnabled(agent),
  };
 }
 
@@ -3797,7 +3817,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId, userId],
   ),
   db.unsafe(
-   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, created_by
+   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, ambient_replies, created_by
        from workspace_agents
        where workspace_id = $1
        order by created_at asc, name asc
@@ -4201,6 +4221,18 @@ const CHANNEL_CONTEXT_LIMIT = 40;
 // also keeps conversation history below the daemon's 10 KiB complete-prompt cap.
 const CHANNEL_CONTEXT_MAX_BYTES = 8 * 1024;
 const conversationLocks = new Set();
+// Cost damper on the PAID ambient tier only (shared/ambientAddressing.cjs).
+// In-process like conversationLocks and cadenceWakes, so on N Fly machines the
+// real cap is N x the constant. That is fine for a spend limiter and would NOT
+// be fine for anything correctness-bearing — the one-active-job unique index
+// holds that, not this.
+const ambientElectionBudget = createAmbientElectionBudget();
+// Kill switch for the paid tier, gating EXECUTION rather than a button: with it
+// off the free continuity tier still runs, because there is nothing to kill
+// about a decision that costs nothing.
+function ambientElectionEnabled() {
+ return String(process.env.AGENSIS_AMBIENT_ELECTION || '').trim().toLowerCase() !== 'off';
+}
 
 
 
@@ -4655,7 +4687,10 @@ async function dispatchCommentMentions({ table, row, authorUserId, run = continu
     // awaiting costs no request latency.
     let outcome = null;
     try {
-     outcome = await run({ workspaceId, sessionId: session.id, threadParentId });
+     // Same as task dispatch: this opens a thread on the agent's behalf after a
+     // comment @mention, so the reply must surface in the conversation rather
+     // than only inside a thread nobody has opened.
+     outcome = await run({ workspaceId, sessionId: session.id, threadParentId, broadcastToChannel: true });
     } catch (error) {
      console.error('continueConversation (task subthread mention) failed', error);
      outcome = { started: false, reason: 'error' };
@@ -5634,7 +5669,7 @@ async function resolveWorkThreadParent(sessionId) {
 // agent turn in flight (or ran one to completion). Task dispatch reads it to tell
 // "the agent is on it" from "the turn was refused — put the task back in the
 // queue"; every other caller ignores it.
-async function continueConversation({ workspaceId, sessionId, threadParentId = null }) {
+async function continueConversation({ workspaceId, sessionId, threadParentId = null, broadcastToChannel = null }) {
  if (!workspaceId || !sessionId) return { started: false, reason: 'missing_input' };
  const lockKey = `${sessionId}::${threadParentId || ''}`;
  if (conversationLocks.has(lockKey)) return { started: false, reason: 'locked' };
@@ -5784,12 +5819,39 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     // an agent's thread dispatch in EVERY mode — the mode decides whether
     // silence is allowed, never whether being asked directly is.
     //
-    // Fires once per human message (agentTurns === 0, latest author is the
-    // human). The candidate pool is every enabled agent that is a channel
+    // Fires once per human message (agentTurns === 0, the newest row is the
+    // human's). The candidate pool is every enabled agent that is a channel
     // participant UNION every agent that has recently posted here — so a human
     // replying right after an agent draws that agent back in to decide "is this
     // for me, or pass it on?".
-    if (!nextAgent && agentTurns === 0 && latestAuthorAgentId === '' && unpromptedAllowed) {
+    //
+    // `isHumanAuthored(latest)` is deliberately NARROWER than the
+    // "latest author is not an agent" test it replaces. That test was satisfied
+    // by a schedule row (sender_kind='system') and an automation post
+    // (sender_kind='automation') as well as by a person. Neither can reach here
+    // today — schedules always prefix @handle so they route through mentions
+    // (see runScheduleNow), and automations never call continueConversation —
+    // but AGENTS.md anticipates a dispatch_agent automation action landing, and
+    // on that day "not an agent" would let a machine open a paid turn budget
+    // that only a human is supposed to open. Narrower can only ever dispatch
+    // less, never more.
+    //
+    // THREE TIERS, in order, and none of them can turn a "no" into a "yes":
+    //
+    //   Tier 1  openInterlocutor — FREE and deterministic. The agent you are
+    //           demonstrably mid-conversation with, read off the transcript.
+    //           This is the common case (a follow-up to the agent that just
+    //           spoke) and it used to cost a paid, non-deterministic call to
+    //           decide something the messages already state.
+    //   Tier 2  cheap suppressors — a cold post with no letters or digits, and
+    //           a per-session budget. Both only ever REFUSE the paid call.
+    //   Tier 3  pickAutoInterjectWatcher — the existing single Haiku call,
+    //           unchanged, still one agent or null, still failing closed.
+    //
+    // Tier 1 elects from the SAME pool Tier 3 would have, so it can never elect
+    // where Tier 3 could not. Tier 1 and Tier 3 are mutually exclusive: a
+    // continuity hit makes NO model call.
+    if (!nextAgent && agentTurns === 0 && isHumanAuthored(latest) && unpromptedAllowed) {
      const candidateIds = new Set();
      for (const id of participantAgentIds) candidateIds.add(String(id));
      // Recent agent authors (newest first): the last one to speak is the
@@ -5802,19 +5864,46 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
        candidateIds.add(String(r.sender_id));
       }
      }
+     // The per-agent off switch is applied to the POOL, so an opted-out agent
+     // is invisible to both tiers at once — and a channel where every candidate
+     // has opted out makes no model call at all.
      const candidates = [...candidateIds]
       .map((id) => agents.find((agent) => String(agent.id) === id))
-      .filter((agent) => agent && isAgentEnabled(agent));
+      .filter((agent) => agent && isAgentEnabled(agent) && ambientRepliesEnabled(agent));
      if (candidates.length > 0) {
-      const humanMessage = textFromValue(burst[0]?.content).slice(0, 2000);
-      const contextLines = rows
-       .slice(Math.max(0, startIdx - 5), startIdx)
-       .map((r) => `${r.sender_kind === 'agent' ? '@' + slugHandle(r.sender_name || 'agent') : 'human'}: ${textFromValue(r.content).slice(0, 300)}`)
-       .join('\n');
-      const lastAgent = candidates.find((agent) => String(agent.id) === lastAgentAuthorId);
-      const lastSpeakerHandle = lastAgent ? slugHandle(lastAgent.handle || lastAgent.name) : '';
-      const watcher = await pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLines, candidates, lastSpeakerHandle });
-      if (watcher) nextAgent = watcher;
+      const inPool = (agentId) => candidates.some((agent) => String(agent.id) === String(agentId));
+      // --- Tier 1: free, deterministic continuity ---------------------------
+      const open = openInterlocutor({
+       rows,
+       startIdx,
+       nowMs: Date.now(),
+       isEligible: inPool,
+       textOf: textFromValue,
+      });
+      if (open) nextAgent = candidates.find((agent) => String(agent.id) === open.agentId) || null;
+
+      if (!nextAgent) {
+       const humanMessage = textFromValue(burst[0]?.content).slice(0, 2000);
+       // --- Tier 2: suppressors, guarding only the paid call ----------------
+       // Structural, never semantic: a message with zero letters and zero
+       // digits is a bare reaction. It runs AFTER Tier 1 on purpose, so a `👍`
+       // typed mid-conversation still reaches the agent you were talking to —
+       // only the COLD trivial message is dropped.
+       const paidTierAllowed = ambientElectionEnabled()
+        && !isStructurallyTrivial(humanMessage)
+        && ambientElectionBudget.take(sessionId);
+       if (paidTierAllowed) {
+        const contextLines = rows
+         .slice(Math.max(0, startIdx - 5), startIdx)
+         .map((r) => `${r.sender_kind === 'agent' ? '@' + slugHandle(r.sender_name || 'agent') : 'human'}: ${textFromValue(r.content).slice(0, 300)}`)
+         .join('\n');
+        const lastAgent = candidates.find((agent) => String(agent.id) === lastAgentAuthorId);
+        const lastSpeakerHandle = lastAgent ? slugHandle(lastAgent.handle || lastAgent.name) : '';
+        // --- Tier 3: the existing single cheap call -------------------------
+        const watcher = await pickAutoInterjectWatcher({ workspaceId, humanMessage, contextLines, candidates, lastSpeakerHandle });
+        if (watcher) nextAgent = watcher;
+       }
+      }
      }
     }
    }
@@ -5880,7 +5969,7 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     .filter((agent) => String(agent.id) !== String(nextAgent.id))
     .map((agent) => ({ handle: slugHandle(agent.handle || agent.name), name: agent.name }));
 
-   const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants, isDirectMessage });
+   const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants, isDirectMessage, broadcastToChannel });
    if (result && result.ok) started = true;
    // `ok:false, pending:true` is the one that matters to the task queue: the
    // one-active-job unique index bounced the insert, so NO job exists and nothing
@@ -6836,22 +6925,46 @@ function workspaceSessionCacheSet(sessionId, workspaceId) {
  }
 }
 
-async function resolveWorkspaceIdForSession(sessionId) {
+/**
+ * Resolve a session's workspace AND whether only its members may read it.
+ *
+ * Both travel together because `activity_events` is a WORKSPACE-scoped feed:
+ * `appendSessionAccessClause` returns untouched for any table that is not
+ * `chat_sessions`/`messages`, and the realtime private lane at
+ * server/realtime.cjs only splits `chat_sessions` rows. So nothing downstream
+ * of this function can re-derive "that came out of a DM" — if the privacy of
+ * the source session does not ride along with the row at WRITE time, it is
+ * gone, and a members-only conversation ends up in a feed every `read` member
+ * can select.
+ *
+ * One query and one cache entry for both, so the privacy check is free.
+ */
+async function resolveSessionActivityContext(sessionId) {
  if (!sessionId) return null;
  const cached = workspaceSessionCacheGet(sessionId);
  if (cached !== undefined) return cached;
  try {
   const rows = await getDb().unsafe(
-   'select workspace_id from chat_sessions where id = $1 limit 1',
+   'select workspace_id, visibility, folder from chat_sessions where id = $1 limit 1',
    [sessionId],
   );
-  const workspaceId = rows[0]?.workspace_id || null;
-  if (workspaceId) workspaceSessionCacheSet(sessionId, workspaceId);
-  return workspaceId;
+  const row = rows[0];
+  const workspaceId = row?.workspace_id || null;
+  if (!workspaceId) return null;
+  // Fail closed: an unreadable/absent row is treated as private by
+  // isPrivateSessionRow's own folder backstop rather than assumed open.
+  const context = { workspaceId, isPrivate: isPrivateSessionRow(row) };
+  workspaceSessionCacheSet(sessionId, context);
+  return context;
  } catch (error) {
-  console.error('resolveWorkspaceIdForSession failed', error);
+  console.error('resolveSessionActivityContext failed', error);
   return null;
  }
+}
+
+async function resolveWorkspaceIdForSession(sessionId) {
+ const context = await resolveSessionActivityContext(sessionId);
+ return context ? context.workspaceId : null;
 }
 
 // Logs an `activity_events` row for each inserted/finalized chat message so it
@@ -6864,20 +6977,30 @@ async function logMessageActivity(rows) {
   if (isAgentPlaceholder(message)) continue;
   try {
    const sessionId = message.session_id;
-   const workspaceId = await resolveWorkspaceIdForSession(sessionId);
-   if (!workspaceId) continue;
+   const sessionContext = await resolveSessionActivityContext(sessionId);
+   if (!sessionContext) continue;
+   const { workspaceId, isPrivate } = sessionContext;
    const role = message.role || '';
    const senderName = message.sender_name || (role === 'user' ? 'You' : 'Agent');
    const content = typeof message.content === 'string' ? message.content : '';
-   const title = `${senderName}: ${content.slice(0, 80)}`.slice(0, 120);
    const senderId = typeof message.sender_id === 'string' ? message.sender_id : '';
    const userId = role === 'user' && ACTIVITY_UUID_RE.test(senderId) ? senderId : null;
+   // A members-only session contributes the FACT of a message, never its words.
+   // Both carriers have to be cut, not just one: `metadata.content` is the whole
+   // body, and `title` was the first 80 characters of that same body — which is
+   // still the message, just shorter. What survives is enough for the feed to
+   // say something happened and to link to it; a reader who is not a member
+   // follows that link and gets nothing, because the session gate does hold on
+   // the transcript route.
+   const title = isPrivate
+    ? `${senderName}: (private conversation)`.slice(0, 120)
+    : `${senderName}: ${content.slice(0, 80)}`.slice(0, 120);
    const metadata = {
     session_id: sessionId,
     role,
     sender_kind: message.sender_kind || '',
     sender_name: message.sender_name || '',
-    content,
+    ...(isPrivate ? {} : { content }),
    };
    // C3: idempotent insert. ON CONFLICT DO NOTHING against the partial unique
    // index uq_activity_events_message_sent means a retried finalization for the
@@ -8427,6 +8550,7 @@ function resetTestState() {
  clearPendingJobFailures();
  taskDispatch.reset();
  conversationLocks.clear();
+ ambientElectionBudget.reset();
 }
 
 

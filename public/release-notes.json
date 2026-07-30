@@ -56,21 +56,6 @@
     ]
   },
   {
-    "version": "skill-store",
-    "date": "2026-07-30",
-    "title": "You can now write a skill, instead of only naming one",
-    "summary": "A skill in agensis has always been a name on an agent, with the actual instructions sitting in a file on somebody's laptop. That worked while a machine was connected and fell apart the moment it wasn't — and it meant there was nowhere to put a procedure you wanted the whole workspace to have. So the Skills window now has a writer. Give a skill a title, a one-line summary and the steps, and every agent can read it with read_skill, whether or not anything is connected. Two things that were bent around the gap are now straight: accepting a suggested skill creates a skill rather than a page in a Documents folder, and the agent form tells you when a skill name has no procedure behind it — which used to happen silently every time a template carried a name your workspace had never seen. A written skill carries words only. It cannot carry a URL agensis will call, a stored credential, or a folder on anyone's machine; those still live where they always did, behind admin. Agents are handed a skill as reference material, clearly marked as something to read rather than orders to follow.",
-    "highlights": [
-      "Write a skill in the Skills window — title, summary, and the procedure.",
-      "Any agent can read it with read_skill, connected or not.",
-      "Accepting a suggested skill now creates a skill, not a document in a Skills folder.",
-      "The agent form warns when a skill name has nothing behind it, so a template can no longer hand you a name with no procedure.",
-      "If a connected machine has a real file by the same name, that file still wins — and the page now says so instead of quietly showing the other one.",
-      "A written skill holds words only: no URL agensis will call, no credential, no folder on your machine.",
-      "Skills accepted as documents before this change stay where they are; nothing was moved."
-    ]
-  },
-  {
     "version": "suggestions",
     "date": "2026-07-30",
     "title": "Suggestions now come from every conversation, not just deleted ones",

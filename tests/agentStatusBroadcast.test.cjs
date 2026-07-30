@@ -68,11 +68,16 @@ function sessionDb(sessionToWorkspace, { fail = false } = {}) {
  __test.setTestDb({
   async unsafe(sql, params) {
    const n = String(sql).replace(/\s+/g, ' ').trim();
-   if (n.startsWith('select workspace_id from chat_sessions')) {
+   // The session lookup also selects `visibility`/`folder` now: activity rows
+   // have to know at WRITE time whether they came out of a members-only
+   // conversation, because nothing downstream of activity_events can re-derive
+   // it. Matched loosely on the leading column so this mock does not have to
+   // track the exact projection.
+   if (n.startsWith('select workspace_id') && n.includes('from chat_sessions')) {
     lookups.push(params[0]);
     if (fail) throw new Error('chat_sessions lookup exploded');
     const ws = sessionToWorkspace[params[0]];
-    return ws ? [{ workspace_id: ws }] : [];
+    return ws ? [{ workspace_id: ws, visibility: 'workspace', folder: 'Channels' }] : [];
    }
    return [];
   },

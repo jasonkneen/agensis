@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { ArrowLeft, Plus, Search } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, Plus } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -12,62 +12,117 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import {
   CHANNEL_TEMPLATES,
-  CHANNEL_TEMPLATE_CATEGORIES,
   canCreateFromTemplate,
   channelDraftFromTemplate,
-  filterChannelTemplates,
   type ChannelTemplate,
 } from '@/lib/channelTemplates';
+import {
+  applyTemplateName,
+  canAdvanceToMembers,
+  composeChannelDraft,
+  duplicateChannelName,
+  type ChannelCreateDraft,
+  type ChannelCreateStep,
+} from '@/lib/channelCreateFlow';
+import { ChannelMemberStep, type MemberChoice } from './ChannelMemberStep';
 import { bridgeSpec } from '@/lib/bridgeProviders';
 import { apiUrl, apiAuthHeaders } from '@/lib/backendClient';
+import type { AgentConnection, ChatSession, WorkspaceAgent } from '@/types';
 
 // ---------------------------------------------------------------------------
 // The "+" beside Channels opens this instead of silently creating "New Channel".
 //
-// Deliberately the same shape as the agent create gallery (AgentsWindowContent's
-// `createStep === 'choose'` branch): search, category tabs, a grid of cards,
-// and picking one PREFILLS rather than creates. Matching that layout is the
-// point — a second gallery that looked different would read as a different
-// kind of thing.
+// TWO STEPS, in the order the owner asked for:
 //
-// Bridge templates (Telegram, Signal, WhatsApp, OpenClaw) are shown but cannot
-// be created: the transport does not exist yet. They open a setup PREVIEW that
-// says so. A card that created a dead channel would be worse than no card.
+//   1. NAME. Autofocused, and the very first thing asked — because the name is
+//      what everything else is derived from. Before this, picking the "Custom
+//      channel" card created a channel called literally "New Channel" (its
+//      template title is '', so createSession's fallback won) and left the user
+//      to go and find Edit channel. That was the worst thing about this dialog.
+//
+//   2. MEMBERS, suggested FROM that name. Ranked locally — see
+//      src/lib/channelMemberSuggestions.ts. Suggested, never added: the roster
+//      decides who answers in the room.
+//
+// Templates moved from being the gate to being a MODIFIER: a compact chip row
+// under the name field that sets icon / description / intent / conversation
+// mode, and fills the name only if it is still empty. They stopped being a
+// wall between the user and a named channel.
+//
+// Bridge templates keep their existing path untouched: they still go straight
+// to BridgeSetup, which creates the channel and THEN attaches the transport in
+// an order that is load-bearing and documented below. They skip step 2.
 // ---------------------------------------------------------------------------
+
+const CUSTOM_TEMPLATE = CHANNEL_TEMPLATES.find(tpl => tpl.id === 'custom') ?? CHANNEL_TEMPLATES[0];
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Create a channel from the template's prefilled fields. */
-  onCreate: (draft: ReturnType<typeof channelDraftFromTemplate>) => void | Promise<void>;
+  /**
+   * Create the channel. RETURNS the created session — BridgeSetup needs its id
+   * to attach a transport to it.
+   */
+  onCreate: (draft: ChannelCreateDraft | ReturnType<typeof channelDraftFromTemplate>) =>
+    Promise<{ id?: string } | null | undefined> | { id?: string } | null | undefined;
+  workspaceId: string | null;
+  agents: WorkspaceAgent[];
+  agentConnections: AgentConnection[];
+  sessions: ChatSession[];
 }
 
-export function NewChannelDialog({ open, onOpenChange, onCreate }: Props) {
-  const [query, setQuery] = useState('');
-  const [category, setCategory] = useState('All');
+export function NewChannelDialog({
+  open, onOpenChange, onCreate, workspaceId, agents, agentConnections, sessions,
+}: Props) {
+  const [step, setStep] = useState<ChannelCreateStep>('name');
+  const [name, setName] = useState('');
+  const [template, setTemplate] = useState<ChannelTemplate>(CUSTOM_TEMPLATE);
+  const [selected, setSelected] = useState<MemberChoice[]>([]);
   const [preview, setPreview] = useState<ChannelTemplate | null>(null);
   const [creating, setCreating] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
 
-  const filtered = useMemo(
-    () => filterChannelTemplates(CHANNEL_TEMPLATES, category, query),
-    [category, query],
-  );
+  useEffect(() => {
+    if (open && step === 'name') {
+      // Focus after the dialog's own open animation, or Radix moves focus back.
+      const timer = setTimeout(() => nameRef.current?.focus(), 60);
+      return () => clearTimeout(timer);
+    }
+  }, [open, step]);
 
-  const reset = () => { setQuery(''); setCategory('All'); setPreview(null); setCreating(false); };
+  const reset = () => {
+    setStep('name');
+    setName('');
+    setTemplate(CUSTOM_TEMPLATE);
+    setSelected([]);
+    setPreview(null);
+    setCreating(false);
+  };
 
   const handleOpenChange = (next: boolean) => {
     if (!next) reset();
     onOpenChange(next);
   };
 
-  const pick = async (tpl: ChannelTemplate) => {
-    // A bridge needs credentials before it can be created, so it opens its own
-    // setup step rather than creating a channel on the spot.
-    if (tpl.kind === 'bridge') { setPreview(tpl); return; }
-    if (!canCreateFromTemplate(tpl)) { setPreview(tpl); return; }
+  const nativeTemplates = useMemo(() => CHANNEL_TEMPLATES.filter(tpl => tpl.kind === 'native'), []);
+  const bridgeTemplates = useMemo(() => CHANNEL_TEMPLATES.filter(tpl => tpl.kind === 'bridge'), []);
+
+  const duplicate = useMemo(() => duplicateChannelName(sessions, name), [sessions, name]);
+  const canAdvance = canAdvanceToMembers(name);
+
+  const pickTemplate = (tpl: ChannelTemplate) => {
+    // A bridge needs credentials before anything exists, so it keeps its own
+    // path and never reaches the member step.
+    if (tpl.kind === 'bridge' || !canCreateFromTemplate(tpl)) { setPreview(tpl); return; }
+    setTemplate(tpl);
+    setName(current => applyTemplateName(current, tpl));
+  };
+
+  const create = async () => {
+    if (!canAdvance) return;
     setCreating(true);
     try {
-      await onCreate(channelDraftFromTemplate(tpl));
+      await onCreate(composeChannelDraft(template, name, selected));
       handleOpenChange(false);
     } finally {
       setCreating(false);
@@ -77,10 +132,10 @@ export function NewChannelDialog({ open, onOpenChange, onCreate }: Props) {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       {/* `sm:` matters: DialogContent's base is `sm:max-w-sm`, and tailwind-merge
-          keeps an unprefixed `max-w-3xl` ALONGSIDE it rather than replacing it —
+          keeps an unprefixed `max-w-2xl` ALONGSIDE it rather than replacing it —
           so above 640px the base media query won and this dialog rendered at
-          384px, collapsing the card grid to a single column. */}
-      <DialogContent className="sm:max-w-3xl">
+          384px, collapsing its content to a single cramped column. */}
+      <DialogContent className="flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-2xl">
         {preview ? (
           <BridgeSetup
             template={preview}
@@ -88,79 +143,124 @@ export function NewChannelDialog({ open, onOpenChange, onCreate }: Props) {
             onCreate={onCreate}
             onClose={() => handleOpenChange(false)}
           />
-        ) : (
+        ) : step === 'name' ? (
           <>
             <DialogHeader>
               <DialogTitle>New channel</DialogTitle>
               <DialogDescription>
-                Pick a starting point. Nothing is created until you choose one, and
-                everything a template sets can be changed afterwards in Edit channel.
+                Name it first — the name is what suggests who to add next. Nothing is created
+                until you finish, and everything here can be changed later in Edit channel.
               </DialogDescription>
             </DialogHeader>
 
-            <div className="flex items-center gap-2">
-              <Search aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-              <Input
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                placeholder="Search templates"
-                aria-label="Search channel templates"
-              />
-            </div>
-
-            <div className="flex flex-wrap gap-1.5">
-              {CHANNEL_TEMPLATE_CATEGORIES.map(cat => (
-                <button
-                  key={cat}
-                  type="button"
-                  onClick={() => setCategory(cat)}
-                  aria-pressed={category === cat}
-                  className={cn(
-                    'control-outer-ring rounded-lg border px-2.5 py-1 text-xs font-medium transition',
-                    category === cat
-                      ? 'border-primary/60 bg-primary/15 text-foreground'
-                      : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
-                  )}
-                >
-                  {cat}
-                </button>
-              ))}
-            </div>
-
-            {filtered.length === 0 ? (
-              <div className="py-8 text-center text-sm text-muted-foreground">
-                No templates match that search.
+            <div>
+              <div className="flex items-center gap-2 rounded-lg border border-border bg-card/40 px-3">
+                <span aria-hidden className="text-base font-medium text-muted-foreground">#</span>
+                <Input
+                  ref={nameRef}
+                  value={name}
+                  onChange={event => setName(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' && canAdvance) { event.preventDefault(); setStep('members'); }
+                  }}
+                  placeholder="e.g. incidents"
+                  aria-label="Channel name"
+                  className="border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
+                />
               </div>
-            ) : (
-              <div className="grid max-h-[52vh] gap-3 overflow-y-auto pr-1 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
-                {filtered.map(tpl => {
+              {duplicate && (
+                <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">
+                  A channel called "{duplicate}" already exists. That is allowed — names are
+                  not unique — but the two will be hard to tell apart.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Start from
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {nativeTemplates.map(tpl => {
                   const Icon = tpl.icon;
-                  const usable = canCreateFromTemplate(tpl);
+                  const active = template.id === tpl.id;
                   return (
                     <button
                       key={tpl.id}
                       type="button"
-                      disabled={creating}
-                      onClick={() => void pick(tpl)}
+                      onClick={() => pickTemplate(tpl)}
+                      aria-pressed={active}
+                      title={tpl.description}
                       className={cn(
-                        'group flex min-h-[132px] flex-col items-start gap-2 rounded-xl border p-4 text-left transition-all duration-200',
-                        'hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30',
-                        usable ? 'border-border bg-card/40' : 'border-dashed border-border bg-card/20',
+                        'control-outer-ring flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition',
+                        active
+                          ? 'border-primary/60 bg-primary/15 text-foreground'
+                          : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
                       )}
                     >
-                      <span className="grid size-9 place-items-center rounded-lg bg-muted">
-                        <Icon className="size-5" />
-                      </span>
-                      <span className="text-sm font-semibold">{tpl.name}</span>
-                      <span className="line-clamp-2 text-xs text-muted-foreground">{tpl.description}</span>
-                      <span className="mt-auto text-[11px] text-muted-foreground opacity-70">
-                        {usable ? tpl.category : 'Preview only'}
-                      </span>
+                      <Icon className="size-3.5" />
+                      {tpl.name}
                     </button>
                   );
                 })}
               </div>
-            )}
+              <p className="text-xs text-muted-foreground">{template.description}</p>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Bring your own
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {bridgeTemplates.map(tpl => {
+                  const Icon = tpl.icon;
+                  return (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => pickTemplate(tpl)}
+                      title={tpl.description}
+                      className="control-outer-ring flex items-center gap-1.5 rounded-lg border border-dashed border-border bg-card/20 px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted/50 hover:text-foreground"
+                    >
+                      <Icon className="size-3.5" />
+                      {tpl.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t pt-3">
+              <Button type="button" variant="outline" size="sm" onClick={() => handleOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button type="button" size="sm" disabled={!canAdvance} onClick={() => setStep('members')}>
+                Next
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>Who is in #{name.trim()}?</DialogTitle>
+              <DialogDescription>
+                Suggested from the name. Adding an agent means it can answer here, so nothing is
+                added until you pick it.
+              </DialogDescription>
+            </DialogHeader>
+            <ChannelMemberStep
+              channelName={name}
+              workspaceId={workspaceId}
+              agents={agents}
+              agentConnections={agentConnections}
+              sessions={sessions}
+              conversationMode={template.conversationMode}
+              selected={selected}
+              onSelectedChange={setSelected}
+              onBack={() => setStep('name')}
+              onCreate={() => void create()}
+              creating={creating}
+            />
           </>
         )}
       </DialogContent>
@@ -183,7 +283,7 @@ function BridgeSetup({
 }: {
   template: ChannelTemplate;
   onBack: () => void;
-  onCreate: (draft: ReturnType<typeof channelDraftFromTemplate>) => void | Promise<void>;
+  onCreate: Props['onCreate'];
   onClose: () => void;
 }) {
   const Icon = template.icon;

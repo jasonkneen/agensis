@@ -24,10 +24,13 @@ test.before(async () => {
 });
 
 // Mock db simulating the activity_events insert path.
-//   sessions: { [sessionId]: workspaceId }   -> chat_sessions workspace lookup
-// Tracks every insert attempt (`insertAttempts`) and the rows actually stored
-// (`stored`), enforcing the partial unique index on entity_id for message_sent
-// events the same way `ON CONFLICT DO NOTHING` does.
+//   sessions: { [sessionId]: workspaceId }
+//             | { [sessionId]: { workspaceId, visibility, folder } }
+// The object form exists so a test can make a session members-only. The mock
+// hands back whatever `visibility`/`folder` it is given and does NOT decide
+// privacy itself — `isPrivateSessionRow` in the code under test owns that rule,
+// so deleting the redaction branch makes the assertions fail rather than the
+// mock quietly agreeing with itself.
 function makeActivityDb({ sessions = {} } = {}) {
   const stored = [];          // rows that survived the conflict check
   const insertAttempts = [];  // every insert call (params)
@@ -36,9 +39,15 @@ function makeActivityDb({ sessions = {} } = {}) {
   async function db(sql, params = []) {
     const n = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
 
-    if (n.startsWith('select workspace_id from chat_sessions where id = $1')) {
-      const ws = sessions[params[0]];
-      return ws ? [{ workspace_id: ws }] : [];
+    if (n.startsWith('select workspace_id') && n.includes('from chat_sessions where id = $1')) {
+      const entry = sessions[params[0]];
+      if (!entry) return [];
+      if (typeof entry === 'string') return [{ workspace_id: entry }];
+      return [{
+        workspace_id: entry.workspaceId,
+        visibility: entry.visibility ?? null,
+        folder: entry.folder ?? null,
+      }];
     }
 
     if (n.startsWith('insert into activity_events')) {

@@ -9,6 +9,7 @@ import { channelMessages } from '../components/chat/channelView';
 import { isToolStepMessage } from '../components/chat/toolSteps';
 import { allowsUnpromptedReply, mentionsChannel } from '../lib/channelMentions';
 import { isHuddleSession } from '../lib/huddleTranscript';
+import { dedupeSessionParticipants } from '../lib/sessionParticipants';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, MessageAttachment, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
@@ -246,6 +247,15 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     delete initialFields.workspace_id;
     delete initialFields.created_at;
     delete initialFields.updated_at;
+    // Normalize the roster at the ONE point every creation path goes through.
+    // The same agent can arrive as `agent:<uuid>` from one caller and bare
+    // `<uuid>` from another; a duplicate is not cosmetic, because
+    // continueConversation iterates agent participants, so the agent is
+    // dispatched twice per turn and a huddle reads both replies aloud. Doing it
+    // here means no future caller has to remember.
+    if (Array.isArray(initialFields.participants)) {
+      initialFields.participants = dedupeSessionParticipants(initialFields.participants);
+    }
     const { data, error } = await backendClient
       .from('chat_sessions')
       .insert({

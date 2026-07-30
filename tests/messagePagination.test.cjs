@@ -25,7 +25,7 @@ function makeDb({ messages = [], sessionWorkspace = {}, roles = {}, owners = {},
         return v ? [{ value: v }] : [];
       }
       if (q.startsWith('select token_version from app_users')) return [{ token_version: '1' }];
-      if (q.startsWith('select workspace_id from chat_sessions where id')) {
+      if (q.startsWith('select workspace_id') && q.includes('from chat_sessions')) {
         const ws = sessionWorkspace[params[0]];
         return ws ? [{ workspace_id: ws }] : [];
       }
