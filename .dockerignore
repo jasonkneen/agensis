@@ -1,0 +1,24 @@
+# Keep the Fly build context small: only the backend is copied in the Dockerfile.
+node_modules
+**/node_modules
+dist
+dist-ssr
+build
+release
+.netlify
+.git
+.github
+landing
+images
+public
+src
+electron
+.playwright-mcp
+.qwen
+.grok
+.bolt
+*.log
+.env
+.env.*
+.DS_Store
+agent/agensis-agent

@@ -1,0 +1,145 @@
+import { useState, useEffect, useCallback } from 'react';
+import { backendClient } from '../lib/backendClient';
+import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
+import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
+
+interface CommentRow {
+  id: string;
+  workspace_id: string;
+  user_id: string | null;
+  parent_id: string | null;
+  content: string;
+  resolved: boolean;
+  version?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UseRealtimeCommentsConfig<T extends CommentRow, I extends { content: string; parent_id?: string | null } = { content: string; parent_id?: string | null }> {
+  table: string;
+  filterField: string;
+  channelPrefix: string;
+  buildInsertPayload: (input: I, extra: Record<string, unknown>) => Record<string, unknown>;
+  castRow: (data: Record<string, unknown>) => T;
+  // Optional second-dimension filter applied client-side. The subscription still
+  // keys on `filterField` (a table can only be filtered server-side by one field),
+  // so e.g. memory-file comments subscribe by agent_id and narrow to a path here.
+  clientFilter?: (row: T) => boolean;
+}
+
+export function useRealtimeComments<T extends CommentRow, I extends { content: string; parent_id?: string | null } = { content: string; parent_id?: string | null }>(
+  config: UseRealtimeCommentsConfig<T, I>,
+  filterValue: string | null,
+  workspaceId: string | null,
+  userId?: string,
+) {
+  const [comments, setComments] = useState<T[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchComments = useCallback(async () => {
+    if (!filterValue) {
+      setComments([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const data = await cachedFetch<T[]>(`${config.table}_${filterValue}`, async () => {
+      const { data } = await backendClient
+        .from(config.table)
+        .select('*')
+        .eq(config.filterField, filterValue)
+        .order('created_at', { ascending: true });
+      return data as unknown as T[];
+    });
+    if (data) setComments(data);
+    setLoading(false);
+  }, [filterValue, config.table, config.filterField]);
+
+  useEffect(() => {
+    fetchComments();
+  }, [fetchComments]);
+
+  const deduper = useRealtimeDeduper();
+  useTableSubscription<T>(
+    {
+      enabled: !!filterValue,
+      channelName: `${config.channelPrefix}:${filterValue}`,
+      table: config.table,
+      event: '*',
+      schema: 'public',
+      filter: `${config.filterField}=eq.${filterValue}`,
+    },
+    (payload) => {
+      if (!deduper.shouldProcess(payload)) return;
+      if (payload.eventType === 'INSERT') {
+        const row = payload.new;
+        if (!row) return;
+        setComments(prev => prev.some(c => c.id === row.id) ? prev : [...prev, row]);
+      } else if (payload.eventType === 'UPDATE') {
+        const row = payload.new;
+        if (!row) return;
+        setComments(prev => prev.map(c => c.id === row.id ? row : c));
+      } else if (payload.eventType === 'DELETE') {
+        const row = payload.old;
+        if (!row?.id) return;
+        setComments(prev => prev.filter(c => c.id !== row.id));
+      }
+    },
+  );
+
+  const createComment = useCallback(async (input: I) => {
+    if (!filterValue || !workspaceId) return null;
+    const payload = config.buildInsertPayload(input, {
+      [config.filterField]: filterValue,
+      workspace_id: workspaceId,
+      user_id: userId ?? null,
+      resolved: false,
+    });
+    const data = await offlineInsert(config.table, payload, `${config.table}_${filterValue}`);
+    if (data) {
+      const comment = config.castRow(data);
+      setComments(prev => prev.some(c => c.id === comment.id) ? prev : [...prev, comment]);
+      return comment;
+    }
+    return null;
+  }, [filterValue, workspaceId, userId, config]);
+
+  const updateComment = useCallback(async (id: string, updates: Partial<T>) => {
+    const result = await offlineUpdate(config.table, id, updates as Record<string, unknown>, `${config.table}_${filterValue}`);
+    if (result) {
+      setComments(prev => prev.map(c => c.id === id ? { ...c, ...result } as T : c));
+    }
+    return result;
+  }, [config.table, filterValue]);
+
+  const resolveComment = useCallback(async (id: string, resolved: boolean) => {
+    return updateComment(id, { resolved } as Partial<T>);
+  }, [updateComment]);
+
+  const deleteComment = useCallback(async (id: string) => {
+    await offlineDelete(config.table, id, `${config.table}_${filterValue}`);
+    setComments(prev => prev.filter(c => c.id !== id && c.parent_id !== id));
+    return true;
+  }, [config.table, filterValue]);
+
+  const visible = config.clientFilter ? comments.filter(config.clientFilter) : comments;
+  const topLevel = visible.filter(c => !c.parent_id);
+  const replyMap = visible.reduce<Record<string, T[]>>((acc, c) => {
+    if (c.parent_id) {
+      (acc[c.parent_id] = acc[c.parent_id] || []).push(c);
+    }
+    return acc;
+  }, {});
+
+  return {
+    comments: visible,
+    topLevel,
+    replyMap,
+    loading,
+    createComment,
+    updateComment,
+    resolveComment,
+    deleteComment,
+    refetch: fetchComments,
+  };
+}

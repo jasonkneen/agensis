@@ -1,0 +1,208 @@
+{
+  "name": "agensis",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Realtime collaborative workspace for chat, documents, memory, files, and shared canvas.",
+  "homepage": "https://agensis.io",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "bin": {
+    "agensis-ops": "cli/agensis-ops.mjs"
+  },
+  "scripts": {
+    "ops": "node cli/agensis-ops.mjs",
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.app.json && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "test": "node --require ./tests/helpers/test-env.cjs --experimental-test-module-mocks --test tests/*.test.cjs",
+    "test:unit": "vitest run",
+    "smoke": "vitest run --config vitest.smoke.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
+    "test:visual-editor": "npm --prefix visual-editor test",
+    "ci": "npm run typecheck && npm test && npm run test:unit && npm run test:visual-editor && npm run smoke && npm run lint",
+    "hooks:install": "git config core.hooksPath .githooks",
+    "icon": "node scripts/generate-icon.cjs",
+    "backend": "node --env-file=.env server/index.cjs",
+    "migrate": "node --env-file=.env scripts/migrate.mjs",
+    "dev:full": "node scripts/dev-full.mjs",
+    "db:neon:push": "bash scripts/neon-push.sh",
+    "reset:test-account": "node --env-file=.env scripts/reset-test-account.cjs",
+    "desktop:dev": "node scripts/desktop-dev.mjs",
+    "desktop:build": "node scripts/desktop-build.mjs",
+    "desktop:dist": "node scripts/desktop-build.mjs --publish never",
+    "electron:dev": "node scripts/desktop-dev.mjs",
+    "electron:build": "node scripts/desktop-build.mjs",
+    "electron:dist": "node scripts/desktop-build.mjs --publish never"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.6.0",
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/lang-markdown": "^6.5.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.6",
+    "@fontsource-variable/geist": "^5.2.9",
+    "@fontsource/archivo-black": "^5.2.8",
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/press-start-2p": "^5.2.7",
+    "@fontsource/space-grotesk": "^5.2.10",
+    "@fontsource/space-mono": "^5.2.9",
+    "@lezer/highlight": "^1.2.3",
+    "@livekit/components-react": "^2.9.9",
+    "@mercuryworkshop/bare-mux": "^2.1.9",
+    "@mercuryworkshop/scramjet": "1.1.0",
+    "@netlify/blobs": "^10.7.10",
+    "@netlify/database": "^1.1.0",
+    "@netlify/identity": "^1.2.0",
+    "@shadcn/react": "^0.1.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "cors": "^2.8.6",
+    "date-fns": "^4.4.0",
+    "dompurify": "^3.4.11",
+    "embla-carousel-react": "^8.6.0",
+    "express": "^5.2.1",
+    "input-otp": "^1.4.2",
+    "livekit-client": "^2.15.4",
+    "livekit-server-sdk": "^2.13.1",
+    "lucide-react": "^1.21.0",
+    "mermaid": "^11.16.0",
+    "next-themes": "^0.4.6",
+    "postgres": "^3.4.9",
+    "radix-ui": "^1.6.0",
+    "react": "19",
+    "react-day-picker": "^10.0.1",
+    "react-dom": "19",
+    "react-resizable-panels": "^4.11.2",
+    "recharts": "3.8.0",
+    "sonner": "^2.0.7",
+    "tailwind-merge": "^3.6.0",
+    "tw-animate-css": "^1.4.0",
+    "undici": "^7.28.0",
+    "vaul": "^1.1.2",
+    "vite-plugin-pwa": "^1.2.0",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.9.1",
+    "@tailwindcss/vite": "^4.3.1",
+    "@types/node": "^26.0.1",
+    "@types/react": "19",
+    "@types/react-dom": "19",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.18",
+    "electron": "^43.0.0",
+    "electron-builder": "^25.1.8",
+    "eslint": "^9.9.1",
+    "eslint-plugin-react-hooks": "^5.1.0-rc.0",
+    "eslint-plugin-react-refresh": "^0.4.11",
+    "globals": "^15.9.0",
+    "jsdom": "^29.1.1",
+    "postcss": "^8.4.35",
+    "shadcn": "^4.12.0",
+    "sharp": "^0.33.5",
+    "tailwindcss": "^4.3.1",
+    "typescript": "^5.5.3",
+    "typescript-eslint": "^8.3.0",
+    "vite": "^5.4.2",
+    "vitest": "^4.1.9"
+  },
+  "build": {
+    "appId": "io.agensis.app",
+    "productName": "agensis",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "server/**/*",
+      "shared/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "agensis uses your microphone for voice huddles.",
+        "NSCameraUsageDescription": "agensis uses your camera for video in huddles."
+      },
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "writeUpdateInfo": false
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "category": "Office",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "publish": {
+      "provider": "github",
+      "releaseType": "release"
+    }
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
+  }
+}

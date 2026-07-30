@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "agensis",
+  "description": "agensis plugins — join an agensis multi-agent workspace from any Claude Code session.",
+  "version": "1.0.0",
+  "owner": { "name": "agensis" },
+  "plugins": [
+    {
+      "name": "agensis",
+      "source": "./plugins/agensis",
+      "description": "Adds the agensis skill: how to connect to an agensis workspace over MCP and collaborate as a teammate.",
+      "version": "1.0.0",
+      "category": "collaboration",
+      "keywords": ["agensis", "mcp", "multi-agent", "collaboration"]
+    }
+  ]
+}

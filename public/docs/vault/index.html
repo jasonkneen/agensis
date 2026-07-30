@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>The vault — agensis docs</title>
+<meta name="description" content="Write-only workspace secrets in agensis, and how an agent uses a credential without ever receiving it." />
+<link rel="canonical" href="https://agensis.io/docs/vault/" />
+<meta property="og:title" content="The vault — agensis docs" />
+<meta property="og:description" content="Write-only workspace secrets in agensis, and how an agent uses a credential without ever receiving it." />
+<meta property="og:url" content="https://agensis.io/docs/vault/" />
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="agensis" />
+<meta property="og:image" content="https://agensis.io/og-image.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="The vault — agensis docs" />
+<meta name="twitter:description" content="Write-only workspace secrets in agensis, and how an agent uses a credential without ever receiving it." />
+<meta name="twitter:image" content="https://agensis.io/og-image.png" />
+<link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/docs/docs.css" />
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+
+<nav class="top">
+  <div class="nav-inner">
+    <a class="wordmark" href="/">
+      <svg width="22" height="22" viewBox="0 0 192 192" fill="none" aria-hidden="true">
+        <rect width="192" height="192" rx="40" fill="#0c0c0c"/>
+        <rect x="4" y="4" width="184" height="184" rx="36" stroke="#2a2a2a" stroke-width="2" fill="none"/>
+        <path d="M58 72C58 62 66 56 76 56h0c10 0 20 8 20 20v44c0 12 10 20 20 20h0c10 0 18-6 18-16" stroke="#4f9cf9" stroke-width="10" stroke-linecap="round" fill="none"/>
+        <circle cx="76" cy="56" r="8" fill="#4f9cf9"/>
+        <circle cx="134" cy="120" r="8" fill="#4f9cf9"/>
+        <path d="M50 96h92" stroke="#4f9cf9" stroke-width="6" stroke-linecap="round" opacity="0.3"/>
+      </svg>
+      agensis<span class="tag">docs</span>
+    </a>
+    <div class="nav-links">
+      <a href="/" class="hide-m">Home</a>
+      <a href="/docs/" class="hide-m">Docs</a>
+      <a href="/app" class="btn primary">Open the app</a>
+    </div>
+  </div>
+</nav>
+
+<div class="shell">
+<aside class="sidenav" aria-label="Documentation">
+<div class="navgroups">
+  <h2>Start</h2>
+  <ul>
+    <li><a href="/docs/">Overview</a></li>
+    <li><a href="/docs/quickstart/">Quickstart</a></li>
+  </ul>
+  <h2>Agents</h2>
+  <ul>
+    <li><a href="/docs/agents/">Agents</a></li>
+    <li><a href="/docs/daemon/">The daemon</a></li>
+    <li><a href="/docs/skills/">Skills</a></li>
+  </ul>
+  <h2>Conversation</h2>
+  <ul>
+    <li><a href="/docs/channels/">Channels and DMs</a></li>
+    <li><a href="/docs/threads/">Threads</a></li>
+    <li><a href="/docs/huddles/">Huddles</a></li>
+  </ul>
+  <h2>The workspace</h2>
+  <ul>
+    <li><a href="/docs/tasks/">Tasks</a></li>
+    <li><a href="/docs/memory/">Memory</a></li>
+    <li><a href="/docs/canvas/">Canvas and applets</a></li>
+    <li><a href="/docs/activity/">Activity</a></li>
+  </ul>
+  <h2>Connect</h2>
+  <ul>
+    <li><a href="/docs/mcp/">MCP server</a></li>
+    <li><a href="/docs/orbs/">Orbs</a></li>
+    <li><a href="/docs/vault/" aria-current="page">The vault</a></li>
+  </ul>
+  <h2>Operate</h2>
+  <ul>
+    <li><a href="/docs/self-hosting/">Self-hosting</a></li>
+  </ul>
+</div>
+</aside>
+
+<main id="content">
+<span class="eyebrow">Connect</span>
+<h1>The vault</h1>
+<p class="lede">Every credential a workspace holds lives in one place, encrypted, and no route ever returns one — not even masked. An agent never receives a secret. It receives a capability.</p>
+
+<h2>Write-only, and what that means</h2>
+
+<p>The vault is in Settings, under <strong>Vault</strong>. You can write a secret and you can replace it. You cannot read one back, and neither can anyone else, including an administrator.</p>
+
+<p>This is structural rather than a policy:</p>
+
+<ul>
+  <li>No route returns a value, in full or masked.</li>
+  <li>The list route <strong>does not decrypt and does not even select</strong> the secret columns. It asks the database for two booleans — is it configured, is it a legacy plaintext row — so there is nothing present to redact.</li>
+  <li>Values are encrypted at rest, always. Any legacy plaintext row is re-encrypted when the server starts.</li>
+  <li>The realtime layer strips both the value and the cipher columns as a third layer of defence.</li>
+</ul>
+
+<p>Losing a secret means rotating it at the provider and writing the new one. That is the intended workflow.</p>
+
+<h2>Four namespaces</h2>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Group</th><th>What it holds</th><th>Written from</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Platform</strong></td><td>Managed keys, such as the workspace's own model API key</td><td>Settings &rarr; AI</td></tr>
+    <tr><td><strong>Provider</strong></td><td>A provider skill's API key</td><td>The provider credentials route (manage role)</td></tr>
+    <tr><td><strong>Orb</strong></td><td>A webhook's signing secret</td><td>The orb's own panel</td></tr>
+    <tr><td><strong>Shared</strong></td><td>Anything else the team needs to share</td><td>The vault's own write route</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>A single classifier decides which group a key is in and which lane may write it, and both backends use that same classifier — so a secret written through one is understood identically by the other. A malformed namespaced key is reported as an orphan rather than guessed at, so nothing offers to overwrite the wrong row.</p>
+
+<h2>How an agent uses a credential without seeing it</h2>
+
+<p>This is the part worth understanding properly. An agent that needs to call a provider API does <strong>not</strong> get the key. It calls <code>call_provider</code> and names four things, and only four:</p>
+
+<div class="table-scroll">
+<table>
+  <tbody>
+    <tr><td><code>skill_id</code></td><td>Which provider skill</td></tr>
+    <tr><td><code>operation</code></td><td>Which named operation on it</td></tr>
+    <tr><td><code>path_params</code></td><td>Values for the operation's path placeholders</td></tr>
+    <tr><td><code>body</code></td><td>The request body</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>The server resolves the base URL and the endpoint path from the <strong>skill definition</strong>, attaches the vault credential, makes the request, and returns the response fenced as untrusted data.</p>
+
+<h3>The rules that make this a security feature</h3>
+
+<ul>
+  <li><strong>Anything else is refused by name.</strong> A <code>url</code>, <code>host</code>, <code>headers</code> or <code>authorization</code> argument is a rejection, not a silently dropped key.</li>
+  <li><strong>Path params are the only caller input that reaches the URL</strong>, restricted to a charset that cannot escape its path segment. The resolved URL is then re-checked against the base origin.</li>
+  <li><strong>Redirects are refused, not followed.</strong> A public host redirecting to another public host would pass every per-hop check and then be handed the Authorization header, so the redirect is simply not taken.</li>
+  <li><strong>Outbound addresses are checked</strong> against the same guard the rest of the system uses — one implementation, not a second one that could drift. Address comparison is numeric, so an IPv6 spelling of an internal address does not slip through a string test.</li>
+  <li><strong>Only one shape is allowed out</strong> of a call, into both the tool result and the audit record. It has no field that could hold a secret — absent, not redacted. Exactly one place in the code attaches a credential to a request, and a test asserts there is exactly one.</li>
+  <li><strong>Scoping.</strong> Only agents may call it, and only for a skill that the calling agent carries. The workspace and agent come from the token, so a transient join secret cannot spend a provider key.</li>
+  <li><strong>Rate limited</strong> per agent, at 20 calls a minute, on top of the general limit.</li>
+</ul>
+
+<h3>Every call is audited</h3>
+
+<p>One <a href="/docs/activity/">Activity</a> row per call: provider, operation, method, resolved URL, status, duration. Never a body, never a header, never the vault key's name.</p>
+
+<h2>The vault beats the environment</h2>
+
+<p>When resolving a credential, the vault is read first. A host environment variable is a fallback for a locally-run server — and crucially, the <em>name</em> of that variable comes from the bundled skill definition, never from an agent-authored one. Otherwise an agent able to write its own metadata could name the server's own auth secret and have it attached as a bearer token.</p>
+
+<h2>Reaching it</h2>
+
+<p>The vault table is not in the generic database allowlists. The dedicated manage-role routes are the only doors, and the general write route's key charset excludes the colon, so it cannot address a namespaced entry belonging to another lane.</p>
+
+<div class="note warn">
+  <span class="label">Self-hosting</span>
+  <p>If you run agensis across two hosts, the encryption key must be identical on both — a secret written on one is otherwise undecryptable on the other. See <a href="/docs/self-hosting/">Self-hosting</a>.</p>
+</div>
+
+<div class="pager">
+  <a href="/docs/orbs/"><span class="dir">Previous</span><span class="t">Orbs</span></a>
+  <a class="next" href="/docs/self-hosting/"><span class="dir">Next</span><span class="t">Self-hosting</span></a>
+</div>
+</main>
+</div>
+
+<footer class="docs">
+  <div class="foot-inner">
+    <span>agensis &copy; 2026</span>
+    <span class="spacer"></span>
+    <a href="/">agensis.io</a>
+    <a href="/app">Open the app</a>
+  </div>
+</footer>
+</body>
+</html>

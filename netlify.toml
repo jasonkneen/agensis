@@ -1,0 +1,199 @@
+# Netlify secret scanning.
+#
+# TWO configured env var values legitimately end up in dist/, and BOTH must be
+# named here — omitting only one leaves the build failing identically, which
+# cost a wasted round on 2026-07-29:
+#
+#   VITE_BACKEND_BASE_URL   — Vite inlines `import.meta.env.*` at build time
+#                             (src/lib/backendClient.ts), and the browser cannot
+#                             call the backend without knowing its URL.
+#   AGENSIS_DAEMON_BASE_URL — baked in by scripts/gen-skill.cjs.
+#
+# Both are plain URLs. Verified by grepping every configured env var's value
+# against dist/: AUTH_SECRET and DATABASE_URL do NOT appear, so there is no real
+# leak — these are false positives on values that are public by necessity.
+#
+# To re-check after adding an env var, grep its value against dist/ rather than
+# guessing which key the scanner means; the build log is not retrievable through
+# `netlify api`.
+#
+# Omitting the KEY rather than disabling the scan or omitting paths: every other
+# variable stays scanned, and dist/ stays scanned, so a genuine secret reaching
+# the bundle still fails the build.
+#
+# This lives here rather than in the Netlify UI on purpose. The same failure was
+# fixed once before via the UI, where it was invisible to the repo and to anyone
+# reading it later — and it recurred.
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "VITE_BACKEND_BASE_URL,AGENSIS_DAEMON_BASE_URL"
+
+# Headers only — build/publish settings stay in the Netlify UI (no [build]
+# section here so we don't override them).
+#
+# The update flow reads /version.json and /release-notes.json to detect a new
+# deploy. They must never be served stale, so tell the CDN + browser not to
+# cache them. (The client also fetches with `cache: 'no-store'`; this is the
+# belt-and-braces edge/proxy layer.)
+[[headers]]
+  for = "/version.json"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# The marketing landing page (public/landing/index.html) owns the root URL.
+# The SPA itself lives at /app (served by the catch-all below).
+# force = true is required: dist/index.html exists as a real file, and Netlify
+# serves existing static files ahead of rewrites unless forced.
+[[redirects]]
+  from = "/"
+  to = "/landing/index.html"
+  status = 200
+  force = true
+
+# The SPA owns /app and the farm-integration approval surface. Device-auth and
+# auth-callback links land on / or /landing with query/hash params and are
+# bounced to /app by root-entry.js, so they never need their own server route.
+[[redirects]]
+  from = "/app"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/app/*"
+  to = "/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/integrations/*"
+  to = "/index.html"
+  status = 200
+
+# The ONE join URL. https://agensis.io/join/<token> is what both a human and an
+# agent are given, and it is SERVER-RENDERED by the Fly backend — not the SPA.
+#
+# That is the whole point. The SPA is a JavaScript shell: an agent that fetches
+# it gets an empty <div id="root">, so the page could not carry the
+# machine-readable instructions an agent needs. Proxying (status 200, not 301)
+# keeps the clean URL on the primary origin while the backend renders real HTML
+# with the JSON-LD block, the fenced machine block, and the prose steps in it.
+#
+# Must stay ABOVE the /* -> 404 catch-all below: redirect rules are evaluated in
+# order, and the catch-all would otherwise turn every join link into a 404.
+[[redirects]]
+  from = "/join/*"
+  to = "https://agensis-backend.fly.dev/backend/join/:splat"
+  status = 200
+  force = true
+
+# The blog's files live at /landing/blog/ beside the landing page, but /blog is
+# what people type. A 301 rather than a 200 rewrite on purpose: one URL owns the
+# content (the one in the sitemap and the canonical tags), and the short form
+# forwards to it instead of becoming a second copy of every post.
+[[redirects]]
+  from = "/blog"
+  to = "/landing/blog/"
+  status = 301
+
+[[redirects]]
+  from = "/blog/*"
+  to = "/landing/blog/:splat"
+  status = 301
+# The docs are plain static HTML under public/docs/, copied verbatim into
+# dist/docs/ by Vite. Every internal link uses a trailing slash, so
+# /docs/agents/ resolves to dist/docs/agents/index.html as a REAL FILE and no
+# redirect is involved. This single rule exists only for the bare, hand-typed
+# `/docs` form, and must stay above the 404 catch-all below.
+#
+# Deliberately not a splat (`/docs/*` → `/docs/:splat/index.html`): a splat
+# would rewrite /docs/typo to a file that doesn't exist, which is exactly the
+# soft-404 shape the catch-all below was added to kill.
+[[redirects]]
+  from = "/docs"
+  to = "/docs/index.html"
+  status = 200
+
+# Short aliases for the legal pages. The pages themselves are real static files
+# at /legal/privacy.html and /legal/terms.html (that is what the footer links to,
+# and what a build check can assert exists); these two rules only make the bare
+# /privacy and /terms readable, which is what people type and what a lawyer will
+# quote. They MUST stay above the catch-all below, which is matched in order and
+# would otherwise turn them into 404s.
+[[redirects]]
+  from = "/privacy"
+  to = "/legal/privacy.html"
+  status = 200
+
+[[redirects]]
+  from = "/terms"
+  to = "/legal/terms.html"
+  status = 200
+
+# Anything else that isn't a real static file is a genuine 404 — never the
+# 200 app shell. (The old catch-all made every unknown path a soft-404:
+# /robots.txt, /sitemap.xml, and random strings all resolved as real pages.)
+[[redirects]]
+  from = "/*"
+  to = "/404.html"
+  status = 404
+
+[[headers]]
+  for = "/release-notes.json"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Join links. The TOKEN IS IN THE URL, so these two headers are the difference
+# between a bounded hand-off and a leaked credential:
+#
+#   Referrer-Policy: no-referrer — the page's "Sign in and join" link navigates
+#   to /app. Under the site-wide strict-origin-when-cross-origin the browser
+#   would send a Referer, and although that policy strips the path cross-origin,
+#   /app is SAME-origin, where the full URL (token included) is sent. no-referrer
+#   sends nothing, ever. The backend sets this too; this is the layer that
+#   survives Netlify serving the proxied response.
+#
+#   Cache-Control: no-store — a secret URL must not sit in a CDN or a shared
+#   proxy cache.
+[[headers]]
+  for = "/join/*"
+  [headers.values]
+    Referrer-Policy = "no-referrer"
+    Cache-Control = "no-store, max-age=0"
+    X-Robots-Tag = "noindex, nofollow"
+
+# Baseline security headers for every response.
+#
+# The ENFORCED CSP is deliberately limited to directives that cannot break a
+# working page: nothing embeds the app in a frame, no form posts cross-origin,
+# there are no <object>/<embed>, and no <base> tag. These are safe to turn on
+# blind.
+#
+# The full policy ships as Report-Only first. script-src/style-src cannot drop
+# 'unsafe-inline' (index.html carries an inline theme script, the landing page
+# is one inline <style> + inline <script>), and chat artifacts / canvas applets
+# are srcdoc iframes running agent-authored HTML that inherits this policy — so
+# an enforced default-src/script-src could silently break them. Watch the
+# report-only violations, then rename the header to Content-Security-Policy.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    # microphone=(self) — required by huddles (LiveKit voice). This header is
+    # ENFORCED, so with `microphone=()` getUserMedia({audio:true}) is blocked
+    # outright and a huddle can never capture audio, whatever the app does.
+    # (self) is the narrowest value that works: same-origin documents only, no
+    # cross-origin iframe (chat artifacts / canvas applets are srcdoc iframes and
+    # do NOT inherit an allowlist they are not named in). Camera and geolocation
+    # stay off.
+    Permissions-Policy = "camera=(), microphone=(self), geolocation=()"
+    Content-Security-Policy = "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
+    # connect-src also allows *.livekit.cloud: the LiveKit client opens a wss://
+    # signalling connection to the project's own host, not to our backend. Listed
+    # now so promoting this policy from Report-Only cannot silently kill voice.
+    #
+    # api.cartesia.ai is listed for the same reason: huddle text-to-speech opens
+    # a wss:// straight to Cartesia, authenticated with a 120-second token our
+    # backend mints (the API key never reaches the browser). Deepgram is
+    # deliberately ABSENT — speech-to-text audio goes to our own backend, which
+    # relays it, so no Deepgram host is ever contacted from a page.
+    Content-Security-Policy-Report-Only = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' https://agensis-backend.fly.dev wss://agensis-backend.fly.dev https://*.livekit.cloud wss://*.livekit.cloud https://api.cartesia.ai wss://api.cartesia.ai; worker-src 'self' blob:; frame-src 'self' data: blob: https:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'; report-uri https://agensis-backend.fly.dev/backend/csp-report"

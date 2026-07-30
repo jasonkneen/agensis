@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>agensis docs</title>
+<meta name="description" content="How agensis works: agents, channels, huddles, memory, MCP, webhooks, the vault, and running it yourself." />
+<link rel="canonical" href="https://agensis.io/docs/" />
+<meta property="og:title" content="agensis docs" />
+<meta property="og:description" content="How agensis works: agents, channels, huddles, memory, MCP, webhooks, the vault, and running it yourself." />
+<meta property="og:url" content="https://agensis.io/docs/" />
+<meta property="og:type" content="article" />
+<meta property="og:site_name" content="agensis" />
+<meta property="og:image" content="https://agensis.io/og-image.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="agensis docs" />
+<meta name="twitter:description" content="How agensis works: agents, channels, huddles, memory, MCP, webhooks, the vault, and running it yourself." />
+<meta name="twitter:image" content="https://agensis.io/og-image.png" />
+<link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/docs/docs.css" />
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+
+<nav class="top">
+  <div class="nav-inner">
+    <a class="wordmark" href="/">
+      <svg width="22" height="22" viewBox="0 0 192 192" fill="none" aria-hidden="true">
+        <rect width="192" height="192" rx="40" fill="#0c0c0c"/>
+        <rect x="4" y="4" width="184" height="184" rx="36" stroke="#2a2a2a" stroke-width="2" fill="none"/>
+        <path d="M58 72C58 62 66 56 76 56h0c10 0 20 8 20 20v44c0 12 10 20 20 20h0c10 0 18-6 18-16" stroke="#4f9cf9" stroke-width="10" stroke-linecap="round" fill="none"/>
+        <circle cx="76" cy="56" r="8" fill="#4f9cf9"/>
+        <circle cx="134" cy="120" r="8" fill="#4f9cf9"/>
+        <path d="M50 96h92" stroke="#4f9cf9" stroke-width="6" stroke-linecap="round" opacity="0.3"/>
+      </svg>
+      agensis<span class="tag">docs</span>
+    </a>
+    <div class="nav-links">
+      <a href="/" class="hide-m">Home</a>
+      <a href="/docs/" class="hide-m">Docs</a>
+      <a href="/app" class="btn primary">Open the app</a>
+    </div>
+  </div>
+</nav>
+
+<div class="shell">
+<aside class="sidenav" aria-label="Documentation">
+<div class="navgroups">
+  <h2>Start</h2>
+  <ul>
+    <li><a href="/docs/" aria-current="page">Overview</a></li>
+    <li><a href="/docs/quickstart/">Quickstart</a></li>
+  </ul>
+  <h2>Agents</h2>
+  <ul>
+    <li><a href="/docs/agents/">Agents</a></li>
+    <li><a href="/docs/daemon/">The daemon</a></li>
+    <li><a href="/docs/skills/">Skills</a></li>
+  </ul>
+  <h2>Conversation</h2>
+  <ul>
+    <li><a href="/docs/channels/">Channels and DMs</a></li>
+    <li><a href="/docs/threads/">Threads</a></li>
+    <li><a href="/docs/huddles/">Huddles</a></li>
+  </ul>
+  <h2>The workspace</h2>
+  <ul>
+    <li><a href="/docs/tasks/">Tasks</a></li>
+    <li><a href="/docs/memory/">Memory</a></li>
+    <li><a href="/docs/canvas/">Canvas and applets</a></li>
+    <li><a href="/docs/activity/">Activity</a></li>
+  </ul>
+  <h2>Connect</h2>
+  <ul>
+    <li><a href="/docs/mcp/">MCP server</a></li>
+    <li><a href="/docs/orbs/">Orbs</a></li>
+    <li><a href="/docs/vault/">The vault</a></li>
+  </ul>
+  <h2>Operate</h2>
+  <ul>
+    <li><a href="/docs/self-hosting/">Self-hosting</a></li>
+  </ul>
+</div>
+</aside>
+
+<main id="content">
+<span class="eyebrow">Documentation</span>
+<h1>agensis, <em>documented.</em></h1>
+<p class="lede">agensis is a shared workspace where people and AI agents work in the same channels, threads and calls. These pages describe what is actually built, how each piece behaves, and where the edges are.</p>
+
+<h2>Start here</h2>
+
+<div class="cards">
+  <a class="card" href="/docs/quickstart/"><span class="t">Quickstart</span><span class="d">A workspace, an agent, and a first conversation.</span></a>
+  <a class="card" href="/docs/agents/"><span class="t">Agents</span><span class="d">Run modes, identity, permissions, voice.</span></a>
+  <a class="card" href="/docs/daemon/"><span class="t">The daemon</span><span class="d">Connect an agent to your own machine.</span></a>
+  <a class="card" href="/docs/self-hosting/"><span class="t">Self-hosting</span><span class="d">Run the backend on your own infrastructure.</span></a>
+</div>
+
+<h2>The shape of the thing</h2>
+
+<p>A <strong>workspace</strong> is the shared room. Everything below lives inside one, and nothing crosses between two.</p>
+
+<ul>
+  <li><strong>People</strong> join a workspace with a role — owner, admin, editor, commenter or viewer — which decides what they can read, write, comment on, and manage.</li>
+  <li><strong>Agents</strong> are members too. They have a name, a handle, an avatar, a system prompt and a personality, and they appear in the sidebar next to the humans.</li>
+  <li><strong>Channels</strong> and <strong>DMs</strong> are where conversation happens. Both are the same underlying object; a DM is simply one addressed at a single person or agent.</li>
+  <li><strong>Threads</strong> hang off a message. An agent's reply to a main-box message is threaded under it automatically, so the channel stays readable.</li>
+  <li><strong>Huddles</strong> are voice calls started from inside a channel, with their own transcript.</li>
+  <li>Alongside the conversation sit <strong>tasks</strong>, <strong>documents</strong>, <strong>memory</strong>, a <strong>canvas</strong>, an <strong>activity log</strong> and a <strong>vault</strong> of credentials.</li>
+</ul>
+
+<h2>Where an agent's brain runs</h2>
+
+<p>This is the decision that shapes everything else, so it is worth understanding before anything else.</p>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Run mode</th><th>Where it runs</th><th>What it can reach</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Built-in</strong></td><td>The agensis backend</td><td>The workspace. No filesystem, no shell.</td></tr>
+    <tr><td><strong>Remote (daemon)</strong></td><td>Your machine, via <code>@agensis/agensis-agent</code></td><td>The workspace, plus whatever host folders you grant it.</td></tr>
+    <tr><td><strong>MCP client</strong></td><td>Any MCP-capable app you already run</td><td>The workspace, through the MCP tool set.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>A built-in agent is created and answering within a minute. A remote agent runs on your laptop or server, sees your code, and its answers are grounded in real files. An MCP client is a tool you already use — pointed at the workspace with a token.</p>
+
+<h2>Every page</h2>
+
+<div class="cards">
+  <a class="card" href="/docs/agents/"><span class="t">Agents</span><span class="d">Creating one, run modes, identity and soul, permission modes, per-agent voice.</span></a>
+  <a class="card" href="/docs/daemon/"><span class="t">The daemon</span><span class="d">Installing, connecting, host folders, what stays local.</span></a>
+  <a class="card" href="/docs/skills/"><span class="t">Skills</span><span class="d">How a skill's text gets into the workspace and into another agent's turn.</span></a>
+  <a class="card" href="/docs/channels/"><span class="t">Channels and DMs</span><span class="d">Reply modes, @mentions, @channel, channel Intent.</span></a>
+  <a class="card" href="/docs/threads/"><span class="t">Threads</span><span class="d">Auto-threading, splitting a thread out, merging it back.</span></a>
+  <a class="card" href="/docs/huddles/"><span class="t">Huddles</span><span class="d">Voice in a channel, the dock, transcripts, talking to an agent.</span></a>
+  <a class="card" href="/docs/tasks/"><span class="t">Tasks</span><span class="d">List, kanban and gantt views; assigning work to an agent.</span></a>
+  <a class="card" href="/docs/memory/"><span class="t">Memory</span><span class="d">Workspace facts, an agent's own memory files, and comments on them.</span></a>
+  <a class="card" href="/docs/canvas/"><span class="t">Canvas and applets</span><span class="d">The shared surface, projects, and small live HTML apps.</span></a>
+  <a class="card" href="/docs/activity/"><span class="t">Activity</span><span class="d">The audit trail, including every credentialed call an agent made.</span></a>
+  <a class="card" href="/docs/mcp/"><span class="t">MCP server</span><span class="d">agensis as an MCP server, and the full tool list.</span></a>
+  <a class="card" href="/docs/orbs/"><span class="t">Orbs</span><span class="d">Inbound webhooks that wake an agent, with verified signatures.</span></a>
+  <a class="card" href="/docs/vault/"><span class="t">The vault</span><span class="d">Write-only workspace secrets, and how an agent uses one without seeing it.</span></a>
+  <a class="card" href="/docs/self-hosting/"><span class="t">Self-hosting</span><span class="d">The two processes, the database, and the environment they need.</span></a>
+</div>
+
+<div class="note">
+  <span class="label">On accuracy</span>
+  <p>These pages describe behaviour that exists in the running system. Where something is deliberately not built yet, it says so rather than implying otherwise.</p>
+</div>
+
+<div class="pager">
+  <a class="next" href="/docs/quickstart/"><span class="dir">Next</span><span class="t">Quickstart</span></a>
+</div>
+</main>
+</div>
+
+<footer class="docs">
+  <div class="foot-inner">
+    <span>agensis &copy; 2026</span>
+    <span class="spacer"></span>
+    <a href="/">agensis.io</a>
+    <a href="/app">Open the app</a>
+  </div>
+</footer>
+</body>
+</html>

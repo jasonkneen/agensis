@@ -1,0 +1,285 @@
+agensis
+Copyright (C) 2026 Jason Kneen
+
+Licensed under the GNU Affero General Public License v3.0 only. See LICENSE for
+the full text, which is the canonical FSF text reproduced verbatim.
+
+The agent daemon (@agensis/agensis-agent) is a SEPARATE project under the MIT
+licence, so it can be embedded in other software freely. Code must not be copied
+from this repository into that one: it would carry AGPL terms into an MIT
+project.
+
+This product includes third-party software. This file reproduces the attribution
+and licence notices that those components require to be distributed alongside
+them. It is not a complete bill of materials — see "Full dependency list" below
+for how to generate one.
+
+Media assets (images, avatars, icons, fonts) are inventoried separately in
+ASSETS.md.
+
+--------------------------------------------------------------------------------
+@mercuryworkshop/scramjet — resolved by this project's own licence
+--------------------------------------------------------------------------------
+
+@mercuryworkshop/scramjet 1.1.0
+  https://github.com/MercuryWorkshop/scramjet
+
+  Recorded because the sources disagree, and someone will check again:
+
+    - the pinned version, 1.1.0 (published 2026-04-27), declares
+      "license": "MIT" in its npm metadata
+    - the tarball it ships contains the 661-line GNU Affero General Public
+      License v3.0 text
+    - upstream's own package.json today declares "AGPL-3.0-only"
+    - GitHub's API reports license: null, because it detects licences from
+      LICENSE FILES and the repo has none. That is not an absence of licence,
+      and should not be read as one
+
+  The project relicensed part-way through its 2.x alpha series:
+
+      1.0.0 – 1.0.2        ISC              2024-06 → 2024-07
+      2.0.0-alpha …        MIT              2025-09 → 2026-05-16
+      1.1.0                MIT              2026-04-27   <- pinned here
+      2.0.6-alpha onward   AGPL-3.0-only    2026-05-24 →
+
+  Since this project is itself AGPL-3.0, the question is moot in either
+  direction: an AGPL dependency is compatible with an AGPL work, and an MIT
+  dependency always was. No obligation is created that this project's own
+  licence does not already impose.
+
+  This matters only if this project is ever relicensed to something permissive.
+  In that case 1.1.0's MIT declaration would have to be confirmed with upstream
+  before shipping, and the version must not be advanced past 2.0.5-alpha.
+
+  The version is pinned exactly rather than with a caret. A range would let a
+  routine dependency bump cross the 2.0.6-alpha boundary silently.
+
+--------------------------------------------------------------------------------
+Required attribution
+--------------------------------------------------------------------------------
+
+@mercuryworkshop/bare-mux 2.1.9
+  https://github.com/MercuryWorkshop/bare-mux
+
+  This package ships MIT licence text but declares no "license" field in its
+  package.json. The MIT licence requires that its copyright notice and
+  permission notice be reproduced in all copies or substantial portions of the
+  software, so the notice is reproduced here in full:
+
+    Copyright 2024 Mercury Workshop Inc.
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to
+    deal in the Software without restriction, including without limitation the
+    rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+    sell copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+    IN THE SOFTWARE.
+
+--------------------------------------------------------------------------------
+Fonts — SIL Open Font License 1.1
+--------------------------------------------------------------------------------
+
+The following font families are bundled into the built site via @fontsource
+packages. OFL-1.1 requires that the copyright notice and the licence accompany
+the Font Software wherever it is distributed, whether or not it is sold. The
+full OFL-1.1 text is in each package's LICENSE file and at
+https://openfontlicense.org.
+
+  Geist  (@fontsource-variable/geist 5.2.9)
+    Copyright 2024 The Geist Project Authors
+    https://github.com/vercel/geist-font
+
+  Archivo Black  (@fontsource/archivo-black 5.2.8)
+    Copyright 2017 The Archivo Black Project Authors
+    https://github.com/Omnibus-Type/ArchivoBlack
+
+  IBM Plex Mono  (@fontsource/ibm-plex-mono 5.2.7)
+    Copyright 2017 IBM Corp. All rights reserved.
+
+  Inter  (@fontsource/inter 5.2.8)
+    Copyright 2016 The Inter Project Authors
+    https://github.com/rsms/inter
+
+  Press Start 2P  (@fontsource/press-start-2p 5.2.7)
+    Copyright 2012 The Press Start 2P Project Authors (cody@zone38.net),
+    with Reserved Font Name "Press Start 2P"
+
+  Space Grotesk  (@fontsource/space-grotesk 5.2.10)
+    Copyright 2020 The Space Grotesk Project Authors
+    https://github.com/floriankarsten/space-grotesk
+
+  Space Mono  (@fontsource/space-mono 5.2.9)
+    Copyright 2016 The Space Mono Project Authors
+    https://github.com/googlefonts/spacemono
+
+OFL-1.1 also carries a Reserved Font Name restriction: a modified version of
+Press Start 2P may not be distributed under that name. This project does not
+modify any of these fonts.
+
+--------------------------------------------------------------------------------
+DOMPurify — dual licensed
+--------------------------------------------------------------------------------
+
+DOMPurify 3.4.11
+  Copyright (c) Cure53 and other contributors
+  https://github.com/cure53/DOMPurify
+
+  Released under the Apache License 2.0 and the Mozilla Public License 2.0.
+  Bundled into the browser application via src/lib/sanitize.ts.
+
+  This project elects the Apache License 2.0. Its notice requirement is
+  discharged by this entry; the full licence text is at
+  http://www.apache.org/licenses/LICENSE-2.0
+
+--------------------------------------------------------------------------------
+Apache License 2.0 components carrying a NOTICE file
+--------------------------------------------------------------------------------
+
+Apache-2.0 section 4(d) requires that a component's own NOTICE file be
+reproduced downstream. Of the Apache-2.0 packages in the installed dependency
+tree, exactly one ships a NOTICE file:
+
+import-in-the-middle
+  (transitive, via @opentelemetry/instrumentation; server-side only)
+
+    import-in-the-middle is licensed for use as follows:
+
+    Copyright 2024 Node.js contributors. All rights reserved.
+
+        Licensed under the Apache License, Version 2.0 (the "License");
+        you may not use this file except in compliance with the License.
+        You may obtain a copy of the License at
+
+            http://www.apache.org/licenses/LICENSE-2.0
+
+        Unless required by applicable law or agreed to in writing, software
+        distributed under the License is distributed on an "AS IS" BASIS,
+        WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+        implied. See the License for the specific language governing
+        permissions and limitations under the License.
+
+    This license applies to parts of import-in-the-middle originating from the
+    https://github.com/DataDog/import-in-the-middle repository:
+
+        This product includes software developed at Datadog
+        (https://www.datadoghq.com/).
+
+        Copyright 2021 Datadog, Inc.
+
+        Licensed under the Apache License, Version 2.0 (the "License");
+        you may not use this file except in compliance with the License.
+        You may obtain a copy of the License at
+
+            http://www.apache.org/licenses/LICENSE-2.0
+
+        Unless required by applicable law or agreed to in writing, software
+        distributed under the License is distributed on an "AS IS" BASIS,
+        WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+        implied. See the License for the specific language governing
+        permissions and limitations under the License.
+
+The other Apache-2.0 dependencies (including the @opentelemetry/*, @livekit/*
+and @eslint/* families, typescript, rxjs, sharp and ejs) ship no NOTICE file, so
+section 4(d) imposes no additional obligation beyond the licence itself.
+
+--------------------------------------------------------------------------------
+Other components with terms worth recording
+--------------------------------------------------------------------------------
+
+lightningcss, lightningcss-darwin-arm64 — MPL-2.0
+  Build-time only (via Vite). MPL-2.0 obligations attach per-file to modified
+  files; this project does not modify them, and they are not redistributed.
+
+caniuse-lite — CC-BY-4.0
+  Build-time browser-support data (via browserslist). Attribution: the caniuse
+  project, https://github.com/browserslist/caniuse-lite. Not redistributed.
+
+mdn-data — CC0-1.0
+  Public-domain dedication; no attribution required.
+
+argparse — Python-2.0
+  Transitive, via js-yaml. Permissive; no NOTICE obligation.
+
+postgres, robust-predicates — Unlicense
+  Public-domain dedication; no attribution required.
+
+@bufbuild/protobuf — Apache-2.0 AND BSD-3-Clause
+truncate-utf8-bytes, sanitize-filename, utf8-byte-length — WTFPL variants
+type-fest — MIT OR CC0-1.0
+  Permissive; covered by the blanket MIT/BSD/ISC notice below.
+
+@img/sharp-libvips-darwin-arm64 — LGPL-3.0-or-later
+  This is libvips, reached through `sharp`, which is a **devDependency**. It is
+  used only by scripts/generate-icon.cjs at build time. Dockerfile.fly installs
+  with `--omit=dev`, so it is not present in the deployed backend image, and it
+  is not part of the browser bundle. No LGPL relinking obligation attaches to
+  anything this project distributes. If sharp is ever promoted to a runtime
+  dependency or bundled into a shipped artifact, that changes and this entry
+  must be revisited.
+
+Two packages declare no licence field and are recorded here for completeness:
+
+  callsite 1.0.0 — MIT per its Readme. Author: TJ Holowaychuk.
+  khroma 2.1.0 — MIT per its bundled `license` file.
+    Copyright (c) 2019-present Fabio Spampinato, Andrew Maney
+
+--------------------------------------------------------------------------------
+Blanket notice for permissive dependencies
+--------------------------------------------------------------------------------
+
+The remainder of the dependency tree is licensed under MIT, ISC, BSD-2-Clause,
+BSD-3-Clause, 0BSD, BlueOak-1.0.0 or Apache-2.0. Each of those (except 0BSD)
+requires that its copyright and permission notice travel with the software. Each
+package's own LICENSE file is preserved inside node_modules and is not stripped
+by any build step in this repository.
+
+--------------------------------------------------------------------------------
+Full dependency list
+--------------------------------------------------------------------------------
+
+To regenerate the complete list of installed packages with their declared
+licences:
+
+    npx license-checker-rseidelsohn --production --summary
+
+Note that a package's declared "license" field is not authoritative — the
+scramjet entry at the top of this file is exactly that failure mode. Any
+verification worth relying on reads the LICENSE file text, not the metadata.
+
+--------------------------------------------------------------------------------
+Verification method for the copyleft claim
+--------------------------------------------------------------------------------
+
+The statement "this dependency tree contains no strong copyleft" was re-checked
+for this file, and it is qualified rather than clean. Two passes were run over
+the installed tree at node_modules/ (1,450 package.json files, four levels deep,
+including nested node_modules):
+
+  1. Declared metadata. Every package.json "license" / "licenses" field was
+     collected. No AGPL, GPL, SSPL or BUSL declaration was found. One
+     LGPL-3.0-or-later was found (@img/sharp-libvips-darwin-arm64, dev-only —
+     see above).
+
+  2. Licence file text. Every LICENSE / LICENCE / COPYING / NOTICE file was
+     read and matched against the AGPL, GPL, SSPL and BUSL headers. Three files
+     matched:
+
+       - lightningcss/LICENSE and lightningcss-darwin-arm64/LICENSE — false
+         positives. Both are MPL-2.0; the match is on MPL-2.0's own definition
+         of "Secondary License", which names the GPL, LGPL and AGPL.
+       - @mercuryworkshop/scramjet/LICENSE — a genuine AGPL-3.0 text, in a
+         package that declares MIT. See the top of this file.
+
+Pass 1 alone reports a clean tree. Pass 2 is what found the scramjet conflict.
+Any future licence audit of this repository must read file text, not fields.

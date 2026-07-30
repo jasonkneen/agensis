@@ -1,0 +1,10 @@
+{
+  "name": "cursorbuddy-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "verify": "npm run build && node scripts/verify.mjs"
+  }
+}

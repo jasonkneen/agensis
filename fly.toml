@@ -1,0 +1,53 @@
+# Fly.io config for the agensis realtime backend (server/index.cjs).
+#
+# Netlify can't host WebSockets, so the WS realtime + agent-daemon endpoint
+# (/backend/ws) and the rest of the Express API run here. The static frontend
+# stays on Netlify; daemons are pointed here via AGENSIS_DAEMON_BASE_URL.
+#
+# First deploy:
+#   flyctl auth login
+#   fly launch --no-deploy --copy-config --name agensis-backend   # or: fly apps create agensis-backend
+#   fly secrets set DATABASE_URL='...' ANTHROPIC_API_KEY='...' AGENSIS_AUTH_SECRET='...'
+#   fly deploy
+# Secrets live in `fly secrets`, NEVER in this file.
+
+app = "agensis-backend"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile.fly"
+
+[env]
+  HOST = "0.0.0.0"
+  API_PORT = "8080"
+  NODE_ENV = "production"
+  AGENSIS_APP_URL = "https://agensis.io"
+  # Persistent upload root on the mounted volume (H6). Volume provisioned:
+  #   fly volumes create agensis_uploads --region fra --size 3 --app agensis-backend
+  # Note: a single volume attaches to ONE machine — durable but not shared across
+  # machines; multi-machine scale-out needs object storage (S3/R2).
+  AGENSIS_UPLOAD_ROOT = "/data/uploads"
+
+[[mounts]]
+  source = "agensis_uploads"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Keep one machine warm so open WebSockets (browser realtime + agent daemons)
+  # are not torn down by idle auto-stop.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/backend/health"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"

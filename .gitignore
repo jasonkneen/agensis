@@ -1,0 +1,55 @@
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+release
+build/icon.png
+*.local
+
+# Native SDK desktop shell
+desktop/zig-out/
+desktop/.zig-cache/
+desktop/third_party/
+
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.env
+
+# Local Netlify folder
+.netlify
+/.playwright-mcp
+.gstack/
+
+# Local upload store + test artifacts (runtime-generated, never source)
+.agensis_uploads/
+
+# What a failing surface painted, dumped by the smoke gate (npm run smoke)
+.smoke-failures/
+
+# Local session scratchpad (not repo content)
+SCRATCHPAD.md
+
+# Agent/Playwright debug screenshots dropped at the repo root. Deliberately
+# root-only: public/ and desktop/assets/ images are real assets.
+/*.png
+
+# Refactor gate's recorded node-test count (see scripts/refactor-gate.sh)
+.refactor-baseline
+/.worktrees
+
+# Internal cleanup plan. Stays on disk, never in the published snapshot — it
+# names the products being removed and describes the scrub itself.

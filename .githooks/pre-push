@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Pre-push correctness gate.
+#
+# Enable with:  npm run hooks:install     (sets core.hooksPath=.githooks)
+# Disable with: git config --unset core.hooksPath
+#
+# WHY THIS EXISTS
+# GitHub Actions is not currently a gate on this repo: runs finish in seconds
+# with zero steps executed, which means no runner is being assigned. Until that
+# is resolved this hook is the only thing standing between a commit and
+# production, so it runs the correctness tier — typecheck and both test suites.
+# Lint deliberately runs in CI only; it is a style signal and should not cost
+# every push ~15s.
+#
+# ESCAPE HATCH — read before removing this file
+# A background daemon auto-commits and pushes this repo unattended. A red hook
+# would wedge it with nobody watching. Any automated pusher MUST set:
+#
+#     AGENSIS_SKIP_HOOKS=1
+#
+# for WIP checkpoint pushes, and MUST NOT set it when merging to main. Humans
+# can use `git push --no-verify` for the same effect on a one-off.
+
+set -uo pipefail
+
+if [ "${AGENSIS_SKIP_HOOKS:-}" = "1" ]; then
+  echo "pre-push: skipped (AGENSIS_SKIP_HOOKS=1)"
+  exit 0
+fi
+
+# Resolve the real worktree root; hooks run with cwd set to the repo root, but
+# being explicit keeps this correct when invoked from a linked worktree.
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT" || exit 1
+
+if [ ! -d node_modules ]; then
+  echo "pre-push: node_modules missing in $ROOT — skipping (run 'npm ci' to enable the gate)"
+  exit 0
+fi
+
+fail() {
+  echo ""
+  echo "  ✖ pre-push blocked: $1 failed."
+  echo ""
+  echo "    Fix it, or bypass deliberately:"
+  echo "      git push --no-verify          # one-off"
+  echo "      AGENSIS_SKIP_HOOKS=1 git push # automated pusher"
+  echo ""
+  exit 1
+}
+
+echo "pre-push: typecheck…"
+npm run --silent typecheck || fail "typecheck"
+
+echo "pre-push: backend tests…"
+npm run --silent test >/dev/null || fail "npm test"
+
+echo "pre-push: unit tests…"
+npm run --silent test:unit >/dev/null || fail "npm run test:unit"
+
+# The suites above prove the pieces are individually correct. None of them
+# renders anything, which is how a workspace holding 8 agents shipped showing
+# "you haven't created any agents yet" with everything green (2026-07-27).
+# The smoke gate mounts each main surface and fails if an empty state is on
+# screen while data exists. ~10s.
+echo "pre-push: surface smoke…"
+npm run --silent smoke >/dev/null || fail "npm run smoke"
+
+echo "pre-push: ✓ typecheck + both suites + smoke green"

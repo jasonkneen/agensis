@@ -1,0 +1,47 @@
+.{
+    .id = "io.agensis.app",
+    .name = "agensis",
+    .display_name = "agensis",
+    .version = "0.1.0",
+    .icons = .{ "assets/icon.png" },
+    .platforms = .{ "macos", "linux", "windows" },
+    .permissions = .{ "dialog", "network" },
+    .capabilities = .{ "webview", "js_bridge", "dialog" },
+    .frontend = .{
+        // Root Vite app (repo root). Paths are relative to this desktop/ package.
+        .dist = "../dist",
+        .entry = "index.html",
+        .spa_fallback = true,
+        .dev = .{
+            .url = "http://127.0.0.1:5173/",
+            .command = .{ "npm", "--prefix", "..", "run", "dev", "--", "--host", "127.0.0.1", "--port", "5173", "--strictPort" },
+            .ready_path = "/",
+            .timeout_ms = 60000,
+        },
+    },
+    .security = .{
+        .navigation = .{
+            .allowed_origins = .{ "zero://app", "zero://inline", "http://127.0.0.1:5173" },
+            // Match the old Electron thin shell: leave the app, open the OS browser.
+            .external_links = .{ .action = "open_system_browser" },
+        },
+    },
+    .web_engine = "system",
+    .cef = .{ .dir = "third_party/cef/macos", .auto_install = false },
+    .windows = .{
+        .{
+            .label = "main",
+            .title = "agensis",
+            .width = 1400,
+            .height = 900,
+            .min_width = 800,
+            .min_height = 600,
+            .restore_state = true,
+            // macOS 26 (Tahoe): unified-toolbar / tall hidden titlebar is what
+            // gets the larger system window corner radius. Plain hidden_inset
+            // keeps the older, tighter corners and looks wrong next to native
+            // Tahoe apps. Traffic lights center in the ~52pt band.
+            .titlebar = "hidden_inset_tall",
+        },
+    },
+}

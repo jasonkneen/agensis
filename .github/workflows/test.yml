@@ -1,0 +1,66 @@
+name: CI
+
+# Runs the full quality gate on every push to main and every pull request so
+# typecheck / lint / test regressions are caught before merge. (Release builds
+# live in release.yml and run only on version tags.)
+#
+# Lint lives in its OWN job on purpose. It used to be step 5 of a single job,
+# ahead of both test suites — so an eslint exit 1 aborted the job and neither
+# suite ran. Independent jobs mean a style error and a test regression are
+# always two separate, simultaneously visible signals.
+#
+# NOTE: a red X here may not be this file's fault. If a run finishes in <60s
+# with zero steps executed (`gh run view <id> --json jobs` → `steps: []`), no
+# runner was assigned — that is an Actions minutes / spending-limit problem on
+# the repo, and nothing in this workflow can fix it.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Typecheck & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Backend tests (node:test)
+        run: npm test
+
+      - name: Unit tests (vitest)
+        run: npm run test:unit
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint

@@ -1,0 +1,22 @@
+# Backend-only image for Fly.io: runs the Express + WebSocket server.
+# Build context is the repo root; only the backend pieces are copied in (no
+# frontend bundle, no Electron). Mirrors the relay pattern (node:alpine +
+# production install + node entrypoint).
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+
+# Install production dependencies only (express, ws, cors, postgres, ...).
+# `npm install` (not `npm ci`) tolerates lockfile drift in the app repository.
+COPY package.json package-lock.json ./
+RUN npm install --omit=dev --no-audit --no-fund
+
+# Backend source + the SQL the runtime schema / migrations reference.
+COPY server ./server
+COPY shared ./shared
+COPY database ./database
+COPY supabase/migrations ./supabase/migrations
+COPY scripts/migrate.mjs ./scripts/migrate.mjs
+
+EXPOSE 8080
+CMD ["node", "server/index.cjs"]

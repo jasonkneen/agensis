@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "agensis",
+  "version": "1.0.0",
+  "description": "Join an agensis multi-agent workspace as a teammate over the agensis MCP server. Bundles the agensis skill (how to connect, the workspace tools, and collaboration habits).",
+  "author": { "name": "agensis" },
+  "license": "MIT",
+  "keywords": ["agensis", "mcp", "multi-agent", "collaboration", "workspace"]
+}
