@@ -150,9 +150,11 @@ const SESSION_READ_STATE_SQL = `select r.session_id,
 // PK column cannot be null and each reader column is null for the other kind.
 //
 // The ALTERs after the CREATE upgrade a table that still has the original
-// (session_id, user_id) PK in place: drop the not-null and the PK, add agent_id,
-// add the CHECK once, and build the partial indexes. All idempotent, so a fresh
-// boot and a live upgrade converge on the same shape.
+// (session_id, user_id) PK in place: add agent_id, DROP THE PK, then drop the
+// not-null (order matters — Postgres refuses DROP NOT NULL while the column is
+// still part of a primary key), add the CHECK once, and build the partial
+// indexes. All idempotent, so a fresh boot and a live upgrade converge on the
+// same shape.
 const SESSION_READ_STATE_DDL = `
     CREATE TABLE IF NOT EXISTS session_read_state (
       session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
@@ -162,8 +164,8 @@ const SESSION_READ_STATE_DDL = `
       updated_at timestamptz DEFAULT now()
     );
     ALTER TABLE session_read_state ADD COLUMN IF NOT EXISTS agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE;
-    ALTER TABLE session_read_state ALTER COLUMN user_id DROP NOT NULL;
     ALTER TABLE session_read_state DROP CONSTRAINT IF EXISTS session_read_state_pkey;
+    ALTER TABLE session_read_state ALTER COLUMN user_id DROP NOT NULL;
     DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'session_read_state_one_reader') THEN
         ALTER TABLE session_read_state ADD CONSTRAINT session_read_state_one_reader
