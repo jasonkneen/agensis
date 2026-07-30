@@ -17,6 +17,14 @@ primary_region = "fra"
 [build]
   dockerfile = "Dockerfile.fly"
 
+# Fly's default is 5s from SIGTERM to SIGKILL. The backend now drains its
+# WebSockets on SIGTERM (see startBackendServer's `shutdown`), telling every
+# daemon and browser to reconnect with a 1012 instead of dropping them into a
+# reasonless 1006. That drain is bounded by AGENSIS_SHUTDOWN_GRACE_MS (3s), so
+# give the machine a little more than that before it is killed — otherwise the
+# SIGKILL lands mid-drain and the close frames never leave.
+kill_timeout = "10s"
+
 [env]
   HOST = "0.0.0.0"
   API_PORT = "8080"

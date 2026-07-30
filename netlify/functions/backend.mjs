@@ -269,6 +269,17 @@ function dbPool() {
    console.warn(`[db] using ${source}; ignoring also-set ${shadowed.join(', ')}`);
   }
   database = connectionString ? getDatabase({ connectionString }) : getDatabase();
+  // A `pg` Pool emits 'error' for a client that fails while IDLE in the pool —
+  // which against Neon is routine, not exceptional: it closes idle connections,
+  // and a serverless container is idle between invocations almost by definition.
+  // An 'error' event with no listener throws, and this one is emitted from a
+  // socket callback with no request on the stack to catch it, so it takes the
+  // whole function container down: the in-flight request 502s and the next
+  // caller pays a cold start. The pool discards the bad client on its own — the
+  // only thing missing was somebody willing to hear about it.
+  database.pool?.on?.('error', (error) => {
+   console.error('[db] idle client error:', error?.message || error);
+  });
  }
  return database.pool;
 }

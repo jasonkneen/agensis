@@ -953,24 +953,58 @@ function createBuiltinTurn(deps = {}) {
   return { ok: true, pending: true };
  }
 
+ // Time-to-FIRST-BYTE ceiling for a call to Anthropic, not a total one.
+ //
+ // These fetches had no deadline of any kind, so an upstream that accepted the
+ // connection and then said nothing held the turn — and the agent job behind it —
+ // open indefinitely, with no error to report and nothing to retry.
+ //
+ // Why not a total timeout: a streaming turn legitimately runs for minutes, and
+ // capping total duration would kill exactly the long generations this product
+ // exists to run. The timer is therefore cleared the moment `fetch` resolves,
+ // which for a streamed response is when the HEADERS arrive — so it bounds "the
+ // API never answered" without ever bounding "the model is still writing".
+ const ANTHROPIC_HEADERS_TIMEOUT_MS = 60_000;
+
+ async function anthropicFetch({ apiKey, body }) {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), ANTHROPIC_HEADERS_TIMEOUT_MS);
+  try {
+   return await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+     'Content-Type': 'application/json',
+     'x-api-key': apiKey,
+     'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify(body),
+    signal: abort.signal,
+   });
+  } catch (error) {
+   if (error?.name === 'AbortError') {
+    throw new Error(`Anthropic did not send response headers within ${ANTHROPIC_HEADERS_TIMEOUT_MS}ms`);
+   }
+   throw error;
+  } finally {
+   // Unconditionally: once headers are in, the body may stream for minutes and
+   // must not be aborted underneath the reader.
+   clearTimeout(timer);
+  }
+ }
+
  async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null, usageKind = 'completion' }) {
   const apiKey = await getAnthropicApiKey(workspaceId);
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
 
   const resolvedModel = resolveAnthropicModel(model);
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-   method: 'POST',
-   headers: {
-    'Content-Type': 'application/json',
-    'x-api-key': apiKey,
-    'anthropic-version': '2023-06-01',
-   },
-   body: JSON.stringify({
+  const response = await anthropicFetch({
+   apiKey,
+   body: {
     model: resolvedModel,
     max_tokens: 4096,
     messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
     system: buildSystemPrompt(memory, documents, workspaceContext, agentContext),
-   }),
+   },
   });
 
   if (!response.ok) {
@@ -1029,15 +1063,10 @@ function createBuiltinTurn(deps = {}) {
   // model having no tool to reach for.
   if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-   method: 'POST',
-   headers: {
-    'Content-Type': 'application/json',
-    'x-api-key': apiKey,
-    'anthropic-version': '2023-06-01',
-   },
-   body: JSON.stringify(payload),
-  });
+  // The streaming call, and the one the headers-only deadline was designed for:
+  // the timer is released as soon as headers land, so the token stream below can
+  // run for as long as the model needs.
+  const response = await anthropicFetch({ apiKey, body: payload });
 
   if (!response.ok || !response.body) {
    throw new Error(await response.text().catch(() => 'Anthropic stream failed'));

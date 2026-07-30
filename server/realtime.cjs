@@ -97,6 +97,10 @@ function createRealtime(deps = {}) {
  // turn is the expensive one.
  const LIVENESS_MAX_MISSED_PONGS = 8;
 
+ // Per-socket subscription ceiling. See the subscribe handler for why this is a
+ // fanout-cost bound rather than an abuse bound.
+ const MAX_SUBSCRIPTIONS_PER_SOCKET = 200;
+
  // One liveness tick over a set of sockets. Extracted from the interval so the
 // miss-tolerance is testable without standing up a server and waiting 30s.
  function sweepLiveness(clients) {
@@ -510,7 +514,23 @@ function createRealtime(deps = {}) {
  }
 
  function attachRealtime(server) {
-  const wss = new WebSocketServer({ server, path: '/backend/ws' });
+  const wss = new WebSocketServer({
+   server,
+   path: '/backend/ws',
+   // The WS handshake needs no credentials — auth is a first-message frame (see
+   // the 'connection' handler) — so until that frame arrives ANY anonymous
+   // client is talking to us. ws defaults maxPayload to 100MB, and it buffers a
+   // fragmented message until the final frame before this code sees anything, so
+   // a handful of unauthenticated sockets each dribbling a 100MB message is
+   // hundreds of megabytes of server memory that no route, rate limiter or auth
+   // check ever gets a chance to refuse. ws closes the socket with 1009 when the
+   // cap is exceeded, before allocating past it.
+   //
+   // 8MB is far above anything real: the largest legitimate frames on this
+   // socket are microphone PCM (a few KB per frame) and agent job results, and
+   // file uploads go over HTTP, not here.
+   maxPayload: 8 * 1024 * 1024,
+  });
 
   wss.on('connection', (ws, req) => {
    // FIRST listener: ws@8 emits 'error' on the socket for any receiver-level
@@ -546,6 +566,18 @@ function createRealtime(deps = {}) {
    function finalizeAuthenticated(userId, agentAuth) {
     ws.userId = userId;
     ws.agentAuth = agentAuth;
+    // Both auth paths AWAIT the token verification (a DB round-trip). A socket
+    // that drops during that await has already fired 'close' — and 'close' is
+    // what removes a socket from this Set. Adding it afterwards puts a DEAD
+    // socket in the fanout set with nothing left to take it out again, so it
+    // stays for the process's lifetime holding its subscriptions and agentAuth.
+    // sendWs's readyState check makes each one harmless individually; the cost
+    // is that every notifyDbSubscribers walks them forever, so a flaky client
+    // reconnecting all day is an unbounded leak on the hottest loop we have.
+    if (ws.readyState !== 0 && ws.readyState !== 1) {
+     settleAuth(false);
+     return;
+    }
     websocketClients.add(ws);
     settleAuth(true);
    }
@@ -616,8 +648,24 @@ function createRealtime(deps = {}) {
      if (message.action === 'subscribe') {
       const binding = { channel: message.channel, ...(message.binding || {}) };
       await authorizeRealtimeBinding(ws.userId, message.channel, binding);
-      const exists = (ws.subscriptions || []).some((subscription) => JSON.stringify(subscription) === JSON.stringify(binding));
+      const bindingKey = JSON.stringify(binding);
+      const exists = (ws.subscriptions || []).some((subscription) => JSON.stringify(subscription) === bindingKey);
       if (!exists) {
+       // Cap it. Every entry here is walked for EVERY row of EVERY broadcast on
+       // this socket, so the list is a multiplier on the hottest loop in the
+       // server — and nothing else bounds it: a client that subscribes with a
+       // slightly different filter each time grows it without ever repeating.
+       // The real UI opens well under 50 (one per hook per scope); a client that
+       // wants more is malfunctioning, and telling it so beats quietly degrading
+       // every other socket's fanout.
+       if (ws.subscriptions.length >= MAX_SUBSCRIPTIONS_PER_SOCKET) {
+        sendWs(ws, {
+         type: 'error',
+         code: 'subscription_limit',
+         message: `This connection is already at its limit of ${MAX_SUBSCRIPTIONS_PER_SOCKET} realtime subscriptions`,
+        });
+        return;
+       }
        ws.subscriptions.push(binding);
       }
       sendWs(ws, { type: 'system', event: 'subscribed', channel: message.channel });
@@ -763,6 +811,14 @@ function createRealtime(deps = {}) {
   return ws;
  }
 
+ // Test seam: how many sockets the fanout would walk. The only way to observe
+ // the leak this guards — a socket that closed mid-authentication and was added
+ // afterwards is invisible from the outside, because sendWs skips it silently
+ // and it simply makes every broadcast a little slower forever.
+ function websocketClientCount() {
+  return websocketClients.size;
+ }
+
  // Called by index.cjs's resetTestState(). Reassigns rather than clears, exactly
  // as the original did — a caller holding the old Set must not keep receiving
  // broadcasts.
@@ -781,6 +837,8 @@ function createRealtime(deps = {}) {
   authorizeRealtimeBroadcast,
   revokeRealtimeAccessForMember,
   registerTestWebsocketClient,
+  websocketClientCount,
+  MAX_SUBSCRIPTIONS_PER_SOCKET,
   sweepLiveness,
   LIVENESS_MAX_MISSED_PONGS,
   LIVENESS_PING_INTERVAL_MS,

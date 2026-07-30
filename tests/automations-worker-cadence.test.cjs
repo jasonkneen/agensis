@@ -83,9 +83,30 @@ test('the sweep stays on the 30s tick', () => {
  // Reclaiming a lease that expired because a process died is housekeeping;
  // running it every second is 30x the query for no benefit.
  // MUTATION: move sweepAutomationRuns onto the 1s worker -> this fails.
- const block = intervalAround('void sweepAutomationRuns()');
+ //
+ // The needle is the guardedSweep call rather than the old bare
+ // `void sweepAutomationRuns()`: the reaper's passengers each gained their own
+ // in-flight guard (see the test below). What this pins is unchanged — which
+ // tick the sweep sits on.
+ const block = intervalAround("guardedSweep('sweepAutomationRuns'");
  assert.match(block, /\}, 30_000\)/);
  assert.equal(/runDueAutomations/.test(block), false, 'the drain must have left the reaper tick');
+});
+
+test('the reaper sweep has its own in-flight guard, so slow ticks cannot stack', () => {
+ // The 30s tick carries the SLOW passengers — runDueThreadHarvests makes model
+ // calls, runDueSchedules and sweepAutomationRuns are DB scans that grow with
+ // the workspace — and it carried no guard at all, so a sweep that outlived its
+ // interval simply started again on top of itself. The slower the database, the
+ // more concurrent copies of the same scan it was asked to serve.
+ // MUTATION: go back to bare `void sweepAutomationRuns()` -> this fails.
+ const block = intervalAround("guardedSweep('sweepAutomationRuns'");
+ assert.equal(/void sweepAutomationRuns\(\)/.test(block), false, 'the bare fire-and-forget call must be gone');
+ // PER-SWEEP, not one boolean for the whole tick: a slow harvest must not stop
+ // stuck jobs from being reaped.
+ assert.match(source, /if \(sweepsInFlight\.has\(name\)\) return;/);
+ assert.match(source, /sweepsInFlight\.add\(name\);/);
+ assert.match(source, /\.finally\(\(\) => \{ sweepsInFlight\.delete\(name\); \}\)/);
 });
 
 test('the worker is cleared when the server closes', () => {
