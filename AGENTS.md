@@ -43,9 +43,14 @@ postgres.js will not array-serialize a raw JS array bound via `.unsafe`.
 
 Every read path resolves a `workspace_id` and calls
 `enforceWorkspaceRole(userId, workspaceId, 'read')`. That check is necessary and
-unchanged. **Since 2026-07-30 it is no longer sufficient**: a session marked
-`chat_sessions.visibility = 'private'` is readable only by rows in
+unchanged. **It is no longer sufficient**: on the request/response read paths, a
+session marked `chat_sessions.visibility = 'private'` is readable only by rows in
 `chat_session_members`.
+
+Realtime broadcast is a separate lane with different coverage — read
+[What this section does NOT
+cover](#what-this-section-does-not-cover-realtime-fanout) at the end before you
+treat "private sessions are gated" as a property of the whole system.
 
 The rule has exactly ONE spelling, in `shared/backend-core.cjs`:
 
@@ -62,9 +67,10 @@ second copy is how this drifts back open.
 **A private session is a DM, or anything derived from one.** Sub-thread splits
 (`parent_message_id`), forks (`split_parent_id`) and huddle transcripts
 (`huddles.transcript_session_id`) inherit both `visibility` and the member list
-at creation time. Scoping only `folder = 'Direct messages'` is a partial fix:
-production had 12 sub-thread sessions hanging off DM messages and 38 huddle
-sessions carrying a DM roster.
+at creation time. Scoping only `folder = 'Direct messages'` is a partial fix —
+sub-thread sessions hang off DM messages and huddle sessions carry a DM roster
+while sitting in neither folder, and both were found in real data before the
+inheritance rule was added.
 
 `isPrivateSessionRow` treats `visibility = 'private'` **OR**
 `folder = 'Direct messages'` as private, on purpose. The folder half is the
@@ -96,16 +102,40 @@ owner; `invite` and unpinned `integration` tokens get no private sessions at all
 Pinned by `tests/dm-scope-assumption.test.cjs`. If you change any of the above,
 that file goes red — update it and this section together.
 
-What IS still structurally guaranteed, and must stay that way: `messages` has no
-`workspace_id` column, so a message is only reachable through
-`session_id -> chat_sessions.workspace_id`.
-
 What IS structurally guaranteed, and must stay that way: `messages` has no
 `workspace_id` column, so a message is only reachable through
 `session_id -> chat_sessions.workspace_id`. That makes cross-tenant scoping a
 property of the schema rather than a convention a query can forget — an unscoped
 `messages` select cannot even be expressed through the generic DB route. Keep
 `messages` OUT of `WORKSPACE_SCOPED_TABLES` for the same reason.
+
+### What this section does NOT cover: realtime fanout
+
+Everything above describes the **request/response read paths** — REST routes,
+the generic `/backend/db/*` handlers, and MCP. It does not describe realtime
+broadcast, and the two are not equivalent. Be precise about this before you rely
+on it:
+
+- **`chat_sessions` is scoped.** `notifyDbSubscribers` splits private rows out of
+  the synchronous fanout and sends them down an async lane that can consult
+  membership. Without that split, opening a DM would push its title and roster to
+  every socket in the workspace.
+- **`messages` is covered by a different argument**, not by that split. An
+  unfiltered `messages` subscription cannot be established at all, so a message
+  only ever reaches a socket that named its session.
+- **Every other allowlisted table is covered by neither.** The private-session
+  split is keyed on the table name being `chat_sessions`. A table that is
+  subscribable on a `workspace_id` filter and that can hold DM-derived rows —
+  `huddles` carries a DM roster; `thread_items` hangs off a thread that may be a
+  DM sub-thread — fans those rows to every socket in the workspace that holds
+  `read`. The REST projection for those tables is not the control here, because
+  the fanout does not go through it.
+
+**So the session granularity is enforced on the REST/MCP side and only partially
+on the realtime side.** If you are adding a table that can carry content derived
+from a private session, do not assume the realtime lane will scope it — it will
+not, and workspace role is all that stands in front of it. Raise it rather than
+allowlisting quietly.
 
 ## Realtime
 
@@ -157,10 +187,13 @@ Read the reason in the declaration before changing a category.
 
 Related: if a broadcast row carries anything secret, strip it in
 `REALTIME_HEAVY_FIELDS` rather than relying on every call site to pass a
-projection. `channel_bridges.config` is the cautionary tale — the REST routes
-project it away, all four fanout calls pass raw `returning *` rows, and only the
-missing allowlist entry stood between that and a live Slack bot token on every
-subscriber's socket.
+projection. `channel_bridges.config` is the cautionary tale. The REST routes
+projected it away, but the fanout calls passed raw `returning *` rows and never
+touched that projection — so a per-call-site projection was doing none of the
+work anyone assumed it was doing. It is stripped centrally now, and the table is
+also absent from `ALLOWED_TABLES`, which is two independent controls rather than
+one. The lesson survives the fix: **a projection applied at some call sites is
+not a control**, because the next call site will not have it.
 
 Allowlisting `gateway_configs` is the worked example of what that costs, and all
 four parts were needed in the one commit:
@@ -363,10 +396,12 @@ window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
     DELETE on the audit trail. `tests/audit-log-append-only.test.cjs` fails on
     exactly that mutation.
   - **`activity_events` is NOT an audit record and must not be promoted into
-    one.** It is client-authored (`src/hooks/useActivity.ts:70` inserts straight
-    from the browser through the generic route, picking its own `event_type`,
-    `title` and `user_id`) and it is `write`-capability insert/update/delete. It
-    is forgeable and erasable by design. That is fine for a feed.
+    one.** It is client-authored — the browser inserts through the generic route
+    and supplies its own `event_type`, `title` and `user_id` — and its
+    insert/update/delete sit at the `write` capability. That is the right design
+    for a feed and the wrong design for evidence. Never move a privileged action
+    into it, and never read a row out of it as proof that something happened;
+    `audit_log` is where that belongs.
   - **A row must be strictly less sensitive than the thing it describes.** Vault
     writes record the key NAME and a `configured` boolean, never the value or the
     ciphertext. Token mints record the agent and the resulting mode, never the
@@ -502,8 +537,10 @@ window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
   - **A caller may name FOUR things**: `skill_id`, `operation`, `path_params`,
     `body`. `unknownProviderCallArgs` REFUSES anything else by name — a `url`,
     `host`, `headers` or `authorization` argument is a rejection, not a dropped
-    key. `additionalProperties: false` on the tool schema is documentation only:
-    the MCP dispatcher never validates arguments against `inputSchema`.
+    key. That by-name refusal is the enforcement; do not weaken it on the
+    assumption that the JSON Schema is doing the same job (see
+    [The MCP tool surface is a public
+    contract](#the-mcp-tool-surface-is-a-public-contract)).
   - **Path params are the only caller input in the URL**, restricted to
     `[A-Za-z0-9._-]` so a value cannot leave its segment. The resolved URL is
     re-checked against the base origin and re-run through `isSafeProviderBaseUrl`.
@@ -647,11 +684,13 @@ surface. Do not delete the test to make it pass.
 
 Two related rules:
 
-- **`additionalProperties: false` on a tool schema is a promise to clients, not a
-  server check.** The dispatcher never validates arguments against `inputSchema`
-  (which is why `call_provider` carries its own by-name `unknownProviderCallArgs`
-  refusal). A schema-driven client rejects unknown flags locally on the strength
-  of that flag, so it has to stay true.
+- **`additionalProperties: false` on a tool schema is a promise to clients, and a
+  tool must not rely on it as its own input validation.** A schema-driven client
+  rejects unknown flags locally on the strength of that flag, so it has to stay
+  true — but a tool that accepts anything security-relevant validates its own
+  arguments in its handler. `call_provider` is the worked example: it carries an
+  explicit by-name `unknownProviderCallArgs` refusal rather than trusting the
+  published schema. Write new tools the same way.
 - **If something needs a capability MCP does not have, add an MCP tool — never a
   parallel client-only route.** `runToolForIdentity` is the single authorization
   chokepoint (kinds allowlist, Flows scope, channel pin, invite-role capability
@@ -675,10 +714,12 @@ Know what it costs before you point anyone at it:
 - **It is not separately revocable.** Revocation is `token_version` on
   `app_users`, a per-user counter, so withdrawing a pasted copy signs the human
   out everywhere. `agw_` is revoked by re-minting and touches MCP clients only.
-- **It has no prefix.** `aga_`/`agw_`/`agx_`/`agf_`/`cbk_` are pattern-matchable,
-  so a redactor can strip them from a log, transcript or screenshot. A session
-  token cannot be recognised by shape — this is why `cli/src/render.mjs` redacts
-  the exact resolved credential as well as the prefixes.
+- **It has no distinguishing prefix.** The minted token classes carry
+  pattern-matchable prefixes, so a redactor can strip them from a log, transcript
+  or screenshot on shape alone. A session token cannot be recognised that way —
+  which is why `cli/src/render.mjs` redacts the exact resolved credential as well
+  as matching on prefix. Any new redaction path has to do both; matching on shape
+  alone leaves this class of token in the output.
 - **It expires in 14 days** (`DEFAULT_TOKEN_TTL_SEC`), so a working MCP config
   silently starts returning 401. `agw_` does not expire.
 - **It picks the user's OLDEST owned workspace** (`order by created_at asc limit
@@ -781,8 +822,9 @@ and the egress allowlist. Full reference: `cli/README.md`.
   file is `.cjs`. eslint reports nothing for a file it doesn't match, so "green"
   and "never looked" are indistinguishable unless you ask. If you add a backend
   entry point, add it to `MUST_BE_LINTED` in that test.
-- Onboarding testing: `npm run reset:test-account` wipes `testing@bouncingfish.com`
-  (user + all their workspaces) so the onboarding tour can be re-run from scratch;
+- Onboarding testing: `npm run reset:test-account` wipes the configured test
+  account (user + all their workspaces) so the onboarding tour can be re-run from
+  scratch;
   also clear the `agensis_tour_complete` / `agensis_getstarted_*` localStorage keys
   (or use incognito) — onboarding state is client-side only.
 
@@ -805,8 +847,8 @@ node --check netlify/functions/backend.mjs   # if you touched netlify
 npm run build                                # if you touched the frontend
 ```
 
-**`npm run smoke` is in that chain, and is not optional.** It exists because on
-2026-07-27 a workspace holding 8 agents rendered "No agents match — You haven't
+**`npm run smoke` is in that chain, and is not optional.** It exists because a
+workspace holding several agents once rendered "No agents match — You haven't
 created any agents yet" over the full list, with no control on screen to undo
 it: `ownerFilter` is persisted, and the Mine/All toggle only rendered when the
 filter had matches. typecheck, eslint, both suites and the build were all green,
@@ -816,11 +858,19 @@ data exists, and a persisted filter must never hide the control that clears it.
 Dropping it means that class of bug is unguarded again — it was verified failing
 against the pre-fix code before it was added.
 
-`npm run ci` is the single gate. Run it locally — **do not infer "tests passed"
-from GitHub Actions.** Actions is not currently a working gate on this repo: runs
-finish in seconds with zero steps executed, which means no runner is being
-assigned (an Actions minutes / spending-limit problem, not a workflow bug).
-Confirm with `gh run view <id> --json jobs` — `steps: []` is the signature.
+`npm run ci` is the single gate. **Run it locally, and treat a local pass as the
+thing that gates a merge** — not a green tick in GitHub Actions.
+
+A workflow run that reports success without having executed anything looks
+identical, at a glance, to one that ran the whole suite. If you are relying on
+CI for a verdict, confirm the run actually did work before you believe it:
+
+```bash
+gh run view <id> --json jobs
+```
+
+An empty `steps: []` on a job means no runner was ever assigned and nothing ran.
+There is no red X in that case, so the only way to notice is to look.
 
 ### Optional pre-push hook
 
@@ -873,13 +923,15 @@ Local dev reads a `.env` (see README). For the deployed split:
 | `DEEPGRAM_API_KEY` | — | ✓ | Huddle speech-to-text (Flux). **Never sent to the browser** — the Fly server relays the audio itself over `/backend/ws`, so this key is useless on Netlify (no websockets). Unset ⇒ fallback to `SpeechRecognition` |
 
 
-## Agent daemon (separate open-source repository)
+## Agent daemon (separate repository)
 
-The host-side daemon is deliberately outside this closed app/backend repo. Its
-source, tests, release workflow, and published bundle live at
-`../agensis-agent` locally and
+The host-side daemon lives in its own repository, deliberately separate from
+this app/backend repo: it has a different release cadence, a different
+distribution channel (npm), and it runs on a contributor's own machine rather
+than on our infrastructure. Its source, tests, release workflow, and published
+bundle live at `../agensis-agent` locally and
 [`jasonkneen/agensis-agent`](https://github.com/jasonkneen/agensis-agent).
-The npm package remains `@agensis/agensis-agent`; changes to the server/daemon
+The npm package is `@agensis/agensis-agent`; changes to the server/daemon
 wire contract must be coordinated across both repositories.
 
 ## Conventions
@@ -889,7 +941,10 @@ wire contract must be coordinated across both repositories.
 - No new npm dependencies without a strong reason. Drag-and-drop is native HTML5
   (`draggable` + `onDragStart/onDragOver/onDrop`) or pointer events — see
   `src/components/windows/ThreadWidgetRail.tsx` and `TasksWindowContent.tsx`.
-- The root package is the closed Agensis app. Do not copy app, backend, database,
-  or deployment code into the public daemon repository.
+- The root package is the agensis app. Keep app, backend, database and deployment
+  code out of the daemon repository — not because either repo is private, but
+  because the daemon is a small, separately released client of the wire contract
+  and copying server code into it duplicates the thing the contract exists to
+  keep in one place.
 - User-facing rich text is sanitized through `src/lib/sanitize.ts` (DOMPurify) at
   every render/paste boundary.

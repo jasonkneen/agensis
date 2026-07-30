@@ -187,11 +187,29 @@ agensis currently focuses on:
 
 ## Notes
 
-- the open-source daemon lives in the sibling
-  [`agensis-agent`](https://github.com/jasonkneen/agensis-agent) repository
+- the host-side agent daemon lives in the sibling
+  [`agensis-agent`](https://github.com/jasonkneen/agensis-agent) repository, and
+  ships separately as `@agensis/agensis-agent` on npm
 - realtime behavior depends on the local backend server websocket bridge
 - workspace sharing and presence depend on authenticated users and workspace membership
 
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, the test runners, and the
+conventions. [AGENTS.md](./AGENTS.md) is the deep architectural reference — read
+it before changing the backend.
+
+Security issues go through [SECURITY.md](./SECURITY.md), **not** public issues.
+
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).
+
+Third-party attribution is in [NOTICE](./NOTICE). Bundled media assets are
+inventoried in [ASSETS.md](./ASSETS.md).
+
+> **Publication note:** ASSETS.md and NOTICE both record items whose
+> redistribution rights are **not yet established** — the bundled wallpapers and
+> agent avatars, and a dependency whose declared licence contradicts the licence
+> text it ships. Those are open questions, listed in each file, and they should
+> be settled before this repository is treated as cleanly redistributable.
