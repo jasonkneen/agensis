@@ -203,7 +203,21 @@ Security issues go through [SECURITY.md](./SECURITY.md), **not** public issues.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Copyright (C) 2026 Jason Kneen.
+
+**GNU Affero General Public License v3.0 only** — see [LICENSE](./LICENSE).
+
+The AGPL's network clause (section 13) is the point: if you run a modified
+version of this server and let other people use it over a network, those users
+are entitled to your modified source. Running it unmodified, or modifying it for
+your own use without offering it to others, carries no such obligation.
+
+The agent daemon is a **separate project under the MIT licence**
+([`@agensis/agensis-agent`](https://github.com/jasonkneen/agensis-agent)), so it
+can be embedded freely. That split is deliberate: the daemon is a client you may
+want inside your own software, while this server is the part worth keeping open.
+Do not copy code from this repository into that one — it would pull AGPL terms
+into an MIT project.
 
 Third-party attribution is in [NOTICE](./NOTICE). Bundled media assets are
 inventoried in [ASSETS.md](./ASSETS.md).

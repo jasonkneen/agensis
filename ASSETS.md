@@ -95,7 +95,12 @@ Two further points of fact:
 So what is genuinely known is: these are AI-generated images produced by
 Google's and OpenAI's image models. What is **not** known, and cannot be
 determined from the files, is whether this project holds the right to
-redistribute them under MIT.
+redistribute them at all.
+
+Note that relicensing this project to AGPL-3.0 does **not** resolve this. A
+licence governs the code its owner holds rights to; it cannot grant rights over
+images somebody else may own. This stays open until the generating accounts and
+their terms of service are identified.
 
 ### What resolving this requires
 

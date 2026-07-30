@@ -1,11 +1,13 @@
 agensis
-Copyright (c) 2026 agensis
+Copyright (C) 2026 Jason Kneen
 
-(This reproduces the copyright line in LICENSE verbatim. Maintainers: "agensis"
-is a product name, not a legal person. If the intended copyright holder is an
-individual or a company, LICENSE and this line should name them — a notice that
-names no identifiable rights holder makes it ambiguous who is granting the MIT
-permissions.)
+Licensed under the GNU Affero General Public License v3.0 only. See LICENSE for
+the full text, which is the canonical FSF text reproduced verbatim.
+
+The agent daemon (@agensis/agensis-agent) is a SEPARATE project under the MIT
+licence, so it can be embedded in other software freely. Code must not be copied
+from this repository into that one: it would carry AGPL terms into an MIT
+project.
 
 This product includes third-party software. This file reproduces the attribution
 and licence notices that those components require to be distributed alongside
@@ -16,36 +18,41 @@ Media assets (images, avatars, icons, fonts) are inventoried separately in
 ASSETS.md.
 
 --------------------------------------------------------------------------------
-UNRESOLVED LICENSING — read before distributing a build
+@mercuryworkshop/scramjet — resolved by this project's own licence
 --------------------------------------------------------------------------------
 
 @mercuryworkshop/scramjet 1.1.0
   https://github.com/MercuryWorkshop/scramjet
 
-  This package's metadata and its licence text disagree with each other:
+  Recorded because the sources disagree, and someone will check again:
 
-    - package.json declares:  "license": "MIT"
-    - the LICENSE file it ships is the 661-line
-      GNU AFFERO GENERAL PUBLIC LICENSE, Version 3 (19 November 2007)
+    - the pinned version, 1.1.0 (published 2026-04-27), declares
+      "license": "MIT" in its npm metadata
+    - the tarball it ships contains the 661-line GNU Affero General Public
+      License v3.0 text
+    - upstream's own package.json today declares "AGPL-3.0-only"
+    - GitHub's API reports license: null, because it detects licences from
+      LICENSE FILES and the repo has none. That is not an absence of licence,
+      and should not be read as one
 
-  This is not a transitive or dev-only dependency. vite.config.ts copies
-  dist/scramjet.all.js, dist/scramjet.sync.js and dist/scramjet.wasm.wasm out of
-  this package into the build output at public/scramjet-runtime/, so it ships in
-  every built artifact and executes in the user's browser.
+  The project relicensed part-way through its 2.x alpha series:
 
-  If the AGPL-3.0 text is the operative licence, it is incompatible with
-  distributing this project under MIT, and AGPL section 13 additionally reaches
-  users who interact with the software over a network. If the MIT declaration is
-  the operative licence, there is no obstacle and only this notice is required.
+      1.0.0 – 1.0.2        ISC              2024-06 → 2024-07
+      2.0.0-alpha …        MIT              2025-09 → 2026-05-16
+      1.1.0                MIT              2026-04-27   <- pinned here
+      2.0.6-alpha onward   AGPL-3.0-only    2026-05-24 →
 
-  This cannot be resolved from the package contents. It requires confirmation
-  from the upstream project. Until then, treat any distributed build as carrying
-  an unresolved copyleft question.
+  Since this project is itself AGPL-3.0, the question is moot in either
+  direction: an AGPL dependency is compatible with an AGPL work, and an MIT
+  dependency always was. No obligation is created that this project's own
+  licence does not already impose.
 
-  Note that vite.config.ts:49 currently carries a comment asserting
-  "scramjet's rewriter (MIT) plus bare-mux (MIT)". That comment states the
-  package.json field, not the shipped LICENSE file, and should not be read as a
-  verification.
+  This matters only if this project is ever relicensed to something permissive.
+  In that case 1.1.0's MIT declaration would have to be confirmed with upstream
+  before shipping, and the version must not be advanced past 2.0.5-alpha.
+
+  The version is pinned exactly rather than with a caret. A range would let a
+  routine dependency bump cross the 2.0.6-alpha boundary silently.
 
 --------------------------------------------------------------------------------
 Required attribution

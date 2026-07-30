@@ -118,7 +118,7 @@ Do not report vulnerabilities as public issues. See
 
 ## Licence
 
-Contributions are accepted under the [MIT licence](./LICENSE), the same licence
+Contributions are accepted under the [GNU AGPL v3.0](./LICENSE), the same licence
 this project is distributed under. By opening a pull request you confirm you
 have the right to contribute the code under those terms.
 

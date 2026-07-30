@@ -51,7 +51,10 @@ function emitVersionJson(): Plugin {
   };
 }
 
-// The web browser panel's runtime: scramjet's rewriter (MIT) plus bare-mux (MIT).
+// The web browser panel's runtime: scramjet's rewriter plus bare-mux. Both are
+// permissively licensed at the pinned versions, and this project is AGPL-3.0
+// anyway, so neither constrains us — see NOTICE for the full picture, including
+// why scramjet is pinned exactly rather than with a caret.
 // These are prebuilt bundles that must be fetched by URL at runtime — the service
 // worker `importScripts` them and bare-mux imports its SharedWorker by path — so
 // they cannot go through Rollup. They are emitted verbatim instead.

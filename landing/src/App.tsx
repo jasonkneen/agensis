@@ -560,7 +560,7 @@ function Footer() {
     <footer className="border-t border-agensis-border">
       <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-6 py-8 text-sm text-agensis-muted sm:flex-row">
         <Logo />
-        <div>© {new Date().getFullYear()} agensis. MIT licensed.</div>
+        <div>© {new Date().getFullYear()} agensis. AGPL-3.0 licensed.</div>
       </div>
     </footer>
   );
