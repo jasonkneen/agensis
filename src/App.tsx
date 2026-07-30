@@ -385,7 +385,11 @@ function directAgentParticipantForSession(session?: ChatSession | null): Channel
     participant?.kind === 'agent' && (participant.agent_id || participant.handle || participant.name)
   );
   if (agentParticipants.length === 0) return null;
-  return agentParticipants.find(participant => participant.direct) || (agentParticipants.length === 1 ? agentParticipants[0] : null);
+  // A sole agent participant only implies a DM when the session is actually a DM
+  // (folder 'Direct messages') or the participant is direct-flagged. A one-agent
+  // CHANNEL is still a channel — see the matching guard in Sidebar.tsx.
+  return agentParticipants.find(participant => participant.direct)
+    || (session?.folder === 'Direct messages' && agentParticipants.length === 1 ? agentParticipants[0] : null);
 }
 
 function isDirectChatSession(session?: ChatSession | null) {
