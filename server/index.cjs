@@ -31,6 +31,7 @@ const {
 // in the `encodeJsonb` bind (porsager wants the object, @netlify/database the
 // string).
 const { emitReactionFlowEventsForUpdate } = require('../shared/reaction-events.cjs');
+const { SESSION_READ_STATE_DDL, SHARE_READ_RECEIPTS_DDL } = require('../shared/read-receipts.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const {
  agentNextSteps,
@@ -131,6 +132,8 @@ const { mountSystemRoutes } = require('./system-routes.cjs');
 const { mountWorkspacesRoutes } = require('./workspaces-routes.cjs');
 const { mountWorkspaceMcpRoutes } = require('./workspace-mcp-routes.cjs');
 const { mountInboxRoutes } = require('./inbox-routes.cjs');
+const { mountReactionsRoutes } = require('./reactions-routes.cjs');
+const { mountReadReceiptsRoutes } = require('./read-receipts-routes.cjs');
 const { mountSessionAccessRoutes } = require('./session-access-routes.cjs');
 const { runDmScopeBackfill } = require('./dm-scope-backfill.cjs');
 const { mountLinkPreviewsRoutes } = require('./link-previews-routes.cjs');
@@ -1743,6 +1746,26 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_inbox_read_state_workspace ON inbox_read_state(workspace_id);
   `);
+ // Read receipts: one MONOTONIC high-water mark per (session, user) — "I had
+ // this conversation on screen up to this point" — plus the reciprocal per-user
+ // opt-out that gates both writing one and reading anyone else's.
+ //
+ // NOT a row per message per user: that model grows with message volume times
+ // workspace size and is written on every scroll, where this one is bounded by
+ // (members x sessions) and coalesces a page of scrolling into a single write.
+ // It is also the more private of the two — it cannot record which SPECIFIC
+ // message was read, only how far.
+ //
+ // There is deliberately NO workspace_id column; see shared/read-receipts.cjs
+ // for why that absence is what makes a DM's read state unsubscribable by a
+ // non-member. The DDL itself is single-sourced there so the three schema
+ // places (this file, database/neon-schema.sql, supabase/migrations/) cannot
+ // drift in shape, only in whether they have run.
+ //
+ // Comments stay OUT of the SQL string, same reason as the block below: several
+ // tests mock the DB and classify a bootstrap statement by its first keyword.
+ await db.unsafe(SESSION_READ_STATE_DDL);
+ await db.unsafe(SHARE_READ_RECEIPTS_DDL);
  // Owner broadcasts (shared/tenant-campaigns.cjs). The only rows in this
  // database addressed to ACCOUNTS rather than scoped to a workspace, which is why
  // neither table is in the backendClient allowlists — the dedicated owner-gated
@@ -2584,6 +2607,16 @@ function jsonError(res, status, error) {
 const aiChatRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 const webhookRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// Keyed per (user, message), not per user: toggling one reaction on and off
+// repeatedly is the abusive shape, and each accepted write rebroadcasts the
+// whole message row to every socket in the session. 30/min leaves a decisive
+// human far more headroom than they will ever use on ONE message while bounding
+// a stuck button.
+const reactionRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+// Keyed per (user, session). RECEIPT_REARM_MS in src/lib/readReceipts.ts already
+// holds a well-behaved client to ~20 writes/minute per conversation; this is the
+// floor under one that does not.
+const readReceiptRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 // Bridge deliveries are machine traffic and legitimately bursty — a busy Slack
 // channel or a Telegram group mid-argument outruns a human webhook by a lot.
 const bridgeRateLimiter = createRateLimiter({ windowMs: 60_000, max: 600 });
@@ -7763,6 +7796,8 @@ function createApp() {
   deleteSkill: deleteWorkspaceSkill,
  });
  mountInboxRoutes(app, { ...coreDeps(), INBOX_DEFAULT_LIMIT, INBOX_FILTERS, INBOX_MAX_LIMIT, THREAD_INBOX_DEFAULT_LIMIT, buildInboxSql, buildThreadInboxSql, inboxMentionHandle, inboxMentionPattern, toInboxItem, toThreadInboxItem });
+ mountReactionsRoutes(app, { ...coreDeps(), reactionRateLimiter });
+ mountReadReceiptsRoutes(app, { ...coreDeps(), readReceiptRateLimiter });
  mountSessionAccessRoutes(app, { ...coreDeps(), revokeRealtimeAccessForMember });
  mountLinkPreviewsRoutes(app, { ...coreDeps(), LINK_PREVIEW_COLUMNS, LINK_PREVIEW_MAX_PER_REQUEST, fetchLinkPreview, fetchPreviewImage, linkPreviewCacheKey, linkPreviewDbRateLimiter, linkPreviewImageDbRateLimiter, linkPreviewImageRateLimiter, linkPreviewRateLimiter, normalizeUnfurlUrl, publicLinkPreview, upsertLinkPreview });
  mountFeedbackRoutes(app, {

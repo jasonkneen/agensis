@@ -1210,6 +1210,42 @@ CREATE TABLE IF NOT EXISTS inbox_read_state (
 );
 CREATE INDEX IF NOT EXISTS idx_inbox_read_state_workspace ON inbox_read_state(workspace_id);
 
+-- Read receipts: one MONOTONIC high-water mark per (session, user) — "I had this
+-- conversation on screen up to this point". Mirrors ensureRuntimeSchema in
+-- server/index.cjs, which runs the DDL single-sourced in shared/read-receipts.cjs.
+--
+-- NOT a row per message per user. That model is 4,000,000 rows at 20 users x
+-- 200k messages, grows with every message sent times the workspace size, and is
+-- written on every scroll. This one is bounded by (members x sessions) — about
+-- 1,200 rows for the same workspace — and a page of scrolling coalesces into a
+-- single write because the marker IS the coalescing. It is also the more private
+-- model: it can say "up to this point" and cannot say "they read that one and
+-- skipped the next", because that is never recorded.
+--
+-- NO workspace_id COLUMN, ON PURPOSE. It mirrors `messages`: with no workspace
+-- column an unscoped subscription cannot be EXPRESSED, so a client must filter by
+-- session_id, resolveOperationWorkspace resolves the tenant through chat_sessions
+-- and enforceDbOperationAccess then runs the DM gate for that session. That makes
+-- "a non-member cannot see who read a private conversation" a property of the
+-- schema rather than of a query remembering to say so.
+--
+-- session_id leads the PK because every read is "all markers for THIS session",
+-- and that prefix is covered by the PK btree — so no second index is created.
+CREATE TABLE IF NOT EXISTS session_read_state (
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  read_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  PRIMARY KEY (session_id, user_id)
+);
+
+-- The receipts opt-out, and it is RECIPROCAL: switching it off stops your
+-- markers being written AND stops you seeing anyone else's (both halves are in
+-- the SQL in shared/read-receipts.cjs, not in the UI). Reciprocity is what keeps
+-- the setting from being a one-way mirror. Defaults to true — an opt-out that
+-- starts switched off is a feature nobody ever sees.
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS share_read_receipts boolean NOT NULL DEFAULT true;
+
 -- Owner broadcasts (shared/tenant-campaigns.cjs). The only rows here addressed
 -- to ACCOUNTS rather than scoped to a workspace, which is why neither table is
 -- in the backendClient allowlists — the dedicated owner-gated routes are the

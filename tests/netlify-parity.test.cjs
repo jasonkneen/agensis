@@ -101,6 +101,15 @@ const PROTECTED_ROUTES = [
   // mistake for a public endpoint. It is not: it writes a task into the System
   // workspace, so it must still refuse an anonymous caller.
   ['POST', '/backend/feedback'],
+  // Reactions and read receipts. Listed here for TWO reasons: the obvious one
+  // (they must refuse an anonymous caller), and the parity one — a route that
+  // exists on Fly and not here is a shipped UI calling something that 404s
+  // against whichever deploy the user happens to reach, which is this repo's
+  // most repeated bug. A 401 proves the route is MATCHED; a 404 would mean it
+  // was never mirrored.
+  ['POST', '/backend/messages/msg-123/reactions'],
+  ['POST', '/backend/sessions/sess-123/read'],
+  ['GET', '/backend/sessions/sess-123/read-state'],
 ];
 
 for (const [method, pathname] of PROTECTED_ROUTES) {
