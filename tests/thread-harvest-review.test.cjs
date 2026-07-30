@@ -45,7 +45,7 @@ test('a verdict is only a verdict if it is one of the two we recognise', () => {
   assert.equal(findingDecision(null), '');
 });
 
-test('three kinds land in the two stores that are actually writable', () => {
+test('three kinds land in three stores, each of which is actually writable', () => {
   assert.equal(harvestAcceptTarget({ kind: 'memory' }).table, 'memory_facts');
   assert.equal(harvestAcceptTarget({ kind: 'memory' }).category, 'suggested',
     'its own category, so a suggested fact is distinguishable from a typed one');

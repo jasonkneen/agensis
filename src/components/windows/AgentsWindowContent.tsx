@@ -17,6 +17,7 @@ import {
   Monitor,
   Pencil,
   Plug,
+  Download,
   Plus,
   Power,
   RefreshCw,
@@ -59,6 +60,7 @@ import {
 } from '@/components/ui/empty';
 import {
   Field,
+  FieldDescription,
   FieldGroup,
   FieldLabel,
 } from '@/components/ui/field';
@@ -85,6 +87,7 @@ import {
 } from '../../lib/agentVoice';
 import { useCartesiaVoices } from '../../hooks/useCartesiaVoices';
 import { useAgentTemplates } from '../../hooks/useAgentTemplates';
+import { useWorkspaceSkills } from '../../hooks/useWorkspaceSkills';
 
 // 418 English voices in one <select> is a scroll nobody finishes; the search
 // box above it is the real control.
@@ -96,16 +99,28 @@ import {
   AGENT_TEMPLATES,
   mergeTemplateSources,
   type GalleryTemplate,
+  type StoredAgentTemplate,
   agentMetadataWithRuntime,
   runtimeChoicesFromConnections,
   type AgentExecutionRuntime,
   type AgentRuntimeChoice,
   type AgentTemplate,
 } from '../../lib/agentTemplates';
+import {
+  TEMPLATE_IMPORT_NOTE,
+  buildTemplateExport,
+  parseTemplateExport,
+  templateExportFilename,
+} from '../../lib/agentTemplateTransfer';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { SkillChipsInput } from '../agents/SkillChipsInput';
-import { buildSkillEntries } from '../../lib/skillsView';
-import { buildSkillSuggestions, type SkillSuggestion } from '../../lib/skillTokens';
+import { buildSkillEntries, type SkillEntry } from '../../lib/skillsView';
+import {
+  buildSkillSuggestions,
+  parseSkillTokens,
+  unresolvedSkillTokens,
+  type SkillSuggestion,
+} from '../../lib/skillTokens';
 import { oneOf, setOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useSplitResize } from '../../hooks/useSplitResize';
@@ -475,9 +490,26 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   // daemon, configured on any agent, shipped by agensis, or a library on the
   // backend host. The old field only ever knew the last of those, so a skill
   // sitting on the agent next to this one couldn't be suggested.
+  // Computed once for BOTH forms, and now used twice: the menu offers these
+  // names, and the dangling-reference check under the field asks the same rows
+  // which of the chosen names anything can actually supply a body for.
+  //
+  // The workspace store is fetched here rather than threaded down so the two
+  // consumers cannot disagree about what exists. `unavailable` (an older
+  // backend) simply yields no stored rows, which is the pre-store behaviour.
+  const workspaceSkillStore = useWorkspaceSkills(workspaceId || null);
+  const skillEntries = useMemo(
+    () => buildSkillEntries(
+      agents,
+      connections,
+      undefined,
+      workspaceSkillStore.skills.map(skill => ({ id: skill.id, name: skill.name, summary: skill.summary })),
+    ),
+    [agents, connections, workspaceSkillStore.skills],
+  );
   const skillSuggestions = useMemo(
-    () => buildSkillSuggestions(buildSkillEntries(agents, connections), capabilities),
-    [agents, connections, capabilities],
+    () => buildSkillSuggestions(skillEntries, capabilities),
+    [skillEntries, capabilities],
   );
   const runtimeChoices = useMemo(() => runtimeChoicesFromConnections(connections), [connections]);
 
@@ -541,7 +573,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   // empty list when the route is unreachable, so the gallery degrades to exactly
   // today's behaviour rather than showing an error — that is also the rollback
   // path if the server is reverted.
-  const { templates: authoredTemplates, saveAgentAsTemplate } = useAgentTemplates(workspaceId);
+  const { templates: authoredTemplates, saveAgentAsTemplate, importTemplate } = useAgentTemplates(workspaceId);
   const galleryTemplates = useMemo(
     () => mergeTemplateSources(AGENT_TEMPLATES, authoredTemplates),
     [authoredTemplates],
@@ -568,6 +600,45 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     setNewSoul(stored?.soul || '');
     setNewInstructions(stored?.instructions || '');
     setCreateStep('form');
+  };
+
+  // One message slot for both directions. Export and import are the same
+  // affordance from the user's side ("move a persona between workspaces"), and
+  // two separate banners would compete for the same bit of space.
+  const [templateTransferMessage, setTemplateTransferMessage] =
+    useState<{ ok: boolean; text: string } | null>(null);
+
+  const handleExportTemplate = (stored: StoredAgentTemplate) => {
+    const envelope = buildTemplateExport(stored);
+    const blob = new Blob([`${JSON.stringify(envelope, null, 2)}\n`], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = templateExportFilename(stored);
+    link.click();
+    // Revoked on the next tick, not immediately: revoking before the browser
+    // has started the download cancels it in WebKit.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setTemplateTransferMessage({ ok: true, text: `Exported ${stored.name}.` });
+  };
+
+  const handleImportTemplateFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    // Cleared straight away so choosing the SAME file twice fires change again;
+    // without this, a failed import cannot be retried after fixing the file.
+    event.target.value = '';
+    if (!file) return;
+    setTemplateTransferMessage(null);
+    const text = await file.text().catch(() => '');
+    const parsed = parseTemplateExport(text);
+    if (!parsed.ok) {
+      setTemplateTransferMessage({ ok: false, text: parsed.error });
+      return;
+    }
+    const failure = await importTemplate(parsed.envelope);
+    setTemplateTransferMessage(failure
+      ? { ok: false, text: failure }
+      : { ok: true, text: 'Imported. It is in the list below.' });
   };
 
   const [templateSavedFor, setTemplateSavedFor] = useState<string | null>(null);
@@ -673,7 +744,40 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 </button>
               </div>
 
-              <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Templates</div>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Templates</span>
+                {/* A real file input, hidden, rather than a fetch from a URL.
+                    A URL field here would be a manage-gated request the server
+                    makes to an address a user chose, which is an SSRF surface
+                    the gateway already had to have closed. A file the person
+                    already has needs no such request. */}
+                <label className="control-outer-ring inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-card/40 px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:bg-muted/50 hover:text-foreground">
+                  <Upload className="size-3.5" />
+                  Import a template
+                  <input
+                    type="file"
+                    accept="application/json,.json"
+                    className="sr-only"
+                    onChange={event => { void handleImportTemplateFile(event); }}
+                  />
+                </label>
+              </div>
+              {/* Said BEFORE a file is chosen, not after. The reassuring half
+                  answers "what is this about to let in" (nothing — a template
+                  has nowhere to keep authority); the second half is the actual
+                  warning and the one that matters, because unread prose becomes
+                  an agent's instructions. */}
+              <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground">{TEMPLATE_IMPORT_NOTE}</p>
+              {templateTransferMessage && (
+                <div className={cn(
+                  'mb-2 rounded-lg border px-2.5 py-1.5 text-xs',
+                  templateTransferMessage.ok
+                    ? 'border-border bg-card/40 text-muted-foreground'
+                    : 'border-destructive/40 bg-destructive/10 text-destructive',
+                )}>
+                  {templateTransferMessage.text}
+                </div>
+              )}
               <div className="relative mb-2">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input value={templateQuery} onChange={e => setTemplateQuery(e.target.value)} placeholder="Search templates" className="h-8 pl-8 text-sm" />
@@ -708,19 +812,41 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
                     {filtered.map(tpl => {
                       const TplIcon = tpl.icon;
+                      // Only an AUTHORED template can be exported. A bundled one
+                      // is reviewed code that ships with the app; exporting it
+                      // would produce a file that re-imports as a workspace
+                      // template and then wins over the bundled original on the
+                      // slug (mergeTemplateSources prefers authored), quietly
+                      // forking a shipped persona into a stale copy.
+                      const stored = tpl.stored;
                       return (
-                        <button
-                          key={tpl.id}
-                          type="button"
-                          onClick={() => applyTemplate(tpl)}
-                          className="group flex min-h-[132px] flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
-                          <span className="grid size-9 place-items-center rounded-lg bg-muted"><TplIcon className="size-5" /></span>
-                          <span className="text-sm font-semibold">{tpl.name}</span>
-                          <span className="line-clamp-2 text-xs text-muted-foreground">{tpl.description}</span>
-                          <span className="mt-auto text-[11px] text-muted-foreground opacity-70">
-                            {tpl.category} · {tpl.runMode === 'daemon' ? `Remote · ${runtimeChoices.find(choice => choice.id === tpl.runtime)?.label || 'Claude'}` : 'Built-in'}
-                          </span>
-                        </button>
+                        /* The card is a button, so Export cannot be nested
+                           inside it — a button inside a button is invalid and
+                           the inner one is unreachable by keyboard in some
+                           browsers. Sibling, positioned over the corner. */
+                        <div key={tpl.id} className="group relative">
+                          <button
+                            type="button"
+                            onClick={() => applyTemplate(tpl)}
+                            className="flex min-h-[132px] w-full flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
+                            <span className="grid size-9 place-items-center rounded-lg bg-muted"><TplIcon className="size-5" /></span>
+                            <span className="text-sm font-semibold">{tpl.name}</span>
+                            <span className="line-clamp-2 text-xs text-muted-foreground">{tpl.description}</span>
+                            <span className="mt-auto text-[11px] text-muted-foreground opacity-70">
+                              {tpl.category} · {tpl.runMode === 'daemon' ? `Remote · ${runtimeChoices.find(choice => choice.id === tpl.runtime)?.label || 'Claude'}` : 'Built-in'}
+                            </span>
+                          </button>
+                          {stored && (
+                            <button
+                              type="button"
+                              aria-label={`Export ${tpl.name}`}
+                              title="Download this template as a file"
+                              onClick={() => handleExportTemplate(stored)}
+                              className="control-outer-ring absolute right-2 top-2 grid size-7 place-items-center rounded-lg border border-border bg-card/80 text-muted-foreground opacity-0 transition hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100">
+                              <Download className="size-3.5" />
+                            </button>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
@@ -755,6 +881,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 runtimeChoices={runtimeChoices}
                 capabilities={capabilities}
                 skillSuggestions={skillSuggestions}
+                skillEntries={skillEntries}
                 onNameChange={setNewName}
                 onAvatarChange={(value) => {
                   setNewAvatar(value);
@@ -1077,6 +1204,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   capabilities={capabilities}
                   runtimeChoices={runtimeChoices}
                   skillSuggestions={skillSuggestions}
+                  skillEntries={skillEntries}
                   webhooks={webhooks.filter(webhook => webhook.agent_id === selectedAgent.id)}
                   connections={connections.filter(connection => connection.agent_id === selectedAgent.id)}
                   roster={agents}
@@ -1273,6 +1401,7 @@ function AgentForm({
   runtimeChoices,
   capabilities,
   skillSuggestions,
+  skillEntries,
   onNameChange,
   onAvatarChange,
   onOpenPetAvatarChange,
@@ -1318,6 +1447,8 @@ function AgentForm({
   capabilities: SystemCapabilities | null;
   /** Every skill name this workspace knows, for the Skills field's menu. */
   skillSuggestions: SkillSuggestion[];
+  /** The same rows, for the dangling-reference check under the field. */
+  skillEntries: SkillEntry[];
   onNameChange: (value: string) => void;
   onAvatarChange: (value: string) => void;
   onOpenPetAvatarChange: (pet: OpenPet) => void;
@@ -1653,6 +1784,23 @@ function AgentForm({
           onChange={onSkillsChange}
           suggestions={skillSuggestions}
         />
+        {/* THE DANGLING-REFERENCE WARNING. A skill list is a list of NAMES, and
+            a name resolves to nothing on its own — so a template authored
+            elsewhere could hand this form `security-review` and the agent would
+            advertise a skill it cannot read. Said here, at the moment the names
+            are chosen, because the fix (write the procedure in Skills) is now a
+            real thing somebody can go and do. */}
+        {(() => {
+          const dangling = unresolvedSkillTokens(parseSkillTokens(skills), skillEntries);
+          if (dangling.length === 0) return null;
+          return (
+            <FieldDescription className="text-amber-600 dark:text-amber-500">
+              {dangling.length === 1
+                ? <>No procedure exists for <code className="font-mono">{dangling[0]}</code> — the agent will claim the name without being able to read it. Write it in Skills, or connect a machine that has it.</>
+                : <>No procedure exists for {dangling.length} of these ({dangling.slice(0, 4).join(', ')}{dangling.length > 4 ? '…' : ''}) — the agent will claim those names without being able to read them.</>}
+            </FieldDescription>
+          );
+        })()}
       </Field>
 
       {extraSections}
@@ -1698,6 +1846,7 @@ function AgentDetailPane({
   capabilities,
   runtimeChoices,
   skillSuggestions,
+  skillEntries,
   webhooks,
   connections,
   roster,
@@ -1727,6 +1876,7 @@ function AgentDetailPane({
   runtimeChoices: AgentRuntimeChoice[];
   /** Passed straight through to the Skills field; built once for both forms. */
   skillSuggestions: SkillSuggestion[];
+  skillEntries: SkillEntry[];
   webhooks: AgentWebhook[];
   connections: AgentConnection[];
   /**
@@ -1939,6 +2089,7 @@ function AgentDetailPane({
             runtimeChoices={runtimeChoices}
             capabilities={capabilities}
             skillSuggestions={skillSuggestions}
+            skillEntries={skillEntries}
             onNameChange={setEditName}
             onAvatarChange={(value) => {
               setEditAvatar(value);

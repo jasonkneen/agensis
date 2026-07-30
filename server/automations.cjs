@@ -16,7 +16,7 @@
 // Every one of them ends in either a paid model turn or an outbound HTTP
 // request. The uncovered cell is event-triggered with an INTERNAL action, and
 // that is the only thing this file adds. It is NOT a fourth general-purpose
-// engine: it has one trigger kind, one action, no loops, no branches and no
+// engine: it has one trigger kind, two actions, no loops, no branches and no
 // step-to-step data flow, and none of the three existing systems is touched.
 //
 // RELATIONSHIP TO flow_connections, since the names are close. A flow connection
@@ -27,8 +27,8 @@
 // URL" is a Flows connection, today, unchanged. The two share the event
 // vocabulary (FLOW_EVENTS / FLOW_EVENT_BY_CHANGE, injected) and nothing else.
 //
-// WHY THERE IS NO dispatch_agent ACTION IN v1. An action that could start an
-// agent turn is the difference between "an automation writes a row" and "an
+// WHY THERE IS NO dispatch_agent ACTION. An action that could start an agent
+// turn is the difference between "an automation writes a row" and "an
 // automation spends money in a loop". With no such action, unbounded agent-job
 // fan-out is impossible BY CONSTRUCTION rather than bounded by a limiter that a
 // later change could raise. post_message inserts a message and notifies
@@ -39,6 +39,14 @@
 // direct agent_jobs insert) so it inherits the one-active-job unique index, the
 // max_agent_turns budget and the per-conversation lock, and the run-time
 // re-check of the author's role becomes mandatory rather than advisory.
+//
+// create_task KEEPS THAT PROPERTY, and keeps it by shape. Task dispatch fires
+// on a non-empty `assignee_id` inside the /backend/db/insert route -- not in a
+// trigger -- so a direct INSERT takes neither path. On top of that the step has
+// no assignee field at all: the validator rebuilds each step from `title` and
+// `description` only, so no stored definition can carry one even if somebody
+// writes it into the JSON. An automation creates the task; a human assigns it.
+// Do not add an assignee field to make create_task "complete".
 //
 // House pattern: a createAutomations(deps) factory with every dependency
 // injected, matching createThreadHarvest and createTaskDispatch, so the logic is
@@ -51,6 +59,8 @@ const {
  interpolate,
  validateDefinition,
  renderDefinitionYaml,
+ AUTOMATION_TASK_SOURCE_TYPE,
+ MAX_TASK_TITLE_LENGTH,
 } = require('../shared/automation-rules.cjs');
 
 /**
@@ -217,17 +227,28 @@ function createAutomations(deps = {}) {
 
   for (const row of Array.isArray(rows) ? rows : []) {
    // THE CYCLE BRAKE. A row an automation produced never triggers an
-   // automation. v1's only action writes `messages`, and it writes them under
-   // sender_kind='automation', so this single check makes chains impossible --
-   // including the two-automation cycle (A posts, B triggers on A and posts, A
-   // triggers on B) that a per-automation self-exclusion check would miss.
+   // automation. post_message writes `messages` under sender_kind='automation',
+   // so this single check makes chains impossible -- including the
+   // two-automation cycle (A posts, B triggers on A and posts, A triggers on B)
+   // that a per-automation self-exclusion check would miss.
    //
    // It is blunter than the depth counter the plan described, and deliberately
    // so: depth needs a tagging column on every table an action can write, which
    // for `messages` is a schema change to the hottest table in the product. A
    // flat "automations do not chain" rule needs no column, cannot be defeated
    // by a cycle of any length, and is trivial to relax later.
+   //
+   // THE OTHER ACTION IS COVERED BY ABSENCE, NOT BY THIS CHECK. `create_task`
+   // writes `tasks`, and `tasks` has no entry in FLOW_EVENT_BY_CHANGE -- there
+   // is no task event to trigger on, so a created task cannot start a run in
+   // the first place. Adding 'tasks:INSERT' to that map WOULD create a cycle
+   // this brake cannot see, because a task row carries no sender_kind. If that
+   // event is ever wanted, `tasks.source_type = 'automation'` is the equivalent
+   // marker and this condition must be widened to skip it at the same time.
+   // Pinned by "a task an automation created cannot trigger an automation" in
+   // tests/automations.test.cjs.
    if (table === 'messages' && String(row?.sender_kind || '') === AUTOMATION_SENDER_KIND) continue;
+   if (table === 'tasks' && String(row?.source_type || '') === AUTOMATION_TASK_SOURCE_TYPE) continue;
 
    const location = await flowEventLocation(table, row);
    if (!location?.workspaceId) continue;
@@ -375,6 +396,41 @@ function createAutomations(deps = {}) {
   return { action: step.action, ok: true, messageId: rows[0]?.id || null };
  }
 
+ /**
+  * Insert the task an automation creates. No agent is woken; see the header.
+  *
+  * THE INSERT IS DIRECT, AND THAT IS THE POINT. Task dispatch is wired into the
+  * /backend/db/insert route (server/index.cjs), not into a database trigger, and
+  * it fires only on a non-empty `assignee_id`. Writing the row here therefore
+  * takes neither path: no route, and no assignee to take it with. `assignee_id`
+  * is not even a column this function mentions, and the validator drops the
+  * field from any stored definition, so an automation cannot name one.
+  *
+  * Provenance goes in source_type / source_id rather than created_by, matching
+  * what post_message does with sender_kind / sender_id: the automation made
+  * this, not the person who happened to author the rule months ago.
+  */
+ async function runCreateTaskStep(step, run, payload) {
+  const title = interpolate(String(step.title || ''), payload).slice(0, MAX_TASK_TITLE_LENGTH).trim();
+  // A title that interpolated down to nothing is a PERMANENT failure. `tasks.title`
+  // is NOT NULL and a blank one is unusable in the list anyway, so retrying it
+  // three times cannot make it succeed — and a nameless task appearing on
+  // somebody's board is worse than a run that says why it stopped.
+  if (!title) {
+   return { action: step.action, ok: false, permanent: true, error: 'task title is empty after interpolation' };
+  }
+  const description = interpolate(String(step.description || ''), payload);
+
+  const rows = await getDb().unsafe(
+   `insert into tasks (workspace_id, created_by, title, description, status, priority, source_type, source_id)
+      values ($1, null, $2, $3, 'todo', 'normal', $4, $5)
+      returning *`,
+   [String(run.workspace_id), title, description, AUTOMATION_TASK_SOURCE_TYPE, String(run.automation_id)],
+  );
+  notifyDbSubscribers('tasks', 'INSERT', rows);
+  return { action: step.action, ok: true, taskId: rows[0]?.id || null };
+ }
+
  /** Run one claimed automation. Steps are serial and there are at most five. */
  async function runOneAutomation() {
   const run = await claimAutomationRun();
@@ -398,20 +454,35 @@ function createAutomations(deps = {}) {
   const results = [];
   let failed = null;
 
+  // The runner's allowlist, kept as its own map rather than an if/else chain so
+  // an action the VALIDATOR accepts but the runner cannot execute fails as
+  // 'unsupported action' instead of falling through to whichever branch is
+  // written last. Both sets must be widened together; neither is the other's
+  // authority.
+  const STEP_RUNNERS = {
+   post_message: runPostMessageStep,
+   create_task: runCreateTaskStep,
+  };
+
+  let lastAction = '';
   try {
    for (const step of Array.isArray(definition.steps) ? definition.steps : []) {
-    if (step?.action !== 'post_message') {
-     results.push({ action: String(step?.action || ''), ok: false, permanent: true, error: 'unsupported action' });
+    lastAction = String(step?.action || '');
+    const runStep = Object.prototype.hasOwnProperty.call(STEP_RUNNERS, lastAction)
+     ? STEP_RUNNERS[lastAction]
+     : null;
+    if (!runStep) {
+     results.push({ action: lastAction, ok: false, permanent: true, error: 'unsupported action' });
      failed = 'unsupported action';
      break;
     }
-    const result = await runPostMessageStep(step, run, payload);
+    const result = await runStep(step, run, payload);
     results.push(result);
     if (!result.ok) { failed = result.error; break; }
    }
   } catch (error) {
    failed = String(error?.message || error).slice(0, 500);
-   results.push({ action: 'post_message', ok: false, error: failed });
+   results.push({ action: lastAction, ok: false, error: failed });
   }
 
   const permanent = results.some((result) => result.permanent === true);
@@ -674,7 +745,7 @@ function createAutomations(deps = {}) {
   updateAutomation,
   deleteAutomation,
   publicAutomation,
-  __internals: { parseDefinition, disableRunaway, recentRunCount, runPostMessageStep },
+  __internals: { parseDefinition, disableRunaway, recentRunCount, runPostMessageStep, runCreateTaskStep },
  };
 }
 

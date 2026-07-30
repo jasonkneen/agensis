@@ -28,6 +28,7 @@ const {
  AUTOMATION_MAX_RUNS_PER_TICK,
  AUTOMATION_SENDER_KIND,
 } = require('../server/automations.cjs');
+const { AUTOMATION_TASK_SOURCE_TYPE } = require('../shared/automation-rules.cjs');
 
 const WORKSPACE = 'ws-1';
 const CHANNEL = 'chan-1';
@@ -274,6 +275,115 @@ test('the posted message carries the automation sender kind', async () => {
  const insert = db.queries.find((entry) => entry.sql.toLowerCase().startsWith('insert into messages'));
  assert.equal(insert.params[2], AUTOMATION_SENDER_KIND);
  assert.equal(insert.params[1], 'hi Jason', 'the text is interpolated');
+});
+
+// --- create_task -------------------------------------------------------------
+
+test('a created task names NO assignee, which is what keeps a run free of model calls', async () => {
+ // THE SAFETY PROPERTY. Task dispatch fires on a non-empty assignee_id inside
+ // the /backend/db/insert route; this INSERT takes neither the route nor an
+ // assignee. Asserting on the SQL TEXT as well as the params is deliberate:
+ // params alone would still pass if somebody added `assignee_id` to the column
+ // list with a null bind and then a later edit filled the bind in.
+ //
+ // MUTATION: add assignee_id to the insert -> this fails.
+ const db = makeDb({ rows: { 'insert into tasks': [{ id: 'task-1' }] } });
+ const engine = build(db);
+ const result = await engine.__internals.runCreateTaskStep(
+  { action: 'create_task', title: 'Look into {{data.senderName}}', description: 'from {{data.content}}' },
+  { automation_id: 'auto-1', workspace_id: WORKSPACE },
+  { data: { senderName: 'Jason', content: 'the deploy failed again' } },
+ );
+ assert.equal(result.ok, true);
+ assert.equal(result.taskId, 'task-1');
+
+ const insert = db.queries.find((entry) => entry.sql.toLowerCase().startsWith('insert into tasks'));
+ assert.ok(insert, 'the task must actually be inserted');
+ assert.equal(/assignee/i.test(insert.sql), false, 'no assignee may appear anywhere in the statement');
+ assert.equal(insert.params.includes(USER), false, 'no user id may be bound as an assignee');
+
+ // Interpolated, workspace-scoped, and stamped with its provenance.
+ assert.equal(insert.params[0], WORKSPACE);
+ assert.equal(insert.params[1], 'Look into Jason');
+ assert.equal(insert.params[2], 'from the deploy failed again');
+ assert.equal(insert.params[3], AUTOMATION_TASK_SOURCE_TYPE);
+ assert.equal(insert.params[4], 'auto-1');
+});
+
+test('a task an automation created cannot trigger an automation', async () => {
+ // The cycle brake for the second action. Today `tasks` is not in
+ // FLOW_EVENT_BY_CHANGE at all, so this is belt AND braces — but the moment
+ // somebody adds 'tasks:INSERT' to that map, this is the only thing standing
+ // between create_task and a rule that feeds itself forever.
+ //
+ // MUTATION: drop the tasks/source_type line from enqueueAutomationRuns -> the
+ // automation-made task enqueues a run and this fails.
+ const taskAutomation = automationRow({ trigger_event: 'task.created', definition: goodDefinition({ trigger: { event: 'task.created' }, when: [] }) });
+ const db = makeDb({
+  rows: {
+   'select id, workspace_id, name, enabled, trigger_event': [taskAutomation],
+   'insert into automation_runs': [{ id: 'run-1' }],
+  },
+ });
+ const engine = build(db, {
+  flowEventByChange: { ...FLOW_EVENT_BY_CHANGE, 'tasks:INSERT': 'task.created' },
+  flowEvents: [...FLOW_EVENTS, 'task.created'],
+ });
+
+ const fromAutomation = await engine.enqueueAutomationRuns('tasks', 'INSERT', [
+  { id: 'task-1', workspace_id: WORKSPACE, source_type: AUTOMATION_TASK_SOURCE_TYPE },
+ ]);
+ assert.deepEqual(fromAutomation, [], 'a task an automation made must not start a run');
+
+ // And the brake must not be "never": an ordinary task still triggers, or the
+ // assertion above would pass against a rule that simply ignores tasks.
+ const fromHuman = await engine.enqueueAutomationRuns('tasks', 'INSERT', [
+  { id: 'task-2', workspace_id: WORKSPACE, source_type: 'manual' },
+ ]);
+ assert.equal(fromHuman.length, 1);
+});
+
+test('a title that interpolates away is a permanent failure, not a blank task', async () => {
+ // tasks.title is NOT NULL and a blank title is unusable in the list, so
+ // retrying cannot help. MUTATION: drop the empty-title guard -> the insert is
+ // attempted with '' and this fails.
+ const db = makeDb({ rows: { 'insert into tasks': [{ id: 'task-1' }] } });
+ const engine = build(db);
+ const result = await engine.__internals.runCreateTaskStep(
+  { action: 'create_task', title: '   ' },
+  { automation_id: 'auto-1', workspace_id: WORKSPACE },
+  {},
+ );
+ assert.equal(result.ok, false);
+ assert.equal(result.permanent, true);
+ assert.equal(db.queries.some((entry) => entry.sql.toLowerCase().startsWith('insert into tasks')), false);
+});
+
+test('an action the validator would accept but the runner cannot execute is refused', async () => {
+ // The runner keeps its OWN allowlist. A definition already stored under an
+ // older/newer shared module must not fall through to whichever branch happens
+ // to be written last.
+ //
+ // MUTATION: make the step dispatch default to runPostMessageStep -> this runs
+ // something and fails.
+ const db = makeDb({
+  rows: {
+   'update automation_runs': [{ id: 'run-1', automation_id: 'auto-1', workspace_id: WORKSPACE, payload: {}, attempt_count: 1 }],
+   'select * from automations': [automationRow({
+    definition: goodDefinition({ steps: [{ action: 'dispatch_agent', agentId: 'agent-1' }] }),
+   })],
+  },
+ });
+ const engine = build(db);
+ await engine.runDueAutomations(1);
+ assert.equal(db.queries.some((entry) => entry.sql.toLowerCase().startsWith('insert into messages')), false);
+ assert.equal(db.queries.some((entry) => entry.sql.toLowerCase().startsWith('insert into tasks')), false);
+ // `set status = $2` and not merely `set status`: the CLAIM statement also
+ // starts "update automation_runs set status", so a looser match finds the
+ // claim and asserts against its params instead of the settle's.
+ const finish = db.queries.find((entry) => /update automation_runs set status = \$2/i.test(entry.sql));
+ assert.ok(finish, 'the run must be settled');
+ assert.ok(JSON.stringify(finish.params).includes('unsupported action'));
 });
 
 // --- fan-out and the runaway guard -------------------------------------------

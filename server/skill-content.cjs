@@ -22,6 +22,12 @@
 //      (`agent_skill_sync`, mirrored into `agent_skill_documents` — see
 //      handleAgentSkillSync in server/index.cjs) there is no document to show,
 //      and the honest answer is to say so.
+//   4. A WORKSPACE SKILL someone authored in the app (`workspace_skills`, see
+//      shared/workspaceSkills.cjs). agensis holds the whole body, it belongs to
+//      the workspace rather than to one agent or one machine, and it is readable
+//      whether or not any daemon is up. This is the store that did not exist
+//      before — the reason Suggestions had to accept a proposed skill as a
+//      Document, and the reason a template's `skills` list could dangle.
 //
 // Everything here is pure except the two `fs` readers at the bottom, so the
 // path guards and the precedence rules are unit-testable without a filesystem.
@@ -36,6 +42,10 @@ const {
   sandboxCredentialKeysForSkills,
   sandboxSkillsForAgent,
 } = require('./sandbox-skills.cjs');
+const {
+  MAX_SKILLS_PER_WORKSPACE,
+  renderWorkspaceSkillMarkdown,
+} = require('../shared/workspaceSkills.cjs');
 
 /** Hard ceiling on any single document, in either direction (read or sync). */
 const SKILL_CONTENT_MAX_BYTES = 64 * 1024;
@@ -179,17 +189,38 @@ function normalizeSkillDocuments(raw) {
 /**
  * Decide what to show for one named skill.
  *
+ * PRECEDENCE: daemon document > sandbox definition > workspace skill.
+ *
  * A daemon-mirrored document wins over a sandbox definition, because it is the
  * real file from the machine that claims the skill; the definition is agensis's
  * own. In practice the two never collide (a sandbox skill id is not a file on
  * anyone's disk) — the order is written down so that if they ever do, the
  * machine's copy is what a reader sees.
  *
+ * A WORKSPACE-AUTHORED SKILL IS LAST, and that is a deliberate choice rather
+ * than an alphabetical accident:
+ *
+ *   - It must not shadow a DAEMON document. If a machine has `code-review` on
+ *     disk, that file is what an agent running there actually loads; showing a
+ *     different body under the same name would make the pane lie about what the
+ *     agent does.
+ *   - It must not shadow a SANDBOX definition, and this one is load-bearing: a
+ *     sandbox definition is what `planProviderCall` resolves a credentialed
+ *     call against. Rendering anything else for that name would be showing text
+ *     that does not govern the call — the exact failure the "browse what the
+ *     agent is actually handed" rule above exists to prevent.
+ *
+ * So the store is the source that makes a name readable when nothing else can
+ * supply it, and it never overrides something with more authority behind it. In
+ * exchange, a collision is silent from the reader's side, so `listWorkspaceSkills`
+ * marks a shadowed store skill (`shadowed: true`) and the pane says which body
+ * won.
+ *
  * Returns an available document, or an unavailable result naming WHICH kind of
  * "nothing here" this is, so the pane can explain it instead of showing a
  * blank.
  */
-function resolveSkillContent({ skill, documents = [], sandboxSkills = [], configuredKeys = [], daemonAdvertised = false } = {}) {
+function resolveSkillContent({ skill, documents = [], sandboxSkills = [], workspaceSkills = [], configuredKeys = [], daemonAdvertised = false } = {}) {
   const name = String(skill || '').trim();
   if (!name) return unavailable('not-found');
 
@@ -222,6 +253,28 @@ function resolveSkillContent({ skill, documents = [], sandboxSkills = [], config
       byteSize: Buffer.byteLength(markdown),
       truncated: false,
       summary: String(definition.summary || ''),
+    };
+  }
+
+  const authored = (Array.isArray(workspaceSkills) ? workspaceSkills : []).find(
+    (s) => s && String(s.name || '').toLowerCase() === name.toLowerCase(),
+  );
+  if (authored) {
+    // Rendered through the SAME function the store's own surfaces use, so a
+    // human reading the Skills pane and an agent calling read_skill are handed
+    // byte-identical text — the invariant this whole module exists to hold.
+    const markdown = renderWorkspaceSkillMarkdown(authored);
+    const { content, byteSize, truncated } = capContent(markdown);
+    return {
+      available: true,
+      source: 'workspace',
+      markdown: content,
+      // No path: this body is not a file anywhere, and inventing one would
+      // suggest a machine a reader could go and look at.
+      path: '',
+      byteSize,
+      truncated,
+      summary: String(authored.summary || ''),
     };
   }
 
@@ -426,6 +479,12 @@ function normalizeNameList(value) {
  * form has two skills, and an earlier version of this listing showed only the
  * advertised set — a connected agent's configured skills vanished from the
  * page entirely.
+ *
+ * WORKSPACE-AUTHORED SKILLS APPEAR HERE TOO, including ones no agent carries.
+ * A stored skill with no chips is not noise: it is a real, readable procedure
+ * any agent can pull with `read_skill`, and hiding it would put the store back
+ * where it started — a body nothing could find. Such a row reports
+ * `agents: []`, which is itself the honest answer to "who has this": nobody yet.
  */
 async function listWorkspaceSkills(db, workspaceId) {
   const agentRows = await db.unsafe(
@@ -442,6 +501,15 @@ async function listWorkspaceSkills(db, workspaceId) {
     'select skill, agent_id, byte_size from agent_skill_documents where workspace_id = $1',
     [String(workspaceId)],
   );
+  const storeRows = await db.unsafe(
+    'select name, title, summary from workspace_skills where workspace_id = $1 order by name asc limit $2',
+    [String(workspaceId), MAX_SKILLS_PER_WORKSPACE],
+  );
+  // Lowercased, because `read_skill` resolves case-insensitively and a store
+  // skill called `Code-Review` must still satisfy an agent that claims
+  // `code-review`. The validator prevents that spelling on the way in; the
+  // lookup does not depend on the validator having been there.
+  const stored = new Map(storeRows.map((row) => [String(row.name || '').toLowerCase(), row]));
 
   const advertisedByAgent = new Map();
   for (const row of connectionRows) {
@@ -477,20 +545,44 @@ async function listWorkspaceSkills(db, workspaceId) {
         runMode: String(agent.run_mode || 'builtin'),
         source: advertised.has(name) ? 'advertised' : 'configured',
         // Whether THIS agent's copy has a body reachable right now. A definition
-        // agensis holds is always readable; a daemon skill only once synced.
+        // agensis holds is always readable; a daemon skill only once synced; and
+        // a workspace-authored body serves EVERY agent that claims the name,
+        // because loadSkillContent is workspace-scoped rather than agent-scoped.
+        // That last clause is the point of the store: one procedure written once
+        // makes the name true for everyone who claims it.
         hasContent: definitions.has(name)
-          || documentedByAgent.has(`${String(agent.id).toLowerCase()}:${name.toLowerCase()}`),
+          || documentedByAgent.has(`${String(agent.id).toLowerCase()}:${name.toLowerCase()}`)
+          || stored.has(name.toLowerCase()),
       });
     }
   }
 
+  // Stored skills nobody carries still get a row — see the header. Added after
+  // the agent pass so a name an agent already claims keeps its chips rather than
+  // being replaced by an empty bucket.
+  for (const [key, row] of stored) {
+    const name = String(row.name || '');
+    if (!name) continue;
+    if ([...bySkill.keys()].some((existing) => existing.toLowerCase() === key)) continue;
+    bySkill.set(name, { name, agents: [], origins: new Set() });
+  }
+
   return [...bySkill.values()]
-    .map((bucket) => ({
-      name: bucket.name,
-      agents: bucket.agents,
-      advertised: bucket.agents.some((a) => a.source === 'advertised'),
-      hasContent: bucket.agents.some((a) => a.hasContent),
-    }))
+    .map((bucket) => {
+      const row = stored.get(bucket.name.toLowerCase());
+      return {
+        name: bucket.name,
+        agents: bucket.agents,
+        advertised: bucket.agents.some((a) => a.source === 'advertised'),
+        hasContent: bucket.agents.some((a) => a.hasContent) || Boolean(row),
+        // The workspace store has a body under this name. Not the same as
+        // hasContent: a name can be readable because a daemon synced it, and
+        // separately be authored here.
+        inStore: Boolean(row),
+        summary: String(row?.summary || ''),
+        title: String(row?.title || ''),
+      };
+    })
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -556,11 +648,30 @@ async function loadSkillContent({ db, workspaceId, skill, listConfiguredCredenti
     return skills.some((s) => s.toLowerCase() === name.toLowerCase());
   });
 
-  const resolved = resolveSkillContent({ skill: name, documents, sandboxSkills, configuredKeys, daemonAdvertised });
+  const storeRows = await db.unsafe(
+    `select name, title, summary, body, source, updated_at from workspace_skills
+       where workspace_id = $1 and lower(name) = lower($2) limit 1`,
+    [String(workspaceId), name],
+  );
+  const workspaceSkills = storeRows.map((row) => ({
+    name: row.name,
+    title: row.title || '',
+    summary: row.summary || '',
+    body: row.body || '',
+  }));
+
+  const resolved = resolveSkillContent({
+    skill: name, documents, sandboxSkills, workspaceSkills, configuredKeys, daemonAdvertised,
+  });
   return {
     skill: name,
     agentName: documentRows[0]?.agent_name || '',
     lastSynced: documentRows[0]?.last_synced || null,
+    // A stored body exists but something with more authority behind it won the
+    // precedence race (see resolveSkillContent). Reported rather than hidden:
+    // silently showing one body while another was authored under the same name
+    // is how somebody edits a skill for an hour and wonders why nothing changed.
+    shadowsWorkspaceSkill: workspaceSkills.length > 0 && resolved.source !== 'workspace',
     ...resolved,
   };
 }

@@ -356,3 +356,183 @@ test('an oversized persona is flagged against the daemon ceiling', () => {
  assert.equal(big.overBudget, true);
  assert.ok(big.budget < DAEMON_LEAN_PROMPT_MAX_BYTES, 'the budget leaves room for the user message');
 });
+
+// --- export / import ---------------------------------------------------------
+//
+// The whole point of this section is that IMPORT NEEDS NO NEW GUARD. The
+// security property was solved by the table's shape — there is no
+// privilege-bearing column, so nothing arriving in a file can reach one. What
+// these cases pin is that nobody quietly re-opens that: an export built by
+// spreading the row, or an import that stopped running the validator.
+
+test('an export carries EXACTLY the carried fields — no more, and no fewer', () => {
+ // No more: a spread of the stored row would put id, workspace_id and
+ // created_by into a file meant to travel between workspaces.
+ // No fewer: a carried field missing from the export is prose silently lost on
+ // every round trip, which nobody notices until the persona reads differently.
+ //
+ // MUTATION: `return { ...template }` for the body -> the extra keys appear.
+ const { buildTemplateExport } = require('../shared/agentTemplates.cjs');
+ const stored = {
+  id: 'tpl-1',
+  workspace_id: WORKSPACE,
+  created_by: USER,
+  revision: 4,
+  source: 'derived',
+  slug: 'ops-runner',
+  name: 'Ops Runner',
+  category: 'Saved',
+  description: 'Runs operational tasks.',
+  handleHint: 'ops-runner',
+  systemPrompt: 'You are an operations agent.',
+  soul: 'Careful and terse.',
+  instructions: 'Ask before destructive things.',
+  tools: ['Bash'],
+  skills: ['deploy'],
+  model: 'auto',
+  runMode: 'daemon',
+  runtime: 'claude',
+  avatar: '',
+  accentColor: '#fff',
+  // The nastiest keys a caller could have attached to the object in memory.
+  permission_mode: 'yolo',
+  metadata: { host_folders: ['/'] },
+ };
+ const file = buildTemplateExport(stored, { exportedAt: '2026-07-30T00:00:00.000Z' });
+
+ assert.deepEqual(Object.keys(file.template).sort(), [...CARRIED_FIELDS].sort());
+ const text = JSON.stringify(file);
+ for (const forbidden of ['yolo', 'host_folders', WORKSPACE, USER, 'tpl-1']) {
+  assert.equal(text.includes(forbidden), false, `${forbidden} must not appear anywhere in an export`);
+ }
+});
+
+test('a file naming a privileged field is REFUSED, and the key is named', () => {
+ // Silently dropping it is the failure mode that matters: someone hand-edits
+ // "permissionMode": "yolo" into a file, the import succeeds, and they believe
+ // the agent they hand over will run in that mode.
+ //
+ // MUTATION: pass { allowUnknown: true } through readTemplateExport -> the
+ // import succeeds and this fails.
+ const { readTemplateExport } = require('../shared/agentTemplates.cjs');
+ const result = readTemplateExport({
+  format: 'agensis.agent-template',
+  formatVersion: 1,
+  template: { name: 'Ops', systemPrompt: 'hi', permissionMode: 'yolo' },
+ });
+ assert.equal(result.ok, false);
+ assert.match(result.errors.join(' '), /permissionMode/);
+});
+
+test('a file from another tool, or from the future, is refused by name', () => {
+ const { readTemplateExport, TEMPLATE_EXPORT_VERSION } = require('../shared/agentTemplates.cjs');
+
+ const foreign = readTemplateExport({ format: 'someone-else.persona', formatVersion: 1, template: { name: 'X' } });
+ assert.equal(foreign.ok, false);
+ assert.match(foreign.errors.join(' '), /not an agensis agent template/);
+
+ // A newer envelope is refused rather than read best-effort: a v2 field this
+ // build does not know could be one whose ABSENCE changes what the persona
+ // means, and quietly ignoring it would produce a different agent.
+ const future = readTemplateExport({
+  format: 'agensis.agent-template',
+  formatVersion: TEMPLATE_EXPORT_VERSION + 1,
+  template: { name: 'X' },
+ });
+ assert.equal(future.ok, false);
+ assert.match(future.errors.join(' '), /newer version/);
+
+ assert.equal(readTemplateExport('not json at all').ok, false);
+ assert.equal(readTemplateExport(null).ok, false);
+ assert.equal(readTemplateExport([]).ok, false);
+});
+
+test('a round trip through a file preserves the persona', () => {
+ // The export is only useful if it comes back the same. MUTATION: drop a field
+ // from the export body -> the round trip loses it and this fails.
+ const { buildTemplateExport, readTemplateExport } = require('../shared/agentTemplates.cjs');
+ const original = normalizeAgentTemplate({
+  name: 'Ops Runner',
+  category: 'Saved',
+  description: 'Runs operational tasks.',
+  systemPrompt: 'You are an operations agent.',
+  soul: 'Careful and terse.',
+  instructions: 'Ask before destructive things.',
+  tools: ['Bash'],
+  skills: ['deploy'],
+  model: 'auto',
+  runMode: 'daemon',
+  runtime: 'claude',
+  accentColor: '#ffffff',
+ });
+ assert.equal(original.ok, true, original.errors.join('; '));
+
+ const file = buildTemplateExport(original.template);
+ const back = readTemplateExport(JSON.parse(JSON.stringify(file)));
+ assert.equal(back.ok, true, back.errors.join('; '));
+ assert.deepEqual(back.template, original.template);
+});
+
+test('import is MANAGE, unlike authoring, and is audited', () => {
+ // The role divergence is the decision: authoring prose grants nothing new
+ // ('write'), but prose ARRIVING FROM OUTSIDE the workspace is a different
+ // call. And it is the only template action audited, for the same reason.
+ //
+ // MUTATION: change the enforceWorkspaceRole call to 'write' -> the role assert
+ // fails. Drop the recordAudit call -> the audit assert fails.
+ const { readTemplateExport, templateFingerprint } = require('../shared/agentTemplates.cjs');
+ const db = makeDb();
+ const roles = [];
+ const audits = [];
+ const engine = build(db, {
+  enforceWorkspaceRole: async (userId, workspaceId, role) => { roles.push(role); return true; },
+  readTemplateExport,
+  templateFingerprint,
+  recordAudit: async (entry) => { audits.push(entry); return null; },
+ });
+
+ return engine.importAgentTemplate({
+  userId: USER,
+  workspaceId: WORKSPACE,
+  payload: {
+   format: 'agensis.agent-template',
+   formatVersion: 1,
+   template: { name: 'Ops Runner', systemPrompt: 'You are an operations agent.' },
+  },
+ }).then(() => {
+  assert.deepEqual(roles, ['manage']);
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0].action, 'agent_template.imported');
+  assert.equal(audits[0].workspaceId, WORKSPACE);
+
+  // Provenance is set by the SERVER, never taken from the caller: a file
+  // claiming source='authored' would erase the record of where it came from.
+  const params = insertedParams(db);
+  assert.equal(params[16], 'imported');
+  assert.equal(typeof params[17], 'object', 'origin is bound as an object, not a JSON string');
+  assert.equal(params[17].format, 'agensis.agent-template');
+ });
+});
+
+test('authoring stays UNAUDITED, so the log does not fill with non-events', () => {
+ // A template cannot carry privilege, so writing one is a non-event. Logging
+ // every prompt edit would bury the rows that matter — which is the same
+ // argument that says an IMPORT must be logged.
+ const db = makeDb();
+ const audits = [];
+ const engine = build(db, { recordAudit: async (entry) => { audits.push(entry); return null; } });
+ return engine.createAgentTemplate({
+  userId: USER,
+  workspaceId: WORKSPACE,
+  template: { name: 'Ops Runner', systemPrompt: 'hi' },
+ }).then(() => {
+  assert.deepEqual(audits, []);
+ });
+});
+
+test('the import audit action is registered, or the row would record as unknown', () => {
+ // recordAudit maps an unrecognised action to 'unknown' rather than throwing,
+ // so a missing registration is invisible at runtime and only shows up as a
+ // useless row in the log weeks later.
+ assert.equal(core.AUDIT_ACTIONS.has('agent_template.imported'), true);
+});

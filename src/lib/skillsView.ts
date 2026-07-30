@@ -35,7 +35,15 @@ export type SkillOrigin =
   /** At least one agent in this workspace carries it. */
   | 'agent'
   /** agensis ships it (a template's skill layer) and nobody here carries it yet. */
-  | 'catalog';
+  | 'catalog'
+  /**
+   * Written in this workspace, in the app (`workspace_skills`), and carried by
+   * no agent yet. Distinguished from 'catalog' because the two need opposite
+   * things from a reader: a catalog skill is waiting to be ATTACHED to an agent,
+   * while a stored skill is already readable by every agent through `read_skill`
+   * and is waiting only to be USED.
+   */
+  | 'workspace';
 
 export interface SkillAgentRef {
   id: string;
@@ -57,6 +65,32 @@ export interface SkillEntry {
   origin: SkillOrigin;
   /** At least one agent's live daemon advertised it itself. */
   advertised: boolean;
+  /**
+   * A body for this name is stored in `workspace_skills`.
+   *
+   * Independent of `origin`: a skill can be carried by three agents (origin
+   * 'agent') AND have a workspace-authored body, which is the good case — the
+   * name is claimed and the procedure behind it exists. It is also what makes
+   * the row editable, since only stored skills have anything to edit.
+   */
+  stored: boolean;
+  /** The stored row's id, for the edit affordance. '' when nothing is stored. */
+  storedId: string;
+  /** The stored `description:` line, shown under the name. '' when unstored. */
+  summary: string;
+}
+
+/**
+ * The bit of a stored `workspace_skills` row a list row needs.
+ *
+ * Deliberately not the whole WorkspaceSkill: the list never renders a body, and
+ * a narrower parameter keeps the (pure, unit-tested) view builder independent of
+ * the wire shape the routes happen to return.
+ */
+export interface StoredSkillRef {
+  id: string;
+  name: string;
+  summary: string;
 }
 
 export interface LibraryEntry {
@@ -122,6 +156,7 @@ export function buildSkillEntries(
   agents: readonly WorkspaceAgent[],
   connections: readonly AgentConnection[],
   catalog: readonly string[] = catalogSkillNames(),
+  stored: readonly StoredSkillRef[] = [],
 ): SkillEntry[] {
   const connByAgent = new Map<string, AgentConnection>();
   for (const conn of connections) {
@@ -160,13 +195,38 @@ export function buildSkillEntries(
     if (!bySkill.has(name)) bySkill.set(name, []);
   }
 
+  // Workspace-authored skills, same rule and a stronger reason. A stored skill
+  // that no agent carries is not a placeholder: its body is readable RIGHT NOW
+  // by any agent via `read_skill`. Hiding it until somebody typed the name onto
+  // an agent would put the store back where it started — a procedure nothing
+  // could find. Added last so a name an agent already claims keeps its chips.
+  const storedByName = new Map<string, StoredSkillRef>();
+  for (const entry of stored) {
+    const name = String(entry?.name || '').trim();
+    if (!name) continue;
+    storedByName.set(name.toLowerCase(), entry);
+    if (![...bySkill.keys()].some(existing => existing.toLowerCase() === name.toLowerCase())) {
+      bySkill.set(name, []);
+    }
+  }
+
   return [...bySkill.entries()]
-    .map(([name, chips]) => ({
-      name,
-      agents: chips,
-      origin: (chips.length > 0 ? 'agent' : 'catalog') as SkillOrigin,
-      advertised: chips.some(chip => chip.source === 'advertised'),
-    }))
+    .map(([name, chips]) => {
+      const row = storedByName.get(name.toLowerCase());
+      return {
+        name,
+        agents: chips,
+        // 'agent' whenever anybody carries it, because that is the more useful
+        // fact about a row; 'workspace' before 'catalog' for an uncarried name,
+        // since a stored body is real and a catalog name is only a definition
+        // agensis ships.
+        origin: (chips.length > 0 ? 'agent' : row ? 'workspace' : 'catalog') as SkillOrigin,
+        advertised: chips.some(chip => chip.source === 'advertised'),
+        stored: Boolean(row),
+        storedId: row?.id || '',
+        summary: row?.summary || '',
+      };
+    })
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

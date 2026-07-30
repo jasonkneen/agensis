@@ -24,7 +24,9 @@ export type SkillContentSource =
   /** A sandbox / provider skill definition agensis itself holds. */
   | 'sandbox'
   /** A file read from a skill library on the backend host. */
-  | 'host';
+  | 'host'
+  /** Written here, in the app — a `workspace_skills` row. */
+  | 'workspace';
 
 export type SkillUnavailableReason =
   /** A live machine claims the skill; agensis was told the name and nothing else. */
@@ -46,6 +48,14 @@ export interface SkillContentAvailable {
   summary?: string;
   agentName?: string;
   lastSynced?: string | null;
+  /**
+   * A workspace-authored body exists for this name, but something with more
+   * authority behind it won — a daemon's real file, or a sandbox definition that
+   * governs a credentialed call. Surfaced rather than hidden: showing one body
+   * while another was authored under the same name is how somebody edits a skill
+   * for an hour and never sees the change.
+   */
+  shadowsWorkspaceSkill?: boolean;
 }
 
 export interface SkillContentUnavailable {
@@ -96,7 +106,8 @@ export function parseSkillContent(payload: unknown): SkillContentResult {
   if (data.available !== true) {
     return { available: false, reason: asReason(data.reason), path: typeof data.path === 'string' ? data.path : '' };
   }
-  const source = data.source === 'daemon' || data.source === 'sandbox' || data.source === 'host'
+  const source = data.source === 'daemon' || data.source === 'sandbox'
+    || data.source === 'host' || data.source === 'workspace'
     ? data.source
     : 'daemon';
   return {
@@ -109,6 +120,7 @@ export function parseSkillContent(payload: unknown): SkillContentResult {
     summary: typeof data.summary === 'string' ? data.summary : '',
     agentName: typeof data.agentName === 'string' ? data.agentName : '',
     lastSynced: typeof data.lastSynced === 'string' ? data.lastSynced : null,
+    shadowsWorkspaceSkill: data.shadowsWorkspaceSkill === true,
   };
 }
 
@@ -165,6 +177,8 @@ export function describeSkillSource(
         : 'Mirrored from the machine that has this skill.';
     case 'sandbox':
       return 'This is the exact text the agent is given for this skill each turn.';
+    case 'workspace':
+      return 'Written here, in this workspace. Any agent can read it with read_skill, whether or not a machine is connected.';
     case 'host':
     default:
       return 'Read from a skill library on the machine running the agensis backend.';

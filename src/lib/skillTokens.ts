@@ -139,7 +139,11 @@ export function buildSkillSuggestions(
         detail: entry.agents.length === 1 ? '1 agent' : `${entry.agents.length} agents`,
       });
     } else {
-      catalog.push({ value, label: value, detail: 'In agensis' });
+      // A workspace-authored skill and one agensis ships both have a readable
+      // body and neither is carried yet, but they are not the same offer:
+      // "Written here" is a procedure a teammate wrote in this workspace, and
+      // saying "In agensis" over it would credit the wrong author.
+      catalog.push({ value, label: value, detail: entry.stored ? 'Written here' : 'In agensis' });
     }
   }
 
@@ -158,6 +162,48 @@ export function buildSkillSuggestions(
 
   const byLabel = (a: SkillSuggestion, b: SkillSuggestion) => a.label.localeCompare(b.label);
   return [...carried.sort(byLabel), ...catalog.sort(byLabel), ...libraries.sort(byLabel)];
+}
+
+/**
+ * The skill names on an agent (or on a template being applied) that NOTHING in
+ * this workspace can supply a body for.
+ *
+ * THE DANGLING-REFERENCE CHECK. `workspace_agents.skills` and a template's
+ * `skills` array are both lists of NAMES, and a name resolves to nothing on its
+ * own — so a template authored elsewhere could say `skills: ['security-review']`
+ * and export a claim with no procedure behind it. Nothing surfaced that, which
+ * is how an agent came to advertise a skill it could not read.
+ *
+ * A name is BACKED when any of three things is true, and each is a real body:
+ *   - it is written in this workspace (`workspace_skills`),
+ *   - agensis ships a definition for it (origin 'catalog'),
+ *   - a live daemon advertises it, so the machine holding it really has the file.
+ *
+ * A name that is only CONFIGURED on an agent nothing is connected to is exactly
+ * the claim-without-a-procedure case, and it is reported. The remedy is now one
+ * click — write the skill here — which is why saying so is worth the space.
+ */
+export function unresolvedSkillTokens(
+  tokens: readonly string[],
+  entries: readonly SkillEntry[],
+): string[] {
+  const backed = new Set<string>();
+  for (const entry of entries) {
+    if (entry.stored || entry.origin === 'catalog' || entry.advertised) {
+      backed.add(entry.name.toLowerCase());
+    }
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of tokens) {
+    const token = trimToken(raw);
+    if (!token) continue;
+    const key = token.toLowerCase();
+    if (seen.has(key) || backed.has(key)) continue;
+    seen.add(key);
+    out.push(token);
+  }
+  return out;
 }
 
 /**

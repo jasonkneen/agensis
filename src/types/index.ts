@@ -432,7 +432,16 @@ export type AuditAction =
  // The key NAME and a configured boolean. Never the value — see the redaction
  // contract on the vault routes.
  | 'vault.secret_set'
- | 'vault.secret_deleted';
+ | 'vault.secret_deleted'
+ // Letting somebody read a private conversation they are not a member of. The
+ // REFUSAL of a read is deliberately not recorded — it fires on ordinary
+ // sidebar rendering — so an empty log does not mean nobody tried.
+ | 'chat_session.access_granted'
+ | 'chat_session.access_revoked'
+ // A persona pack from outside this workspace. Authoring one is NOT audited —
+ // a template cannot carry authority, so writing one is a non-event; arriving
+ // from elsewhere is not.
+ | 'agent_template.imported';
 
 /**
  * One audit row as the read route returns it.

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Sparkles, Search, ChevronLeft, FileText, FolderTree, Info, Radio, X } from 'lucide-react';
+import { Sparkles, Search, ChevronLeft, FileText, FolderTree, Info, Pencil, Plus, Radio, Trash2, X } from 'lucide-react';
 import type { WorkspaceAgent, AgentConnection } from '../../types';
 import type { SystemCapabilities } from '../../lib/backendClient';
 import {
@@ -27,6 +27,9 @@ import {
   type SkillContentResult,
   type SkillLibraryListing,
 } from '../../lib/skillContent';
+import { useWorkspaceSkills } from '../../hooks/useWorkspaceSkills';
+import { describeSkillProvenance, type WorkspaceSkillDraft } from '../../lib/workspaceSkills';
+import { WorkspaceSkillEditor } from './WorkspaceSkillEditor';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -124,9 +127,21 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
     return () => ro.disconnect();
   }, []);
 
+  // The app-side skill store. `unavailable` means the backend has not shipped
+  // these routes yet — the frontend deploys ahead of Fly in this repo — and in
+  // that case the page renders exactly as it did before, with no authoring
+  // affordance offered against a server that would refuse it.
+  const store = useWorkspaceSkills(workspaceId || null);
+  /** null = closed; { skillId: '' } = authoring a new one. */
+  const [editing, setEditing] = useState<{ skillId: string } | null>(null);
+
+  const storedRefs = useMemo(
+    () => store.skills.map(skill => ({ id: skill.id, name: skill.name, summary: skill.summary })),
+    [store.skills],
+  );
   const skillEntries = useMemo(
-    () => buildSkillEntries(agents, agentConnections),
-    [agents, agentConnections],
+    () => buildSkillEntries(agents, agentConnections, undefined, storedRefs),
+    [agents, agentConnections, storedRefs],
   );
   const libraries = useMemo(() => buildLibraryEntries(systemCapabilities), [systemCapabilities]);
 
@@ -154,6 +169,9 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
   const [contentLoading, setContentLoading] = useState(false);
   const [listing, setListing] = useState<SkillLibraryListing | null>(null);
   const [openEntry, setOpenEntry] = useState('');
+  // Bumped after a store write so the open pane refetches. Writing a skill and
+  // seeing the previous body is indistinguishable from the write having failed.
+  const [contentReloads, setContentReloads] = useState(0);
 
   const selectedSkillName = selectedSkill?.name ?? '';
   const selectedLibraryId = selectedLibrary?.id ?? '';
@@ -178,7 +196,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
   useEffect(() => {
     if (!selectedSkillName || !workspaceId) { setContent(null); setContentLoading(false); return; }
     return load(() => fetchSkillContent(workspaceId, selectedSkillName));
-  }, [selectedSkillName, workspaceId, load]);
+  }, [selectedSkillName, workspaceId, load, contentReloads]);
 
   // Opening a library lists its entries; the body arrives only once one is
   // picked. Changing library drops the open entry — keeping it would ask the
@@ -201,6 +219,53 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
   const totalSkills = skillEntries.length;
   const totalLibraryEntries = libraries.reduce((sum, l) => sum + l.count, 0);
   const isEmpty = totalSkills === 0 && libraries.length === 0;
+  const canAuthor = !store.unavailable;
+
+  const selectedStored = selectedSkill?.stored
+    ? store.skills.find(s => s.name.toLowerCase() === selectedSkill.name.toLowerCase()) ?? null
+    : null;
+  const editingSkill = editing
+    ? store.skills.find(s => s.id === editing.skillId) ?? null
+    : null;
+
+  const saveDraft = async (draft: WorkspaceSkillDraft) => {
+    const result = editing?.skillId
+      ? await store.updateSkill(editing.skillId, draft)
+      : await store.createSkill(draft);
+    if (result.error) return { error: result.error };
+    setEditing(null);
+    // Reopen on the saved skill so the pane shows the body that was just
+    // written, rather than leaving the user on a stale one and making the save
+    // look like it did nothing.
+    if (result.skill) setSelection({ kind: 'skill', name: result.skill.name });
+    setContentReloads(n => n + 1);
+    return { error: '' };
+  };
+
+  const removeStored = async (skillId: string, name: string) => {
+    if (!window.confirm(`Delete the skill "${name}"? Agents will stop being able to read it.`)) return;
+    const ok = await store.deleteSkill(skillId);
+    if (ok) setContentReloads(n => n + 1);
+  };
+
+  if (editing) {
+    return (
+      <div className="flex h-full flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-card px-3 py-2">
+          <Sparkles className="size-4 shrink-0 text-primary" />
+          <p className="min-w-0 flex-1 truncate text-sm font-medium">
+            {editingSkill ? `Edit ${editingSkill.name}` : 'New skill'}
+          </p>
+        </div>
+        <WorkspaceSkillEditor
+          skill={editingSkill}
+          existingNames={store.skills.map(s => s.name)}
+          onCancel={() => setEditing(null)}
+          onSave={saveDraft}
+        />
+      </div>
+    );
+  }
 
   if (isEmpty) {
     return (
@@ -211,8 +276,15 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
             <EmptyTitle>No skills yet</EmptyTitle>
             <EmptyDescription>
               Skills appear here once your agents advertise them or a connected daemon enumerates its skill libraries.
+              {canAuthor && ' You can also write one here — any agent can read it, connected or not.'}
             </EmptyDescription>
           </EmptyHeader>
+          {canAuthor && (
+            <Button type="button" size="sm" className="mt-3" onClick={() => setEditing({ skillId: '' })}>
+              <Plus className="size-3.5" />
+              Write a skill
+            </Button>
+          )}
         </Empty>
       </div>
     );
@@ -237,6 +309,19 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
             {totalSkills} skill{totalSkills === 1 ? '' : 's'}
             {totalLibraryEntries > 0 ? ` · ${totalLibraryEntries} in libraries` : ''}
           </span>
+        )}
+        {canAuthor && (
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            className="shrink-0"
+            onClick={() => setEditing({ skillId: '' })}
+            aria-label="Write a skill"
+            title="Write a skill"
+          >
+            <Plus className="size-4" />
+          </Button>
         )}
       </div>
 
@@ -263,10 +348,20 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                       <div className="flex items-center gap-2">
                         <Sparkles className="size-3.5 shrink-0 text-primary" />
                         <span className="truncate text-sm font-medium text-foreground">{skill.name}</span>
+                        {/* "Written here" is the one fact about a row that the
+                            chips cannot carry: it means the PROCEDURE exists in
+                            agensis, readable by every agent, rather than the
+                            name merely being claimed by one. */}
+                        {skill.stored && (
+                          <Badge variant="outline" className="ml-auto shrink-0 text-[10px]">written here</Badge>
+                        )}
                         {skill.agents.length > 0 && (
-                          <Badge variant="secondary" className="ml-auto shrink-0">{skill.agents.length}</Badge>
+                          <Badge variant="secondary" className={`shrink-0 ${skill.stored ? '' : 'ml-auto'}`}>{skill.agents.length}</Badge>
                         )}
                       </div>
+                      {skill.summary && (
+                        <p className="mt-1 line-clamp-2 pl-5.5 text-[11px] leading-snug text-muted-foreground">{skill.summary}</p>
+                      )}
                       {/* The chips ARE the answer to "which agents can do this",
                           so they stay in the narrow column too — the earlier
                           version dropped them beside a detail pane, which is
@@ -277,7 +372,9 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                         ))}
                         {skill.agents.length === 0 && (
                           <span className="text-[11px] text-muted-foreground">
-                            Available in agensis · no agent has it yet
+                            {skill.stored
+                              ? 'Readable by any agent · no agent lists it yet'
+                              : 'Available in agensis · no agent has it yet'}
                           </span>
                         )}
                       </div>
@@ -406,14 +503,91 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
           <div className="space-y-4 p-4">
             {selectedSkill && (
               <>
+                {/* A stored body exists but something with more authority won the
+                    precedence race (resolveSkillContent). Said out loud, because
+                    silently showing the other body is how somebody edits a skill
+                    for an hour and never sees their change. */}
+                {content?.available && content.shadowsWorkspaceSkill && (
+                  <p className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs text-foreground">
+                    <Info className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+                    <span>
+                      A skill with this name is also written here, but the body above wins —
+                      {content.source === 'daemon'
+                        ? ' a machine has a real file by the same name, and that file is what an agent running there loads.'
+                        : ' an agensis skill definition by the same name governs a credentialed call, so its text is the one that matters.'}
+                      {' '}Rename one of them if they are meant to be different skills.
+                    </span>
+                  </p>
+                )}
+
                 <div>
                   <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Skill content</h4>
                   {renderContentBlock(selectedSkill.name)}
                 </div>
 
+                {selectedStored && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-muted-foreground">
+                      {describeSkillProvenance(selectedStored.source)}
+                      {selectedStored.revision > 1 && ` · revision ${selectedStored.revision}`}
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="ml-auto h-7 gap-1 px-2 text-xs"
+                      onClick={() => setEditing({ skillId: selectedStored.id })}
+                    >
+                      <Pencil className="size-3.5" />
+                      Edit
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 gap-1 px-2 text-xs text-destructive hover:text-destructive"
+                      onClick={() => void removeStored(selectedStored.id, selectedStored.name)}
+                    >
+                      <Trash2 className="size-3.5" />
+                      Delete
+                    </Button>
+                  </div>
+                )}
+
+                {/* A name nothing can supply a body for is exactly what this
+                    store exists to fix, so the offer to write one belongs here
+                    rather than only in the header. */}
+                {canAuthor && !selectedSkill.stored && content && !content.available && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1 px-2 text-xs"
+                    onClick={() => setEditing({ skillId: '' })}
+                  >
+                    <Plus className="size-3.5" />
+                    Write this skill here
+                  </Button>
+                )}
+
                 <div>
                   <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Where this comes from</h4>
-                  {selectedSkill.advertised ? (
+                  {/* ORDER MATTERS, and `stored` comes before the advertised /
+                      configured split rather than after it. A skill written here
+                      that an agent ALSO lists used to fall through to
+                      "nothing is connected to confirm it" — which is exactly
+                      backwards: the procedure is right here, and being confirmed
+                      by a machine is not what makes it readable. */}
+                  {selectedSkill.stored ? (
+                    <p className="text-sm text-muted-foreground">
+                      Written in this workspace, so any agent can read it with <code className="font-mono text-xs">read_skill</code> whether or not a machine is connected.
+                      {selectedSkill.advertised
+                        ? ' A connected daemon also advertises this name from its own machine.'
+                        : selectedSkill.agents.length > 0
+                          ? ' Listing it on an agent only makes the agent advertise it; reading it never required that.'
+                          : ' No agent lists it yet, which does not stop any of them reading it.'}
+                    </p>
+                  ) : selectedSkill.advertised ? (
                     <p className="flex items-start gap-2 text-sm text-foreground">
                       <Radio className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
                       <span>A connected daemon advertised this skill itself, so a machine really has it.</span>
