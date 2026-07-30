@@ -31,6 +31,7 @@ const {
 // in the `encodeJsonb` bind (porsager wants the object, @netlify/database the
 // string).
 const { emitReactionFlowEventsForUpdate } = require('../shared/reaction-events.cjs');
+const { SESSION_READ_STATE_DDL, SHARE_READ_RECEIPTS_DDL } = require('../shared/read-receipts.cjs');
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const {
  agentNextSteps,
@@ -113,7 +114,6 @@ const {
 const TASK_MENTION_CLAIM_MS = 5_000;
 const { mountFeedbackRoutes } = require('./feedback-routes.cjs');
 const { mountAiChatRoutes } = require('./ai-chat-routes.cjs');
-const { installBrowserProxy } = require('./browser-proxy.cjs');
 const { mountVaultRoutes } = require('./vault-routes.cjs');
 const { mountAuditRoutes } = require('./audit-routes.cjs');
 const { mountTenantsRoutes } = require('./tenants-routes.cjs');
@@ -131,6 +131,8 @@ const { mountSystemRoutes } = require('./system-routes.cjs');
 const { mountWorkspacesRoutes } = require('./workspaces-routes.cjs');
 const { mountWorkspaceMcpRoutes } = require('./workspace-mcp-routes.cjs');
 const { mountInboxRoutes } = require('./inbox-routes.cjs');
+const { mountReactionsRoutes } = require('./reactions-routes.cjs');
+const { mountReadReceiptsRoutes } = require('./read-receipts-routes.cjs');
 const { mountSessionAccessRoutes } = require('./session-access-routes.cjs');
 const { runDmScopeBackfill } = require('./dm-scope-backfill.cjs');
 const { mountLinkPreviewsRoutes } = require('./link-previews-routes.cjs');
@@ -1760,6 +1762,26 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_inbox_read_state_workspace ON inbox_read_state(workspace_id);
   `);
+ // Read receipts: one MONOTONIC high-water mark per (session, user) — "I had
+ // this conversation on screen up to this point" — plus the reciprocal per-user
+ // opt-out that gates both writing one and reading anyone else's.
+ //
+ // NOT a row per message per user: that model grows with message volume times
+ // workspace size and is written on every scroll, where this one is bounded by
+ // (members x sessions) and coalesces a page of scrolling into a single write.
+ // It is also the more private of the two — it cannot record which SPECIFIC
+ // message was read, only how far.
+ //
+ // There is deliberately NO workspace_id column; see shared/read-receipts.cjs
+ // for why that absence is what makes a DM's read state unsubscribable by a
+ // non-member. The DDL itself is single-sourced there so the three schema
+ // places (this file, database/neon-schema.sql, supabase/migrations/) cannot
+ // drift in shape, only in whether they have run.
+ //
+ // Comments stay OUT of the SQL string, same reason as the block below: several
+ // tests mock the DB and classify a bootstrap statement by its first keyword.
+ await db.unsafe(SESSION_READ_STATE_DDL);
+ await db.unsafe(SHARE_READ_RECEIPTS_DDL);
  // Owner broadcasts (shared/tenant-campaigns.cjs). The only rows in this
  // database addressed to ACCOUNTS rather than scoped to a workspace, which is why
  // neither table is in the backendClient allowlists — the dedicated owner-gated
@@ -2601,6 +2623,16 @@ function jsonError(res, status, error) {
 const aiChatRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 const webhookRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// Keyed per (user, message), not per user: toggling one reaction on and off
+// repeatedly is the abusive shape, and each accepted write rebroadcasts the
+// whole message row to every socket in the session. 30/min leaves a decisive
+// human far more headroom than they will ever use on ONE message while bounding
+// a stuck button.
+const reactionRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+// Keyed per (user, session). RECEIPT_REARM_MS in src/lib/readReceipts.ts already
+// holds a well-behaved client to ~20 writes/minute per conversation; this is the
+// floor under one that does not.
+const readReceiptRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 // Bridge deliveries are machine traffic and legitimately bursty — a busy Slack
 // channel or a Telegram group mid-argument outruns a human webhook by a lot.
 const bridgeRateLimiter = createRateLimiter({ windowMs: 60_000, max: 600 });
@@ -2611,10 +2643,6 @@ const mcpRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 // our key attached. Keyed per-agent, and tighter than mcpRateLimiter on purpose —
 // the general MCP limiter still applies on top.
 const providerCallRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
-// One page view is many requests — a single site load in the spike was 230-460
-// subresources — so this is sized per-page, not per-click. It exists to stop the
-// route being used as a general-purpose relay, not to ration browsing.
-const browserProxyRateLimiter = createRateLimiter({ windowMs: 60_000, max: 900 });
 // The voice preview spends real money per press, so it is capped harder than
 // anything else here. Twenty presses a minute is far more than auditioning
 // voices needs and far less than a stuck retry loop would cost.
@@ -4654,7 +4682,10 @@ async function dispatchCommentMentions({ table, row, authorUserId, run = continu
     // awaiting costs no request latency.
     let outcome = null;
     try {
-     outcome = await run({ workspaceId, sessionId: session.id, threadParentId });
+     // Same as task dispatch: this opens a thread on the agent's behalf after a
+     // comment @mention, so the reply must surface in the conversation rather
+     // than only inside a thread nobody has opened.
+     outcome = await run({ workspaceId, sessionId: session.id, threadParentId, broadcastToChannel: true });
     } catch (error) {
      console.error('continueConversation (task subthread mention) failed', error);
      outcome = { started: false, reason: 'error' };
@@ -5633,7 +5664,7 @@ async function resolveWorkThreadParent(sessionId) {
 // agent turn in flight (or ran one to completion). Task dispatch reads it to tell
 // "the agent is on it" from "the turn was refused — put the task back in the
 // queue"; every other caller ignores it.
-async function continueConversation({ workspaceId, sessionId, threadParentId = null }) {
+async function continueConversation({ workspaceId, sessionId, threadParentId = null, broadcastToChannel = null }) {
  if (!workspaceId || !sessionId) return { started: false, reason: 'missing_input' };
  const lockKey = `${sessionId}::${threadParentId || ''}`;
  if (conversationLocks.has(lockKey)) return { started: false, reason: 'locked' };
@@ -5933,7 +5964,7 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
     .filter((agent) => String(agent.id) !== String(nextAgent.id))
     .map((agent) => ({ handle: slugHandle(agent.handle || agent.name), name: agent.name }));
 
-   const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants, isDirectMessage });
+   const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants, isDirectMessage, broadcastToChannel });
    if (result && result.ok) started = true;
    // `ok:false, pending:true` is the one that matters to the task queue: the
    // one-active-job unique index bounced the insert, so NO job exists and nothing
@@ -6889,22 +6920,46 @@ function workspaceSessionCacheSet(sessionId, workspaceId) {
  }
 }
 
-async function resolveWorkspaceIdForSession(sessionId) {
+/**
+ * Resolve a session's workspace AND whether only its members may read it.
+ *
+ * Both travel together because `activity_events` is a WORKSPACE-scoped feed:
+ * `appendSessionAccessClause` returns untouched for any table that is not
+ * `chat_sessions`/`messages`, and the realtime private lane at
+ * server/realtime.cjs only splits `chat_sessions` rows. So nothing downstream
+ * of this function can re-derive "that came out of a DM" — if the privacy of
+ * the source session does not ride along with the row at WRITE time, it is
+ * gone, and a members-only conversation ends up in a feed every `read` member
+ * can select.
+ *
+ * One query and one cache entry for both, so the privacy check is free.
+ */
+async function resolveSessionActivityContext(sessionId) {
  if (!sessionId) return null;
  const cached = workspaceSessionCacheGet(sessionId);
  if (cached !== undefined) return cached;
  try {
   const rows = await getDb().unsafe(
-   'select workspace_id from chat_sessions where id = $1 limit 1',
+   'select workspace_id, visibility, folder from chat_sessions where id = $1 limit 1',
    [sessionId],
   );
-  const workspaceId = rows[0]?.workspace_id || null;
-  if (workspaceId) workspaceSessionCacheSet(sessionId, workspaceId);
-  return workspaceId;
+  const row = rows[0];
+  const workspaceId = row?.workspace_id || null;
+  if (!workspaceId) return null;
+  // Fail closed: an unreadable/absent row is treated as private by
+  // isPrivateSessionRow's own folder backstop rather than assumed open.
+  const context = { workspaceId, isPrivate: isPrivateSessionRow(row) };
+  workspaceSessionCacheSet(sessionId, context);
+  return context;
  } catch (error) {
-  console.error('resolveWorkspaceIdForSession failed', error);
+  console.error('resolveSessionActivityContext failed', error);
   return null;
  }
+}
+
+async function resolveWorkspaceIdForSession(sessionId) {
+ const context = await resolveSessionActivityContext(sessionId);
+ return context ? context.workspaceId : null;
 }
 
 // Logs an `activity_events` row for each inserted/finalized chat message so it
@@ -6917,20 +6972,30 @@ async function logMessageActivity(rows) {
   if (isAgentPlaceholder(message)) continue;
   try {
    const sessionId = message.session_id;
-   const workspaceId = await resolveWorkspaceIdForSession(sessionId);
-   if (!workspaceId) continue;
+   const sessionContext = await resolveSessionActivityContext(sessionId);
+   if (!sessionContext) continue;
+   const { workspaceId, isPrivate } = sessionContext;
    const role = message.role || '';
    const senderName = message.sender_name || (role === 'user' ? 'You' : 'Agent');
    const content = typeof message.content === 'string' ? message.content : '';
-   const title = `${senderName}: ${content.slice(0, 80)}`.slice(0, 120);
    const senderId = typeof message.sender_id === 'string' ? message.sender_id : '';
    const userId = role === 'user' && ACTIVITY_UUID_RE.test(senderId) ? senderId : null;
+   // A members-only session contributes the FACT of a message, never its words.
+   // Both carriers have to be cut, not just one: `metadata.content` is the whole
+   // body, and `title` was the first 80 characters of that same body — which is
+   // still the message, just shorter. What survives is enough for the feed to
+   // say something happened and to link to it; a reader who is not a member
+   // follows that link and gets nothing, because the session gate does hold on
+   // the transcript route.
+   const title = isPrivate
+    ? `${senderName}: (private conversation)`.slice(0, 120)
+    : `${senderName}: ${content.slice(0, 80)}`.slice(0, 120);
    const metadata = {
     session_id: sessionId,
     role,
     sender_kind: message.sender_kind || '',
     sender_name: message.sender_name || '',
-    content,
+    ...(isPrivate ? {} : { content }),
    };
    // C3: idempotent insert. ON CONFLICT DO NOTHING against the partial unique
    // index uq_activity_events_message_sent means a retried finalization for the
@@ -7849,6 +7914,8 @@ function createApp() {
   deleteSkill: deleteWorkspaceSkill,
  });
  mountInboxRoutes(app, { ...coreDeps(), INBOX_DEFAULT_LIMIT, INBOX_FILTERS, INBOX_MAX_LIMIT, THREAD_INBOX_DEFAULT_LIMIT, buildInboxSql, buildThreadInboxSql, inboxMentionHandle, inboxMentionPattern, toInboxItem, toThreadInboxItem });
+ mountReactionsRoutes(app, { ...coreDeps(), reactionRateLimiter });
+ mountReadReceiptsRoutes(app, { ...coreDeps(), readReceiptRateLimiter });
  mountSessionAccessRoutes(app, { ...coreDeps(), revokeRealtimeAccessForMember });
  mountLinkPreviewsRoutes(app, { ...coreDeps(), LINK_PREVIEW_COLUMNS, LINK_PREVIEW_MAX_PER_REQUEST, fetchLinkPreview, fetchPreviewImage, linkPreviewCacheKey, linkPreviewDbRateLimiter, linkPreviewImageDbRateLimiter, linkPreviewImageRateLimiter, linkPreviewRateLimiter, normalizeUnfurlUrl, publicLinkPreview, upsertLinkPreview });
  mountFeedbackRoutes(app, {
@@ -8338,11 +8405,15 @@ function createApp() {
 
  mountTtsRoutes(app, { ...coreDeps(), cartesiaApiKey, cartesiaSpeak, cartesiaVoices, normalizeVoicePreference, ttsPreviewRateLimiter });
 
- // Web-only egress for the browser panel; the desktop shell uses <webview> and
- // never calls this. Auth + rate limit are both mandatory — see the module header.
- installBrowserProxy(app, {
-  requireAuth, rateLimiter: browserProxyRateLimiter, rateLimitBlocked, clientIpFromReq,
- });
+ // NOTE: /backend/browser/fetch used to live here — web-only egress for the
+ // browser panel's rewriting proxy. Both are gone: the proxy depended on
+ // @mercuryworkshop/scramjet, whose redistribution terms we could not
+ // establish (see vite.config.ts for the three conflicting signals), so the panel
+ // is desktop-only now and the desktop shell's <webview> dials out itself. The
+ // route had no other caller, and an authenticated relay that can fetch an
+ // arbitrary URL from inside this machine is not worth keeping without one.
+ // `assertSafeBrowsingUrl`/`guardedFetchAgent` stay in server/lib/net-guard.cjs
+ // (still covered by tests/browser-proxy-ssrf.test.cjs) for whatever needs them next.
 
  mountAiChatRoutes(app, {
   ...coreDeps(),

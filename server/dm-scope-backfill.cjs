@@ -147,8 +147,38 @@ const MARK_DERIVED_SQL = `
  *       on a fresh database, DMs are already correctly private and the
  *       fail-closed folder check in isPrivateSessionRow still covers them.
  */
+// Scrub message bodies that a members-only session already mirrored into the
+// workspace-wide activity feed.
+//
+// `logMessageActivity` used to copy every message into `activity_events` twice:
+// the whole body in `metadata.content`, and its first 80 characters into
+// `title`. That table is workspace-scoped and selectable at `read`, is not in
+// SELECTABLE_COLUMNS_BY_TABLE (so `columns:"*"` returns `metadata` intact), and
+// is reached by neither appendSessionAccessClause nor the realtime private
+// lane. One /backend/db/select returned every private conversation in the
+// workspace. The write path is fixed, but every row written before that fix
+// still holds the text, so the rows have to be rewritten too — a code fix alone
+// leaves the data sitting there.
+//
+// Both carriers are cut. Idempotent: once `content` is gone the row stops
+// matching, so this is a no-op on every subsequent boot.
+const SCRUB_PRIVATE_ACTIVITY_SQL = `
+  update activity_events ae
+     set metadata = ae.metadata - 'content',
+         title = coalesce(
+                   nullif(ae.metadata->>'sender_name', ''),
+                   nullif(split_part(coalesce(ae.title, ''), ':', 1), ''),
+                   'Someone'
+                 ) || ': (private conversation)'
+    from chat_sessions cs
+   where cs.id::text = ae.metadata->>'session_id'
+     and (coalesce(cs.visibility, '') = 'private' or coalesce(cs.folder, '') = 'Direct messages')
+     and (ae.metadata->>'content') is not null
+  returning ae.id
+`;
+
 async function runDmScopeBackfill(db, { warn = console.warn } = {}) {
- const report = { markedDms: false, seededOwners: false, speakersSeeded: 0, violations: [], markedDerived: false };
+ const report = { markedDms: false, seededOwners: false, speakersSeeded: 0, violations: [], markedDerived: false, activityScrubbed: 0 };
 
  try {
   await db(MARK_DMS_SQL, []);
@@ -190,6 +220,22 @@ async function runDmScopeBackfill(db, { warn = console.warn } = {}) {
   warn('[backend] derived-session visibility backfill failed:', error?.message || error);
  }
 
+ // Runs AFTER the visibility passes above, and that order is load-bearing: the
+ // scrub matches on `visibility`/`folder`, so a DM only just marked private by
+ // MARK_DMS_SQL or MARK_DERIVED_SQL would be missed if this ran first.
+ try {
+  const scrubbed = await db(SCRUB_PRIVATE_ACTIVITY_SQL, []);
+  report.activityScrubbed = Array.isArray(scrubbed) ? scrubbed.length : 0;
+  if (report.activityScrubbed > 0) {
+   warn(
+    `[backend] DM scope: removed message bodies from ${report.activityScrubbed} activity feed row(s) that mirrored a private conversation. `
+    + 'Those rows were readable by any workspace member holding `read` until now.',
+   );
+  }
+ } catch (error) {
+  warn('[backend] private activity scrub failed:', error?.message || error);
+ }
+
  return report;
 }
 
@@ -200,4 +246,5 @@ module.exports = {
  SEED_SPEAKERS_SQL,
  ASSUMPTION_VIOLATIONS_SQL,
  MARK_DERIVED_SQL,
+ SCRUB_PRIVATE_ACTIVITY_SQL,
 };

@@ -358,7 +358,7 @@ function harvestAcceptTarget(finding) {
     return { table: 'memory_facts', label: 'Team memory', category: 'suggested', folder: '' };
   }
   if (kind === 'skill') {
-    return { table: 'documents', label: 'Documents · Playbooks', category: '', folder: 'Playbooks' };
+    return { table: 'workspace_skills', label: 'Skills', category: '', folder: '' };
   }
   if (kind === 'doc') {
     return { table: 'documents', label: 'Documents · Suggestions', category: '', folder: 'Suggestions' };

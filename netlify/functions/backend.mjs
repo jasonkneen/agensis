@@ -31,7 +31,21 @@ import {
  normalizeFeedbackSubmission,
  insertFeedbackReport,
  badRequest,
+ enforceSessionReadAccess,
 } from '../../shared/backend-core.cjs';
+import {
+ REACTION_RETURNING_COLUMNS,
+ explainReactionNoop,
+ normalizeReactionOp,
+ normalizeReactionValue,
+ priorReactionMap,
+ reactionToggleSql,
+} from '../../shared/reaction-toggle.cjs';
+import {
+ ADVANCE_READ_MARKER_SQL,
+ SESSION_READ_STATE_SQL,
+ toReadMarker,
+} from '../../shared/read-receipts.cjs';
 import {
  assertSystemOwner,
  isReservedSignupEmail,
@@ -129,6 +143,11 @@ const cursorBuddyGuidesRateLimiter = createRateLimiter({ windowMs: 60_000, max: 
 // Delivery side of owner broadcasts: read by every signed-in session, not by
 // the operator, so it gets its own budget rather than sharing the admin one.
 const campaignMessageRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+// Reactions and receipts. Budgets mirror server/index.cjs exactly — a client
+// that hits one lane's limit and not the other's would be a difference nobody
+// could explain from the UI.
+const reactionRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+const readReceiptRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 
 function clientIpFromRequest(req) {
  // Prefer Netlify's trusted x-nf-client-connection-ip (set at the edge); never
@@ -2023,6 +2042,119 @@ async function seedDefaultAgents(workspaceId, ownerUserId) {
  );
 }
 
+// ---------------------------------------------------------------------------
+// Reactions and read receipts — the Netlify half of the two dedicated routes.
+//
+// Every decision is in the shared modules (shared/reaction-toggle.cjs,
+// shared/read-receipts.cjs) and every guard is the same shared function the Fly
+// lane calls. What is NOT shared, and must not be: the jsonb bind. Nothing here
+// binds jsonb directly — the reaction statements build the map with jsonb
+// operators server-side, so there is no map parameter to get wrong on either
+// lane, which is a small side benefit of moving the mutation into SQL.
+//
+// There is no realtime fanout on this lane (serverless has no socket to fan to);
+// clients on the Fly lane get the live update, and a client on this one sees the
+// change on its next read. That asymmetry predates this feature.
+// ---------------------------------------------------------------------------
+
+// Resolve a session and run BOTH gates: workspace membership, then the DM gate
+// under it. Returns the row so callers never re-read it.
+async function authorizeSessionForUser(sessionId, userId, capability) {
+ const rows = await query(
+  'select id, workspace_id, visibility, folder from chat_sessions where id = $1::uuid limit 1',
+  [sessionId],
+ );
+ const session = rows[0];
+ if (!session) return { error: jsonError(404, new Error('Conversation not found')) };
+ await assertWorkspaceRole({ userId, workspaceId: session.workspace_id, capability, db: query });
+ await enforceSessionReadAccess({ userId, sessionId, sessionRow: session, db: query });
+ return { session };
+}
+
+async function handleToggleReaction(req, messageId, userId) {
+ const body = await readBody(req);
+ const op = normalizeReactionOp(body?.op);
+ if (!op) return jsonError(400, badRequest("op must be 'add' or 'remove'"));
+ const reaction = normalizeReactionValue(body?.reaction ?? body?.emoji);
+ if (!reaction) return jsonError(400, badRequest('A reaction is required'));
+
+ const blocked = rateLimitBlock(reactionRateLimiter, `${userId}:${messageId}`);
+ if (blocked) return blocked;
+
+ const rows = await query(
+  `select m.id, m.session_id from messages m where m.id = $1::uuid limit 1`,
+  [messageId],
+ );
+ if (!rows[0]) return jsonError(404, new Error('Message not found'));
+ const sessionId = String(rows[0].session_id);
+ // 'write', not 'read': a reaction changes a stored row and publishes your name
+ // against someone else's message. A viewer may read the channel, not annotate it.
+ const gate = await authorizeSessionForUser(sessionId, userId, 'write');
+ if (gate.error) return gate.error;
+
+ const updated = await query(reactionToggleSql(op), [messageId, sessionId, reaction, String(userId)]);
+
+ if (updated.length === 0) {
+  const current = await query(
+   `select ${REACTION_RETURNING_COLUMNS} from messages where id = $1::uuid limit 1`,
+   [messageId],
+  );
+  const problem = explainReactionNoop(current[0], { op, reaction, userId });
+  if (problem) return jsonError(problem.status, new Error(problem.message));
+  return json({ data: { messageId, reactions: current[0]?.reactions ?? {}, changed: false }, error: null });
+ }
+
+ const after = updated[0];
+ // The before/after-map contract, unchanged: the flow module still diffs two
+ // real maps. The before-image is DERIVED from the after-image and the op rather
+ // than re-read, because a SELECT for it would reintroduce the race this route
+ // exists to remove. Awaited (not fire-and-forget) only so the serverless
+ // container is not frozen mid-insert; a failure is logged and dropped.
+ try {
+  await emitReactionFlowEventsForUpdate({
+   db: query,
+   // @netlify/database REQUIRES the stringified form for a $n::jsonb bind — the
+   // exact opposite of the Fly lane. Deliberately not unified; see
+   // tests/jsonb-bind-hygiene.test.cjs.
+   encodeJsonb: (payload) => JSON.stringify(payload),
+   priorRows: [{ ...after, reactions: priorReactionMap(after.reactions, { op, reaction, userId }) }],
+   updatedRows: updated,
+   nextReactions: after.reactions,
+   actorUserId: userId,
+   onWarn: (message) => console.warn('[flows] reaction events:', message),
+  });
+ } catch (error) {
+  console.error('[flows] failed to queue reaction event:', error?.message || error);
+ }
+
+ return json({ data: { messageId, reactions: after.reactions ?? {}, changed: true }, error: null });
+}
+
+async function handleAdvanceReadMarker(req, sessionId, userId) {
+ const body = await readBody(req);
+ const messageId = String(body?.lastSeenMessageId || body?.last_seen_message_id || '').trim();
+ if (!messageId) return jsonError(400, badRequest('lastSeenMessageId is required'));
+
+ const blocked = rateLimitBlock(readReceiptRateLimiter, `${userId}:${sessionId}`);
+ if (blocked) return blocked;
+
+ const gate = await authorizeSessionForUser(sessionId, userId, 'read');
+ if (gate.error) return gate.error;
+
+ const rows = await query(ADVANCE_READ_MARKER_SQL, [sessionId, String(userId), messageId]);
+ // Always ok, exactly like the Fly lane: "already at or ahead of this point" is
+ // success, and so is "I have receipts switched off" — a caller must not be able
+ // to detect a setting by probing.
+ return json({ data: { ok: true, marker: rows[0] ? toReadMarker(rows[0]) : null }, error: null });
+}
+
+async function handleSessionReadState(sessionId, userId) {
+ const gate = await authorizeSessionForUser(sessionId, userId, 'read');
+ if (gate.error) return gate.error;
+ const rows = await query(SESSION_READ_STATE_SQL, [sessionId, String(userId)]);
+ return json({ data: { markers: rows.map(toReadMarker) }, error: null });
+}
+
 async function handleDb(pathname, req, userId) {
  const body = await readBody(req);
 
@@ -2739,6 +2871,24 @@ async function route(req) {
  }
  if (req.method === 'POST' && pathname === '/backend/users/me/change-password') {
   return handleChangeMyPassword(req, await requireUserId(req));
+ }
+ // Reactions and read receipts. Mirrors server/reactions-routes.cjs and
+ // server/read-receipts-routes.cjs statement for statement — the SQL and the
+ // guards are single-sourced in shared/reaction-toggle.cjs and
+ // shared/read-receipts.cjs, so the only thing this lane owns is the plumbing.
+ // A route that exists on one backend and not the other is a UI that 404s
+ // against whichever deploy the user happens to reach.
+ const reactionMatch = pathname.match(/^\/backend\/messages\/([^/]+)\/reactions$/);
+ if (req.method === 'POST' && reactionMatch) {
+  return handleToggleReaction(req, decodeURIComponent(reactionMatch[1]), await requireUserId(req));
+ }
+ const sessionReadMatch = pathname.match(/^\/backend\/sessions\/([^/]+)\/read$/);
+ if (req.method === 'POST' && sessionReadMatch) {
+  return handleAdvanceReadMarker(req, decodeURIComponent(sessionReadMatch[1]), await requireUserId(req));
+ }
+ const sessionReadStateMatch = pathname.match(/^\/backend\/sessions\/([^/]+)\/read-state$/);
+ if (req.method === 'GET' && sessionReadStateMatch) {
+  return handleSessionReadState(decodeURIComponent(sessionReadStateMatch[1]), await requireUserId(req));
  }
  if (req.method === 'POST' && pathname.startsWith('/backend/db/')) {
   return handleDb(pathname, req, await requireUserId(req));

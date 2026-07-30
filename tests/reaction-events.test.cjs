@@ -8,9 +8,9 @@
 // the one signal a human gives without typing — was invisible to every
 // integration.
 //
-// A reaction is not a row. The UI replaces the whole jsonb map through the
-// generic /backend/db/update route, so the event is the DIFFERENCE between the
-// stored map and the written one. That has consequences this file pins:
+// A reaction is not a row. It is an entry in a jsonb map, so the event is the
+// DIFFERENCE between the map before a write and the map after it. That has
+// consequences this file pins:
 //
 //   * re-writing a map the row already holds is not a change and emits nothing
 //     (so a retry, or a double-click landing twice, cannot duplicate an event)
@@ -21,10 +21,28 @@
 //   * an event reaches only connections entitled to that workspace
 //
 // The route tests run the real Express handler against a fake DB, so they cover
-// the wiring (before-image read, fire-and-forget emission) and not just the
-// pure diff. `netlify/functions/backend.mjs` gets the same treatment in
+// the wiring (before-image derivation, fire-and-forget emission) and not just
+// the pure diff. `netlify/functions/backend.mjs` gets the same treatment in
 // tests/reaction-events-netlify.test.cjs — one lane emitting and the other
 // silently not is this repo's most repeated bug.
+//
+// WHAT MOVED, and what deliberately did not.
+//
+// The write path used to be the generic /backend/db/update route carrying a
+// WHOLE map computed in the browser. That raced (two people reacting inside the
+// realtime window each wrote a full map from a stale base, and the second erased
+// the first) and its attribution was forgeable (the map was caller-authored, so
+// any client could write any user's id into it). The mutation now lives in ONE
+// atomic statement behind POST /backend/messages/:id/reactions, and `reactions`
+// is stripped from generic writes — see tests/message-reactions.test.cjs.
+//
+// The CONTRACT this file exists to protect did not move. Events are still the
+// diff of a before-map against an after-map, emission is still idempotent, and
+// shared/reaction-events.cjs is untouched. What changed is where the before-map
+// comes from: it is DERIVED from the after-map and the operation
+// (priorReactionMap) rather than re-read, because a SELECT for it would
+// reintroduce the race. Every assertion below is the one it always was; only the
+// door the request goes through is different.
 // ============================================================================
 
 const test = require('node:test');
@@ -160,15 +178,59 @@ function makeDb({ message, connections = [connectionRow()], failDeliveryInsert =
       }
       if (q.startsWith('select role from workspace_members')) return [];
       // enforceDbOperationAccess resolves the message's workspace via its session.
-      if (q.startsWith('select workspace_id from chat_sessions where id')) {
+      if (q.startsWith('select workspace_id') && q.includes('from chat_sessions')) {
         return String(params[0]) === SESSION ? [{ workspace_id: WORKSPACE }] : [];
       }
       // The event path re-resolves it (messages has no workspace_id column).
       if (q.startsWith('select id, workspace_id from chat_sessions where id')) {
         return String(params[0]) === SESSION ? [{ id: SESSION, workspace_id: WORKSPACE }] : [];
       }
-      // The route's before-image read.
+      // The reaction route's one pre-write read: the message's session, and the
+      // session's workspace and privacy, so both gates run against the row the
+      // UPDATE then names. A plain channel, so the DM gate returns immediately.
+      if (q.startsWith('select m.id, m.session_id, s.workspace_id')) {
+        return String(params[0]) === MESSAGE
+          ? [{ id: MESSAGE, session_id: SESSION, workspace_id: WORKSPACE, visibility: 'workspace', folder: 'General' }]
+          : [];
+      }
+      // The no-op read (a repeat click, or the distinct-reaction cap) and the
+      // old before-image read share a prefix; both want the message row.
       if (q.startsWith('select id, session_id, reactions, sender_kind')) {
+        return [{ ...message }];
+      }
+      // ---------------------------------------------------------------------
+      // The two atomic toggle statements. This mock stands in for POSTGRES —
+      // it applies the jsonb semantics of the real statements, including the
+      // guards that make a repeat click a no-op. It does NOT stand in for any
+      // authorization rule; those run in the real code above.
+      //
+      // A mock cannot exhibit a lost update, so the RACE itself is not what
+      // these tests prove. tests/message-reactions.test.cjs pins that with the
+      // claim a mock can honestly carry: the mutation is one round trip with no
+      // intervening read.
+      // ---------------------------------------------------------------------
+      if (q.startsWith('update messages set reactions = jsonb_set')) {
+        const [id, sessionId, reaction, userId] = params.map(String);
+        if (id !== String(message.id) || sessionId !== String(message.session_id)) return [];
+        const holders = message.reactions[reaction] || [];
+        if (holders.includes(userId)) return [];  // `not … @> to_jsonb($4)`
+        if (!(reaction in message.reactions) && Object.keys(message.reactions).length >= 24) return [];
+        message.reactions = { ...message.reactions, [reaction]: [...holders, userId] };
+        messageUpdates.push({ sql: n, params });
+        return [{ ...message }];
+      }
+      if (q.startsWith('update messages set reactions = case')) {
+        const [id, sessionId, reaction, userId] = params.map(String);
+        if (id !== String(message.id) || sessionId !== String(message.session_id)) return [];
+        const holders = message.reactions[reaction] || [];
+        if (!holders.includes(userId)) return [];  // `… @> to_jsonb($4)`
+        const next = { ...message.reactions };
+        const remaining = holders.filter(user => user !== userId);
+        // The last holder leaving deletes the KEY, never leaves `[]` behind.
+        if (remaining.length === 0) delete next[reaction];
+        else next[reaction] = remaining;
+        message.reactions = next;
+        messageUpdates.push({ sql: n, params });
         return [{ ...message }];
       }
       if (q.startsWith('update "messages" set')) {
@@ -208,18 +270,14 @@ async function withServer(fn) {
   }
 }
 
-async function writeReactions(baseUrl, token, reactions) {
-  return fetch(`${baseUrl}/backend/db/update`, {
+// ONE reaction, ONE operation, and the reactor is never named in the body — it
+// is req.userId. That is the shape the route enforces, so it is the shape the
+// tests use.
+async function react(baseUrl, token, reaction, op = 'add', messageId = MESSAGE) {
+  return fetch(`${baseUrl}/backend/messages/${messageId}/reactions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      table: 'messages',
-      values: { reactions },
-      filters: [
-        { column: 'id', operator: 'eq', value: MESSAGE },
-        { column: 'session_id', operator: 'eq', value: SESSION },
-      ],
-    }),
+    body: JSON.stringify({ reaction, op }),
   });
 }
 
@@ -239,7 +297,7 @@ test('adding a reaction queues exactly one event, with the signal and not the me
   const token = await __test.issueToken(USER, '1');
 
   await withServer(async (baseUrl) => {
-    const res = await writeReactions(baseUrl, token, { '✅': [USER] });
+    const res = await react(baseUrl, token, '✅', 'add');
     assert.equal(res.status, 200, 'the reaction is saved');
     assert.ok(await settle(() => db.deliveries.length > 0), 'an event was queued');
     await settle(() => false, 80); // let any extra (unwanted) delivery appear
@@ -285,16 +343,25 @@ test('the same reaction written twice does not emit twice', async () => {
   __test.setTestDb(db);
   const token = await __test.issueToken(USER, '1');
 
+  let second;
   await withServer(async (baseUrl) => {
-    assert.equal((await writeReactions(baseUrl, token, { '✅': [USER] })).status, 200);
+    assert.equal((await react(baseUrl, token, '✅', 'add')).status, 200);
     assert.ok(await settle(() => db.deliveries.length > 0));
-    // The same map again — a retry, or a second click that lost the race.
-    assert.equal((await writeReactions(baseUrl, token, { '✅': [USER] })).status, 200);
+    // The same reaction again — a retry, or a second click that lost the race.
+    const res = await react(baseUrl, token, '✅', 'add');
+    assert.equal(res.status, 200, 'a repeat is success, not an error');
+    second = await res.json();
     await settle(() => db.deliveries.length > 1, 200);
   });
 
-  assert.equal(db.deliveries.length, 1, 'the second write is not a change');
-  assert.equal(db.messageUpdates.length, 2, 'but both writes were saved');
+  assert.equal(db.deliveries.length, 1, 'the second request is not a change');
+  // STRONGER than the whole-map path this replaced, where both writes landed and
+  // only the diff suppressed the second event. The statement's own guard now
+  // refuses the redundant write, so the row is never touched twice and the
+  // realtime fanout never fires for a click that changed nothing.
+  assert.equal(db.messageUpdates.length, 1, 'the redundant write never reached the row');
+  assert.equal(second.data.changed, false, 'and the caller is told so');
+  assert.deepEqual(second.data.reactions, { '✅': [USER] }, 'with the state that actually holds');
 });
 
 test('withdrawing a reaction emits reaction.removed', async () => {
@@ -303,7 +370,7 @@ test('withdrawing a reaction emits reaction.removed', async () => {
   const token = await __test.issueToken(USER, '1');
 
   await withServer(async (baseUrl) => {
-    assert.equal((await writeReactions(baseUrl, token, {})).status, 200);
+    assert.equal((await react(baseUrl, token, '✅', 'remove')).status, 200);
     assert.ok(await settle(() => db.deliveries.length > 0));
   });
 
@@ -322,9 +389,9 @@ test('a connection that did not subscribe to removals never receives one', async
   const token = await __test.issueToken(USER, '1');
 
   await withServer(async (baseUrl) => {
-    assert.equal((await writeReactions(baseUrl, token, { '✅': [USER] })).status, 200);
+    assert.equal((await react(baseUrl, token, '✅', 'add')).status, 200);
     assert.ok(await settle(() => db.deliveries.length > 0));
-    assert.equal((await writeReactions(baseUrl, token, {})).status, 200);
+    assert.equal((await react(baseUrl, token, '✅', 'remove')).status, 200);
     await settle(() => db.deliveries.length > 1, 200);
   });
 
@@ -337,11 +404,12 @@ test('a failed delivery enqueue does not prevent the reaction being saved', asyn
   const token = await __test.issueToken(USER, '1');
 
   await withServer(async (baseUrl) => {
-    const res = await writeReactions(baseUrl, token, { '✅': [USER] });
+    const res = await react(baseUrl, token, '✅', 'add');
     assert.equal(res.status, 200, 'the write succeeds even though the event cannot be queued');
     const body = await res.json();
     assert.equal(body.error, null);
-    assert.deepEqual(body.data[0].reactions, { '✅': [USER] }, 'the reaction is persisted');
+    assert.deepEqual(body.data.reactions, { '✅': [USER] }, 'the reaction is persisted');
+    assert.equal(body.data.changed, true);
     await settle(() => false, 150); // give the rejected fire-and-forget time to land
   });
 
@@ -361,7 +429,7 @@ test('a reaction event does not reach a connection in another workspace', async 
   const token = await __test.issueToken(USER, '1');
 
   await withServer(async (baseUrl) => {
-    assert.equal((await writeReactions(baseUrl, token, { '✅': [USER] })).status, 200);
+    assert.equal((await react(baseUrl, token, '✅', 'add')).status, 200);
     assert.ok(await settle(() => db.deliveries.length > 0));
     await settle(() => db.deliveries.length > 1, 150);
   });
@@ -382,7 +450,7 @@ test('a channel-scoped connection only receives reactions in its own channel', a
   const token = await __test.issueToken(USER, '1');
 
   await withServer(async (baseUrl) => {
-    assert.equal((await writeReactions(baseUrl, token, { '✅': [USER] })).status, 200);
+    assert.equal((await react(baseUrl, token, '✅', 'add')).status, 200);
     assert.ok(await settle(() => db.deliveries.length > 0));
     await settle(() => db.deliveries.length > 1, 150);
   });
@@ -412,36 +480,85 @@ test('a message edit that does not touch reactions never reads or emits', async 
   assert.equal(db.deliveries.length, 0, 'an ordinary edit pays for no reaction query');
 });
 
-test('one write cannot amplify into an unbounded flood of signed deliveries', async () => {
-  const flood = {};
-  for (let i = 0; i < MAX_REACTION_EVENTS_PER_WRITE + 20; i += 1) flood[`r${i}`] = [USER];
-  const db = makeDb({ message: messageRow() });
+test('one request produces exactly one delivery, whatever else the message carries', async () => {
+  // The STRONGER version of the amplification guarantee the whole-map write
+  // needed a cap for. One request now names ONE reaction and ONE operation, so a
+  // single call can no longer carry forty changes at all — the flood is
+  // unreachable by construction rather than truncated after the fact. The
+  // message here already holds ten other reactions, none of which may produce a
+  // delivery.
+  const crowded = {};
+  for (let i = 0; i < 10; i += 1) crowded[`r${i}`] = [OTHER_USER];
+  const db = makeDb({ message: messageRow({ reactions: crowded }) });
   __test.setTestDb(db);
   const token = await __test.issueToken(USER, '1');
 
   await withServer(async (baseUrl) => {
-    assert.equal((await writeReactions(baseUrl, token, flood)).status, 200);
-    assert.ok(await settle(() => db.deliveries.length >= MAX_REACTION_EVENTS_PER_WRITE));
-    await settle(() => db.deliveries.length > MAX_REACTION_EVENTS_PER_WRITE, 200);
+    assert.equal((await react(baseUrl, token, '✅', 'add')).status, 200);
+    assert.ok(await settle(() => db.deliveries.length > 0));
+    await settle(() => db.deliveries.length > 1, 200);
   });
 
-  assert.equal(db.deliveries.length, MAX_REACTION_EVENTS_PER_WRITE);
+  assert.equal(db.deliveries.length, 1, 'one click, one delivery');
+  assert.equal(db.deliveries[0].payload.data.reaction, '✅');
 });
 
-test('an oversized reaction value is truncated and says so', async () => {
+test('the per-write cap still bounds a caller that reaches the emitter directly', async () => {
+  // MAX_REACTION_EVENTS_PER_WRITE is no longer reachable through the route (see
+  // above), but it is still the guarantee shared/reaction-events.cjs makes to
+  // anything that calls it — and it is the one that stops one write becoming a
+  // flood of SIGNED deliveries against somebody else's endpoint. Tested where it
+  // now lives rather than deleted along with the path that used to reach it.
+  const { enqueueReactionFlowEvents, REACTION_CREATED: created } = require('../shared/reaction-events.cjs');
+  const changes = [];
+  for (let i = 0; i < MAX_REACTION_EVENTS_PER_WRITE + 20; i += 1) {
+    changes.push({ type: created, reaction: `r${i}`, userId: USER, count: 1 });
+  }
+  const queued = [];
+  const warnings = [];
+  const count = await enqueueReactionFlowEvents({
+    db: async (sql, params) => {
+      if (String(sql).includes('from flow_connections')) return [connectionRow()];
+      queued.push(params);
+      return [];
+    },
+    encodeJsonb: payload => payload,
+    workspaceId: WORKSPACE,
+    channelId: SESSION,
+    message: messageRow(),
+    changes,
+    actorUserId: USER,
+    onWarn: message => warnings.push(message),
+  });
+
+  assert.equal(count, MAX_REACTION_EVENTS_PER_WRITE);
+  assert.equal(queued.length, MAX_REACTION_EVENTS_PER_WRITE);
+  assert.equal(warnings.length, 1, 'the truncation is logged, never silent');
+});
+
+test('an oversized reaction is truncated at the door, so an oversized one is never stored', async () => {
+  // The route normalizes BEFORE the write, so the stored map key can never
+  // exceed the limit — which is stronger than the old behaviour, where an
+  // arbitrarily long key was stored and only the webhook payload was cut.
+  // Truncation stays surrogate-safe: see the unit test directly below.
   const huge = 'x'.repeat(MAX_REACTION_LENGTH + 500);
-  const db = makeDb({ message: messageRow() });
+  const message = messageRow();
+  const db = makeDb({ message });
   __test.setTestDb(db);
   const token = await __test.issueToken(USER, '1');
 
   await withServer(async (baseUrl) => {
-    assert.equal((await writeReactions(baseUrl, token, { [huge]: [USER] })).status, 200);
+    assert.equal((await react(baseUrl, token, huge, 'add')).status, 200);
     assert.ok(await settle(() => db.deliveries.length > 0));
   });
 
+  const stored = Object.keys(message.reactions);
+  assert.deepEqual(stored.map(key => key.length), [MAX_REACTION_LENGTH], 'the STORED key is capped');
   const { data } = db.deliveries[0].payload;
   assert.equal(data.reaction.length, MAX_REACTION_LENGTH);
-  assert.equal(data.reactionTruncated, true);
+  // Not marked truncated any more, and that is correct: the payload carries the
+  // reaction in full, because the reaction itself is now that length.
+  assert.equal(data.reactionTruncated, undefined);
 });
 
 test('truncating never leaves half an emoji behind', () => {
@@ -467,13 +584,13 @@ test('a toggle sequence stays observable — re-adding a withdrawn reaction is a
   const token = await __test.issueToken(USER, '1');
 
   await withServer(async (baseUrl) => {
-    await writeReactions(baseUrl, token, { '✅': [USER] });
+    await react(baseUrl, token, '✅', 'add');
     assert.ok(await settle(() => db.deliveries.length >= 1));
     await new Promise(resolve => setTimeout(resolve, 3));
-    await writeReactions(baseUrl, token, {});
+    await react(baseUrl, token, '✅', 'remove');
     assert.ok(await settle(() => db.deliveries.length >= 2));
     await new Promise(resolve => setTimeout(resolve, 3));
-    await writeReactions(baseUrl, token, { '✅': [USER] });
+    await react(baseUrl, token, '✅', 'add');
     assert.ok(await settle(() => db.deliveries.length >= 3));
   });
 
