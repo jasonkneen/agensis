@@ -69,7 +69,16 @@ const BROWSER_RUNTIME_FILES: Array<[string, string]> = [
   ['@mercuryworkshop/bare-mux/dist/worker.js', 'baremux-worker.js'],
 ];
 
-function browserRuntimeAssets() {
+// Typed as `Plugin` for the same reason emitVersionJson is: without it the hand
+// written parameter types below are checked against Vite's real hook signatures
+// and lose — `configureServer` receives a full ViteDevServer, whose
+// `middlewares.use` is Connect's four-overload signature, not `(fn: unknown) =>
+// void`. Declaring the return type lets Vite's types flow into the hooks so the
+// parameters can be inferred instead of guessed.
+//
+// This surfaced only once `npm run typecheck` began covering tsconfig.node.json;
+// before that nothing checked this file at all.
+function browserRuntimeAssets(): Plugin {
   // Resolved by PATH, not by `require.resolve`. Neither package lists
   // "./package.json" in its exports map, so the usual
   // `dirname(require.resolve(pkg + '/package.json'))` trick throws
@@ -90,8 +99,12 @@ function browserRuntimeAssets() {
   return {
     name: 'agensis-browser-runtime-assets',
     // Dev has no build step, so serve them straight off disk.
-    configureServer(server: { middlewares: { use: (fn: unknown) => void } }) {
-      server.middlewares.use((req: { url?: string }, res: import('node:http').ServerResponse, next: () => void) => {
+    // No parameter annotations: with the return typed as `Plugin`, Vite infers
+    // `server` as ViteDevServer and the middleware args from Connect. Annotating
+    // them by hand is what broke — a narrower hand-written shape is not
+    // assignable to the real hook signature.
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
         const match = BROWSER_RUNTIME_FILES.find(([, out]) => req.url === `/scramjet-runtime/${out}`);
         if (!match) return next();
         try {
@@ -102,7 +115,9 @@ function browserRuntimeAssets() {
         }
       });
     },
-    generateBundle(this: { emitFile: (f: unknown) => void }) {
+    // Same again: `this` is Rollup's PluginContext, inferred from the Plugin
+    // return type. The hand-written shape narrowed it and did not assign.
+    generateBundle() {
       if (isDesktopBuild) return;
       for (const [spec, out] of BROWSER_RUNTIME_FILES) {
         this.emitFile({
