@@ -99,14 +99,19 @@ export function useReadReceipts({
       filter: `session_id=eq.${sessionId || ''}`,
     },
     (payload) => {
-      const row = payload.new as SessionReadMarker | undefined;
-      if (!row || !row.user_id) return;
+      // A raw db_changes row carries user_id OR agent_id (a human or an agent
+      // reader), never a pre-collapsed reader_id like the REST projection does —
+      // so fold both here into the one opaque id the rest of the code uses.
+      const row = payload.new as (Partial<SessionReadMarker> & { user_id?: string; agent_id?: string }) | undefined;
+      const readerId = row ? String(row.reader_id || row.user_id || row.agent_id || '') : '';
+      if (!row || !readerId) return;
+      const readerKind = row.reader_kind || (row.agent_id ? 'agent' : 'human');
       // The fanout does not exclude the writer, so your own marker comes back.
-      // Upsert by user_id rather than appending: a marker is a POSITION, and the
-      // list must hold at most one per person or `readersOf` counts them twice.
+      // Upsert by reader id rather than appending: a marker is a POSITION, and the
+      // list must hold at most one per reader or `readersOf` counts them twice.
       setMarkers(prev => {
-        const next = prev.filter(marker => marker.user_id !== row.user_id);
-        next.push({ session_id: String(row.session_id), user_id: String(row.user_id), read_at: String(row.read_at) });
+        const next = prev.filter(marker => marker.reader_id !== readerId);
+        next.push({ session_id: String(row.session_id), reader_id: readerId, reader_kind: readerKind, read_at: String(row.read_at) });
         return next;
       });
     },

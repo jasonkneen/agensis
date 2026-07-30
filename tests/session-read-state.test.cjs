@@ -37,6 +37,7 @@ const http = require('node:http');
 const { createApp, __test } = require('../server/index.cjs');
 const {
   ADVANCE_READ_MARKER_SQL,
+  ADVANCE_AGENT_READ_MARKER_SQL,
   SESSION_READ_STATE_SQL,
 } = require('../shared/read-receipts.cjs');
 const {
@@ -113,23 +114,32 @@ function makeDb({ roles = {}, dmMembers = [], markers = [], optedOut = [] } = {}
       // the message must belong to the named session, and the writer must not
       // have opted out. Both are in the statement's own WHERE, so this is
       // reporting what the parameters make true, not inventing a rule.
-      if (q.startsWith('insert into session_read_state')) {
+      if (q.startsWith('insert into session_read_state (session_id, user_id, read_at)')) {
         const [sessionId, userId, messageId] = params.map(String);
         if (optedOut.includes(userId)) return [];
         if (messageId !== MESSAGE) return [];           // `m.id = $3`
         if (sessionId !== CHANNEL && sessionId !== DM) return [];
         written.push({ sessionId, userId, messageId });
-        return [{ session_id: sessionId, user_id: userId, read_at: '2026-07-01T00:00:00.000Z' }];
+        return [{ session_id: sessionId, user_id: userId, agent_id: null, read_at: '2026-07-01T00:00:00.000Z' }];
       }
 
-      if (q.startsWith('select r.session_id, r.user_id, r.read_at')) {
+      // The read projects a unified reader_id/reader_kind across human + agent
+      // markers. The mock stores markers keyed by user_id (its fixtures predate
+      // agents) and returns them in the route's projected shape.
+      if (q.startsWith('select r.session_id,')) {
         const [sessionId, callerId] = params.map(String);
         // Reciprocity and the omission of opted-out readers are BOTH in the
         // statement's WHERE; the mock applies the caller's own flag and each
         // row's flag exactly as those predicates would.
         if (optedOut.includes(callerId)) return [];
         return markers
-          .filter(marker => marker.session_id === sessionId && !optedOut.includes(marker.user_id));
+          .filter(marker => marker.session_id === sessionId && !optedOut.includes(marker.user_id))
+          .map(marker => ({
+            session_id: marker.session_id,
+            reader_id: marker.user_id,
+            reader_kind: 'human',
+            read_at: marker.read_at,
+          }));
       }
       return [];
     },
@@ -230,7 +240,7 @@ test('the marker can only ever move FORWARD', () => {
   // into an un-read, which is the failure inbox_read_state was built to avoid.
   assert.match(
     ADVANCE_READ_MARKER_SQL,
-    /on conflict \(session_id, user_id\)\s+do update set read_at = excluded\.read_at, updated_at = now\(\)\s+where session_read_state\.read_at < excluded\.read_at/,
+    /on conflict \(session_id, user_id\) where user_id is not null\s+do update set read_at = excluded\.read_at, updated_at = now\(\)\s+where session_read_state\.read_at < excluded\.read_at/,
   );
 });
 
@@ -278,9 +288,9 @@ test('an opted-out reader is omitted from what everyone else sees', async () => 
     const res = await readState(baseUrl, token, CHANNEL);
     assert.equal(res.status, 200);
     const { data } = await res.json();
-    assert.deepEqual(data.markers.map(marker => marker.user_id), [OWNER]);
+    assert.deepEqual(data.markers.map(marker => marker.reader_id), [OWNER]);
   });
-  assert.match(SESSION_READ_STATE_SQL, /join app_users u on u\.id = r\.user_id/);
+  assert.match(SESSION_READ_STATE_SQL, /left join app_users u on u\.id = r\.user_id/);
 });
 
 test('the opt-out is RECIPROCAL — switching it off also stops you seeing others', async () => {
@@ -310,7 +320,7 @@ test('updated_at is never projected', () => {
   // It records when a marker last MOVED — a second, finer clock than "read up to
   // this point", and not a disclosure this feature makes.
   assert.doesNotMatch(SESSION_READ_STATE_SQL, /updated_at/);
-  assert.deepEqual(SELECTABLE_COLUMNS_BY_TABLE.session_read_state, ['session_id', 'user_id', 'read_at']);
+  assert.deepEqual(SELECTABLE_COLUMNS_BY_TABLE.session_read_state, ['session_id', 'user_id', 'agent_id', 'read_at']);
 });
 
 // ---------------------------------------------------------------------------
@@ -344,7 +354,7 @@ test('a member OF the DM can both mark and read its receipts', async () => {
     assert.equal((await markRead(baseUrl, token, DM, { lastSeenMessageId: MESSAGE })).status, 200);
     const res = await readState(baseUrl, token, DM);
     assert.equal(res.status, 200);
-    assert.deepEqual((await res.json()).data.markers.map(m => m.user_id), [OWNER]);
+    assert.deepEqual((await res.json()).data.markers.map(m => m.reader_id), [OWNER]);
   });
   assert.deepEqual(db.written, [{ sessionId: DM, userId: OUTSIDER, messageId: MESSAGE }]);
 });
@@ -381,6 +391,41 @@ test('a missing lastSeenMessageId is a 400, not a marker at "now"', async () => 
     assert.equal((await markRead(baseUrl, token, CHANNEL, {})).status, 400);
   });
   assert.deepEqual(db.written, [], 'defaulting to now() would be a receipt for messages nobody saw');
+});
+
+// ---------------------------------------------------------------------------
+// Agents as readers
+// ---------------------------------------------------------------------------
+
+test('an agent marker is keyed by agent_id, not user_id, and skips the human opt-out', () => {
+  // An agent is not in app_users, so its write must NOT join that table — there is
+  // no share_read_receipts row to honour, and joining would drop every agent
+  // marker. The conflict target is the agent partial index, mirroring the human
+  // path's forward-only guard.
+  assert.match(ADVANCE_AGENT_READ_MARKER_SQL, /insert into session_read_state \(session_id, agent_id, read_at\)/);
+  assert.doesNotMatch(ADVANCE_AGENT_READ_MARKER_SQL, /app_users/);
+  assert.match(
+    ADVANCE_AGENT_READ_MARKER_SQL,
+    /on conflict \(session_id, agent_id\) where agent_id is not null\s+do update set read_at = excluded\.read_at, updated_at = now\(\)\s+where session_read_state\.read_at < excluded\.read_at/,
+  );
+});
+
+test("an agent's marker resolves to the newest message it did NOT author", () => {
+  // "Seen" for an agent is the latest inbound message, resolved server-side (the
+  // daemon feeds it the conversation out of band, so there is no client-supplied
+  // id). Excluding its own posts keeps it from marking its own replies as read.
+  assert.match(ADVANCE_AGENT_READ_MARKER_SQL, /from messages m\s+where m\.session_id = \$1::uuid/);
+  assert.match(ADVANCE_AGENT_READ_MARKER_SQL, /coalesce\(m\.sender_id::text, ''\) <> \$2::text/);
+  assert.match(ADVANCE_AGENT_READ_MARKER_SQL, /order by m\.created_at desc, m\.id desc\s+limit 1/);
+});
+
+test('the read projection unifies human and agent markers into reader_id + reader_kind', () => {
+  // The client resolves a name the same way for both, so the two reader columns
+  // collapse to one opaque id. The left join (not join) is what lets an agent row,
+  // which has no app_users match, survive the read.
+  assert.match(SESSION_READ_STATE_SQL, /coalesce\(r\.user_id, r\.agent_id\) as reader_id/);
+  assert.match(SESSION_READ_STATE_SQL, /when r\.agent_id is not null then 'agent' else 'human' end as reader_kind/);
+  assert.match(SESSION_READ_STATE_SQL, /r\.agent_id is not null or coalesce\(u\.share_read_receipts, true\)/);
 });
 
 // ---------------------------------------------------------------------------

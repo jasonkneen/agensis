@@ -882,11 +882,16 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // "Someone" — a raw uuid is useless to the reader and a small identifier leak
   // into any screenshot of it.
   const { members: workspaceMembers } = useWorkspaceUsers(workspaceId || null);
-  const resolveUserName = useCallback((userId: string) => {
-    const member = workspaceMembers.find(row => String(row.user_id) === String(userId));
-    if (!member) return null;
-    return member.email ? member.email.split('@')[0] : null;
-  }, [workspaceMembers]);
+  // A reader id is a human user id OR an agent id (read receipts now cover both),
+  // so resolve against members first, then the agent roster — an agent's eye
+  // needs its name in the tooltip exactly like a person's.
+  const resolveUserName = useCallback((readerId: string) => {
+    const member = workspaceMembers.find(row => String(row.user_id) === String(readerId));
+    if (member) return member.email ? member.email.split('@')[0] : null;
+    const agent = agents.find(row => String(row.id) === String(readerId));
+    if (agent) return agent.name || null;
+    return null;
+  }, [workspaceMembers, agents]);
 
   // The user's own reciprocal opt-out. The SERVER enforces both halves — an
   // opted-out marker is never stored, and the read returns nothing — so this is

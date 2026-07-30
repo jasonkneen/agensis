@@ -69,10 +69,38 @@ select $1::uuid, $2::uuid, m.created_at
  where m.id = $3::uuid
    and m.session_id = $1::uuid
    and coalesce(u.share_read_receipts, true)
-on conflict (session_id, user_id)
+on conflict (session_id, user_id) where user_id is not null
 do update set read_at = excluded.read_at, updated_at = now()
  where session_read_state.read_at < excluded.read_at
-returning session_id, user_id, read_at`;
+returning session_id, user_id, agent_id, read_at`;
+
+// Advance an AGENT's marker to the newest message in the session it did NOT
+// author. Agents are not in app_users, so their reader identity is agent_id
+// (references workspace_agents) and there is no share_read_receipts opt-out to
+// honour — an agent has no privacy interest of its own to protect, and "has this
+// agent seen it" is the whole point of the feature.
+//
+// It resolves the message server-side rather than trusting a client-supplied id:
+// the daemon feeds an agent its conversation out of band, so unlike the human
+// path there is no "newest message on screen" to send. "Read up to the latest
+// thing someone else said" is the truthful high-water mark for an agent turn.
+//
+// `coalesce(m.sender_id::text,'') <> $2::text` excludes the agent's own posts so
+// a chatty agent does not mark itself as having "read" its own replies — the one
+// clock stays anchored to inbound content.
+//
+// $1 session id, $2 agent id.
+const ADVANCE_AGENT_READ_MARKER_SQL = `insert into session_read_state (session_id, agent_id, read_at)
+select m.session_id, $2::uuid, m.created_at
+  from messages m
+ where m.session_id = $1::uuid
+   and coalesce(m.sender_id::text, '') <> $2::text
+ order by m.created_at desc, m.id desc
+ limit 1
+on conflict (session_id, agent_id) where agent_id is not null
+do update set read_at = excluded.read_at, updated_at = now()
+ where session_read_state.read_at < excluded.read_at
+returning session_id, user_id, agent_id, read_at`;
 
 // Every marker for one session, minus the people who have opted out.
 //
@@ -85,12 +113,24 @@ returning session_id, user_id, read_at`;
 // MOVED, which is a second and finer clock than the one this feature means to
 // disclose; it stays an operational column.
 //
+// A marker's reader is a human (user_id) OR an agent (agent_id); the projection
+// collapses the two columns into one opaque `reader_id` plus a `reader_kind` so
+// the client resolves a name the same way for both and never has to know which
+// column a row came from. `left join` (not `join`) because an agent row has no
+// app_users match; its opt-out clause is skipped since agents have no
+// share_read_receipts flag. The caller-reciprocity `exists (...)` still gates the
+// WHOLE result: a human who switched receipts off sees nobody's eye, human or
+// agent, which keeps the setting symmetric.
+//
 // $1 session id, $2 the calling user's id.
-const SESSION_READ_STATE_SQL = `select r.session_id, r.user_id, r.read_at
+const SESSION_READ_STATE_SQL = `select r.session_id,
+       coalesce(r.user_id, r.agent_id) as reader_id,
+       case when r.agent_id is not null then 'agent' else 'human' end as reader_kind,
+       r.read_at
   from session_read_state r
-  join app_users u on u.id = r.user_id
+  left join app_users u on u.id = r.user_id
  where r.session_id = $1::uuid
-   and coalesce(u.share_read_receipts, true)
+   and (r.agent_id is not null or coalesce(u.share_read_receipts, true))
    and exists (
      select 1 from app_users me
       where me.id = $2::uuid and coalesce(me.share_read_receipts, true)
@@ -102,14 +142,38 @@ const SESSION_READ_STATE_SQL = `select r.session_id, r.user_id, r.read_at
 // session", and that prefix is covered by the PK btree — so no second index is
 // created. The reverse direction (every session for one user) is not a query
 // this feature makes; do not add the index speculatively.
+//
+// A reader is EITHER a human (user_id -> app_users) or an agent (agent_id ->
+// workspace_agents), never both and never neither — the CHECK enforces exactly
+// one, and two PARTIAL unique indexes give each kind its own "one marker per
+// (session, reader)" guarantee. There is no plain PRIMARY KEY any more because a
+// PK column cannot be null and each reader column is null for the other kind.
+//
+// The ALTERs after the CREATE upgrade a table that still has the original
+// (session_id, user_id) PK in place: drop the not-null and the PK, add agent_id,
+// add the CHECK once, and build the partial indexes. All idempotent, so a fresh
+// boot and a live upgrade converge on the same shape.
 const SESSION_READ_STATE_DDL = `
     CREATE TABLE IF NOT EXISTS session_read_state (
       session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-      user_id uuid NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+      user_id uuid REFERENCES app_users(id) ON DELETE CASCADE,
+      agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
       read_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz DEFAULT now(),
-      PRIMARY KEY (session_id, user_id)
+      updated_at timestamptz DEFAULT now()
     );
+    ALTER TABLE session_read_state ADD COLUMN IF NOT EXISTS agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE;
+    ALTER TABLE session_read_state ALTER COLUMN user_id DROP NOT NULL;
+    ALTER TABLE session_read_state DROP CONSTRAINT IF EXISTS session_read_state_pkey;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'session_read_state_one_reader') THEN
+        ALTER TABLE session_read_state ADD CONSTRAINT session_read_state_one_reader
+          CHECK ((user_id IS NOT NULL) <> (agent_id IS NOT NULL));
+      END IF;
+    END $$;
+    CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_user_uidx
+      ON session_read_state (session_id, user_id) WHERE user_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_agent_uidx
+      ON session_read_state (session_id, agent_id) WHERE agent_id IS NOT NULL;
 `;
 
 // Reciprocal by design (see SESSION_READ_STATE_SQL). Defaults to true: receipts
@@ -119,16 +183,28 @@ const SHARE_READ_RECEIPTS_DDL = `
     ALTER TABLE app_users ADD COLUMN IF NOT EXISTS share_read_receipts boolean NOT NULL DEFAULT true;
 `;
 
+// Normalise a marker row to one wire shape regardless of which path produced it:
+// the /read-state SELECT already projects `reader_id`/`reader_kind`, while an
+// ADVANCE ... returning row carries the raw `user_id`/`agent_id` columns. Both
+// collapse to a single opaque reader id so the client treats a human and an agent
+// identically — it only ever needs "who, and what name".
 function toReadMarker(row) {
+ const readerId = row.reader_id != null ? row.reader_id
+  : row.user_id != null ? row.user_id
+  : row.agent_id;
+ const readerKind = row.reader_kind != null ? String(row.reader_kind)
+  : row.agent_id != null ? 'agent' : 'human';
  return {
   session_id: String(row.session_id),
-  user_id: String(row.user_id),
+  reader_id: String(readerId),
+  reader_kind: readerKind,
   read_at: row.read_at instanceof Date ? row.read_at.toISOString() : String(row.read_at),
  };
 }
 
 module.exports = {
  ADVANCE_READ_MARKER_SQL,
+ ADVANCE_AGENT_READ_MARKER_SQL,
  SESSION_READ_STATE_DDL,
  SESSION_READ_STATE_SQL,
  SHARE_READ_RECEIPTS_DDL,

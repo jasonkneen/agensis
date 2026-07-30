@@ -555,7 +555,7 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
  // entry here. `updated_at` is dropped: it records when a marker last MOVED,
  // which is a finer clock than "read up to this point" and is not a disclosure
  // this feature makes. It stays an operational column, readable only in psql.
- session_read_state: ['session_id', 'user_id', 'read_at'],
+ session_read_state: ['session_id', 'user_id', 'agent_id', 'read_at'],
 };
 
 /**

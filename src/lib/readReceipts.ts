@@ -36,7 +36,14 @@
 
 export interface SessionReadMarker {
   session_id: string;
-  user_id: string;
+  /**
+   * The reader — a human `app_users.id` OR an agent `workspace_agents.id`. One
+   * opaque id either way, so the client resolves a name the same for both and
+   * never has to branch on which kind of principal read the message.
+   */
+  reader_id: string;
+  /** 'human' | 'agent'. Present from the server; defaulted when absent. */
+  reader_kind?: string;
   /** ISO timestamp, resolved server-side from `messages.created_at`. */
   read_at: string;
 }
@@ -159,14 +166,18 @@ export function readersOf(
 ): string[] {
   const createdAt = message.created_at ? Date.parse(message.created_at) : NaN;
   if (!Number.isFinite(createdAt)) return [];
-  const authorId = message.sender_kind === 'agent' ? null : String(message.sender_id || '');
+  // The author's id — a user id for a human message, an agent id for an agent
+  // message. Reader ids share that namespace, so a single equality check excludes
+  // the author of EITHER kind: "you read your own message" is not information,
+  // and that now includes an agent not marking its own reply as seen.
+  const authorId = String(message.sender_id || '');
   const readers: string[] = [];
   for (const marker of markers) {
     const readAt = Date.parse(marker.read_at);
     if (!Number.isFinite(readAt) || readAt < createdAt) continue;
-    const userId = String(marker.user_id);
-    if (authorId && userId === authorId) continue;
-    if (!readers.includes(userId)) readers.push(userId);
+    const readerId = String(marker.reader_id);
+    if (authorId && readerId === authorId) continue;
+    if (!readers.includes(readerId)) readers.push(readerId);
   }
   return readers;
 }
