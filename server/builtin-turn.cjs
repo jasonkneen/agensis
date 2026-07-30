@@ -368,7 +368,7 @@ function createBuiltinTurn(deps = {}) {
    : { id: 'amp' };
  }
 
- async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [], isDirectMessage = false }) {
+ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [], isDirectMessage = false, broadcastToChannel: broadcastOverride = null }) {
   if (!isAgentEnabled(agent)) return { ok: false, pending: false };
   const handle = slugHandle(agent.handle || agent.name);
   const runMode = resolveRunTarget(agent);
@@ -382,8 +382,25 @@ function createBuiltinTurn(deps = {}) {
   // ACCEPTED TRADEOFF: while the agent works, the channel shows only the human's
   // message and its reply count. There is deliberately no channel-level
   // "working…" row.
+  // `threadParentId` alone cannot decide this, because it arrives meaning two
+  // opposite things:
+  //
+  //   a human typing in an open thread panel  -> "I am already looking at this
+  //     thread", so the reply belongs in the thread and broadcasting would
+  //     duplicate it into the channel. broadcast: false is right.
+  //
+  //   dispatchTaskAssignment / a comment @mention -> "I am OPENING a thread for
+  //     you"; nobody is looking at it, the human is on the task board. The reply
+  //     has to reach the conversation or it is written somewhere correct and
+  //     seen by no one.
+  //
+  // The second case took the first case's branch, so every task thread since the
+  // feature shipped answered into a thread the DM view cannot render: 22 task
+  // roots platform-wide, 0 that ever broadcast. Hence an explicit flag from the
+  // caller that knows which of the two it is, rather than re-deriving intent
+  // from a parameter that does not carry it.
   const workThread = threadParentId
-   ? { parentId: threadParentId, broadcast: false }
+   ? { parentId: threadParentId, broadcast: broadcastOverride === true }
    : await resolveWorkThreadParent(sessionId);
   const workThreadParentId = workThread.parentId;
   const broadcastToChannel = workThread.broadcast;

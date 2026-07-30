@@ -16,6 +16,19 @@ import type { Message as ChatMessage } from '../../types';
  * never reads as a top-level message that lost its context.
  */
 export function isChannelMessage(message: ChatMessage): boolean {
+  // A tool step is never channel content, whatever its parentage says.
+  //
+  // This is a second, independent guard rather than a tidy-up. The server tries
+  // to thread every step, but when the placeholder row is gone AND neither
+  // recorded parent verifies, agent-jobs.cjs writes the step with a null
+  // thread_parent_id — and a null parent is exactly what the first clause below
+  // treats as top-level. One live DM had 119 such rows: `Bash · grep -n …`,
+  // `Read · /Users/…`, context-free, 531 top-level rows against 332 threaded,
+  // which pushed the actual conversation off the 200-row page.
+  //
+  // Filtering on kind fixes every DM already in that state without a migration,
+  // and it holds even if a future writer forgets to thread a step.
+  if (message.message_kind === 'tool_step') return false;
   return !message.thread_parent_id || Boolean(message.broadcast_to_channel);
 }
 
