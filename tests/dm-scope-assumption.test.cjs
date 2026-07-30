@@ -65,7 +65,7 @@ function makeDb({ owners = {}, roles = {}, sessions = {}, visibility = {}, folde
   if (n.startsWith('select id from workspaces where id = $1')) {
    return params[0] ? [{ id: params[0] }] : [];
   }
-  if (n.startsWith('select workspace_id from chat_sessions where id = $1')) {
+  if (n.startsWith('select workspace_id') && n.includes('from chat_sessions')) {
    const ws = sessions[params[0]];
    return ws ? [{ workspace_id: ws }] : [];
   }

@@ -71,7 +71,7 @@ test.before(async () => {
               return { rows: String(params[1]) === USER ? [{ ok: 1 }] : [] };
             }
             if (q.startsWith('select role from workspace_members')) return { rows: [] };
-            if (q.startsWith('select workspace_id from chat_sessions where id')) {
+            if (q.startsWith('select workspace_id') && q.includes('from chat_sessions')) {
               return { rows: String(params[0]) === SESSION ? [{ workspace_id: WORKSPACE }] : [] };
             }
             if (q.startsWith('select id, workspace_id from chat_sessions where id')) {

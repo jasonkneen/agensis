@@ -160,7 +160,7 @@ function makeDb({ message, connections = [connectionRow()], failDeliveryInsert =
       }
       if (q.startsWith('select role from workspace_members')) return [];
       // enforceDbOperationAccess resolves the message's workspace via its session.
-      if (q.startsWith('select workspace_id from chat_sessions where id')) {
+      if (q.startsWith('select workspace_id') && q.includes('from chat_sessions')) {
         return String(params[0]) === SESSION ? [{ workspace_id: WORKSPACE }] : [];
       }
       // The event path re-resolves it (messages has no workspace_id column).
