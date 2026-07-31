@@ -279,9 +279,15 @@ function hasTag(event, name, expectedValue = null) {
  ));
 }
 
+function replaceControlCharacters(value) {
+ return Array.from(String(value || ''), character => {
+  const codePoint = character.codePointAt(0);
+  return codePoint != null && (codePoint < 32 || codePoint === 127) ? ' ' : character;
+ }).join('');
+}
+
 function normalizeRemoteText(value, maxChars, fallback = '') {
- const normalized = String(value || '')
-  .replace(/[\u0000-\u001f\u007f]/g, ' ')
+ const normalized = replaceControlCharacters(value)
   .replace(/[<>]/g, '')
   .replace(/\s+/g, ' ')
   .trim()

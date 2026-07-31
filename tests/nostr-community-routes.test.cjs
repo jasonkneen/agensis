@@ -22,15 +22,27 @@ test('Nostr community routes require auth and enforce workspace and session scop
   };
   const enforceSessionRead = async (userId, sessionId) => {
     checks.push({ kind: 'session', userId, sessionId });
+    if (sessionId === 'private-session') throw Object.assign(new Error('Forbidden'), { status: 403 });
   };
   const connection = { id: 'connection-1', workspace_id: 'workspace-1' };
+  const subscriptions = [
+    { bridgeId: 'bridge-public', channelId: 'c1', sessionId: 'session-1', enabled: true },
+    { bridgeId: 'bridge-private', channelId: 'c2', sessionId: 'private-session', enabled: true },
+  ];
   const nostrCommunities = {
     async previewInvite() { return { host: 'community.test', name: 'Community', supportedNips: [29, 42] }; },
     async connectCommunity(input) { calls.push(['connect', input]); return { connection, channels: [], alreadyConnected: false }; },
-    async listConnections(workspaceId) { calls.push(['list', workspaceId]); return [connection]; },
-    async connectionById() { return connection; },
-    async discoverChannels() { calls.push(['channels']); return []; },
+    async listConnections(workspaceId) { calls.push(['list', workspaceId]); return [{ ...connection, subscriptions }]; },
+    async connectionById(id) { return id === 'foreign' ? { ...connection, id, workspace_id: 'other-workspace' } : connection; },
+    async discoverChannels() {
+      calls.push(['channels']);
+      return [
+        { id: 'c1', name: 'Public', subscription: subscriptions[0] },
+        { id: 'c2', name: 'Private', subscription: subscriptions[1] },
+      ];
+    },
     async mapChannels(_id, mappings) { calls.push(['map', mappings]); return [{}]; },
+    async setChannelSubscription(_id, channelId, enabled) { calls.push(['subscribe', channelId, enabled]); return { channelId, enabled }; },
     async membersForSession(sessionId) { calls.push(['members', sessionId]); return []; },
     async disconnectCommunity() { calls.push(['disconnect']); return connection; },
   };
@@ -39,7 +51,7 @@ test('Nostr community routes require auth and enforce workspace and session scop
     jsonError: (res, status, error) => res.status(status).json({ error: { message: error.message } }),
     enforceWorkspaceRole,
     enforceSessionRead,
-    getDb: () => ({ unsafe: async () => [{ id: 'session-1', workspace_id: 'workspace-1' }] }),
+    getDb: () => ({ unsafe: async (_sql, params = []) => [{ id: params[0] || 'session-1', workspace_id: 'workspace-1' }] }),
     nostrCommunities,
   });
 
@@ -61,12 +73,30 @@ test('Nostr community routes require auth and enforce workspace and session scop
     assert.equal((await fetch(`${baseUrl}/backend/workspaces/workspace-1/nostr-communities`, {
       method: 'POST', headers: auth, body: JSON.stringify({ inviteUrl: 'https://community.test/invite/x' }),
     })).status, 201);
-    assert.equal((await fetch(`${baseUrl}/backend/workspaces/workspace-1/nostr-communities`, { headers: auth })).status, 200);
+    const listed = await fetch(`${baseUrl}/backend/workspaces/workspace-1/nostr-communities`, { headers: auth });
+    assert.equal(listed.status, 200);
+    assert.deepEqual((await listed.json()).data[0].subscriptions.map(value => value.sessionId), ['session-1']);
     assert.equal((await fetch(`${baseUrl}/backend/workspaces/other-workspace/nostr-communities`, { headers: auth })).status, 403);
-    assert.equal((await fetch(`${baseUrl}/backend/nostr-communities/connection-1/channels`, { headers: auth })).status, 200);
+    const channels = await fetch(`${baseUrl}/backend/nostr-communities/connection-1/channels`, { headers: auth });
+    assert.equal(channels.status, 200);
+    const channelData = (await channels.json()).data;
+    assert.equal(channelData[0].subscription.sessionId, 'session-1');
+    assert.equal(channelData[1].subscription, null, 'private local session ids are omitted from workspace-level channel discovery');
     assert.equal((await fetch(`${baseUrl}/backend/nostr-communities/connection-1/channels`, {
       method: 'POST', headers: auth, body: JSON.stringify({ mappings: [{ channelId: 'c1', sessionId: 'session-1' }] }),
     })).status, 201);
+    assert.equal((await fetch(`${baseUrl}/backend/nostr-communities/connection-1/channels/c1`, {
+      method: 'PATCH', headers: auth, body: JSON.stringify({ enabled: false }),
+    })).status, 200);
+    const subscribeCalls = () => calls.filter(value => value[0] === 'subscribe').length;
+    const beforeRefusals = subscribeCalls();
+    assert.equal((await fetch(`${baseUrl}/backend/nostr-communities/connection-1/channels/c1`, {
+      method: 'PATCH', headers: auth, body: JSON.stringify({ enabled: 'false' }),
+    })).status, 400);
+    assert.equal((await fetch(`${baseUrl}/backend/nostr-communities/foreign/channels/c1`, {
+      method: 'PATCH', headers: auth, body: JSON.stringify({ enabled: false }),
+    })).status, 403);
+    assert.equal(subscribeCalls(), beforeRefusals, 'invalid and cross-workspace PATCH requests never reach the manager');
     assert.equal((await fetch(`${baseUrl}/backend/sessions/session-1/nostr-members`, { headers: auth })).status, 200);
     assert.equal((await fetch(`${baseUrl}/backend/nostr-communities/connection-1`, { method: 'DELETE', headers: auth })).status, 200);
   });
@@ -76,6 +106,7 @@ test('Nostr community routes require auth and enforce workspace and session scop
   assert.ok(checks.some(value => value.kind === 'session' && value.sessionId === 'session-1'));
   assert.ok(calls.some(value => value[0] === 'connect'));
   assert.ok(calls.some(value => value[0] === 'map'));
+  assert.ok(calls.some(value => value[0] === 'subscribe' && value[1] === 'c1' && value[2] === false));
   assert.ok(calls.some(value => value[0] === 'disconnect'));
 });
 

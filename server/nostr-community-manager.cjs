@@ -51,6 +51,18 @@ function publicConnection(row) {
   lastOutboundAt: row.last_outbound_at || null,
   createdAt: row.created_at || null,
   updatedAt: row.updated_at || null,
+  subscriptions: [],
+ };
+}
+
+function publicSubscription(row) {
+ return {
+  bridgeId: String(row.id || ''),
+  channelId: String(row.external_id || ''),
+  sessionId: String(row.session_id || ''),
+  enabled: row.enabled === true,
+  status: String(row.status || (row.enabled === true ? 'connected' : 'disconnected')),
+  lastError: String(row.last_error || ''),
  };
 }
 
@@ -97,7 +109,24 @@ function createNostrCommunityManager(deps = {}) {
    'select * from nostr_community_connections where workspace_id = $1 order by created_at desc',
    [String(workspaceId)],
   );
-  return rows.map(publicConnection);
+  const subscriptions = await getDb().unsafe(
+   `select b.* from channel_bridges b
+      join nostr_community_connections c on c.id = b.nostr_connection_id
+     where c.workspace_id = $1 and b.provider = 'nostr'
+     order by b.created_at`,
+   [String(workspaceId)],
+  );
+  const byConnection = new Map();
+  for (const subscription of subscriptions) {
+   const key = String(subscription.nostr_connection_id || '');
+   const values = byConnection.get(key) || [];
+   values.push(publicSubscription(subscription));
+   byConnection.set(key, values);
+  }
+  return rows.map(row => ({
+   ...publicConnection(row),
+   subscriptions: byConnection.get(String(row.id)) || [],
+  }));
  }
 
  async function previewInvite(inviteUrl) {
@@ -237,23 +266,51 @@ function createNostrCommunityManager(deps = {}) {
   return secret.toLowerCase();
  }
 
- async function discoverChannels(connectionId) {
+ async function discoverChannels(connectionId, { allowLocalFallback = false } = {}) {
   const row = await connectionById(connectionId);
   if (!row) throw inputError('Nostr community connection not found', 404);
-  const secretKeyHex = await connectionSecret(row);
-  const rawEvents = await protocol.query({
-   httpUrl: row.relay_http_url,
-   secretKeyHex,
-   filters: [
-    { kinds: [39002], '#p': [row.member_pubkey], limit: 500 },
-    { kinds: [39000], limit: 500 },
-   ],
-  });
-  const events = verifiedNostrEvents(rawEvents, {
-   authors: [row.relay_pubkey],
-   kinds: [39000, 39002],
-  });
-  return extractNostrChannels(events);
+  const subscriptions = await getDb().unsafe(
+   `select b.*, s.title as session_title, s.description as session_description
+      from channel_bridges b
+      join chat_sessions s on s.id = b.session_id and s.deleted_at is null
+     where b.nostr_connection_id = $1 and b.provider = 'nostr'`,
+   [row.id],
+  );
+  const byChannel = new Map(subscriptions.map(value => [String(value.external_id), publicSubscription(value)]));
+  const localFallbacks = subscriptions.map(value => ({
+   id: String(value.external_id || ''),
+   name: String(value.session_title || value.external_id || 'Imported channel'),
+   description: String(value.session_description || ''),
+   type: String(value.config?.channelType || 'stream'),
+   visibility: 'public',
+   archived: false,
+   joined: true,
+   subscription: publicSubscription(value),
+  }));
+  try {
+   const secretKeyHex = await connectionSecret(row);
+   const rawEvents = await protocol.query({
+    httpUrl: row.relay_http_url,
+    secretKeyHex,
+    filters: [
+     { kinds: [39002], '#p': [row.member_pubkey], limit: 500 },
+     { kinds: [39000], limit: 500 },
+    ],
+   });
+   const events = verifiedNostrEvents(rawEvents, {
+    authors: [row.relay_pubkey],
+    kinds: [39000, 39002],
+   });
+   const remoteChannels = extractNostrChannels(events).map(channel => ({
+    ...channel,
+    subscription: byChannel.get(channel.id) || null,
+   }));
+   const remoteIds = new Set(remoteChannels.map(channel => channel.id));
+   return [...remoteChannels, ...localFallbacks.filter(channel => !remoteIds.has(channel.id))];
+  } catch (error) {
+   if (allowLocalFallback) return localFallbacks;
+   throw error;
+  }
  }
 
  async function refreshMembers(connectionId, channelId) {
@@ -358,6 +415,54 @@ function createNostrCommunityManager(deps = {}) {
   }
   await startConnection(row.id);
   return saved;
+ }
+
+ async function setChannelSubscription(connectionId, channelId, enabled) {
+  const row = await connectionById(connectionId);
+  if (!row) throw inputError('Nostr community connection not found', 404);
+  if (enabled === true && row.status === 'disconnected') {
+   throw inputError('Reconnect this Nostr community with an invite before enabling channels', 409);
+  }
+  if (enabled === true) {
+   const available = await discoverChannels(row.id);
+   const channel = available.find(value => value.id === String(channelId));
+   if (!channel) throw inputError('Nostr channel is no longer accessible', 404);
+   if (channel.archived) throw inputError(`Nostr channel is archived: ${channel.name}`);
+   if (channel.visibility === 'private') {
+    throw inputError(`Private Nostr channel ${channel.name} cannot be enabled until equivalent Agensis access is configured`);
+   }
+  }
+  const rows = await getDb().unsafe(
+   `update channel_bridges
+       set enabled = $3,
+           status = case when $3 then 'connected' else 'disconnected' end,
+           nostr_initial_sync_completed = case when $3 then nostr_initial_sync_completed else false end,
+           last_error = null, version = version + 1, updated_at = now()
+     where nostr_connection_id = $1 and external_id = $2 and provider = 'nostr'
+     returning *`,
+   [String(row.id), String(channelId), enabled === true],
+  );
+  if (!rows[0]) throw inputError('Imported Nostr channel not found', 404);
+  let finalRows = rows;
+  try {
+   await startConnection(row.id);
+  } catch (error) {
+   await setConnectionError(row.id, error);
+   if (enabled === true) {
+    finalRows = await getDb().unsafe(
+     `update channel_bridges
+         set enabled = false, status = 'error', last_error = $3,
+             nostr_initial_sync_completed = false, version = version + 1, updated_at = now()
+       where nostr_connection_id = $1 and external_id = $2 and provider = 'nostr'
+       returning *`,
+     [String(row.id), String(channelId), String(error?.message || error || 'Nostr subscription restart failed').slice(0, 500)],
+    );
+   }
+   notifyDbSubscribers('channel_bridges', 'UPDATE', finalRows);
+   throw error;
+  }
+  notifyDbSubscribers('channel_bridges', 'UPDATE', finalRows);
+  return publicSubscription(finalRows[0]);
  }
 
  async function membersForSession(sessionId) {
@@ -505,22 +610,26 @@ function createNostrCommunityManager(deps = {}) {
 
  async function startConnection(connectionId, inheritedRetries = 0) {
   const key = String(connectionId);
-  stopConnection(key);
   const row = await connectionById(key);
   if (!row || row.status === 'disconnected') return false;
   const mappings = await mappedBridges(key);
-  if (!mappings.length) return false;
+  if (!mappings.length) {
+   stopConnection(key);
+   return false;
+  }
   const secretKeyHex = await connectionSecret(row);
   const mappingByChannel = new Map(mappings.map(bridge => [String(bridge.external_id), bridge]));
+  // Construct the replacement before stopping the working socket. A malformed
+  // URL or synchronous WebSocket failure must not take every other subscribed
+  // channel offline while leaving their rows marked connected.
+  const socket = new WebSocketClass(row.relay_ws_url);
+  stopConnection(key);
   const runtime = {
-   socket: null, stopped: false, retries: inheritedRetries,
+   socket, stopped: false, retries: inheritedRetries,
    reconnectTimer: null, authTimer: null, authenticated: false,
    authEventId: '', subscriptions: new Map(), backfillBuffers: new Map(), ingestQueue: Promise.resolve(),
   };
   runtimes.set(key, runtime);
-
-  const socket = new WebSocketClass(row.relay_ws_url);
-  runtime.socket = socket;
   runtime.authTimer = setTimeout(() => {
    if (!runtime.authenticated) socket.close(4001, 'Nostr authentication timeout');
   }, AUTH_TIMEOUT_MS);
@@ -552,7 +661,7 @@ function createNostrCommunityManager(deps = {}) {
     clearTimeout(runtime.authTimer);
     const filters = [...mappingByChannel.entries()].map(([channelId, bridge]) => {
      const filter = { kinds: NOSTR_MESSAGE_KINDS, '#h': [channelId], limit: INITIAL_HISTORY_LIMIT };
-     if (bridge.nostr_initial_sync_completed && Number(bridge.nostr_last_event_at) > 0) {
+     if (Number(bridge.nostr_last_event_at) > 0) {
       filter.since = Math.max(0, Number(bridge.nostr_last_event_at) - 5);
      }
      return filter;
@@ -658,6 +767,7 @@ function createNostrCommunityManager(deps = {}) {
   discoverChannels,
   refreshMembers,
   mapChannels,
+  setChannelSubscription,
   membersForSession,
   send,
   startConnection,
@@ -678,5 +788,6 @@ module.exports = {
  nostrSecretKey,
  createNostrCommunityManager,
  publicConnection,
+ publicSubscription,
  publicMember,
 };

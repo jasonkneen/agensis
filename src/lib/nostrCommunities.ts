@@ -32,6 +32,16 @@ export interface NostrConnection {
   policyVersion: string;
   status: string;
   lastError: string;
+  subscriptions: NostrChannelSubscription[];
+}
+
+export interface NostrChannelSubscription {
+  bridgeId: string;
+  channelId: string;
+  sessionId: string;
+  enabled: boolean;
+  status: string;
+  lastError: string;
 }
 
 export interface NostrChannel {
@@ -42,6 +52,7 @@ export interface NostrChannel {
   visibility: 'public' | 'private';
   archived: boolean;
   joined: boolean;
+  subscription: NostrChannelSubscription | null;
 }
 
 export interface NostrMember {
@@ -103,6 +114,24 @@ export function mapNostrChannels(connectionId: string, mappings: Array<{ channel
     method: 'POST',
     body: JSON.stringify({ mappings }),
   });
+}
+
+export function listNostrCommunities(workspaceId: string, signal?: AbortSignal) {
+  return request<NostrConnection[]>(
+    `/backend/workspaces/${encodeURIComponent(workspaceId)}/nostr-communities`,
+    { signal },
+  );
+}
+
+export function getNostrChannels(connectionId: string, signal?: AbortSignal) {
+  return request<NostrChannel[]>(`/backend/nostr-communities/${encodeURIComponent(connectionId)}/channels`, { signal });
+}
+
+export function setNostrChannelSubscription(connectionId: string, channelId: string, enabled: boolean) {
+  return request<NostrChannelSubscription>(
+    `/backend/nostr-communities/${encodeURIComponent(connectionId)}/channels/${encodeURIComponent(channelId)}`,
+    { method: 'PATCH', body: JSON.stringify({ enabled }) },
+  );
 }
 
 export function getNostrMembers(sessionId: string, signal?: AbortSignal) {
