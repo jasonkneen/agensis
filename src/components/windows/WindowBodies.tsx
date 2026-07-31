@@ -95,6 +95,7 @@ export function ChatWindowBody({
   return (
     <ChatWindowContent
       {...contentProps}
+      sessionId={sessionId}
       onSendMessage={handleSendMessage}
       onSendThreadReply={handleSendThreadReply}
       onSplitThread={winSession ? handleSplitThread : undefined}

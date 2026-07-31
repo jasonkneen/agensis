@@ -209,6 +209,7 @@ import { shouldAnnounceTyping } from '../../lib/typingPresence';
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
 import { channelComposerPlaceholder, directMessageComposerPlaceholder } from '@/lib/composerPlaceholder';
 import { useComposerAutosize } from '@/hooks/useComposerAutosize';
+import { useNostrMembers } from '@/hooks/useNostrMembers';
 import type { SendOutcome } from '@/lib/writeFeedback';
 
 interface ChatWindowContentProps {
@@ -254,6 +255,7 @@ interface ChatWindowContentProps {
   readOnly?: boolean;
   channelTitle?: string;
   workspaceId?: string | null;
+  sessionId?: string | null;
   uploadedFiles?: UploadedFile[];
   onUploadFiles?: (files: File[]) => Promise<UploadedFile[]>;
   onCreateTask?: (input: CreateTaskInput) => void | Promise<unknown>;
@@ -353,6 +355,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   readOnly = false,
   channelTitle = 'general',
   workspaceId = null,
+  sessionId: explicitSessionId = null,
   uploadedFiles = [],
   onUploadFiles,
   onCreateTask,
@@ -678,6 +681,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   };
 
   const handleAgentSelect = (agent: WorkspaceAgent) => insertMentionHandle(agentHandle(agent));
+  const handleNostrMemberSelect = (member: { handle: string }) => insertMentionHandle(member.handle);
 
   const handleDocSelect = (doc: Document) => {
     if (!linkedDocs.find(d => d.id === doc.id)) {
@@ -736,6 +740,11 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
         if (filteredAgents.length > 0) {
           e.preventDefault();
           handleAgentSelect(filteredAgents[0]);
+          return;
+        }
+        if (filteredNostrMembers.length > 0) {
+          e.preventDefault();
+          handleNostrMemberSelect(filteredNostrMembers[0]);
           return;
         }
         if (showChannelMentionOption && docPickerQuery.trim()) {
@@ -857,6 +866,17 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     threadMessages[0]?.session_id ||
     null
   ), [messages, threadMessages, topLevelMessages]);
+  const nostrMembers = useNostrMembers(explicitSessionId || inferredSessionId);
+  const filteredNostrMembers = useMemo(() => {
+    const q = docPickerQuery.trim().toLowerCase();
+    return nostrMembers
+      .filter(member => member.isAgent && (
+        member.name.toLowerCase().includes(q)
+        || member.handle.toLowerCase().includes(q)
+        || member.aliases.some(alias => alias.toLowerCase().includes(q))
+      ))
+      .slice(0, 12);
+  }, [nostrMembers, docPickerQuery]);
 
   // --- Reactions and read receipts ------------------------------------------
   //
@@ -2326,6 +2346,31 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                                 </span>
                               </span>
                               <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">@{agentHandle(agent)}</span>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      )}
+                      {filteredNostrMembers.length > 0 && (
+                        <CommandGroup heading="Nostr agents">
+                          {filteredNostrMembers.map(member => (
+                            <CommandItem
+                              key={member.pubkey}
+                              value={`${member.name} ${member.handle} Nostr`}
+                              className="rounded-lg px-2 py-2.5"
+                              onSelect={() => handleNostrMemberSelect(member)}
+                            >
+                              <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                                <Globe className="size-4" />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate font-medium">{member.name}</span>
+                                <span className="block truncate text-xs text-muted-foreground">
+                                  Nostr agent in this mirrored channel
+                                </span>
+                              </span>
+                              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                @{member.handle}
+                              </span>
                             </CommandItem>
                           ))}
                         </CommandGroup>

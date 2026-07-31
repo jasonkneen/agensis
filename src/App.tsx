@@ -3736,6 +3736,7 @@ function ReadOnlyChatWindowContent({
 
   return (
     <ChatWindowContent
+      sessionId={sessionId}
       messages={remoteMessages}
       streaming={false}
       memoryFacts={memoryFacts}
@@ -3841,6 +3842,7 @@ function InactiveChatWindow({
 
   return (
     <ChatWindowContent
+      sessionId={session.id}
       messages={messages as never[]}
       topLevelMessages={topLevelMessages}
       threadReplyCounts={threadReplyCounts}
