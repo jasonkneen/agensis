@@ -76,7 +76,19 @@ function createRealtime(deps = {}) {
  // Owned here, not injected — see the header. reset() below is what
  // resetTestState() calls.
  let websocketClients = new Set();
- const SESSION_AUDIENCE_TABLES = new Set(['agent_permission_requests', 'huddles', 'huddle_events']);
+ const SESSION_AUDIENCE_TABLES = new Set([
+  'agent_permission_requests',
+  'huddles',
+  'huddle_events',
+  'thread_items',
+  'agent_jobs',
+  'agent_schedules',
+ ]);
+ // Only old permission requests deliberately support no session: they predate
+ // the session_id column and remain workspace-visible. Every other table above
+ // is session-derived by definition, so a missing association is not "public";
+ // it is unprovable and leaves through no fanout lane.
+ const WORKSPACE_VISIBLE_WITHOUT_SESSION = new Set(['agent_permission_requests']);
 
  // Heartbeat cadence for agent sockets. An ungraceful drop (laptop sleep, network
  // loss) leaves ws.readyState === 1 until a ping goes unanswered, so detection
@@ -371,7 +383,9 @@ function createRealtime(deps = {}) {
   }
 
   // A PRIVATE chat_sessions row, or a workspace-scoped row derived from a
-  // session, cannot ride the synchronous lane.
+  // session, cannot ride the synchronous lane. That includes the thread rail,
+  // live job badges and scheduled prompts: all three subscribe workspace-wide
+  // in at least one client surface.
   //
   // Subscribing is gated (authorizeRealtimeBinding -> enforceDbOperationAccess),
   // but a `chat_sessions` subscription filtered on workspace_id is legitimate —
@@ -386,11 +400,14 @@ function createRealtime(deps = {}) {
   // and holds no handle (see emitAgentStatus above for the same constraint), so
   // these rows leave through an async lane instead.
   const privateRows = table === 'chat_sessions' ? rowList.filter(isPrivateSessionRow) : [];
-  const sessionAudienceRows = SESSION_AUDIENCE_TABLES.has(table)
+  const hasSessionAudience = SESSION_AUDIENCE_TABLES.has(table);
+  const sessionAudienceRows = hasSessionAudience
    ? rowList.filter((row) => row?.session_id)
    : [];
-  const openRows = sessionAudienceRows.length > 0
-   ? rowList.filter((row) => !row?.session_id)
+  const openRows = hasSessionAudience
+   ? (WORKSPACE_VISIBLE_WITHOUT_SESSION.has(table)
+      ? rowList.filter((row) => !row?.session_id)
+      : [])
    : privateRows.length > 0
      ? rowList.filter((row) => !isPrivateSessionRow(row))
      : rowList;
@@ -465,9 +482,9 @@ function createRealtime(deps = {}) {
 
  /**
   * Fan workspace-scoped, session-derived rows according to the source
-  * conversation. Huddles, their event log and permission requests all subscribe
-  * by workspace; that broad binding must not turn a DM-derived row into
-  * workspace data.
+  * conversation. Huddles, their event log, permission requests, thread items,
+  * agent jobs and schedules all have workspace-wide bindings; that broad
+  * binding must not turn a DM-derived row into workspace data.
   *
   * Audience resolution is one query pair per row, never per socket. Unknown
   * sessions and lookup failures send nothing. Open-session rows retain the

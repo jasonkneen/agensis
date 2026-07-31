@@ -375,6 +375,25 @@ test('appendSessionAccessClause constrains every workspace-wide session-bearing 
   assert.deepEqual(scoped.params, ['w1', OWNER]);
  }
 
+ for (const table of ['thread_items', 'agent_jobs', 'agent_schedules']) {
+  const scoped = core.appendSessionAccessClause(
+   { clause: ` WHERE "${table}"."workspace_id" = $1`, params: ['w1'] },
+   OWNER,
+   table,
+  );
+  assert.match(
+   scoped.clause,
+   new RegExp(`cs\\.id = "${table}"\\."session_id"`),
+   `${table} must inherit its source conversation on a workspace-wide list`,
+  );
+  assert.doesNotMatch(
+   scoped.clause,
+   new RegExp(`"${table}"\\."session_id" IS NULL OR EXISTS`),
+   `${table} has no workspace-visible legacy/null row class`,
+  );
+  assert.deepEqual(scoped.params, ['w1', OWNER]);
+ }
+
  // Untouched tables must come back byte-identical, or this helper would start
  // silently filtering things that have nothing to do with sessions.
  const other = { clause: ' WHERE x = $1', params: ['v'] };

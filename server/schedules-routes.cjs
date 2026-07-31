@@ -19,7 +19,7 @@
 function mountSchedulesRoutes(app, deps = {}) {
  const {
   requireAuth, jsonError, enforceWorkspaceRole, getDb, notifyDbSubscribers,
-  runDueSchedules,
+  enforceSessionRead, sessionReadableSql, runDueSchedules,
  } = deps;
 
  app.get('/backend/workspaces/:id/schedules', requireAuth, async (req, res) => {
@@ -28,8 +28,13 @@ function mountSchedulesRoutes(app, deps = {}) {
    if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'read');
    const rows = await getDb().unsafe(
-    `select * from agent_schedules where workspace_id = $1 order by created_at desc`,
-    [workspaceId],
+    `select s.*
+       from agent_schedules s
+       join chat_sessions cs on cs.id = s.session_id
+      where s.workspace_id = $1
+        and ${sessionReadableSql('cs', '$2')}
+      order by s.created_at desc`,
+    [workspaceId, req.userId],
    );
    res.json({ data: rows, error: null });
   } catch (error) {
@@ -66,6 +71,7 @@ function mountSchedulesRoutes(app, deps = {}) {
            where m.session_id = s.id and m.deleted_at is null
              and m.sender_kind = 'user' and m.sender_id = $2
         )
+        and ${sessionReadableSql('s', '$2')}
       order by last_activity desc nulls last
       limit $3`,
     [workspaceId, String(req.userId), limit],
@@ -79,9 +85,13 @@ function mountSchedulesRoutes(app, deps = {}) {
  app.get('/backend/schedules/:id/runs', requireAuth, async (req, res) => {
   try {
    const scheduleId = String(req.params.id || '').trim();
-   const scheduleRows = await getDb().unsafe('select workspace_id from agent_schedules where id = $1 limit 1', [scheduleId]);
+   const scheduleRows = await getDb().unsafe(
+    'select workspace_id, session_id from agent_schedules where id = $1 limit 1',
+    [scheduleId],
+   );
    if (!scheduleRows[0]) return res.json({ data: [], error: null });
    await enforceWorkspaceRole(req.userId, scheduleRows[0].workspace_id, 'read');
+   await enforceSessionRead(req.userId, scheduleRows[0].session_id);
    const rows = await getDb().unsafe(
     `select * from agent_schedule_runs where schedule_id = $1 order by created_at desc limit 50`,
     [scheduleId],
@@ -101,8 +111,13 @@ function mountSchedulesRoutes(app, deps = {}) {
    if (!agentId || !sessionId) return jsonError(res, 400, new Error('agentId and sessionId are required'));
    const agentOk = await getDb().unsafe('select 1 from workspace_agents where id = $1 and workspace_id = $2 limit 1', [agentId, workspaceId]);
    if (!agentOk[0]) return jsonError(res, 404, new Error('Agent not found in this workspace'));
-   const sessionOk = await getDb().unsafe('select 1 from chat_sessions where id = $1 and workspace_id = $2 limit 1', [sessionId, workspaceId]);
-   if (!sessionOk[0]) return jsonError(res, 404, new Error('Session not found in this workspace'));
+   const sessionRows = await getDb().unsafe(
+    `select id, workspace_id, visibility, folder
+       from chat_sessions where id = $1 and workspace_id = $2 limit 1`,
+    [sessionId, workspaceId],
+   );
+   if (!sessionRows[0]) return jsonError(res, 404, new Error('Session not found in this workspace'));
+   await enforceSessionRead(req.userId, sessionId, sessionRows[0]);
    const interval = Math.min(2592000, Math.max(60, Number(intervalSeconds) || 86400));
    const rows = await getDb().unsafe(
     `insert into agent_schedules
@@ -125,6 +140,7 @@ function mountSchedulesRoutes(app, deps = {}) {
    const schedule = scheduleRows[0];
    if (!schedule) return jsonError(res, 404, new Error('Schedule not found'));
    await enforceWorkspaceRole(req.userId, schedule.workspace_id, 'run_agents');
+   await enforceSessionRead(req.userId, schedule.session_id);
    const { name, prompt, intervalSeconds, enabled } = req.body || {};
    const nextName = name === undefined ? schedule.name : String(name).slice(0, 200);
    const nextPrompt = prompt === undefined ? schedule.prompt : String(prompt).slice(0, 4000);
@@ -147,9 +163,13 @@ function mountSchedulesRoutes(app, deps = {}) {
  app.delete('/backend/schedules/:id', requireAuth, async (req, res) => {
   try {
    const scheduleId = String(req.params.id || '').trim();
-   const scheduleRows = await getDb().unsafe('select workspace_id from agent_schedules where id = $1 limit 1', [scheduleId]);
+   const scheduleRows = await getDb().unsafe(
+    'select workspace_id, session_id from agent_schedules where id = $1 limit 1',
+    [scheduleId],
+   );
    if (!scheduleRows[0]) return res.json({ data: { id: scheduleId }, error: null });
    await enforceWorkspaceRole(req.userId, scheduleRows[0].workspace_id, 'run_agents');
+   await enforceSessionRead(req.userId, scheduleRows[0].session_id);
    const rows = await getDb().unsafe('delete from agent_schedules where id = $1 returning *', [scheduleId]);
    notifyDbSubscribers('agent_schedules', 'DELETE', rows);
    res.json({ data: { id: scheduleId }, error: null });
@@ -165,6 +185,7 @@ function mountSchedulesRoutes(app, deps = {}) {
    const schedule = scheduleRows[0];
    if (!schedule) return jsonError(res, 404, new Error('Schedule not found'));
    await enforceWorkspaceRole(req.userId, schedule.workspace_id, 'run_agents');
+   await enforceSessionRead(req.userId, schedule.session_id);
    const rows = await getDb().unsafe(
     `update agent_schedules set next_run_at = now(), enabled = true, updated_at = now() where id = $1 returning *`,
     [scheduleId],

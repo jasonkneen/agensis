@@ -126,7 +126,7 @@ const ALLOWED_TABLES = new Set([
  // src/hooks/useSchedules.ts has subscribed to agent_schedules since the day it
  // was written. Without this line that subscription is refused and the error
  // frame is dropped by backendClient, so the schedules list never went live.
- // Every WRITE is gated to 'manage' below and goes through
+ // Every WRITE is explicitly refused below and goes through
  // /backend/workspaces/:id/schedules — the only place agent_id and session_id are
  // checked to belong to this workspace and the interval is clamped. A schedule is
  // a standing "run this agent on a timer" grant, so a forged row is strictly
@@ -321,8 +321,8 @@ const DB_TABLE_ACCESS = {
  // read/write mapping (L1, 2026-07 review).
  agent_registrations: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  // Writes go through dedicated /backend/.../schedules endpoints (workspace/session
- // validation + interval clamps). Generic /db writes are gated to 'manage' so the
- // run_agents path can't bypass that validation; runs are written by the runner only.
+ // validation + interval clamps). Generic /db writes are refused explicitly below;
+ // these declarations remain defense in depth. Runs are written by the runner only.
  agent_schedules: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_schedule_runs: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  // SELECT is 'read' to MATCH the dedicated route: GET /backend/workspaces/:id/
@@ -524,6 +524,15 @@ function setsManageOnlyDbColumn(table, values) {
 // (M7, 2026-07 review).
 const SELECTABLE_COLUMNS_BY_TABLE = {
  app_users: ['id', 'email', 'display_name', 'accent_color', 'created_at'],
+ // A job's prompt is the assembled daemon payload (conversation, system prompt,
+ // documents and agent context) and `response` is the full streamed answer.
+ // The browser's workspace feed needs neither: it renders only liveness badges.
+ // Keep the generic path at that exact metadata shape; transcripts remain the
+ // source for human-readable content.
+ agent_jobs: [
+  'id', 'workspace_id', 'session_id', 'agent_id', 'status',
+  'started_at', 'created_at', 'metadata',
+ ],
  // gateway_configs became selectable so its realtime subscription could work at
  // all (authorizeRealtimeBinding authorizes a db_changes binding as a SELECT), and
  // `columns: '*'` would otherwise hand back api_key_cipher — the encrypted
@@ -1034,6 +1043,22 @@ async function enforceSessionReadAccess({ userId, sessionId, sessionRow = null, 
  throw forbidden('This conversation is private');
 }
 
+// Session-derived rows need a stricter variant than the ordinary transcript
+// gate. A missing transcript id naturally returns 404 from a transcript route,
+// but a child row with no provable parent must never be treated as workspace
+// data. Resolve the canonical row first, then reuse enforceSessionReadAccess so
+// the private predicate still has exactly one spelling.
+async function enforceKnownSessionReadAccess({ userId, sessionId, db }) {
+ if (!sessionId) throw forbidden('This conversation is unavailable');
+ const rows = await db(
+  'select id, visibility, folder from chat_sessions where id = $1 limit 1',
+  [sessionId],
+ );
+ const sessionRow = rows[0] || null;
+ if (!sessionRow) throw forbidden('This conversation is unavailable');
+ return enforceSessionReadAccess({ userId, sessionId, sessionRow, db });
+}
+
 /**
  * Record `userId` as an intrinsic participant of a session.
  *
@@ -1179,6 +1204,46 @@ const UPDATE_PARENT_REF_LOOKUPS = {
  group_id: 'select workspace_id from canvas_groups where id = $1 limit 1',
 };
 
+// The browser legitimately writes thread rail items through the generic DB
+// route. Unlike an INSERT, UPDATE/DELETE normally names only the item id, so the
+// session boundary has to be resolved from the stored row before the write.
+// Requiring a single session_id or id is intentional: a workspace-wide bulk
+// mutation cannot prove one private-session audience and therefore fails closed.
+async function filteredSessionId(table, filters, db) {
+ const direct = findFilterValue(filters, 'session_id');
+ if (direct) return direct;
+ const id = findFilterValue(filters, 'id');
+ if (!id) return null;
+ const rows = await db(
+  `select session_id from ${quoteIdent(table)} where id = $1 limit 1`,
+  [id],
+ );
+ return rows[0]?.session_id || null;
+}
+
+async function enforceThreadItemSessionMutation({ userId, op, filters, values, db }) {
+ if (op === 'insert') {
+  for (const row of operationRows(values)) {
+   await enforceKnownSessionReadAccess({ userId, sessionId: row?.session_id, db });
+  }
+  return;
+ }
+
+ const sourceSessionId = await filteredSessionId('thread_items', filters, db);
+ if (!sourceSessionId) throw badRequest('A thread item session or id filter is required');
+ await enforceKnownSessionReadAccess({ userId, sessionId: sourceSessionId, db });
+
+ // A move crosses two boundaries. Passing the source check must not let a user
+ // move the row into a private conversation they cannot read (or use that move
+ // to learn whether the target exists).
+ if (op === 'update'
+  && values && typeof values === 'object' && !Array.isArray(values)
+  && Object.prototype.hasOwnProperty.call(values, 'session_id')
+  && String(values.session_id || '') !== String(sourceSessionId)) {
+  await enforceKnownSessionReadAccess({ userId, sessionId: values.session_id, db });
+ }
+}
+
 // H1 (2026-07 review): reject an UPDATE whose `values` would move/inject the row
 // into a workspace other than the one it currently belongs to. Authorizing the
 // source workspace alone is not enough — the SET clause could carry
@@ -1293,6 +1358,17 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
  if ((table === 'huddles' || table === 'huddle_events') && op !== 'select') {
   throw forbidden('Huddles can only be changed through the dedicated huddle routes');
  }
+ // Job state is server/daemon-authored. Schedules are validated and triggered
+ // only by their dedicated routes, and run rows are runner-authored history.
+ // None has a legitimate browser generic-write caller; leaving one open would
+ // let a workspace role forge execution state before session privacy is even
+ // considered.
+ if (table === 'agent_jobs' && op !== 'select') {
+  throw forbidden('Agent jobs can only be changed by the agent runtime');
+ }
+ if ((table === 'agent_schedules' || table === 'agent_schedule_runs') && op !== 'select') {
+  throw forbidden('Schedules can only be changed through the dedicated schedule routes');
+ }
 
  if (!WORKSPACE_SCOPED_TABLES.has(table) && table !== 'messages') return;
 
@@ -1310,6 +1386,11 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
    await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: 'manage', db });
   }
   await assertUpdateKeepsTenancy({ sourceWorkspaceId: resolved.workspaceId, values, db });
+  if (table === 'thread_items') {
+   await enforceThreadItemSessionMutation({
+    userId, op, filters: flt, values, db,
+   });
+  }
   return;
  }
 
@@ -1327,6 +1408,11 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   // (document_id/task_id/session_id/group_id) even when workspace_id is legit —
   // reuse the UPDATE tenancy guard so the parent must live in this workspace.
   await assertUpdateKeepsTenancy({ sourceWorkspaceId: resolved.workspaceId, values: row, db });
+  if (table === 'thread_items') {
+   await enforceThreadItemSessionMutation({
+    userId, op, filters: flt, values: row, db,
+   });
+  }
  }
 
  if (operationRows(values).length === 0) {
@@ -1334,9 +1420,10 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
   await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
 
-  // The session gate, layered UNDER the workspace one. Only for `select`: this
-  // is a READ-scope feature, and quietly extending it to delete would change
-  // write behaviour nobody asked to change.
+  // The session gate, layered UNDER the workspace one. All session-bearing
+  // SELECTs pass it; thread_items DELETE also resolves its stored parent here
+  // because that is a legitimate generic browser write. Other session-derived
+  // server-owned tables refuse generic writes above.
   //
   // This is also what closes REALTIME, at no extra cost — realtime subscribe
   // authorizes a binding by calling this same function with op 'select'
@@ -1350,7 +1437,18 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
    const sessionId = table === 'chat_sessions'
     ? findFilterValue(flt, 'id')
     : findFilterValue(flt, 'session_id');
-   if (sessionId) await enforceSessionReadAccess({ userId, sessionId, db });
+   if (sessionId) {
+    if (['thread_items', 'agent_jobs', 'agent_schedules'].includes(table)) {
+     await enforceKnownSessionReadAccess({ userId, sessionId, db });
+    } else {
+     await enforceSessionReadAccess({ userId, sessionId, db });
+    }
+   }
+  }
+  if (table === 'thread_items' && op === 'delete') {
+   await enforceThreadItemSessionMutation({
+    userId, op, filters: flt, values, db,
+   });
   }
  }
 }
@@ -1374,6 +1472,9 @@ function appendSessionAccessClause(where, userId, table) {
   'agent_permission_requests',
   'huddles',
   'huddle_events',
+  'thread_items',
+  'agent_jobs',
+  'agent_schedules',
  ].includes(table)) return where;
  const params = where.params || [];
  params.push(userId);

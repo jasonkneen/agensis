@@ -3949,17 +3949,21 @@ function buildInboxSql(perCategory) {
  // Three of the branches below reach into a session: blockers join one, the
  // mention branch carries a message's CONTENT, and a failed agent job names the
  // session it failed in. An inbox is the easiest place to forget this, because
- // none of these branches selects from `messages`. A NULL/absent session id
- // means "not session-scoped" and stays visible.
+ // none of these branches selects from `messages`. Activity events predate
+ // session attribution and deliberately retain their legacy workspace-visible
+ // rows. An agent job is different: it is conversation work when it reaches
+ // this human inbox, so no provable session means no row.
  //
  // Joined on ::text rather than casting the metadata value to uuid: that column
  // is free-form jsonb and a non-uuid string in it would turn a bad row into a
  // query-wide 500 instead of one hidden item.
  const sessionVisible = (expr, alias) =>
-  `(${expr} is null or ${expr} = '' or exists (
+  `(${expr} is not null and ${expr} <> '' and exists (
       select 1 from chat_sessions ${alias}
        where ${alias}.id::text = ${expr} and ${sessionReadableSql(alias, '$2')}
     ))`;
+ const sessionVisibleOrUnscoped = (expr, alias) =>
+  `(${expr} is null or ${expr} = '' or ${sessionVisible(expr, alias)})`;
  return `
     with items as (
       (
@@ -4065,7 +4069,7 @@ function buildInboxSql(perCategory) {
            and $3::text <> ''
            and coalesce(ae.metadata->>'content', '') ~* $3::text
            and (ae.user_id is null or ae.user_id <> $2::uuid)
-           and ${sessionVisible(`nullif(ae.metadata->>'session_id', '')`, 'cs_ae')}
+           and ${sessionVisibleOrUnscoped(`nullif(ae.metadata->>'session_id', '')`, 'cs_ae')}
          order by ae.created_at desc
          limit ${cap}
       )
@@ -6040,10 +6044,20 @@ async function runDueSchedules() {
     if (!agent) throw new Error('scheduled agent no longer exists');
     if (!isAgentEnabled(agent)) throw new Error('scheduled agent is deactivated');
     if (!schedule.session_id) throw new Error('schedule has no target session');
-    const sessionRows = await db.unsafe('select id, workspace_id from chat_sessions where id = $1 limit 1', [schedule.session_id]);
-    if (!sessionRows[0] || String(sessionRows[0].workspace_id) !== String(schedule.workspace_id)) {
+    if (!schedule.created_by) throw new Error('schedule has no author');
+    // A schedule is standing authority, not a snapshot of authority at create
+    // time. Role or DM-membership revocation must stop the next run; otherwise a
+    // removed user can keep posting a private prompt forever through the timer.
+    await enforceWorkspaceRole(schedule.created_by, schedule.workspace_id, 'run_agents');
+    const sessionRows = await db.unsafe(
+     'select id, workspace_id, visibility, folder from chat_sessions where id = $1 limit 1',
+     [schedule.session_id],
+    );
+    const session = sessionRows[0] || null;
+    if (!session || String(session.workspace_id) !== String(schedule.workspace_id)) {
      throw new Error('scheduled session no longer exists');
     }
+    await enforceSessionRead(schedule.created_by, schedule.session_id, session);
     const handle = slugHandle(agent.handle || agent.name);
     const promptBody = String(schedule.prompt || '').trim() || 'Run your scheduled task.';
     // Address the agent explicitly so mention-mode channels still dispatch.
@@ -8812,6 +8826,7 @@ module.exports = {
   BOOTSTRAP_LIMITS,
   ensureCursorBuddyAgentForKey,
   runAgentTurn,
+  runDueSchedules,
   resolveWorkThreadParent,
   loadChannelMessages,
   sanitizeRealtimeRow,
