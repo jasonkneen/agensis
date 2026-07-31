@@ -21,7 +21,6 @@ import {
   Link2,
   Loader2,
   MessageSquare,
-  Mic,
   Monitor,
   MoreHorizontal,
   Settings2,
@@ -2497,9 +2496,6 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           />
                         </PopoverContent>
                       </Popover>
-                      <InputGroupButton size="icon-xs" aria-label="Voice input">
-                        <Mic />
-                      </InputGroupButton>
                     </div>
 
                     <div className="flex min-w-0 items-center gap-1">

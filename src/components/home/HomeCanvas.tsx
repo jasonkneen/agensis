@@ -1,6 +1,6 @@
 import { DEFAULT_BACKGROUND_OPACITY } from '../../lib/wallpaperDefaults';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Clock, FileText, Mic, Plus, Send, Sparkles, X } from 'lucide-react';
+import { Bot, Clock, FileText, Send, Sparkles, X } from 'lucide-react';
 import type { Document, MemoryFact, WorkspaceAgent } from '../../types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -374,15 +374,7 @@ export function HomeCanvas({
               rows={2}
               className="max-h-36 min-h-[4.5rem] px-4 py-3 text-sm leading-relaxed placeholder:text-muted-foreground/85"
             />
-            <InputGroupAddon align="block-end" className="min-h-9 justify-between gap-2 border-t px-2 py-1.5">
-              <div className="flex shrink-0 items-center gap-1">
-                <InputGroupButton title="Attach" size="icon-sm">
-                  <Plus className="size-4" />
-                </InputGroupButton>
-                <InputGroupButton title="Voice" size="icon-sm">
-                  <Mic className="size-4" />
-                </InputGroupButton>
-              </div>
+            <InputGroupAddon align="block-end" className="min-h-9 justify-end gap-2 border-t px-2 py-1.5">
               <InputGroupButton
                 onClick={handleSend}
                 disabled={!canSend || sending}

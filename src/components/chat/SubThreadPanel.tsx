@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Bot, MessageSquare, Mic, Plus, Send, User, X } from 'lucide-react';
+import { Bot, MessageSquare, Plus, Send, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolStepGroup } from './ToolStepGroup';
@@ -434,9 +434,6 @@ export function SubThreadPanel({
                     />
                   </PopoverContent>
                 </Popover>
-                <InputGroupButton size="icon-xs" aria-label="Voice input">
-                  <Mic />
-                </InputGroupButton>
               </div>
               <div className="flex items-center gap-1">
                 <Button
@@ -568,4 +565,3 @@ function safeText(value: unknown): string {
   }
   return String(value);
 }
-
