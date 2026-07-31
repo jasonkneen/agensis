@@ -122,21 +122,30 @@ on it:
   the synchronous fanout and sends them down an async lane that can consult
   membership. Without that split, opening a DM would push its title and roster to
   every socket in the workspace.
+- **`agent_permission_requests` is independently session-scoped.** Requests
+  attached to a session leave synchronous workspace fanout and use a live
+  session-audience lookup before INSERT or UPDATE delivery. Unknown sessions and
+  lookup failures fail closed. Public-session requests and legacy rows with no
+  session remain workspace-visible.
+- **`huddles` and `huddle_events` are scoped through the host session.** Huddle
+  rows resolve `session_id`; event rows resolve `huddle_id -> session_id`. Both
+  leave synchronous workspace fanout and use the same fail-closed live audience
+  lookup. The generic database path is read-only for these tables and applies
+  the corresponding session predicate to workspace-wide reads.
 - **`messages` is covered by a different argument**, not by that split. An
   unfiltered `messages` subscription cannot be established at all, so a message
   only ever reaches a socket that named its session.
-- **Every other allowlisted table is covered by neither.** The private-session
-  split is keyed on the table name being `chat_sessions`. A table that is
+- **Every other allowlisted table is covered by none of those lanes.** A table that is
   subscribable on a `workspace_id` filter and that can hold DM-derived rows —
-  `huddles` carries a DM roster; `thread_items` hangs off a thread that may be a
-  DM sub-thread — fans those rows to every socket in the workspace that holds
-  `read`. The REST projection for those tables is not the control here, because
-  the fanout does not go through it.
+  `thread_items`, for example, hangs off a thread that may be a DM sub-thread —
+  fans those rows to every socket in the workspace that holds `read`. The REST
+  projection for those tables is not the control here, because the fanout does
+  not go through it.
 
-**So the session granularity is enforced on the REST/MCP side and only partially
-on the realtime side.** If you are adding a table that can carry content derived
-from a private session, do not assume the realtime lane will scope it — it will
-not, and workspace role is all that stands in front of it. Raise it rather than
+**So the session granularity is enforced broadly on the REST/MCP side but only
+for the five named table shapes above.** If you are adding a table that can carry
+content derived from a private session, do not assume realtime will scope it.
+Add an explicit session-audience lane and tests, or raise the gap rather than
 allowlisting quietly.
 
 ## Realtime

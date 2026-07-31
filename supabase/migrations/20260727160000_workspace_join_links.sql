@@ -2,9 +2,10 @@
 -- agent can redeem. Redeeming provisions the real credential server-side; the
 -- link itself is never a credential and appears in no auth path.
 --
--- Separate from workspace_invites on purpose: that table's rows live 14 days AND
--- double as usable MCP bearer tokens for the whole window (verifyInviteToken).
--- A join link lives minutes, works once, and can authenticate nothing.
+-- Separate from workspace_invites on purpose: that table is the legacy,
+-- email-oriented human invitation record and lives for 14 days. Neither table
+-- is accepted as an MCP bearer. A join link lives minutes, works once, and can
+-- authenticate nothing outside its dedicated redemption route.
 --
 -- Only the token HASH is stored, like connect_token_hash / mcp_token_hash. The
 -- plaintext exists in the mint response and in the URL its creator copies;

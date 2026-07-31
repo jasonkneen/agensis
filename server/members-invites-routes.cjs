@@ -10,11 +10,11 @@ const crypto = require('crypto');
 // Workspace membership and the invite lifecycle: list, add, change role, remove,
 // mint, revoke, and redeem.
 //
-// A workspace_invite is a REAL CREDENTIAL — verifyInviteToken accepts one as an
-// MCP bearer for its full lifetime — so it is stored hashed and its plaintext is
-// rendered exactly once, in the response that mints it. That is also why the
-// newer join-link surface exists separately (server/join-links-routes.cjs): it
-// is deliberately NOT a credential. Do not merge the two tables.
+// A workspace_invite is a legacy, email-oriented human invitation secret. It is
+// stored hashed and its plaintext is rendered exactly once, but it is NOT an MCP
+// bearer. The newer join-link surface exists separately because it is the
+// short-lived, single-use entry point for either a human or an agent. Neither
+// invitation table authenticates outside its dedicated redemption route.
 
 function mountMembersInvitesRoutes(app, deps = {}) {
  const {
@@ -179,11 +179,11 @@ function mountMembersInvitesRoutes(app, deps = {}) {
    );
    notifyDbSubscribers('workspace_invites', 'INSERT', rows);
    // NEITHER the token NOR its hash NOR the local-part of the address. An invite
-   // token is a real credential (verifyInviteToken accepts one as an MCP bearer
-   // for its whole lifetime), so an audit row carrying it would be strictly more
-   // dangerous than the gap this log closes. The DOMAIN is kept because "someone
-   // invited an external address" is what an owner actually needs to see; who
-   // exactly is already on the invite row this points at.
+   // token is still a bearer secret for its dedicated human acceptance route, so
+   // an audit row carrying it would be strictly more dangerous than the gap this
+   // log closes. The DOMAIN is kept because "someone invited an external
+   // address" is what an owner actually needs to see; who exactly is already on
+   // the invite row this points at.
    await recordAudit({
     workspaceId,
     actor: { userId: String(req.userId || '') },

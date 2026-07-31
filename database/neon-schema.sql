@@ -794,9 +794,10 @@ CREATE INDEX IF NOT EXISTS idx_workspace_invites_token ON workspace_invites(toke
 -- agent can redeem. Redeeming provisions the real credential server-side; the
 -- link itself is never a credential and appears in no auth path.
 --
--- Separate from workspace_invites on purpose: that table's rows live 14 days AND
--- double as usable MCP bearer tokens for the whole window (verifyInviteToken).
--- A join link lives minutes, works once, and can authenticate nothing.
+-- Separate from workspace_invites on purpose: that table is the legacy,
+-- email-oriented human invitation record and lives for 14 days. Neither table
+-- is accepted as an MCP bearer. A join link lives minutes, works once, and can
+-- authenticate nothing outside its dedicated redemption route.
 CREATE TABLE IF NOT EXISTS workspace_join_links (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
