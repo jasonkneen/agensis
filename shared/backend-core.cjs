@@ -524,6 +524,38 @@ function setsManageOnlyDbColumn(table, values) {
 // (M7, 2026-07 review).
 const SELECTABLE_COLUMNS_BY_TABLE = {
  app_users: ['id', 'email', 'display_name', 'accent_color', 'created_at'],
+ // Workspace control is deliberately owner-only and its bearer hash is never
+ // workspace metadata. Generic reads and mutation echoes previously returned
+ // `mcp_token_hash` to every workspace reader because the table had no
+ // projection. Pin the complete public row shape so a future credential column
+ // is excluded by default too.
+ workspaces: [
+  'id', 'name', 'description', 'icon', 'user_id', 'auto_share',
+  'local_path', 'project_kind', 'git_root', 'git_remote',
+  'background_opacity', 'background_image', 'version', 'parent_id',
+  'is_system', 'created_at', 'updated_at',
+ ],
+ // The dedicated workspace agents route already spells this public shape and
+ // omits connect_token_hash/mcp_approved. The generic path must not be wider:
+ // the connect hash is the daemon's bearer verifier, and mutation RETURNING
+ // used to echo the stored value even after the write guard stripped it from
+ // the request.
+ workspace_agents: [
+  'id', 'workspace_id', 'name', 'avatar', 'openpet_avatar_id',
+  'accent_color', 'description', 'system_prompt', 'soul', 'instructions',
+  'tools', 'skills', 'purpose', 'resource_facets', 'metadata', 'identity',
+  'handle', 'model', 'run_mode', 'sandbox_provider', 'sandbox_config',
+  'memory_dir', 'enabled', 'ambient_replies', 'permission_mode', 'version',
+  'created_by', 'created_at', 'updated_at',
+ ],
+ // A webhook URL is a bearer credential and is returned in plaintext exactly
+ // once by POST /backend/agent-webhooks. `token` stores its hash for new rows
+ // but may still hold legacy plaintext; either form is credential material and
+ // neither belongs in list/select/update responses.
+ agent_webhooks: [
+  'id', 'workspace_id', 'agent_id', 'name', 'enabled',
+  'last_triggered_at', 'version', 'created_at', 'updated_at',
+ ],
  // A job's prompt is the assembled daemon payload (conversation, system prompt,
  // documents and agent context) and `response` is the full streamed answer.
  // The browser's workspace feed needs neither: it renders only liveness badges.
@@ -571,7 +603,8 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
 };
 
 /**
- * Project a select's requested columns down to what the table allows. Returns a
+ * Project a generic read or mutation RETURNING clause down to what the table
+ * allows. Returns a
  * comma-separated column list (the same shape both backends' normalizeColumns
  * already accepts) so callers wrap it: normalizeColumns(safeSelectColumns(...)).
  * Throws 403 when a column outside the allow-list is asked for by name, so the

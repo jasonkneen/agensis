@@ -209,6 +209,12 @@ function createRealtime(deps = {}) {
  const REALTIME_HEAVY_FIELDS = {
   agent_memory_files: ['content_cache'],
   agent_jobs: ['prompt', 'response'],
+  // These three are bearer verifiers. Generic mutation rows and several
+  // dedicated routes reach this chokepoint as raw `returning *`, so response
+  // projection alone is not a realtime control.
+  workspaces: ['mcp_token_hash'],
+  workspace_agents: ['connect_token_hash'],
+  agent_webhooks: ['token'],
   workspace_secrets: VAULT_SECRET_COLUMNS,
   // channel_bridges.config is jsonb holding Slack/Telegram botToken, Slack
   // signingSecret and OpenClaw authToken. The REST projection publicBridge drops

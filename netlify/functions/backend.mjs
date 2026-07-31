@@ -2239,7 +2239,7 @@ async function handleDb(pathname, req, userId) {
   }).join(', ')})`).join(', ');
 
   const result = await query(
-   `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(returning)}`,
+   `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(safeSelectColumns(table, returning))}`,
    params,
   );
   if (table === 'messages') {
@@ -2311,7 +2311,7 @@ async function handleDb(pathname, req, userId) {
 
   const where = buildWhereClause(filters, params);
   const result = await query(
-   `update ${tableSql} set ${setClause}${where.clause} returning ${normalizeColumns(returning)}`,
+   `update ${tableSql} set ${setClause}${where.clause} returning ${normalizeColumns(safeSelectColumns(table, returning))}`,
    where.params,
   );
 
@@ -2352,7 +2352,10 @@ async function handleDb(pathname, req, userId) {
    return jsonError(400, new Error('Delete requires a non-empty where clause'));
   }
   await enforceDbOperationAccess({ userId, table, op: 'delete', filters, db: query });
-  const result = await query(`delete from ${tableSql}${where.clause} returning *`, where.params);
+  const result = await query(
+   `delete from ${tableSql}${where.clause} returning ${normalizeColumns(safeSelectColumns(table, '*'))}`,
+   where.params,
+  );
   return json({ data: single ? (result[0] ?? null) : null, error: null });
  }
 

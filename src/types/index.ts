@@ -803,7 +803,8 @@ export interface AgentWebhook {
  workspace_id: string;
  agent_id: string | null;
  name: string;
- token: string;
+ /** Plaintext bearer, present only in the one-time create response. */
+ token?: string;
  enabled: boolean;
  last_triggered_at: string | null;
  version?: number;

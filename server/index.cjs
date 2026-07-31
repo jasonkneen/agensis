@@ -8222,7 +8222,7 @@ function createApp() {
    }).join(', ')})`).join(', ');
 
    const result = await getDb().unsafe(
-    `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(returning)}`,
+    `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(safeSelectColumns(table, returning))}`,
     params,
    );
 
@@ -8402,7 +8402,7 @@ function createApp() {
 
    const where = buildWhereClause(filters, params);
    const result = await getDb().unsafe(
-    `update ${tableSql} set ${setClause}${where.clause} returning ${normalizeColumns(returning)}`,
+    `update ${tableSql} set ${setClause}${where.clause} returning ${normalizeColumns(safeSelectColumns(table, returning))}`,
     where.params,
    );
 
@@ -8476,7 +8476,10 @@ function createApp() {
     return jsonError(res, 400, new Error('Delete requires a non-empty where clause'));
    }
    await enforceDbOperationAccess(req.userId, table, 'delete', { filters });
-   const result = await getDb().unsafe(`delete from ${tableSql}${where.clause} returning *`, where.params);
+   const result = await getDb().unsafe(
+    `delete from ${tableSql}${where.clause} returning ${normalizeColumns(safeSelectColumns(table, '*'))}`,
+    where.params,
+   );
    notifyDbSubscribers(table, 'DELETE', result);
    res.json({ data: single ? (result[0] ?? null) : null, error: null });
   } catch (error) {

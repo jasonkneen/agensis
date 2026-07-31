@@ -2488,14 +2488,16 @@ function AgentDetailPane({
             <AgentDetailSection title="Webhooks">
               <div className="space-y-1.5">
                 {webhooks.map(webhook => {
-                  const url = webhookUrl(webhook.token);
+                  const url = webhook.token ? webhookUrl(webhook.token) : '';
                   return (
                     <div key={webhook.id} className="flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/35 px-2 py-1 text-xs">
                       <Link2 className="size-3 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate" title={url}>{webhook.name}</span>
-                      <Button type="button" variant="ghost" size="icon-xs" onClick={() => void navigator.clipboard?.writeText(url)} aria-label={`Copy webhook for ${agent.name}`}>
-                        <Copy />
-                      </Button>
+                      <span className="min-w-0 flex-1 truncate" title={url || 'Secret URL is shown only when created'}>{webhook.name}</span>
+                      {url && (
+                        <Button type="button" variant="ghost" size="icon-xs" onClick={() => void navigator.clipboard?.writeText(url)} aria-label={`Copy webhook for ${agent.name}`}>
+                          <Copy />
+                        </Button>
+                      )}
                       <Button
                         type="button"
                         variant={webhook.enabled ? 'secondary' : 'ghost'}
@@ -2849,21 +2851,23 @@ function AgentConnectDialog({
                 {webhooks.length > 0 ? (
                   <div className="space-y-1.5">
                     {webhooks.map(webhook => {
-                      const url = webhookUrl(webhook.token);
+                      const url = webhook.token ? webhookUrl(webhook.token) : '';
                       return (
                         <div key={webhook.id} className="space-y-1.5 rounded-md border bg-background px-2 py-1.5">
                           <div className="flex min-w-0 items-center gap-1.5 text-xs">
                             <Link2 className="size-3 shrink-0" />
-                            <span className="min-w-0 flex-1 truncate" title={url}>{webhook.name}</span>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-xs"
-                              onClick={() => void navigator.clipboard?.writeText(url)}
-                              aria-label={`Copy webhook for ${agent.name}`}
-                            >
-                              <Copy />
-                            </Button>
+                            <span className="min-w-0 flex-1 truncate" title={url || 'Secret URL is shown only when created'}>{webhook.name}</span>
+                            {url && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-xs"
+                                onClick={() => void navigator.clipboard?.writeText(url)}
+                                aria-label={`Copy webhook for ${agent.name}`}
+                              >
+                                <Copy />
+                              </Button>
+                            )}
                             <Button
                               type="button"
                               variant={webhook.enabled ? 'secondary' : 'ghost'}
@@ -2875,6 +2879,11 @@ function AgentConnectDialog({
                               <Power />
                             </Button>
                           </div>
+                          {!url && (
+                            <p className="text-[11px] text-muted-foreground">
+                              Secret URL hidden after creation. Create a replacement to receive a new URL.
+                            </p>
+                          )}
                         </div>
                       );
                     })}
