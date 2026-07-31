@@ -35,6 +35,7 @@ const express = require('express');
 const { __test } = require('../server/index.cjs');
 const core = require('../shared/backend-core.cjs');
 const huddles = require('../server/huddles.cjs');
+const { createRealtime } = require('../server/realtime.cjs');
 
 const root = path.resolve(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
@@ -45,6 +46,7 @@ const SESSION = '33333333-3333-4333-8333-333333333333';
 const MEMBER = 'user-member';
 const VIEWER = 'user-viewer';
 const STRANGER = 'user-stranger';
+const OWNER_OUTSIDE_PRIVATE = 'user-owner-outside-private';
 const HUDDLE_ID = '44444444-4444-4444-8444-444444444444';
 // The huddle's OWN conversation session — where the transcript goes. SESSION
 // above is the channel it was called from; the two are deliberately different
@@ -82,6 +84,8 @@ function makeDb({
   roles = {},
   owners = {},
   sessions = { [SESSION]: WS },
+  sessionPrivacy = {},
+  sessionMembers = {},
   huddleRows = [],
   eventRows = [],
   // Messages already in a huddle's transcript session, keyed by session id.
@@ -127,8 +131,27 @@ function makeDb({
       if (n.startsWith('select display_name, email from app_users')) {
         return [{ display_name: 'Member', email: 'member@example.com' }];
       }
-      if (n.startsWith('select id, title from chat_sessions where id = $1 and workspace_id = $2')) {
-        return sessions[params[0]] === params[1] ? [{ id: params[0], title: 'general' }] : [];
+      if (n.startsWith('select id, title, visibility, folder from chat_sessions where id = $1 and workspace_id = $2')) {
+        if (sessions[params[0]] !== params[1]) return [];
+        const privacy = sessionPrivacy[params[0]] || {};
+        return [{
+          id: params[0],
+          title: 'general',
+          visibility: privacy.visibility || 'workspace',
+          folder: privacy.folder || 'General',
+        }];
+      }
+      if (n.startsWith('select id, visibility, folder from chat_sessions where id = $1 limit 1')) {
+        if (!sessions[params[0]]) return [];
+        const privacy = sessionPrivacy[params[0]] || {};
+        return [{
+          id: params[0],
+          visibility: privacy.visibility || 'workspace',
+          folder: privacy.folder || 'General',
+        }];
+      }
+      if (n.startsWith('select 1 from chat_session_members')) {
+        return (sessionMembers[params[0]] || []).includes(String(params[1])) ? [{ ok: 1 }] : [];
       }
       if (n.startsWith('select count(*)::int as count from messages where session_id = $1')) {
         return [{ count: Number(transcriptCounts[params[0]] || 0) }];
@@ -288,6 +311,12 @@ function makeApp(db, overrides = {}) {
     getDb: () => db,
     requireAuth,
     enforceWorkspaceRole: __test.enforceWorkspaceRole,
+    enforceSessionRead: (userId, sessionId, sessionRow = null) => core.enforceSessionReadAccess({
+      userId,
+      sessionId,
+      sessionRow,
+      db: (sql, params) => db.unsafe(sql, params),
+    }),
     jsonError,
     notifyDbSubscribers: (table, eventType, rows) => broadcasts.push({ table, eventType, rows }),
     mintToken: async (args) => { minted.push(args); return `token-for-${args.identity}`; },
@@ -295,6 +324,32 @@ function makeApp(db, overrides = {}) {
     ...overrides,
   });
   return { app, minted, broadcasts };
+}
+
+function makeRealtime(sessionRealtimeAudience) {
+  return createRealtime({
+    VAULT_SECRET_COLUMNS: [],
+    enqueueFlowWebhookEvents: async () => [],
+    enqueueAutomationRuns: async () => [],
+    refreshConnectedAgentConfigs: () => {},
+    sessionRealtimeAudience,
+  });
+}
+
+function realtimeClient(realtime, userId) {
+  return realtime.registerTestWebsocketClient({
+    userId,
+    readyState: 1,
+    subscriptions: ['huddles', 'huddle_events'].map((table) => ({
+      type: 'db_changes',
+      table,
+      event: '*',
+      schema: 'public',
+      filter: `workspace_id=eq.${WS}`,
+    })),
+    sent: [],
+    send(raw) { this.sent.push(JSON.parse(raw)); },
+  });
 }
 
 async function withServer(app, fn) {
@@ -411,9 +466,88 @@ test('a NON-MEMBER cannot get a join token (403, minter never reached)', async (
   });
 });
 
-test('a VIEWER (read-only role) can see a huddle but cannot join it', async () => {
+test('workspace ownership does not reveal or control a huddle in a private session', async () => {
+  const db = makeDb({
+    owners: { [WS]: OWNER_OUTSIDE_PRIVATE },
+    sessionPrivacy: { [SESSION]: { visibility: 'private', folder: 'Direct messages' } },
+    sessionMembers: { [SESSION]: [MEMBER] },
+    huddleRows: [liveHuddleRow()],
+  });
+  __test.setTestDb(db);
+  const { app, minted, broadcasts } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(OWNER_OUTSIDE_PRIVATE, '1');
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const attempts = [
+      ['GET', `/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, undefined],
+      ['GET', `/backend/workspaces/${WS}/huddles/${HUDDLE_ID}`, undefined],
+      ['POST', `/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, undefined],
+      ['POST', `/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/join`, undefined],
+      ['POST', `/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/confirm`, { connectionEpoch: 'owner' }],
+      ['POST', `/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/leave`, { connectionEpoch: 'owner' }],
+      ['POST', `/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/heartbeat`, { connectionEpoch: 'owner' }],
+      ['POST', `/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/end`, undefined],
+      ['POST', `/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/notes`, { notes: 'private note' }],
+    ];
+
+    for (const [method, route, body] of attempts) {
+      const res = await fetch(`${baseUrl}${route}`, {
+        method,
+        headers,
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      assert.equal(res.status, 403, `${method} ${route}`);
+      assert.match((await res.json()).error.message, /private/i);
+    }
+  });
+
+  assert.equal(minted.length, 0, 'no LiveKit bearer may be minted');
+  assert.equal(broadcasts.length, 0, 'an unauthorized request must fan out nothing');
+  assert.equal(db.state.events.length, 0, 'an unauthorized request must append no event');
+  assert.equal(db.state.presence.length, 0, 'an unauthorized request must claim no presence');
+  assert.equal(db.state.huddles[0].ended_at, null, 'an unauthorized owner must not end the call');
+  assert.equal(db.state.huddles[0].notes, '', 'an unauthorized owner must not edit notes');
+});
+
+test('a private-session member keeps the same workspace read and write capability behavior', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    sessionPrivacy: { [SESSION]: { visibility: 'private', folder: 'Direct messages' } },
+    sessionMembers: { [SESSION]: [MEMBER] },
+    huddleRows: [liveHuddleRow()],
+  });
+  __test.setTestDb(db);
+  const { app, minted } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+    const bySession = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, { headers });
+    assert.equal(bySession.status, 200);
+    const byId = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}`, { headers });
+    assert.equal(byId.status, 200);
+    const join = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/join`, {
+      method: 'POST',
+      headers,
+    });
+    assert.equal(join.status, 200);
+    const notes = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/notes`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ notes: 'member note' }),
+    });
+    assert.equal(notes.status, 200);
+  });
+
+  assert.equal(minted.length, 1);
+  assert.equal(db.state.huddles[0].notes, 'member note');
+});
+
+test('a VIEWER who belongs to a private session can see its huddle but cannot join it', async () => {
   const db = makeDb({
     roles: { [`${WS}:${VIEWER}`]: 'viewer' },
+    sessionPrivacy: { [SESSION]: { visibility: 'private', folder: 'Direct messages' } },
+    sessionMembers: { [SESSION]: [VIEWER] },
     huddleRows: [liveHuddleRow()],
   });
   __test.setTestDb(db);
@@ -429,6 +563,63 @@ test('a VIEWER (read-only role) can see a huddle but cannot join it', async () =
     assert.equal(join.status, 403);
     assert.equal(minted.length, 0);
   });
+});
+
+test('private huddles and their events fan out only to host-session members', async () => {
+  const realtime = makeRealtime(async (sessionId) => (
+    sessionId === SESSION ? { memberUserIds: new Set([MEMBER]) } : null
+  ));
+  const member = realtimeClient(realtime, MEMBER);
+  const owner = realtimeClient(realtime, OWNER_OUTSIDE_PRIVATE);
+  const event = {
+    id: 'event-private',
+    huddle_id: HUDDLE_ID,
+    workspace_id: WS,
+    session_id: SESSION,
+    kind: 'participant_joined',
+  };
+
+  realtime.notifyDbSubscribers('huddles', 'UPDATE', [liveHuddleRow()]);
+  realtime.notifyDbSubscribers('huddle_events', 'INSERT', [event]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.deepEqual(
+    member.sent.map((frame) => frame.table).sort(),
+    ['huddle_events', 'huddles'],
+    'the private-session member receives both live row shapes',
+  );
+  assert.equal(owner.sent.length, 0, 'workspace ownership alone receives neither row');
+});
+
+test('huddle realtime remains workspace-visible for public sessions and fails closed for unknown ones', async () => {
+  let known = true;
+  const realtime = makeRealtime(async () => (known ? { memberUserIds: null } : null));
+  const member = realtimeClient(realtime, MEMBER);
+  const viewer = realtimeClient(realtime, VIEWER);
+  const event = {
+    id: 'event-public',
+    huddle_id: HUDDLE_ID,
+    workspace_id: WS,
+    session_id: SESSION,
+    kind: 'participant_joined',
+  };
+
+  realtime.notifyDbSubscribers('huddles', 'UPDATE', [liveHuddleRow()]);
+  realtime.notifyDbSubscribers('huddle_events', 'INSERT', [event]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual([member.sent.length, viewer.sent.length], [2, 2]);
+
+  member.sent.length = 0;
+  viewer.sent.length = 0;
+  known = false;
+  realtime.notifyDbSubscribers('huddles', 'UPDATE', [liveHuddleRow()]);
+  realtime.notifyDbSubscribers('huddle_events', 'INSERT', [event]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(
+    [member.sent.length, viewer.sent.length],
+    [0, 0],
+    'an unresolvable host session withholds both row shapes',
+  );
 });
 
 test('a member of another workspace cannot borrow this workspace session id', async () => {
@@ -1147,7 +1338,7 @@ test('neon-schema.sql creates huddles AFTER the tables it references', () => {
   assert.ok(created.get('huddle_events') > created.get('huddles'));
 });
 
-test('huddle tables are readable through /backend/db but NOT writable by a client', () => {
+test('huddle tables are readable through /backend/db but no client role can write them', async () => {
   for (const table of ['huddles', 'huddle_events']) {
     assert.equal(core.ALLOWED_TABLES.has(table), true, `${table} in ALLOWED_TABLES`);
     assert.equal(core.WORKSPACE_SCOPED_TABLES.has(table), true, `${table} is workspace-scoped`);
@@ -1157,7 +1348,21 @@ test('huddle tables are readable through /backend/db but NOT writable by a clien
     // signed webhook. If a browser could insert a huddle_events row it could
     // claim someone was in a call — the exact property this feature relies on.
     for (const action of ['insert', 'update', 'delete']) {
-      assert.equal(access[action], 'manage', `${table}.${action} must require 'manage'`);
+      assert.equal(access[action], 'manage', `${table}.${action} keeps manage as defense in depth`);
+      await assert.rejects(
+        () => core.enforceDbOperationAccess({
+          userId: OWNER_OUTSIDE_PRIVATE,
+          table,
+          op: action,
+          filters: action === 'insert' ? [] : [{ column: 'id', operator: 'eq', value: HUDDLE_ID }],
+          payload: action === 'insert'
+            ? { values: { id: HUDDLE_ID, workspace_id: WS, session_id: SESSION } }
+            : { filters: [{ column: 'id', operator: 'eq', value: HUDDLE_ID }] },
+          db: async () => { throw new Error('generic huddle refusal must run before a DB lookup'); },
+        }),
+        /dedicated huddle routes/i,
+        `${table}.${action} must be unreachable even to a workspace manager`,
+      );
     }
   }
 });
@@ -1215,18 +1420,20 @@ test('the temporary @livekit/components-react type shim is deleted once the pack
   );
 });
 
-test('the realtime fanout does not strip huddle fields', () => {
+test('the realtime fanout does not strip huddle fields', async () => {
   // sanitizeRealtimeRow only drops declared heavy fields; assert the card's
   // fields survive a broadcast (the "blank column" trap, in its realtime form).
   const row = { id: 'h1', workspace_id: WS, session_id: SESSION, room_name: ROOM, started_by: MEMBER, started_at: 'x', ended_at: null };
-  const client = __test.registerTestWebsocketClient({
+  const realtime = makeRealtime(async () => ({ memberUserIds: null }));
+  const client = realtime.registerTestWebsocketClient({
     userId: MEMBER,
     readyState: 1,
     subscriptions: [{ type: 'db_changes', table: 'huddles', event: '*', schema: 'public', filter: `session_id=eq.${SESSION}` }],
     sent: [],
     send(payload) { this.sent.push(JSON.parse(payload)); },
   });
-  __test.notifyDbSubscribers('huddles', 'INSERT', [row]);
+  realtime.notifyDbSubscribers('huddles', 'INSERT', [row]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
   const delivered = client.sent.find((m) => m.type === 'db_changes');
   assert.ok(delivered, 'the huddle row reached the subscriber');
   assert.equal(delivered.table, 'huddles');
@@ -2093,12 +2300,11 @@ test('huddles.notes is declared in all three schema places', () => {
   }
 });
 
-test('notes stay off the generic /backend/db path — huddles writes are manage-only there', () => {
-  // The whole reason this is its own route: DB_TABLE_ACCESS.huddles.update is
-  // 'manage', not 'write', so an editor reaching /backend/db/update for this
-  // table is refused before a single column is inspected. If this ever
-  // silently loosened to 'write', an editor could rewrite room_name/started_by
-  // — the LiveKit-authority fields the dedicated routes exist to protect.
+test('notes stay off the generic /backend/db path — huddle writes have an explicit refusal', () => {
+  // The manage declaration is defense in depth. enforceDbOperationAccess now
+  // refuses the generic write before role resolution, so neither an editor nor
+  // an owner can rewrite room_name/started_by — the LiveKit-authority fields
+  // the dedicated routes exist to protect.
   assert.equal(core.DB_TABLE_ACCESS.huddles.update, 'manage');
   assert.equal(core.ALLOWED_TABLES.has('huddles'), true);
 });

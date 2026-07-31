@@ -53,8 +53,8 @@ function createRealtime(deps = {}) {
   // a second copy here is exactly how the fanout would drift back open.
   isPrivateSessionRow = () => false,
   sessionMemberUserIds = async () => new Set(),
-  // Permission requests subscribe at workspace scope but inherit their source
-  // session's audience. Null means the session could not be proven: fail closed.
+  // Workspace-scoped rows derived from a session inherit that session's
+  // audience. Null means the session could not be proven: fail closed.
   sessionRealtimeAudience = async () => null,
   logMessageActivity,
   markAgentConnectionOffline,
@@ -76,6 +76,7 @@ function createRealtime(deps = {}) {
  // Owned here, not injected — see the header. reset() below is what
  // resetTestState() calls.
  let websocketClients = new Set();
+ const SESSION_AUDIENCE_TABLES = new Set(['agent_permission_requests', 'huddles', 'huddle_events']);
 
  // Heartbeat cadence for agent sockets. An ungraceful drop (laptop sleep, network
  // loss) leaves ws.readyState === 1 until a ping goes unanswered, so detection
@@ -369,7 +370,8 @@ function createRealtime(deps = {}) {
    }
   }
 
-  // A PRIVATE chat_sessions row cannot ride the synchronous lane.
+  // A PRIVATE chat_sessions row, or a workspace-scoped row derived from a
+  // session, cannot ride the synchronous lane.
   //
   // Subscribing is gated (authorizeRealtimeBinding -> enforceDbOperationAccess),
   // but a `chat_sessions` subscription filtered on workspace_id is legitimate —
@@ -384,10 +386,10 @@ function createRealtime(deps = {}) {
   // and holds no handle (see emitAgentStatus above for the same constraint), so
   // these rows leave through an async lane instead.
   const privateRows = table === 'chat_sessions' ? rowList.filter(isPrivateSessionRow) : [];
-  const permissionRows = table === 'agent_permission_requests'
+  const sessionAudienceRows = SESSION_AUDIENCE_TABLES.has(table)
    ? rowList.filter((row) => row?.session_id)
    : [];
-  const openRows = permissionRows.length > 0
+  const openRows = sessionAudienceRows.length > 0
    ? rowList.filter((row) => !row?.session_id)
    : privateRows.length > 0
      ? rowList.filter((row) => !isPrivateSessionRow(row))
@@ -421,7 +423,9 @@ function createRealtime(deps = {}) {
   }
 
   if (privateRows.length > 0) void fanoutPrivateSessionRows(privateRows, eventType, deliver);
-  if (permissionRows.length > 0) void fanoutPermissionRequestRows(permissionRows, eventType, deliver);
+  if (sessionAudienceRows.length > 0) {
+   void fanoutSessionAudienceRows(table, sessionAudienceRows, eventType, deliver);
+  }
  }
 
  /**
@@ -460,21 +464,22 @@ function createRealtime(deps = {}) {
  }
 
  /**
-  * Fan permission-request rows according to the conversation holding the tool
-  * call. The client subscribes by workspace so it can maintain one approvals
-  * inbox; that broad binding must not turn a DM request into workspace data.
+  * Fan workspace-scoped, session-derived rows according to the source
+  * conversation. Huddles, their event log and permission requests all subscribe
+  * by workspace; that broad binding must not turn a DM-derived row into
+  * workspace data.
   *
   * Audience resolution is one query pair per row, never per socket. Unknown
-  * sessions and lookup failures send nothing. Open-session requests retain the
+  * sessions and lookup failures send nothing. Open-session rows retain the
   * existing workspace-wide behavior.
   */
- async function fanoutPermissionRequestRows(rows, eventType, deliver) {
+ async function fanoutSessionAudienceRows(table, rows, eventType, deliver) {
   for (const row of rows) {
    let audience;
    try {
     audience = await sessionRealtimeAudience(row?.session_id);
    } catch (error) {
-    console.error('permission request fanout audience lookup failed', error?.message || error);
+    console.error(`${table} fanout audience lookup failed`, error?.message || error);
     continue;
    }
    if (!audience) continue;
@@ -485,7 +490,7 @@ function createRealtime(deps = {}) {
     if (members !== null && (!ws.userId || !members.has(String(ws.userId)))) continue;
     for (const subscription of ws.subscriptions || []) {
      if (subscription.type !== 'db_changes') continue;
-     if (subscription.table && subscription.table !== 'agent_permission_requests') continue;
+     if (subscription.table && subscription.table !== table) continue;
      if (subscription.schema && subscription.schema !== 'public') continue;
      if (subscription.event && subscription.event !== '*' && subscription.event !== eventType) continue;
      if (!matchesFilter(subscription.filter, row)) continue;

@@ -373,7 +373,9 @@ const DB_TABLE_ACCESS = {
  // APPEND-ONLY, written only by those routes and by the signed LiveKit webhook.
  // If a browser could insert a huddle_events row it could claim someone was in a
  // call, which is exactly the server-side-authority property this feature has.
- // 'manage' (not 'write') so an editor cannot reach these through /backend/db.
+ // The explicit refusal in enforceDbOperationAccess below makes every generic
+ // write unreachable; 'manage' remains here as defense in depth so removing
+ // that refusal cannot silently reopen the tables to ordinary editors.
  huddles: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  huddle_events: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  // SELECT is the whole point: a member of the System workspace reads the
@@ -1284,6 +1286,13 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
  if (table === 'agent_permission_requests' && op !== 'select') {
   throw forbidden('Permission requests can only be changed through the dedicated permission route');
  }
+ // Huddle lifecycle rows are server-owned. The dedicated routes are where the
+ // host-session privacy check, LiveKit token minting and append-only event
+ // authority live; even a workspace manager must not bypass those invariants
+ // through a generic write.
+ if ((table === 'huddles' || table === 'huddle_events') && op !== 'select') {
+  throw forbidden('Huddles can only be changed through the dedicated huddle routes');
+ }
 
  if (!WORKSPACE_SCOPED_TABLES.has(table) && table !== 'messages') return;
 
@@ -1346,21 +1355,26 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
  }
 }
 
-// Constrain a SELECT on `chat_sessions`, `messages`, or
-// `agent_permission_requests` to rows in a session the user may read. The
-// sibling of appendWorkspaceAccessClause, and needed for the same reason:
-// enforceDbOperationAccess can only ANSWER "may you", it cannot remove rows
-// from a result set. Without this a workspace-filtered select returns every
-// DM's title/roster or parked tool request, leaking private conversation data
-// without reading one message.
+// Constrain a SELECT on session-bearing tables to rows in a session the user
+// may read. The sibling of appendWorkspaceAccessClause, and needed for the same
+// reason: enforceDbOperationAccess can only ANSWER "may you", it cannot remove
+// rows from a result set. Without this a workspace-filtered select returns every
+// DM's title/roster, parked tool request, huddle or huddle event, leaking
+// private conversation data without reading one message.
 //
-// All three tables route through one subquery alias so the cases differ only in
-// the join column. Slightly more work than inlining the predicate on
+// Every table routes through one subquery alias so the cases differ only in the
+// join column. Slightly more work than inlining the predicate on
 // chat_sessions itself; worth it because there is then exactly ONE spelling of
 // the readability rule to keep correct. Legacy permission rows with no session
 // retain their workspace visibility; a non-null orphan is withheld.
 function appendSessionAccessClause(where, userId, table) {
- if (!['chat_sessions', 'messages', 'agent_permission_requests'].includes(table)) return where;
+ if (![
+  'chat_sessions',
+  'messages',
+  'agent_permission_requests',
+  'huddles',
+  'huddle_events',
+ ].includes(table)) return where;
  const params = where.params || [];
  params.push(userId);
  const userParam = `$${params.length}`;

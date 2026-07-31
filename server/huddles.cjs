@@ -28,7 +28,7 @@
 //   * SERVER-SIDE AUTHORITY. The relay — here, the LiveKit webhook — signs
 //     join/leave/end, not the client. A browser cannot claim someone was in a
 //     huddle; it can only ask for a token for ITSELF, and only if it is a
-//     member of the workspace that owns the session.
+//     member of the workspace that owns the session and may read that session.
 //
 //   * PRESENCE EXPIRES. The webhook was the only thing that could notice a
 //     browser that CRASHED, and the project's webhook has since been deleted —
@@ -739,8 +739,8 @@ const PRESENCE_COLUMNS = 'huddle_id, identity, connection_epoch, last_seen_at, h
  * server/index.cjs. From index.cjs:
  *
  *   mountHuddleRoutes(app, {
- *    getDb, requireAuth, enforceWorkspaceRole, jsonError, notifyDbSubscribers,
- *    rateLimitBlocked, webhookRateLimiter, clientIpFromReq,
+ *    getDb, requireAuth, enforceWorkspaceRole, enforceSessionRead, jsonError,
+ *    notifyDbSubscribers, rateLimitBlocked, webhookRateLimiter, clientIpFromReq,
  *   });
  */
 function mountHuddleRoutes(app, deps = {}) {
@@ -748,6 +748,7 @@ function mountHuddleRoutes(app, deps = {}) {
   getDb,
   requireAuth,
   enforceWorkspaceRole,
+  enforceSessionRead,
   jsonError,
   notifyDbSubscribers,
   rateLimitBlocked,
@@ -760,7 +761,9 @@ function mountHuddleRoutes(app, deps = {}) {
  } = deps;
 
  if (!app) throw new Error('mountHuddleRoutes requires an express app');
- for (const [name, value] of Object.entries({ getDb, requireAuth, enforceWorkspaceRole, jsonError })) {
+ for (const [name, value] of Object.entries({
+  getDb, requireAuth, enforceWorkspaceRole, enforceSessionRead, jsonError,
+ })) {
   if (typeof value !== 'function') throw new Error(`mountHuddleRoutes requires deps.${name}`);
  }
 
@@ -791,10 +794,17 @@ function mountHuddleRoutes(app, deps = {}) {
  // against workspace B's session id.
  async function sessionInWorkspace(sessionId, workspaceId) {
   const rows = await getDb().unsafe(
-   'select id, title from chat_sessions where id = $1 and workspace_id = $2 limit 1',
+   'select id, title, visibility, folder from chat_sessions where id = $1 and workspace_id = $2 limit 1',
    [sessionId, workspaceId],
   );
   return rows[0] || null;
+ }
+
+ // Workspace capability is always checked first. This is the second,
+ // narrower gate: a huddle inherits the audience of the host session it was
+ // called from, including the "no implicit owner oversight" rule for DMs.
+ async function enforceHuddleRead(userId, huddle) {
+  if (huddle?.session_id) await enforceSessionRead(userId, huddle.session_id);
  }
 
  async function loadEvents(huddleId) {
@@ -1169,9 +1179,11 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!workspaceId || !sessionId) return jsonError(res, 400, new Error('workspaceId and sessionId are required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'read');
    await ensureSchemaOnce();
-   if (!(await sessionInWorkspace(sessionId, workspaceId))) {
+   const host = await sessionInWorkspace(sessionId, workspaceId);
+   if (!host) {
     return jsonError(res, 404, new Error('Session not found in this workspace'));
    }
+   await enforceSessionRead(req.userId, sessionId, host);
    // Reap BEFORE folding: a roster is the one thing this route exists to
    // render, so it must never hand back a participant whose browser has
    // stopped reporting.
@@ -1199,8 +1211,10 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'read');
    await ensureSchemaOnce();
-   const huddle = await reapHuddle(await huddleInWorkspace(huddleId, workspaceId));
-   if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   const existing = await huddleInWorkspace(huddleId, workspaceId);
+   if (!existing) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   await enforceHuddleRead(req.userId, existing);
+   const huddle = await reapHuddle(existing);
    res.json({
     data: { ...(await huddlePayload(huddle)), configured: livekitConfigured() },
     error: null,
@@ -1226,6 +1240,7 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!host) {
     return jsonError(res, 404, new Error('Session not found in this workspace'));
    }
+   await enforceSessionRead(req.userId, sessionId, host);
 
    // Reap first. Pressing "Huddle" on a channel whose last call is a room full
    // of crashed browsers must open a NEW one, not enrol you in the wake — and
@@ -1301,8 +1316,10 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'write');
    await ensureSchemaOnce();
-   const huddle = await reapHuddle(await huddleInWorkspace(huddleId, workspaceId));
-   if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   const existing = await huddleInWorkspace(huddleId, workspaceId);
+   if (!existing) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   await enforceHuddleRead(req.userId, existing);
+   const huddle = await reapHuddle(existing);
    // Also the reap's answer: joining a room whose occupants all crashed ten
    // minutes ago is refused, truthfully, instead of putting you alone in it.
    if (huddle.ended_at) return jsonError(res, 409, new Error('This huddle has ended'));
@@ -1353,6 +1370,7 @@ function mountHuddleRoutes(app, deps = {}) {
    await ensureSchemaOnce();
    const huddle = await huddleInWorkspace(huddleId, workspaceId);
    if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   await enforceHuddleRead(req.userId, huddle);
    if (huddle.ended_at) return jsonError(res, 409, new Error('This huddle has ended'));
    // Clear out anyone who has stopped reporting, so the roster the arriving
    // participant is handed is already correct — but never END the huddle from
@@ -1399,6 +1417,7 @@ function mountHuddleRoutes(app, deps = {}) {
    await ensureSchemaOnce();
    const huddle = await huddleInWorkspace(huddleId, workspaceId);
    if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   await enforceHuddleRead(req.userId, huddle);
    const identity = participantIdentity(req.userId);
    await appendEvent({
     huddle,
@@ -1439,6 +1458,7 @@ function mountHuddleRoutes(app, deps = {}) {
    await ensureSchemaOnce();
    const huddle = await huddleInWorkspace(huddleId, workspaceId);
    if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   await enforceHuddleRead(req.userId, huddle);
    if (huddle.ended_at) return jsonError(res, 409, new Error('This huddle has ended'));
 
    const identity = participantIdentity(req.userId);
@@ -1485,6 +1505,7 @@ function mountHuddleRoutes(app, deps = {}) {
    await ensureSchemaOnce();
    const existing = await huddleInWorkspace(huddleId, workspaceId);
    if (!existing) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   await enforceHuddleRead(req.userId, existing);
 
    // `ended_at is null` makes this idempotent: a second End is a no-op that
    // still returns the ended state instead of moving the timestamp.
@@ -1517,11 +1538,10 @@ function mountHuddleRoutes(app, deps = {}) {
  // --- notes -----------------------------------------------------------------
 
  // Shared notes for the call. Deliberately its OWN route rather than a generic
- // /backend/db/update: huddles writes are locked to 'manage' there (see
- // DB_TABLE_ACCESS.huddles in shared/backend-core.cjs) because the row also
- // carries LiveKit/webhook authority an editor must never touch. Notes are
- // just text anyone in the call could have said out loud, so this gates on
- // 'write' — the same bar as posting in the channel the huddle was called
+ // /backend/db/update refuses huddle writes entirely: the row carries
+ // LiveKit/webhook authority no generic mutation may touch. Notes are just text
+ // anyone in the call could have said out loud, so this dedicated route gates
+ // on 'write' — the same bar as posting in the channel the huddle was called
  // from — and touches nothing but the one column.
  app.post('/backend/workspaces/:id/huddles/:huddleId/notes', requireAuth, async (req, res) => {
   try {
@@ -1538,6 +1558,7 @@ function mountHuddleRoutes(app, deps = {}) {
 
    const existing = await huddleInWorkspace(huddleId, workspaceId);
    if (!existing) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   await enforceHuddleRead(req.userId, existing);
 
    const rows = await getDb().unsafe(
     `update huddles set notes = $1 where id = $2 and workspace_id = $3 returning ${HUDDLE_COLUMNS}`,
