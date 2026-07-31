@@ -32,3 +32,11 @@ test('the migration heals active duplicates before creating the unique index', (
   assert.ok(dedupe >= 0 && unique > dedupe);
   assert.match(migration, /status IN \('queued', 'running'\)/);
 });
+
+test('the migration establishes agent_connections before agent_jobs references it', () => {
+  const migration = read('supabase/migrations/20260731160000_agent_jobs_canonical.sql');
+  const connections = migration.indexOf('CREATE TABLE IF NOT EXISTS agent_connections');
+  const jobs = migration.indexOf('CREATE TABLE IF NOT EXISTS agent_jobs');
+  assert.ok(connections >= 0 && jobs > connections);
+  assert.match(migration, /idx_agent_connections_workspace_id/);
+});

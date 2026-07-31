@@ -1153,6 +1153,25 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id);
     ALTER TABLE agent_webhooks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
+    -- Connection rows must exist before channel_bridges adds its optional
+    -- connection_id foreign key. Keep this ordering compatible with a genuinely
+    -- fresh database rather than relying on a previous runtime bootstrap.
+    CREATE TABLE IF NOT EXISTS agent_connections (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      name text NOT NULL DEFAULT 'Agent',
+      handle text NOT NULL DEFAULT '',
+      host text DEFAULT '',
+      cwd text DEFAULT '',
+      status text NOT NULL DEFAULT 'offline' CHECK (status IN ('online', 'offline', 'busy')),
+      metadata jsonb DEFAULT '{}'::jsonb,
+      capabilities jsonb DEFAULT '{}'::jsonb,
+      connected_at timestamptz DEFAULT now(),
+      last_seen_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now()
+    );
+
     -- A channel fed by an OUTSIDE network. One row = one (channel, provider,
     -- external chat) triple, so a channel mirrors exactly one remote room and a
     -- remote room lands in exactly one channel.
@@ -1249,21 +1268,6 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_link_previews_expires ON link_previews(expires_at);
 
-    CREATE TABLE IF NOT EXISTS agent_connections (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
-      name text NOT NULL DEFAULT 'Agent',
-      handle text NOT NULL DEFAULT '',
-      host text DEFAULT '',
-      cwd text DEFAULT '',
-      status text NOT NULL DEFAULT 'offline' CHECK (status IN ('online', 'offline', 'busy')),
-      metadata jsonb DEFAULT '{}'::jsonb,
-      capabilities jsonb DEFAULT '{}'::jsonb,
-      connected_at timestamptz DEFAULT now(),
-      last_seen_at timestamptz DEFAULT now(),
-      updated_at timestamptz DEFAULT now()
-    );
     CREATE TABLE IF NOT EXISTS farm_integration_device_codes (
       id uuid PRIMARY KEY,
       device_code_hash text NOT NULL UNIQUE,

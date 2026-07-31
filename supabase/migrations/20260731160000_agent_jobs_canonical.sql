@@ -1,6 +1,31 @@
 -- Bring agent_jobs under the canonical migration chain. It was previously
 -- created only by server/index.cjs ensureRuntimeSchema, which made production
 -- startup repair a database that the documented migration path left incomplete.
+-- agent_jobs references agent_connections, which was also missing from the
+-- historical migration chain, so establish that prerequisite first.
+CREATE TABLE IF NOT EXISTS agent_connections (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
+  name text NOT NULL DEFAULT 'Agent',
+  handle text NOT NULL DEFAULT '',
+  host text DEFAULT '',
+  cwd text DEFAULT '',
+  status text NOT NULL DEFAULT 'offline'
+    CHECK (status IN ('online', 'offline', 'busy')),
+  metadata jsonb DEFAULT '{}'::jsonb,
+  capabilities jsonb DEFAULT '{}'::jsonb,
+  connected_at timestamptz DEFAULT now(),
+  last_seen_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_connections_workspace_id
+  ON agent_connections(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_agent_connections_agent_id
+  ON agent_connections(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_connections_status
+  ON agent_connections(workspace_id, status);
+
 CREATE TABLE IF NOT EXISTS agent_jobs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
