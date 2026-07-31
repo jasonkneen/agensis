@@ -65,12 +65,20 @@ function makeWorld({ bridge = BRIDGE } = {}) {
         seq += 1;
         const row = {
           id: `m-${seq}`, session_id: params[0], content: params[1],
-          sender_kind: 'bridge', sender_name: params[2],
+          sender_kind: 'bridge', sender_name: params[2], thread_parent_id: params[3] || null,
         };
         state.messages.push(row);
         return [{ ...row }];
       }
-      if (n.startsWith('update bridge_messages set message_id')) return [];
+      if (n.startsWith('update bridge_messages set message_id')) {
+        const claim = state.claims.find(c => c.bridgeId === params[1] && c.externalId === params[2]);
+        if (claim) claim.messageId = params[0];
+        return [];
+      }
+      if (n.startsWith('select message_id from bridge_messages')) {
+        const claim = state.claims.find(c => c.bridgeId === params[0] && c.externalId === params[1]);
+        return claim?.messageId ? [{ message_id: claim.messageId }] : [];
+      }
       if (n.startsWith('update channel_bridges set last_inbound_at')
         || n.startsWith('update channel_bridges set last_outbound_at')
         || n.startsWith('update channel_bridges set status')) {
@@ -178,6 +186,20 @@ test('our own outbound is recorded, so a provider that echoes sends does not re-
   assert.equal(state.messages.length, 0, 'the agent never sees its own words come back');
 });
 
+test('an inbound reply to our outbound event resolves back to the local thread root', async () => {
+  const { state, bridges } = makeWorld();
+  await bridges.emitBridgeOutbound({
+    id: 'm-root', session_id: SESSION, content: 'root from agensis', sender_kind: 'agent', sender_name: 'Coder',
+  });
+  const reply = await bridges.ingestBridgeMessage({
+    bridgeId: 'b1', externalMessageId: 'remote-reply', threadParentExternalId: 'out-1',
+    authorName: 'Ana', text: 'remote threaded reply',
+  });
+  assert.equal(reply.ingested, true);
+  assert.equal(state.messages[0].thread_parent_id, 'm-root');
+  assert.deepEqual(state.turns[0], { workspaceId: WS, sessionId: SESSION, threadParentId: 'm-root' });
+});
+
 // --- (3) ingest feeds the NORMAL conversation path ---------------------------
 
 test('an ingested message runs the ordinary turn, not a bridge-specific one', async () => {
@@ -186,6 +208,15 @@ test('an ingested message runs the ordinary turn, not a bridge-specific one', as
     bridgeId: 'b1', externalMessageId: '-100123:21', authorName: 'Ana', text: 'anyone about?',
   });
   assert.deepEqual(state.turns, [{ workspaceId: WS, sessionId: SESSION }]);
+});
+
+test('initial history can be ingested without waking an agent', async () => {
+  const { state, bridges } = makeWorld();
+  await bridges.ingestBridgeMessage({
+    bridgeId: 'b1', externalMessageId: 'old-1', authorName: 'Ana', text: 'old history', dispatch: false,
+  });
+  assert.equal(state.messages.length, 1);
+  assert.equal(state.turns.length, 0);
 });
 
 test('an empty or whitespace-only remote message is dropped before it costs a turn', async () => {
@@ -262,6 +293,7 @@ test('every provider maps to exactly one lane, and an unknown one to none', () =
   const { bridges } = makeWorld();
   assert.equal(bridges.laneForProvider('telegram'), 'hub');
   assert.equal(bridges.laneForProvider('slack'), 'hub');
+  assert.equal(bridges.laneForProvider('nostr'), 'hub');
   assert.equal(bridges.laneForProvider('whatsapp'), 'daemon');
   assert.equal(bridges.laneForProvider('signal'), 'daemon');
   assert.equal(bridges.laneForProvider('openclaw'), 'daemon');

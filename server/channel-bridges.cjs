@@ -29,7 +29,7 @@
 // frame pushed down a socket, and the rest is the adapter's problem.
 
 const DAEMON_PROVIDERS = new Set(['whatsapp', 'signal', 'openclaw']);
-const HUB_PROVIDERS = new Set(['telegram', 'slack']);
+const HUB_PROVIDERS = new Set(['telegram', 'slack', 'nostr']);
 
 function laneForProvider(provider) {
  const key = String(provider || '');
@@ -51,6 +51,25 @@ function createChannelBridges(deps = {}) {
  // than a module-level singleton) is what lets a test build a world with one
  // fake adapter and no network at all.
  const hubAdapters = new Map();
+ const conversationWakes = new Map();
+
+ function queueConversationWake(target) {
+  const key = `${target.sessionId}::${target.threadParentId || ''}`;
+  const run = async () => {
+   let result = await continueConversation(target);
+   for (let attempt = 0; result?.reason === 'locked' && attempt < 200; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+    result = await continueConversation(target);
+   }
+   return result;
+  };
+  const previous = conversationWakes.get(key);
+  const queued = previous ? previous.then(run, run) : Promise.resolve(run());
+  conversationWakes.set(key, queued);
+  void queued.finally(() => {
+   if (conversationWakes.get(key) === queued) conversationWakes.delete(key);
+  }).catch(error => console.error('[bridge] continueConversation failed', error));
+ }
 
  /** @param {{provider: string, send: (bridge, text, meta) => Promise<string|null>}} adapter */
  function registerHubAdapter(adapter) {
@@ -96,14 +115,25 @@ function createChannelBridges(deps = {}) {
   }
  }
 
+ async function localMessageForExternal(bridgeId, externalMessageId) {
+  if (!externalMessageId) return null;
+  const rows = await getDb().unsafe(
+   `select message_id from bridge_messages
+     where bridge_id = $1 and external_message_id = $2 limit 1`,
+   [String(bridgeId), String(externalMessageId)],
+  ).catch(() => []);
+  return rows[0]?.message_id || null;
+ }
+
  // Remote message -> agensis channel.
  //
  // `sender_kind: 'bridge'` is load-bearing in two places: emitBridgeOutbound
  // skips it (so an ingested message is never echoed straight back out), and the
  // UI can attribute it to the remote human rather than to an agensis account
  // that does not exist.
- async function ingestBridgeMessage({
-  bridgeId, externalMessageId = '', authorName = '', text = '', authorHandle = '',
+  async function ingestBridgeMessage({
+   bridgeId, externalMessageId = '', authorName = '', text = '', authorHandle = '',
+  threadParentExternalId = null, sourceCreatedAt = null, dispatch = true,
  }) {
   const body = String(text || '').trim();
   if (!body) return { ingested: false, reason: 'empty' };
@@ -116,11 +146,15 @@ function createChannelBridges(deps = {}) {
   if (!fresh) return { ingested: false, reason: 'duplicate' };
 
   const who = String(authorName || authorHandle || 'Someone').trim();
+  const threadParentId = await localMessageForExternal(bridge.id, threadParentExternalId);
+  const sourceSeconds = Number.isFinite(Number(sourceCreatedAt)) && Number(sourceCreatedAt) > 0
+   ? Math.floor(Number(sourceCreatedAt))
+   : null;
   const rows = await getDb().unsafe(
-   `insert into messages (session_id, role, content, sender_kind, sender_name)
-        values ($1, 'user', $2, 'bridge', $3)
+   `insert into messages (session_id, role, content, sender_kind, sender_name, thread_parent_id, created_at)
+        values ($1, 'user', $2, 'bridge', $3, $4, coalesce(to_timestamp($5), now()))
         returning *`,
-   [String(bridge.session_id), body, who],
+   [String(bridge.session_id), body, who, threadParentId, sourceSeconds],
   );
   const message = rows[0];
   if (!message) return { ingested: false, reason: 'insert_failed' };
@@ -141,9 +175,11 @@ function createChannelBridges(deps = {}) {
   // must be ACKed to the remote network promptly, and Telegram in particular
   // retries anything slow — which would then be deduped as a duplicate and the
   // sender would see nothing.
-  void Promise.resolve(
-   continueConversation({ workspaceId: bridge.workspace_id, sessionId: bridge.session_id }),
-  ).catch(error => console.error('[bridge] continueConversation failed', error));
+  if (dispatch) {
+   const target = { workspaceId: bridge.workspace_id, sessionId: bridge.session_id };
+   if (threadParentId) target.threadParentId = threadParentId;
+   queueConversationWake(target);
+  }
 
   return { ingested: true, messageId: message.id, sessionId: bridge.session_id };
  }
@@ -172,6 +208,7 @@ function createChannelBridges(deps = {}) {
     authorName: String(message.sender_name || '').trim(),
     senderKind: kind,
     messageId: message.id,
+    threadParentId: message.thread_parent_id || null,
    };
 
    if (bridge.lane === 'daemon') return await sendViaDaemon(bridge, text, meta);
@@ -179,7 +216,7 @@ function createChannelBridges(deps = {}) {
    const adapter = hubAdapters.get(String(bridge.provider));
    if (!adapter) return { sent: false, reason: 'no_adapter' };
    const externalId = await adapter.send(bridge, text, meta);
-   await noteOutbound(bridge, externalId);
+   await noteOutbound(bridge, externalId, meta.messageId);
    return { sent: true, reason: 'sent' };
   } catch (error) {
    console.error('[bridge] outbound failed', error);
@@ -216,7 +253,7 @@ function createChannelBridges(deps = {}) {
   return { sent: true, reason: 'relayed' };
  }
 
- async function noteOutbound(bridge, externalMessageId) {
+ async function noteOutbound(bridge, externalMessageId, messageId = null) {
   await getDb().unsafe(
    'update channel_bridges set last_outbound_at = now(), status = $2, last_error = null, updated_at = now() where id = $1',
    [bridge.id, 'connected'],
@@ -226,7 +263,13 @@ function createChannelBridges(deps = {}) {
   // device sees its own traffic). Without this the echo reads as a new inbound
   // message and the agent answers itself.
   if (externalMessageId) {
-   await claimExternalMessage(bridge.id, externalMessageId, 'out').catch(() => { });
+   const claimed = await claimExternalMessage(bridge.id, externalMessageId, 'out').catch(() => false);
+   if (claimed && messageId) {
+    await getDb().unsafe(
+     'update bridge_messages set message_id = $1 where bridge_id = $2 and external_message_id = $3',
+     [String(messageId), bridge.id, String(externalMessageId)],
+    ).catch(() => { });
+   }
   }
  }
 
@@ -348,9 +391,11 @@ function createChannelBridges(deps = {}) {
   bridgeForSession,
   bridgeById,
   claimExternalMessage,
+  localMessageForExternal,
   ingestBridgeMessage,
   emitBridgeOutbound,
   markBridgeError,
+  queueConversationWake,
   DAEMON_PROVIDERS,
   HUB_PROVIDERS,
  };
