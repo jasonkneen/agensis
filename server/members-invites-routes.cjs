@@ -16,6 +16,99 @@ const crypto = require('crypto');
 // short-lived, single-use entry point for either a human or an agent. Neither
 // invitation table authenticates outside its dedicated redemption route.
 
+async function acceptLegacyWorkspaceInvite({ db, lookupParams, userId }) {
+ if (!db || typeof db.begin !== 'function') throw new Error('Invite acceptance requires transaction support');
+ const [hashedToken, plaintextToken] = lookupParams;
+ return db.begin(async tx => {
+  // Claim first, in the database. The status and expiry predicates are on the
+  // UPDATE target itself so PostgreSQL re-checks them after any competing row
+  // lock is released. A preceding SELECT cannot provide that guarantee.
+  const claimedRows = await tx.unsafe(
+   `update workspace_invites
+          set status = 'accepted', accepted_by = $3, accepted_at = now(), updated_at = now()
+        where id = (
+          select id
+            from workspace_invites
+           where token in ($1, $2)
+           order by case when token = $1 then 0 else 1 end
+           limit 1
+        )
+          and status = 'pending'
+          and (expires_at is null or expires_at >= now())
+        returning *`,
+   [hashedToken, plaintextToken, userId],
+  );
+
+  let invite = claimedRows[0] || null;
+  const newlyAccepted = Boolean(invite);
+  if (!invite) {
+   // READ COMMITTED gives this statement a fresh snapshot after a competing
+   // UPDATE completes, so the loser observes who actually consumed the link.
+   const existingRows = await tx.unsafe(
+    `select *, (expires_at is not null and expires_at < now()) as invite_expired
+       from workspace_invites
+      where token in ($1, $2)
+      order by case when token = $1 then 0 else 1 end
+      limit 1`,
+    [hashedToken, plaintextToken],
+   );
+   invite = existingRows[0] || null;
+   if (!invite) return { outcome: 'not_found' };
+   if (invite.status === 'revoked') return { outcome: 'revoked' };
+   if (invite.invite_expired) return { outcome: 'expired' };
+   const acceptedBy = String(invite.accepted_by || '');
+   if (invite.status !== 'accepted' || !acceptedBy || acceptedBy !== String(userId)) {
+    return { outcome: 'used' };
+   }
+   // Idempotency confirms an acceptance that still exists; it must not become
+   // a permanent re-entry credential. If this user was removed after accepting,
+   // replaying the old URL cannot recreate their membership.
+   const accessRows = await tx.unsafe(
+    `select 1 as has_access
+       where exists (
+        select 1 from workspaces where id = $1 and user_id = $2
+       )
+          or exists (
+           select 1 from workspace_members where workspace_id = $1 and user_id = $2
+          )
+       limit 1`,
+    [invite.workspace_id, userId],
+   );
+   if (accessRows.length === 0) return { outcome: 'used' };
+  }
+
+  const workspaceId = String(invite.workspace_id || '');
+  // Existing members keep their current role, matching the old read-then-insert
+  // behavior, but the unique constraint now handles concurrent/idempotent calls.
+  // Owners deliberately do not receive a duplicate workspace_members row.
+  const memberRows = newlyAccepted
+   ? await tx.unsafe(
+    `insert into workspace_members (workspace_id, user_id, role, invited_by)
+        select $1, $2, $3, $4
+         where not exists (
+          select 1 from workspaces where id = $1 and user_id = $2
+         )
+        on conflict (workspace_id, user_id) do nothing
+        returning *`,
+    [workspaceId, userId, invite.role, invite.created_by],
+   )
+   : [];
+  const workspaceRows = await tx.unsafe(
+   'select id, name from workspaces where id = $1 limit 1',
+   [workspaceId],
+  );
+  if (!workspaceRows[0]) throw new Error('Invite workspace no longer exists');
+
+  return {
+   outcome: 'accepted',
+   workspaceId,
+   workspace: workspaceRows[0],
+   inviteRows: newlyAccepted ? claimedRows : [],
+   memberRows,
+  };
+ });
+}
+
 function mountMembersInvitesRoutes(app, deps = {}) {
  const {
   requireAuth, jsonError, enforceWorkspaceRole, getDb, notifyDbSubscribers,
@@ -329,41 +422,28 @@ function mountMembersInvitesRoutes(app, deps = {}) {
  app.post('/backend/invites/:token/accept', requireAuth, async (req, res) => {
   try {
    const token = String(req.params.token || '').trim();
-   const inviteRows = await getDb().unsafe('select * from workspace_invites where token in ($1, $2) limit 1', inviteTokenLookupParams(token));
-   const invite = inviteRows[0];
-   if (!invite) return jsonError(res, 404, new Error('Invite not found'));
-   if (invite.status === 'revoked') return jsonError(res, 410, new Error('This invite has been revoked'));
-   if (invite.expires_at && new Date(invite.expires_at) < new Date()) return jsonError(res, 410, new Error('This invite has expired'));
-   if (invite.status === 'accepted' && invite.accepted_by && String(invite.accepted_by) !== String(req.userId)) {
-    return jsonError(res, 410, new Error('This invite has already been used'));
-   }
-   const workspaceId = invite.workspace_id;
-   const owns = await getDb().unsafe('select 1 from workspaces where id = $1 and user_id = $2 limit 1', [workspaceId, req.userId]);
-   if (owns.length === 0) {
-    const existing = await getDb().unsafe('select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1', [workspaceId, req.userId]);
-    if (existing.length === 0) {
-     const memberRows = await getDb().unsafe(
-      `insert into workspace_members (workspace_id, user_id, role, invited_by)
-             values ($1, $2, $3, $4) returning *`,
-      [workspaceId, req.userId, invite.role, invite.created_by],
-     );
-     notifyDbSubscribers('workspace_members', 'INSERT', memberRows);
-    }
-   }
-   if (invite.status === 'pending') {
-    const updated = await getDb().unsafe(
-     `update workspace_invites set status = 'accepted', accepted_by = $2, accepted_at = now(), updated_at = now()
-            where id = $1 returning *`,
-     [invite.id, req.userId],
-    );
-    notifyDbSubscribers('workspace_invites', 'UPDATE', updated);
-   }
-   const wsRows = await getDb().unsafe('select id, name from workspaces where id = $1 limit 1', [workspaceId]);
-   res.json({ data: { workspaceId, workspace: wsRows[0] ?? null }, error: null });
+   const result = await acceptLegacyWorkspaceInvite({
+    db: getDb(),
+    lookupParams: inviteTokenLookupParams(token),
+    userId: req.userId,
+   });
+   if (result.outcome === 'not_found') return jsonError(res, 404, new Error('Invite not found'));
+   if (result.outcome === 'revoked') return jsonError(res, 410, new Error('This invite has been revoked'));
+   if (result.outcome === 'expired') return jsonError(res, 410, new Error('This invite has expired'));
+   if (result.outcome === 'used') return jsonError(res, 410, new Error('This invite has already been used'));
+
+   // Emit only after COMMIT. A rolled-back claim or membership insert must not
+   // create a realtime event for state that never became durable.
+   if (result.memberRows.length > 0) notifyDbSubscribers('workspace_members', 'INSERT', result.memberRows);
+   if (result.inviteRows.length > 0) notifyDbSubscribers('workspace_invites', 'UPDATE', result.inviteRows);
+   res.json({
+    data: { workspaceId: result.workspaceId, workspace: result.workspace },
+    error: null,
+   });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
  });
 }
 
-module.exports = { mountMembersInvitesRoutes };
+module.exports = { mountMembersInvitesRoutes, acceptLegacyWorkspaceInvite };
