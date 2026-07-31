@@ -290,6 +290,17 @@ window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
   deploy. A workspace can now author its own and save a tuned agent as a
   starting point. Validator: `shared/agentTemplates.cjs`. Routes:
   `server/agent-templates-routes.cjs`. Things to know before touching it:
+  - **Purpose describes the job; it grants nothing.** `workspace_agents.purpose`
+    is either `collaborator` or `resource`. A resource may carry one or more
+    `resource_facets` (`context`, `knowledge`, `tooling`, `code`), while a
+    collaborator must carry none. The database CHECK, shared normalizer, and
+    frontend types enforce that shape. Neither field changes RBAC, token scope,
+    sandbox access, permission mode, host folders, or tool grants.
+  - **A resource is non-ambient by default.** It is a callable capability or
+    steward, not another voice competing in every room. Creating an agent with
+    `purpose = 'resource'` therefore defaults `ambient_replies` to false unless
+    a manager explicitly changes it. Templates may carry purpose and facets
+    because those are intent, but they still cannot carry authority.
   - **A template carries PROSE and REQUESTS, never AUTHORITY**, and that is
     enforced by the SHAPE rather than by a filter: `workspace_agent_templates`
     has no column for `permission_mode`, `metadata`, `sandbox_provider`,
