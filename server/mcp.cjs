@@ -376,9 +376,11 @@ function buildTools() {
  //   'agent'     — a per-agent connect token; you ARE that agent.
  //   'workspace' — the one workspace MCP token.
  //   'user'      — your agensis login.
- //   'invite'    — an invite link (auto-approve).
- // The last three authenticate INTO a workspace; you then register_agent to become an
- // agent. Default kinds = everything that can act in a workspace. Handler enforces it.
+ //   'invite'    — legacy defensive branch; no verifier emits this identity.
+ // Workspace/user identities authenticate INTO a workspace and then call
+ // register_agent. Integration is already pinned to its configured channel;
+ // invite remains only as a fail-closed compatibility branch for injected
+ // identities. Default kinds = everything that can act in a workspace.
  const CONNECTED = ['agent', 'workspace', 'user', 'invite', 'integration'];
  const add = (def) => tools.push({ kinds: CONNECTED, ...def });
 
@@ -395,7 +397,7 @@ function buildTools() {
      workspaceId: identity.workspaceId,
      name: identity.name,
      autoApprove: Boolean(identity.autoApprove),
-     note: 'Call register_agent({ name } or { as: "<handle>" }) to become an agent. You get approved via a popup (or automatically if you joined via an invite link). Then poll claim_job to work as that agent — multiple clients can work as the same one.',
+     note: 'Call register_agent({ name } or { as: "<handle>" }) to become an agent. You get approved via a popup, or automatically when the workspace owner enabled auto-approve. Then poll claim_job to work as that agent — multiple clients can work as the same one.',
     };
    }
    const a = identity.agent || {};
@@ -616,7 +618,7 @@ function buildTools() {
  add({
   name: 'post_message',
   kinds: ['agent', 'integration', 'workspace', 'user', 'invite'],
-  description: 'Post a message into a channel as an agent. Pure "speak" — it does NOT trigger other agents to respond. Use dispatch_agent if you want @mentioned/direct/auto agents to act on it. A workspace/user/invite client MUST pass `as: "<handle>"` to choose which approved agent it speaks as.',
+  description: 'Post a message into a channel as an agent. Pure "speak" — it does NOT trigger other agents to respond. Use dispatch_agent if you want @mentioned/direct/auto agents to act on it. A workspace or user client MUST pass `as: "<handle>"` to choose which approved agent it speaks as.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -624,7 +626,7 @@ function buildTools() {
     content: { type: 'string', description: 'The message text (may include @handle mentions).' },
     thread_parent_id: { type: 'string', description: 'If set, post as a reply in that thread.' },
     broadcast_to_channel: { type: 'boolean', description: 'Only meaningful with thread_parent_id set. An agent working a thread is otherwise invisible on the main channel timeline until its final answer — set this true on a message the human should see NOW even while you keep working: a question, a permission/approval check, or another significant update. Leave false/omitted for routine progress; it stays in the thread.' },
-    as: { type: 'string', description: 'Agent handle to speak as (e.g. "forge"). Required for a workspace/user/invite client; ignored for a per-agent token.' },
+    as: { type: 'string', description: 'Agent handle to speak as (e.g. "forge"). Required for a workspace or user client; ignored for a per-agent token.' },
    },
    required: ['channel_id', 'content'],
    additionalProperties: false,
@@ -645,7 +647,7 @@ function buildTools() {
  add({
   name: 'dispatch_agent',
   kinds: ['agent', 'integration', 'workspace', 'user', 'invite'],
-  description: 'Post a message into a channel as an agent AND advance the conversation, so @mentioned, direct, or auto-mode agents respond. Use this to delegate work or ask a teammate. Returns immediately; replies arrive asynchronously. A workspace/user/invite client MUST pass `as: "<handle>"`.',
+  description: 'Post a message into a channel as an agent AND advance the conversation, so @mentioned, direct, or auto-mode agents respond. Use this to delegate work or ask a teammate. Returns immediately; replies arrive asynchronously. A workspace or user client MUST pass `as: "<handle>"`.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -653,7 +655,7 @@ function buildTools() {
     content: { type: 'string', description: 'The message text. @mention a teammate (e.g. "@scout find X") to direct it.' },
     thread_parent_id: { type: 'string', description: 'If set, dispatch within that thread.' },
     broadcast_to_channel: { type: 'boolean', description: 'Only meaningful with thread_parent_id set. Set true so this message also shows on the main channel timeline (not just the thread) — use for a question, permission check, or other significant update while work continues in the thread.' },
-    as: { type: 'string', description: 'Agent handle to speak as (e.g. "forge"). Required for a workspace/user/invite client; ignored for a per-agent token.' },
+    as: { type: 'string', description: 'Agent handle to speak as (e.g. "forge"). Required for a workspace or user client; ignored for a per-agent token.' },
    },
    required: ['channel_id', 'content'],
    additionalProperties: false,
@@ -1126,6 +1128,11 @@ function buildTools() {
      throw new ToolError(err.message);
     }
    }
+   // item_id does not carry a session in the request, so the shared
+   // runToolForIdentity channel gate cannot protect this path. Resolve the
+   // parent first, then apply the same private-session predicate as every tool
+   // that names session_id directly.
+   await assertChannelInWorkspace(db, existing[0].session_id, identity);
    const status = ['open', 'done', 'answered', 'dismissed'].includes(args?.status) ? args.status : null;
    const rows = await db.unsafe(
     `update thread_items set
@@ -1233,11 +1240,11 @@ function buildTools() {
  //
  //   kinds: ['agent'] ONLY. Every other identity kind acts through `as: "<handle>"`,
  //   which is fine for posting a message and wrong for spending a credential: an
- //   `invite` bearer is a transient 14-day join secret, and letting one drive a
- //   workspace's provider keys would be a strict escalation over anything an invite
- //   can do today. A `workspace`/`user` token has no agent and therefore no skill
- //   layer to authorize against. 'integration' is excluded twice over — by `kinds`
- //   and by connectionCanUseTool, which fails closed for a tool with no entry in
+ //   `invite` is a retired authentication kind retained here as a fail-closed
+ //   compatibility branch. Even an injected legacy identity cannot drive a
+ //   workspace's provider keys. A `workspace`/`user` token has no agent and
+ //   therefore no skill layer to authorize against. 'integration' is excluded
+ //   twice over — by `kinds` and by connectionCanUseTool, which fails closed for a tool with no entry in
  //   flow-integration's TOOL_SCOPES.
  //
  //   THE SCHEMA IS NOT THE GUARD. `additionalProperties: false` is documentation
@@ -1387,15 +1394,16 @@ function buildTools() {
  });
 
  // --- register as an agent, then work AS it over MCP -----------------------
- // A connected client first calls register_agent (popup approval, or auto-approve via an
- // invite link). Once approved, it polls claim_job, generates the reply, and returns it
- // with submit_job_result (or fail_job). Multiple clients can work as the same agent —
- // they share its queue, whoever claims a job answers it.
+ // A connected workspace client first calls register_agent (popup approval, or
+ // owner-configured auto-approve). Once approved, it polls claim_job, generates
+ // the reply, and returns it with submit_job_result (or fail_job). Multiple
+ // clients can work as the same agent — they share its queue, whoever claims a
+ // job answers it.
 
  add({
   name: 'register_agent',
   kinds: ['workspace', 'user', 'invite'],
-  description: 'Register this client as an agent — a brand new one (pass `name`/`handle`) or an existing one (pass `as: "<handle>"`). The workspace owner gets an approve popup; if you joined via an invite link it is auto-approved. Returns a registrationId and status — poll registration_status until "approved", then start claim_job. Call this once after connecting.',
+  description: 'Register this workspace client as an agent — a brand new one (pass `name`/`handle`) or an existing one (pass `as: "<handle>"`). The workspace owner gets an approval popup unless auto-approve is enabled. Returns a registrationId and status — poll registration_status until "approved", then start claim_job. Call this once after connecting.',
   inputSchema: {
    type: 'object',
    properties: {
@@ -1433,11 +1441,10 @@ function buildTools() {
    const name = (typeof args?.name === 'string' && args.name.trim()) ? args.name.trim() : null;
    const handle = (typeof args?.handle === 'string' && args.handle.trim()) ? args.handle.trim() : null;
    if (!asHandle && !name && !handle) throw new ToolError('Pass `as: "<handle>"` to work as an existing agent, or `name` to create a new one.');
-   // Registering a brand-new agent is what invite links are for, and a
-   // declaration for an agent that is pending approval only lands after a
-   // human approves it. But `as` + `identity` against an ALREADY-APPROVED
-   // agent is applied immediately — a write — so an invite whose role cannot
-   // write must not re-avatar or re-voice an agent from a read-only link.
+   // A declaration for an agent that is pending approval only lands after a
+   // human approves it. But `as` + `identity` against an ALREADY-APPROVED agent
+   // is applied immediately — a write — so the retired legacy-invite branch
+   // remains fail-closed for any injected identity whose role cannot write.
    if (asHandle && args?.identity && identity.kind === 'invite'
     && !deps.roleHasWorkspaceCapability(identity.role, 'write')) {
     throw new ToolError('This invite is read-only and cannot change an existing agent\'s identity');
@@ -1482,7 +1489,8 @@ function buildTools() {
  // connected (non-agent) client may only work as an agent it has had approved.
  async function resolveActingAgent(identity, deps, asHandle) {
   if (identity.kind === 'agent') return { id: identity.agentId, name: identity.name };
-  // F8: an invite bearer may only drive an agent when its role grants run_agents.
+  // Fail closed for any injected legacy invite identity: it may only drive an
+  // agent when its role grants run_agents.
   if (identity.kind === 'invite' && !deps.roleHasWorkspaceCapability(identity.role, 'run_agents')) {
    throw new ToolError('This invite is read-only and cannot act as an agent');
   }
@@ -1504,7 +1512,7 @@ function buildTools() {
   inputSchema: {
    type: 'object',
    properties: {
-    as: { type: 'string', description: 'Agent handle to work as (e.g. "q"). Required for an invite-link client; ignored for a per-agent token.' },
+    as: { type: 'string', description: 'Agent handle to work as (e.g. "q"). Required for a workspace or user client; ignored for a per-agent token.' },
    },
    additionalProperties: false,
   },
@@ -1528,7 +1536,7 @@ function buildTools() {
    properties: {
     job_id: { type: 'string', description: 'The jobId from claim_job.' },
     response: { type: 'string', description: 'The agent\'s reply text to post.' },
-    as: { type: 'string', description: 'Agent handle you are working as (invite-link clients). Ignored for a per-agent token.' },
+    as: { type: 'string', description: 'Agent handle you are working as (workspace or user clients). Ignored for a per-agent token.' },
    },
    required: ['job_id', 'response'],
    additionalProperties: false,
@@ -1554,7 +1562,7 @@ function buildTools() {
    properties: {
     job_id: { type: 'string', description: 'The jobId from claim_job.' },
     error: { type: 'string', description: 'Short reason the job failed.' },
-    as: { type: 'string', description: 'Agent handle you are working as (invite-link clients).' },
+    as: { type: 'string', description: 'Agent handle you are working as (workspace or user clients).' },
    },
    required: ['job_id'],
    additionalProperties: false,
@@ -1580,15 +1588,15 @@ function buildTools() {
  add({
   name: 'get_connect_command',
   // Minting a full-permission daemon token is a workspace-admin action. Exclude
-  // 'invite' (a transient join secret must not be able to mint daemon tokens for
-  // arbitrary agents or rotate a running daemon's token). Per-kind authorization
-  // is enforced in run(): agent→self, user→manage role, workspace→owner-level.
+  // the retired 'invite' compatibility kind: it must not mint daemon tokens for
+  // arbitrary agents or rotate a running daemon's token. Per-kind authorization
+  // is enforced in run(): agent→self, user→manage role, workspace→control plane.
   kinds: ['agent', 'workspace', 'user'],
   description: 'Get the daemon connect command for an agent so a host can launch an always-on runtime that backs it. Registering as an agent over MCP does NOT make it "connected" — only a running daemon does. Call this, then run the returned `command` as a long-running background process on the machine where the agent should execute; it holds the connection (the agent shows "Connected") and answers turns via `claude -p`. Returns the full `agensis connect …` command, a freshly-minted aga_ token (shown once), and the resolved model / permission settings. NOTE: this ROTATES the agent\'s connect token (restart any existing daemon with the new one) and sets the agent to daemon run-mode.',
   inputSchema: {
    type: 'object',
    properties: {
-    as: { type: 'string', description: 'Handle of the agent to connect (e.g. "claude"). Required for a workspace/user/invite token; ignored for a per-agent token (which targets itself).' },
+    as: { type: 'string', description: 'Handle of the agent to connect (e.g. "claude"). Required for a workspace or user token; ignored for a per-agent token (which targets itself).' },
     model: { type: 'string', description: 'Override the model the daemon runs (default: the agent\'s configured model).' },
     permission_mode: { type: 'string', description: 'Daemon permission mode: "yolo" (full access, default), "accept_edits", or "default".' },
     base_url: { type: 'string', description: 'Override the backend --url the daemon connects to (default: the server\'s configured daemon base URL).' },
@@ -1777,19 +1785,15 @@ function createBuiltinToolset(deps) {
 /**
  * Which user id, if any, this MCP identity reads private sessions AS.
  *
- * `user` is the obvious one. `workspace` is the interesting one: that token is
- * the workspace's own credential, minted by and for its owner, so it reads as
- * the owner rather than as a stranger — without this, connecting Claude Code to
- * your own workspace would stop being able to open your own DMs, which is the
- * primary way this product is used.
- *
- * `invite` and an unpinned `integration` deliberately resolve to nothing. They
- * are guest and machine credentials; neither is a person with DMs.
+ * Only a real user identity has a user id. A workspace token is a control-plane
+ * credential: it can register agents and create workspace-visible resources,
+ * but it is not a silent owner session and cannot read anybody's private
+ * conversations. A registered per-agent token gets its own participation scope
+ * in mcpSessionScopeSql instead.
  */
 function mcpSubjectUserId(identity) {
  if (!identity) return '';
  if (identity.kind === 'user' && identity.userId) return String(identity.userId);
- if (identity.kind === 'workspace' && identity.ownerUserId) return String(identity.ownerUserId);
  return '';
 }
 
@@ -1863,7 +1867,8 @@ async function assertChannelInWorkspace(db, channelId, identity) {
 async function insertAgentMessage(ctx, channelId, content, threadParentId, actingAgent = null, broadcastToChannel = false) {
  const { db, identity, deps } = ctx;
  await assertChannelInWorkspace(db, channelId, identity);
- // When a non-agent client (workspace/user/invite) speaks via `as: "<handle>"`,
+ // When a non-agent client (workspace/user, or an injected legacy invite
+ // identity) speaks via `as: "<handle>"`,
  // the message must be attributed to that resolved agent, not the raw token —
  // otherwise a workspace-token client could never post AS an agent (the reason
  // post_message/dispatch_agent were unreachable for standard MCP clients).
@@ -2018,13 +2023,14 @@ function createMcpHandler(deps) {
   try {
    if (runtimeSchemaReady) await runtimeSchemaReady;
 
-   // Auth: Bearer = an agent connect token OR a workspace invite token. Required.
+   // Auth: Bearer = an agent, workspace, flow, or user credential. A legacy
+   // human invite URL is deliberately not an MCP bearer.
    const header = req.headers['authorization'] || '';
    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
    const identity = token ? await verifyMcpToken(token, req) : null;
    if (!identity) {
     res.setHeader('WWW-Authenticate', 'Bearer realm="agensis-mcp"');
-    return res.status(401).json(jsonrpcError(null, -32001, 'Unauthorized: valid agent or invite Bearer token required'));
+    return res.status(401).json(jsonrpcError(null, -32001, 'Unauthorized: valid MCP Bearer token required'));
    }
 
    noteLoginTokenUse(identity);
@@ -2071,6 +2077,6 @@ module.exports = {
  SERVER_NAME,
  __test: {
   buildTools, ToolError, toolAllowedForIdentity, runToolForIdentity, KINDS_TO_RECORD,
-  encodeCursor, decodeCursor, keysetClause, nextCursor,
+  encodeCursor, decodeCursor, keysetClause, nextCursor, mcpSessionScopeSql,
  },
 };

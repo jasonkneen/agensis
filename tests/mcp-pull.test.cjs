@@ -3,7 +3,6 @@ const assert = require('node:assert/strict');
 const { __test } = require('../server/index.cjs');
 
 const {
-  verifyInviteToken,
   verifyMcpToken,
   runAgentTurn,
   claimMcpJob,
@@ -37,52 +36,27 @@ function makeDb(handlers = []) {
 function use(handlers) { const db = makeDb(handlers); setTestDb(db); return db; }
 test.afterEach(() => resetTestState());
 
-// --- invite-token auth (the ONE link) --------------------------------------
+// --- MCP bearer classes -----------------------------------------------------
 
-test('verifyInviteToken resolves a valid invite to a workspace identity', async () => {
-  use([{ match: /from workspace_invites where token in \(\$1, \$2\) and status = 'pending'/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: 'cursor@x.com', role: 'editor' }] }]);
-  assert.deepEqual(await verifyInviteToken('tok'), { kind: 'invite', workspaceId: WS, inviteId: 'inv-1', name: 'cursor@x.com', autoApprove: true, role: 'editor' });
-});
-
-test('verifyInviteToken looks up by hash + legacy plaintext for a normal token (L4 dual-path)', async () => {
-  // A normal (non-hash) presented token: $1 = its sha256 hash (matches new
-  // hashed invites), $2 = the raw plaintext (matches legacy invites).
-  const db = use([{ match: /from workspace_invites where token in/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: '', role: 'viewer' }] }]);
-  await verifyInviteToken('plain-token');
-  const call = db.calls.find(c => /workspace_invites where token in/.test(c.n));
-  assert.match(call.params[0], /^[a-f0-9]{64}$/, 'first param is the sha256 hash (new hashed invites)');
-  assert.equal(call.params[1], 'plain-token', 'second param is the raw plaintext (legacy invites)');
-});
-
-test('verifyInviteToken never matches a submitted raw hash against a stored hash (L4 leak guard)', async () => {
-  // A 64-hex value (e.g. a hash leaked from the DB) must NOT authenticate as its
-  // own token: both params are hashes-of-the-input, so neither equals the input.
-  const stolenHash = 'a'.repeat(64);
-  const db = use([{ match: /from workspace_invites where token in/, rows: () => [] }]);
-  await verifyInviteToken(stolenHash);
-  const call = db.calls.find(c => /workspace_invites where token in/.test(c.n));
-  assert.notEqual(call.params[0], stolenHash, 'does not query for the raw submitted hash');
-  assert.notEqual(call.params[1], stolenHash, 'legacy branch also does not use the raw submitted hash');
-  assert.match(call.params[0], /^[a-f0-9]{64}$/);
-});
-
-test('verifyInviteToken returns null for missing/expired/revoked (no row)', async () => {
-  use([{ match: /from workspace_invites/, rows: () => [] }]);
-  assert.equal(await verifyInviteToken('nope'), null);
-  assert.equal(await verifyInviteToken(''), null);
-});
-
-test('verifyMcpToken prefers an agent token, then falls back to an invite token', async () => {
+test('verifyMcpToken prefers a per-agent credential', async () => {
   use([{ match: /from workspace_agents where connect_token_hash/, rows: () => [{ id: 'a1', workspace_id: WS, name: 'Coder', handle: 'coder', enabled: true }] }]);
   assert.equal((await verifyMcpToken('aga')).kind, 'agent');
+});
+
+test('a legacy human invite cannot authenticate at MCP', async () => {
   resetTestState();
-  use([
+  const db = use([
     { match: /from workspace_agents where connect_token_hash/, rows: () => [] },
-    { match: /from workspace_invites/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: '' }] },
+    { match: /from workspaces where mcp_token_hash/, rows: () => [] },
+    { match: /from workspace_invites/, rows: () => {
+      throw new Error('MCP authentication must not query legacy invites');
+    } },
   ]);
-  const i = await verifyMcpToken('invite');
-  assert.equal(i.kind, 'invite');
-  assert.equal(i.name, 'MCP client'); // empty email → default label
+  assert.equal(await verifyMcpToken('legacy-human-invite'), null);
+  assert.ok(
+    !db.calls.some((call) => /workspace_invites/.test(call.n)),
+    'the MCP verifier chain must not even consult workspace_invites',
+  );
 });
 
 test('resolveWorkspaceAgentByHandle matches by handle (slugged)', async () => {
@@ -207,21 +181,12 @@ test('finalizeAgentJobResult inserts a fresh message when there is no placeholde
 const { registerAgentRequest, finalizeRegistrationApproval, decideAgentRegistration, getRegistrationStatus, verifyWorkspaceMcpToken, verifyUserAuthMcpToken, createWorkspaceMcpToken, hashAgentToken } = __test;
 
 test('verifyWorkspaceMcpToken resolves the one workspace token + auto-approve flag', async () => {
-  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS, user_id: 'owner-1', mcp_auto_approve: true }] }]);
-  // ownerUserId is SECURITY-RELEVANT, not decoration: server/mcp.cjs
-  // mcpSubjectUserId reads private sessions AS this user, so a workspace token
-  // that loses it silently stops being able to open its owner's own DMs.
+  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS, mcp_auto_approve: true }] }]);
   assert.deepEqual(await verifyWorkspaceMcpToken('agw_x'), {
-    kind: 'workspace', workspaceId: WS, ownerUserId: 'owner-1', name: 'MCP client', autoApprove: true,
+    kind: 'workspace', workspaceId: WS, name: 'MCP client', autoApprove: true,
   });
   resetTestState();
 
-  // A workspace row with no owner must resolve to '' and NOT to undefined/null:
-  // mcpSubjectUserId treats a falsy value as "no subject", which denies private
-  // sessions. Anything else risks a null landing in a `= $n::uuid` comparison.
-  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS, user_id: null, mcp_auto_approve: false }] }]);
-  assert.equal((await verifyWorkspaceMcpToken('agw_x')).ownerUserId, '');
-  resetTestState();
   use([{ match: /from workspaces where mcp_token_hash/, rows: () => [] }]);
   assert.equal(await verifyWorkspaceMcpToken('nope'), null);
 });

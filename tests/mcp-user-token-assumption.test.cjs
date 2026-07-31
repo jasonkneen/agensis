@@ -5,7 +5,7 @@
 // ----------------------------------------------------------------------------
 // A user's ORDINARY LOGIN TOKEN authenticates at the MCP endpoint.
 //
-// `verifyMcpToken` falls through five verifiers and the last one is
+// `verifyMcpToken` falls through four verifiers and the last one is
 // `verifyUserAuthMcpToken`, which takes an agensis session token and resolves it
 // to a workspace identity. This is DELIBERATE — it arrived with the MCP client
 // registration approval flow, the fall-through order is spelled out in a comment
@@ -35,7 +35,7 @@
 //      looking at -- `order by created_at asc limit 1`.
 //
 // And the reason all five matter: a login token reaches EXACTLY the same tools
-// as the agw_ workspace token, which is manage-gated, revocable, prefixed,
+// as the agw_ workspace token, which is owner-only to mint, revocable, prefixed,
 // non-expiring, and the only thing the UI ever mints (src/lib/mcpConnect.ts).
 // That equality is asserted below, because it is the fact that decides whether
 // this path is worth keeping.
@@ -94,6 +94,12 @@ test('a login token reaches exactly the tools the agw_ workspace token reaches',
   assert.equal(byUser.length, 29);
   assert.ok(byUser.includes('get_connect_command'), 'including the tool that mints an aga_ daemon token');
   assert.ok(byUser.includes('register_agent'));
+  for (const resourceTool of ['create_channel', 'write_doc', 'create_task', 'add_memory']) {
+    assert.ok(
+      byWorkspace.includes(resourceTool),
+      `the agw_ control-plane credential must retain ${resourceTool}`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -167,30 +173,20 @@ test('the agw_ sibling carries a recognisable prefix; a session token cannot', a
   );
 });
 
-test('verifyWorkspaceMcpToken is the manage-gated, revocable alternative', async () => {
-  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS_OLDEST, mcp_auto_approve: true, user_id: 'owner-1' }] }]);
-  // RESTATED when DMs became private (fix/dm-read-scope). The identity now carries
-  // ownerUserId, and it is load-bearing: mcpSubjectUserId (server/mcp.cjs) reads
-  // PRIVATE sessions as that user, so without it, pointing an MCP client at your
-  // own workspace would stop being able to open your own DMs.
-  //
-  // Not an elevation -- an agw_ token is the workspace's own credential and is
-  // manage-gated to mint, so it already speaks for the workspace. But it IS a
-  // real consequence worth stating out loud: whoever holds an agw_ token can read
-  // the owner's private DMs through MCP. That is the price of the token, and the
-  // reason it is revocable by re-minting.
+test('verifyWorkspaceMcpToken is the owner-only, revocable control-plane alternative', async () => {
+  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS_OLDEST, mcp_auto_approve: true }] }]);
   assert.deepEqual(
     await verifyWorkspaceMcpToken('agw_x'),
-    { kind: 'workspace', workspaceId: WS_OLDEST, ownerUserId: 'owner-1', name: 'MCP client', autoApprove: true },
-    'the agw_ identity reads as the workspace owner, deliberately',
+    { kind: 'workspace', workspaceId: WS_OLDEST, name: 'MCP client', autoApprove: true },
+    'the agw_ identity is a workspace principal, not an owner session',
   );
 
-  // The distinction that matters for revocation: this identity carries no LOGIN,
-  // only the owner it reads as -- so re-minting withdraws it without signing any
-  // human out. Revoking a user token bumps a per-user counter and signs them out
+  // Re-minting withdraws this credential without signing any human out.
+  // Revoking a user token bumps a per-user counter and signs them out
   // everywhere; that asymmetry is the whole argument for preferring agw_.
   const wsIdentity = await verifyWorkspaceMcpToken('agw_x');
   assert.equal(wsIdentity.userId, undefined);
+  assert.equal(wsIdentity.ownerUserId, undefined, 'a workspace principal cannot borrow private-session membership');
   assert.equal(wsIdentity.kind, 'workspace');
 });
 

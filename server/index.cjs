@@ -1992,10 +1992,8 @@ async function ensureRuntimeSchema() {
     -- Deliberately a separate table from workspace_invites rather than more
     -- columns on it, because the two have opposite security properties and
     -- merging them would have meant one row type with two lifetimes:
-    --   * workspace_invites lives 14 DAYS and is itself a usable MCP bearer for
-    --     that whole window (verifyInviteToken) — a long-lived credential that
-    --     has to be rendered somewhere, which is the exact shape of the leak
-    --     this feature exists to remove.
+    --   * workspace_invites is the legacy human-accept record and may live for
+    --     14 DAYS. It is NOT an MCP credential.
     --   * a join link lives MINUTES, works exactly once, and is never a bearer
     --     anywhere: it is not in verifyMcpToken's chain and cannot authenticate
     --     a single API call. The only thing it can do is be redeemed, once, at
@@ -2899,9 +2897,9 @@ function isJoinLinkToken(value) {
 // What the short window buys is the failure case. The incident that produced
 // this feature was a credential pasted into a transcript. Transcripts get saved,
 // summarised, replayed into other models, and read by people days later. A
-// 14-day invite link (which is what workspace_invites still is, AND which is a
-// live MCP bearer for that whole window) pasted into one is a standing door. The
-// same paste of a join link is, fifteen minutes later, a dead string.
+// 14-day legacy human invite pasted into one remains redeemable by a human for
+// that window. The same paste of a join link is, fifteen minutes later, a dead
+// string, and neither link authenticates at the MCP endpoint.
 //
 // Overridable for deployments that need a courier window, clamped to [1m, 24h]:
 // below a minute it would fail honest users on a slow sign-up, and a link that
@@ -3532,47 +3530,19 @@ async function verifyAgentConnectToken(token, req = null) {
  };
 }
 
-// The SAME invite link a human accepts can be used by an MCP client as its Bearer.
-// It grants workspace access; the client then works AS an agent (claim_job { as }).
-async function verifyInviteToken(token) {
- if (!token || typeof token !== 'string') return null;
- const rows = await getDb().unsafe(
-  // Dual-path (L4): new invites store the token hash; legacy invites store the
-  // plaintext. Match either so both keep working during the transition.
-  // F8 (P7): only a still-pending invite may authenticate as an MCP bearer — once
-  // accepted (single-use consume in the /invites/:token/accept route) the link dies
-  // as a live 14-day credential; the human keeps access via their own session token.
-  `select id, workspace_id, email, role from workspace_invites
-      where token in ($1, $2) and status = 'pending'
-        and (expires_at is null or expires_at > now())
-      limit 1`,
-  inviteTokenLookupParams(token),
- );
- const invite = rows[0];
- if (!invite) return null;
- // An invite link is pre-authorization → a client joining through it is auto-approved.
- return { kind: 'invite', workspaceId: invite.workspace_id, inviteId: invite.id, name: invite.email || 'MCP client', autoApprove: true, role: invite.role };
-}
-
 // The one workspace MCP token (issued in settings). Authenticates any client into the
 // workspace; the client then registers as an agent (popup approval unless auto-approve).
 async function verifyWorkspaceMcpToken(token) {
  if (!token || typeof token !== 'string') return null;
  const rows = await getDb().unsafe(
-  `select id, user_id, mcp_auto_approve from workspaces where mcp_token_hash = $1 and mcp_token_hash <> '' limit 1`,
+  `select id, mcp_auto_approve from workspaces where mcp_token_hash = $1 and mcp_token_hash <> '' limit 1`,
   [hashAgentToken(token)],
  );
  const ws = rows[0];
  if (!ws) return null;
- // ownerUserId is what this token reads PRIVATE sessions as (mcpSubjectUserId in
- // server/mcp.cjs). The workspace token is the workspace's own credential, so
- // reading as its owner is what it already is — not an elevation. Without it,
- // pointing an MCP client at your own workspace would stop being able to open
- // your own DMs.
  return {
   kind: 'workspace',
   workspaceId: ws.id,
-  ownerUserId: ws.user_id || '',
   name: 'MCP client',
   autoApprove: Boolean(ws.mcp_auto_approve),
  };
@@ -3602,15 +3572,15 @@ async function verifyFlowConnectionToken(token) {
  }
 }
 
-// The MCP endpoint accepts, in priority order: a per-agent connect token (acts AS that
-// agent), the one workspace MCP token, an invite link (auto-approve), or the user's
-// agensis login. The latter three authenticate into the workspace; the client then
-// calls register_agent to become an agent.
+// The MCP endpoint accepts, in priority order: a per-agent connect token (acts AS
+// that agent), a flow token, the one workspace MCP token, or the user's agensis
+// login. The latter two authenticate into the workspace; the client then calls
+// register_agent to become an agent. Legacy workspace_invites remain human-accept
+// URLs only and deliberately do not authenticate here.
 async function verifyMcpToken(token, req = null) {
  return (await verifyAgentConnectToken(token, req))
   || (await verifyFlowConnectionToken(token))
   || (await verifyWorkspaceMcpToken(token))
-  || (await verifyInviteToken(token))
   || (await verifyUserAuthMcpToken(token));
 }
 
@@ -8799,7 +8769,6 @@ module.exports = {
   LIVENESS_PING_INTERVAL_MS: realtime.LIVENESS_PING_INTERVAL_MS,
   clearPendingJobFailures,
   // MCP connect-a-client model — exercised against a fake DB.
-  verifyInviteToken,
   verifyWorkspaceMcpToken,
   verifyUserAuthMcpToken,
   verifyMcpToken,

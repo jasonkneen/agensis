@@ -355,12 +355,13 @@ test('appendSessionAccessClause constrains chat_sessions and messages, and nothi
 // The MCP surface
 // ---------------------------------------------------------------------------
 
-test('an AGENT is scoped by participation, a human by membership', () => {
+test('an AGENT is scoped by participation, a human by membership, and a workspace principal to visible sessions', () => {
  // The core product loop: an agent must keep reading its own DM.
  // chat_session_members holds USER ids and an agent is not a user, so the two
  // identities cannot share a branch.
- const { buildTools } = require('../server/mcp.cjs').__test;
+ const { buildTools, mcpSessionScopeSql } = require('../server/mcp.cjs').__test;
  assert.ok(typeof buildTools === 'function');
+ assert.ok(typeof mcpSessionScopeSql === 'function');
 
  const mcpSrc = require('node:fs').readFileSync(require('node:path').join(__dirname, '../server/mcp.cjs'), 'utf8');
  // Source-text, because these branches are inside a SQL string builder that is
@@ -369,7 +370,26 @@ test('an AGENT is scoped by participation, a human by membership', () => {
  assert.match(mcpSrc, /function mcpSessionScopeSql/);
  assert.match(mcpSrc, /identity\?\.kind === 'agent' && identity\.agentId/);
  assert.match(mcpSrc, /mp->>'agent_id'/, 'the agent branch must key on the roster, not on members');
- assert.match(mcpSrc, /kind === 'workspace' && identity\.ownerUserId/, 'a workspace token reads as its owner');
+
+ // A workspace token is a control-plane principal, not a user session. It gets
+ // the open-session predicate with no membership bind and therefore cannot read
+ // an owner's or member's private session.
+ const workspaceParams = [];
+ const workspaceScope = mcpSessionScopeSql(
+  { kind: 'workspace', workspaceId: WORKSPACE, ownerUserId: OWNER },
+  's',
+  workspaceParams,
+ );
+ assert.deepEqual(workspaceParams, [], 'workspace scope must not bind any borrowed user id');
+ assert.doesNotMatch(workspaceScope, /chat_session_members/);
+ assert.match(workspaceScope, /visibility/);
+ assert.match(workspaceScope, /Direct messages/);
+ assert.doesNotMatch(mcpSrc, /kind === 'workspace' && identity\.ownerUserId/);
+
+ const userParams = [];
+ const userScope = mcpSessionScopeSql({ kind: 'user', userId: OWNER }, 's', userParams);
+ assert.deepEqual(userParams, [OWNER]);
+ assert.match(userScope, /chat_session_members/, 'a real user keeps their membership branch');
 
  // Every tool that names a channel must go through the gate.
  const callSites = mcpSrc.match(/assertChannelInWorkspace\(db, \w+, identity\)/g) || [];
@@ -466,7 +486,7 @@ test('a private row with an unresolvable member set is sent to nobody', async ()
  assert.equal(sent.length, 0, 'a failed membership lookup must withhold, never broadcast');
 });
 
-test('list_channels and search_messages carry the scope predicate', () => {
+test('aggregate reads and item-id-only thread updates carry the session scope', () => {
  const mcpSrc = require('node:fs').readFileSync(require('node:path').join(__dirname, '../server/mcp.cjs'), 'utf8');
  // search_messages is the widest read in the MCP surface — it spans every
  // session at once, and was returning matches out of other people's DMs.
@@ -474,4 +494,10 @@ test('list_channels and search_messages carry the scope predicate', () => {
  assert.match(search.slice(0, 2000), /mcpSessionScopeSql\(identity, 's', params\)/);
  const list = mcpSrc.slice(mcpSrc.indexOf("name: 'list_channels'"));
  assert.match(list.slice(0, 2000), /mcpSessionScopeSql\(identity, 'chat_sessions', params\)/);
+ const updateThreadItem = mcpSrc.slice(mcpSrc.indexOf("name: 'update_thread_item'"));
+ assert.match(
+  updateThreadItem.slice(0, 2500),
+  /assertChannelInWorkspace\(db, existing\[0\]\.session_id, identity\)/,
+  'an item-id-only update must resolve and gate its parent session before returning private thread data',
+ );
 });
