@@ -30,6 +30,23 @@ test('runtime creates agent_connections before the bridge foreign key', () => {
   assert.ok(connections >= 0 && bridges > connections);
 });
 
+test('Nostr community connection and member tables stay in all schema paths', () => {
+  const sources = [
+    ['runtime bootstrap', read('server/index.cjs')],
+    ['canonical schema', read('database/neon-schema.sql')],
+    ['forward migration', read('supabase/migrations/20260731210000_nostr_community_bridges.sql')],
+  ];
+  for (const [label, source] of sources) {
+    assert.match(source, /CREATE TABLE IF NOT EXISTS nostr_community_connections\s*\(/i, `${label} must create Nostr connections`);
+    assert.match(source, /CREATE TABLE IF NOT EXISTS nostr_community_members\s*\(/i, `${label} must create Nostr member profiles`);
+    assert.match(source, /nostr_connection_id/i, `${label} must link channel bridges to the community connection`);
+    assert.match(source, /nostr_initial_sync_completed/i, `${label} must track initial sync per channel bridge`);
+    assert.match(source, /nostr_last_event_at/i, `${label} must track a replay cursor per channel bridge`);
+    assert.match(source, /uq_channel_bridges_nostr_channel/i, `${label} must keep one Agensis channel per remote Nostr channel`);
+    assert.match(source, /'nostr'/i, `${label} must permit the Nostr bridge provider`);
+  }
+});
+
 test('rate limits exist in runtime, canonical schema, and migration', () => {
   for (const [label, source] of [
     ['runtime bootstrap', read('server/index.cjs')],

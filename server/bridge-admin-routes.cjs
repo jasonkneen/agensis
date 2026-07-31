@@ -29,6 +29,7 @@ const PROVIDER_FIELDS = {
  whatsapp: [],
  signal: [],
  openclaw: ['gatewayUrl', 'authToken'],
+ nostr: [],
 };
 
 // What the user has to be told to do, per provider, once the bridge exists.
@@ -46,6 +47,8 @@ function setupHintFor(provider, { eventUrl }) {
    return 'Scan the QR code with Signal on your phone (Settings, then Linked devices).';
   case 'openclaw':
    return 'Make sure your OpenClaw gateway is running and reachable from the machine running the agensis daemon.';
+  case 'nostr':
+   return 'Nostr communities are connected from the dedicated invite flow.';
   default:
    return '';
  }
@@ -71,6 +74,9 @@ function mountBridgeAdminRoutes(app, deps) {
    if (!sessionId) return jsonError(res, 400, new Error('sessionId is required'));
    const lane = bridges.laneForProvider(provider);
    if (!lane) return jsonError(res, 400, new Error(`Unknown bridge provider: ${provider}`));
+   if (provider === 'nostr') {
+    return jsonError(res, 400, new Error('Nostr communities must be connected with an invite'));
+   }
 
    const workspaceId = await resolveWorkspaceIdForSession(sessionId);
    if (!workspaceId) return jsonError(res, 404, new Error('Channel not found'));
@@ -108,6 +114,7 @@ function mountBridgeAdminRoutes(app, deps) {
              lane = excluded.lane,
              external_id = excluded.external_id,
              config = excluded.config,
+             nostr_connection_id = null,
              status = 'pending',
              last_error = null,
              enabled = true,

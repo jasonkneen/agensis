@@ -149,6 +149,8 @@ const {
  telegramAdapter, telegramSetWebhook, slackAdapter, mountBridgeRoutes,
 } = require('./bridge-routes.cjs');
 const { mountBridgeAdminRoutes } = require('./bridge-admin-routes.cjs');
+const { createNostrCommunityManager } = require('./nostr-community-manager.cjs');
+const { mountNostrCommunityRoutes } = require('./nostr-community-routes.cjs');
 const { mountPetsRoutes } = require('./pets-routes.cjs');
 const { mountHealthRoutes } = require('./health-routes.cjs');
 const { mountStaticSite } = require('./static-site.cjs');
@@ -1198,6 +1200,49 @@ async function ensureRuntimeSchema() {
       updated_at timestamptz DEFAULT now()
     );
 
+    -- One hosted Nostr identity + relay connection per imported Nostr community.
+    -- The private key is NOT in this table; it lives encrypted in
+    -- workspace_secrets under bridge:nostr:<id>:nsec.
+    CREATE TABLE IF NOT EXISTS nostr_community_connections (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      relay_http_url text NOT NULL,
+      relay_ws_url text NOT NULL,
+      community_id text NOT NULL DEFAULT '',
+      host text NOT NULL DEFAULT '',
+      name text NOT NULL DEFAULT 'Nostr community',
+      description text NOT NULL DEFAULT '',
+      relay_pubkey text NOT NULL DEFAULT '',
+      member_pubkey text NOT NULL DEFAULT '',
+      policy_version text NOT NULL DEFAULT '',
+      status text NOT NULL DEFAULT 'pending',
+      last_error text,
+      last_event_at bigint NOT NULL DEFAULT 0,
+      last_inbound_at timestamptz,
+      last_outbound_at timestamptz,
+      created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      UNIQUE (workspace_id, relay_ws_url)
+    );
+    CREATE INDEX IF NOT EXISTS idx_nostr_community_connections_workspace
+      ON nostr_community_connections(workspace_id);
+
+    CREATE TABLE IF NOT EXISTS nostr_community_members (
+      connection_id uuid NOT NULL REFERENCES nostr_community_connections(id) ON DELETE CASCADE,
+      channel_id text NOT NULL,
+      pubkey text NOT NULL,
+      name text NOT NULL DEFAULT '',
+      handle text NOT NULL DEFAULT '',
+      picture text NOT NULL DEFAULT '',
+      is_agent boolean NOT NULL DEFAULT false,
+      aliases jsonb NOT NULL DEFAULT '[]'::jsonb,
+      updated_at timestamptz DEFAULT now(),
+      PRIMARY KEY (connection_id, channel_id, pubkey)
+    );
+    CREATE INDEX IF NOT EXISTS idx_nostr_community_members_lookup
+      ON nostr_community_members(connection_id, channel_id, lower(handle));
+
     -- A channel fed by an OUTSIDE network. One row = one (channel, provider,
     -- external chat) triple, so a channel mirrors exactly one remote room and a
     -- remote room lands in exactly one channel.
@@ -1222,6 +1267,9 @@ async function ensureRuntimeSchema() {
       lane text NOT NULL,
       external_id text NOT NULL DEFAULT '',
       config jsonb NOT NULL DEFAULT '{}'::jsonb,
+      nostr_connection_id uuid REFERENCES nostr_community_connections(id) ON DELETE CASCADE,
+      nostr_last_event_at bigint NOT NULL DEFAULT 0,
+      nostr_initial_sync_completed boolean NOT NULL DEFAULT false,
       -- The daemon currently carrying this bridge. ON DELETE SET NULL so pruning
       -- an offline connection marks the bridge unattached instead of deleting it.
       connection_id uuid REFERENCES agent_connections(id) ON DELETE SET NULL,
@@ -1240,7 +1288,16 @@ async function ensureRuntimeSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_bridges_session ON channel_bridges(session_id);
     ALTER TABLE channel_bridges DROP CONSTRAINT IF EXISTS channel_bridges_provider_check;
     ALTER TABLE channel_bridges ADD CONSTRAINT channel_bridges_provider_check
-      CHECK (provider IN ('telegram', 'slack', 'whatsapp', 'signal', 'openclaw'));
+      CHECK (provider IN ('telegram', 'slack', 'whatsapp', 'signal', 'openclaw', 'nostr'));
+    ALTER TABLE channel_bridges ADD COLUMN IF NOT EXISTS nostr_connection_id uuid
+      REFERENCES nostr_community_connections(id) ON DELETE CASCADE;
+    ALTER TABLE channel_bridges ADD COLUMN IF NOT EXISTS nostr_last_event_at bigint NOT NULL DEFAULT 0;
+    ALTER TABLE channel_bridges ADD COLUMN IF NOT EXISTS nostr_initial_sync_completed boolean NOT NULL DEFAULT false;
+    CREATE INDEX IF NOT EXISTS idx_channel_bridges_nostr_connection
+      ON channel_bridges(nostr_connection_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_bridges_nostr_channel
+      ON channel_bridges(nostr_connection_id, external_id)
+      WHERE nostr_connection_id IS NOT NULL;
     ALTER TABLE channel_bridges DROP CONSTRAINT IF EXISTS channel_bridges_lane_check;
     ALTER TABLE channel_bridges ADD CONSTRAINT channel_bridges_lane_check
       CHECK (lane IN ('hub', 'daemon'));
@@ -7698,6 +7755,15 @@ const channelBridges = createChannelBridges({
 // a test can construct channelBridges with no adapters and no network at all.
 channelBridges.registerHubAdapter(telegramAdapter());
 channelBridges.registerHubAdapter(slackAdapter());
+const nostrCommunities = createNostrCommunityManager({
+ getDb,
+ getWorkspaceSecretValue,
+ setWorkspaceSecretValue,
+ assertSafeOutboundUrl,
+ bridges: channelBridges,
+ notifyDbSubscribers: (...args) => realtime.notifyDbSubscribers(...args),
+});
+channelBridges.registerHubAdapter(nostrCommunities.hubAdapter);
 
 // One relay for the process; per-socket state hangs off `ws.voiceStt`.
 const voiceRelay = createVoiceRelay();
@@ -7892,6 +7958,7 @@ function createApp() {
    throw error;
   })
   : Promise.resolve();
+ app.locals.runtimeSchemaReady = runtimeSchemaReady;
  // Terminal handler attached at creation, so a boot-time DDL failure is never an
  // unhandled rejection — Node's default mode terminates the process, which would
  // make the per-request 500 degradation below unreachable. The gate still awaits
@@ -7947,6 +8014,9 @@ function createApp() {
   ...coreDeps(), bridges: channelBridges, findConnectedAgent, requestBaseUrl,
   resolveWorkspaceIdForSession, telegramSetWebhook,
   getWorkspaceRole, roleHasWorkspaceCapability,
+ });
+ mountNostrCommunityRoutes(app, {
+  ...coreDeps(), nostrCommunities,
  });
 
  mountWorkspacesRoutes(app, {
@@ -8563,6 +8633,9 @@ function startBackendServer(port = DEFAULT_PORT, { handleSignals = false } = {})
  });
  void reconcileAgentConnectionsAtStartup();
  void reconcileSchedulesAtStartup();
+ void Promise.resolve(app.locals.runtimeSchemaReady)
+  .then(() => nostrCommunities.startAll())
+  .catch(error => console.error('[nostr] connection startup failed:', error?.message || error));
  // sweepAutomationRuns stays on the 30s tick: reclaiming a lease that expired
  // because a process died is housekeeping, and running it every second would be
  // 30x the query for no benefit. The DRAIN moved to its own 1s worker below.
@@ -8673,6 +8746,7 @@ function startBackendServer(port = DEFAULT_PORT, { handleSignals = false } = {})
   clearInterval(automationWorker);
   clearInterval(suggestionSweeper);
   wss.close();
+  nostrCommunities.stopAll();
   realtime.reset();
  });
 
@@ -8766,6 +8840,7 @@ function resetTestState() {
  farmIntegrationCoreInstance = undefined;
  flowConnectionCoreInstance = undefined;
  agentConnections.reset();
+ nostrCommunities.stopAll();
  clearPendingJobFailures();
  taskDispatch.reset();
  conversationLocks.clear();
