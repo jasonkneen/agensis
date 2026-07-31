@@ -169,6 +169,13 @@ export default defineConfig({
     },
   },
   server: {
+    // Parallel review/implementation worktrees live beneath this checkout.
+    // Without explicit ignores, another agent's build rewrites thousands of
+    // dist files and Vite treats every one as an application change, causing
+    // reload storms in the browser being used for acceptance testing.
+    watch: {
+      ignored: ['**/.worktrees/**', '**/.claude/worktrees/**'],
+    },
     proxy: {
       '/backend': {
         target: 'http://127.0.0.1:3142',
