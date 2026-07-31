@@ -67,17 +67,17 @@ export function ChatWindowBody({
   const { memoryFacts, activeThreadId } = contentProps;
 
   const handleSendMessage = useCallback(
-    (content: string, model: string, mf?: MemoryFact[], docs?: Document[], attachments?: MessageAttachment[]) => {
+    (content: string, mf?: MemoryFact[], docs?: Document[], attachments?: MessageAttachment[]) => {
       if (winSession && !isActiveSession) onSetActiveSession(winSession);
-      return onAppSendMessage(content, model, mf, docs, null, winSession || null, undefined, attachments);
+      return onAppSendMessage(content, 'auto', mf, docs, null, winSession || null, undefined, attachments);
     },
     [winSession, isActiveSession, onSetActiveSession, onAppSendMessage],
   );
 
   const handleSendThreadReply = useCallback(
-    (content: string, model: string, broadcastToChannel?: boolean) => {
+    (content: string, broadcastToChannel?: boolean) => {
       if (winSession && !isActiveSession) onSetActiveSession(winSession);
-      return onAppSendMessage(content, model, memoryFacts, undefined, activeThreadId, winSession || null, broadcastToChannel);
+      return onAppSendMessage(content, 'auto', memoryFacts, undefined, activeThreadId, winSession || null, broadcastToChannel);
     },
     [winSession, isActiveSession, onSetActiveSession, onAppSendMessage, memoryFacts, activeThreadId],
   );

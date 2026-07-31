@@ -29,19 +29,15 @@ import {
   CURRENT_USER_EMAIL,
   CURRENT_USER_ID,
   INBOX_MARKERS,
-  INVITE_MARKERS,
   TASK_MARKERS,
   ACTIVITY_MARKERS,
   WORKSPACE_ID,
-  asyncNoop,
   asyncNull,
   asyncTrue,
   noop,
   seedActivity,
   seedAgents,
   seedInboxItems,
-  seedInvites,
-  seedMembers,
   seedTaskMembers,
   seedTasks,
 } from './fixtures';
@@ -49,7 +45,6 @@ import {
 import { AgentsWindowContent } from '../../src/components/windows/AgentsWindowContent';
 import { TasksWindowContent } from '../../src/components/windows/TasksWindowContent';
 import { ActivityWindowContent } from '../../src/components/windows/ActivityWindowContent';
-import { UsersWindowContent } from '../../src/components/windows/UsersWindowContent';
 import { InboxWindowContent } from '../../src/components/inbox/InboxWindowContent';
 
 /** The key `viewPreferenceKey` builds. Written raw so a change to it is caught. */
@@ -166,28 +161,6 @@ const TRAPS: TrapCase[] = [
       backend.routes.set('/inbox', { items: seedInboxItems({ unread: false }), unreadCount: 0 });
     },
     render: () => createElement(InboxWindowContent, { workspaceId: WORKSPACE_ID }),
-  },
-  {
-    surface: 'Members',
-    preference: 'users.show-dismissed',
-    stored: '0',
-    note: 'hide-dismissed with every invite dismissed',
-    seeded: INVITE_MARKERS,
-    render: () => createElement(UsersWindowContent, {
-      workspaceId: WORKSPACE_ID,
-      workspaceName: 'Smoke',
-      currentUserId: CURRENT_USER_ID,
-      currentUserEmail: CURRENT_USER_EMAIL,
-      inviteOrigin: 'https://smoke.test',
-      members: seedMembers(),
-      invites: seedInvites({ dismissed_at: '2026-07-26T00:00:00.000Z' }),
-      onCreateInvite: asyncNull,
-      onRevokeInvite: asyncNoop,
-      onSetInviteDismissed: asyncNoop,
-      onDismissSpentInvites: asyncNoop,
-      onRemoveMember: asyncNoop,
-      onChangeMemberRole: asyncNoop,
-    }),
   },
 ];
 

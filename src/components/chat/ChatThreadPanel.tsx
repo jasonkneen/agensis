@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 import { Bot, CornerDownRight, Send, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { ThreadWorkBadge } from './AgentWorkBadge';
@@ -9,9 +9,7 @@ import { usePermissionRequests } from '../../hooks/usePermissionRequests';
 import { resolvePermissionRequest } from './permissionRequests';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { validAgentAccentColor } from '../../lib/agentAccent';
-import type { AIModel, Document, Message as ChatMessage, WorkspaceAgent } from '../../types';
-import { ModelSelector } from './ModelSelector';
-import { availableChatModelId } from '../../lib/sharedModels';
+import type { Document, Message as ChatMessage, WorkspaceAgent } from '../../types';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 
@@ -84,11 +82,10 @@ interface ChatThreadPanelProps {
   streaming: boolean;
   resolveMessageAccent?: (message: ChatMessage) => string;
   // May resolve `{ delivered: false }` — the reply was rejected and rolled back.
-  onSendReply: (content: string, model: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
+  onSendReply: (content: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   onClose: () => void;
   embedded?: boolean;
-  models?: AIModel[];
   agents?: WorkspaceAgent[];
   documents?: Document[];
   workspaceId?: string | null;
@@ -103,14 +100,12 @@ export function ChatThreadPanel({
   onAgentProfile,
   onClose,
   embedded = false,
-  models,
   agents,
   documents,
   workspaceId,
 }: ChatThreadPanelProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const m = useComposerMentions({ agents, documents, workspaceId, inputRef });
-  const [model, setModel] = useState('auto');
   const [autoScroll, setAutoScroll] = useState(true);
   // "Send to channel": a thread reply stays in the thread but is ALSO shown in
   // the channel. Off by default — a thread exists
@@ -129,10 +124,6 @@ export function ChatThreadPanel({
     resolvePermissionRequest(message, permissionRequestsById),
   );
 
-  useEffect(() => {
-    if (models) setModel(current => availableChatModelId(current, models));
-  }, [models]);
-
   useComposerAutosize(inputRef, m.input);
 
   const handleSend = async () => {
@@ -147,7 +138,7 @@ export function ChatThreadPanel({
     setBroadcastToChannel(false);
     inputRef.current?.focus();
 
-    const outcome = await onSendReply(content, model, previousBroadcast);
+    const outcome = await onSendReply(content, previousBroadcast);
     if (outcome && outcome.delivered === false) {
       m.restore(draft);
       setBroadcastToChannel(previousBroadcast);
@@ -249,7 +240,6 @@ export function ChatThreadPanel({
             />
             <InputGroupAddon align="block-end" className={COMPOSER_ADDON_CLASS}>
               <div className="flex min-w-0 items-center gap-2">
-                <ModelSelector value={model} onChange={setModel} models={models} />
                 <label className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
                   <Checkbox
                     checked={broadcastToChannel}

@@ -45,7 +45,6 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { ChatThreadPanel } from '../chat/ChatThreadPanel';
-import { ModelSelector } from '../chat/ModelSelector';
 import { SubThreadPanel } from '../chat/SubThreadPanel';
 import {
   ComposerAddContent,
@@ -193,7 +192,6 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { useMyThreads } from '../../hooks/useMyThreads';
-import { useGateways } from '../../hooks/useGateways';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
 import { huddleAgentOptions } from '../../lib/huddleAgents';
@@ -208,9 +206,7 @@ import { buildThreadReplySummaries, formatLastReplyTime, type ThreadReplySummary
 import { useSharedNow } from '../../hooks/useSharedNow';
 import { ThreadWorkBadge } from '../chat/AgentWorkBadge';
 import { cn } from '@/lib/utils';
-import { getSettings } from '../../lib/settings';
 import { shouldAnnounceTyping } from '../../lib/typingPresence';
-import { availableChatModelId, workspaceChatModels } from '../../lib/sharedModels';
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
 import { channelComposerPlaceholder, directMessageComposerPlaceholder } from '@/lib/composerPlaceholder';
 import { useComposerAutosize } from '@/hooks/useComposerAutosize';
@@ -243,12 +239,12 @@ interface ChatWindowContentProps {
   // `attachments` are structured references to uploaded_files rows, for
   // rendering. They are IN ADDITION to the "[Linked files]" text that
   // buildFileContext folds into `content` for the agent — not a replacement.
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], attachments?: MessageAttachment[]) => void | Promise<SendOutcome | void>;
+  onSendMessage: (content: string, facts?: MemoryFact[], docs?: Document[], attachments?: MessageAttachment[]) => void | Promise<SendOutcome | void>;
   onOpenThread?: (messageId: string) => void;
   onCloseThread?: () => void;
   // broadcastToChannel = the thread composer's "Send to channel" switch: post the
   // reply in the thread AND show it in the channel (messages.broadcast_to_channel).
-  onSendThreadReply?: (content: string, model: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
+  onSendThreadReply?: (content: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
   /**
    * Tell the app a channel's own row changed (title, icon, description,
    * intent, participants). The window keeps its own copy of the channel for
@@ -285,7 +281,7 @@ interface ChatWindowContentProps {
   activeSubThread?: ChatSession | null;
   subThreadMessages?: ChatMessage[];
   subThreadStreaming?: boolean;
-  onOpenSubThread?: (session: ChatSession) => void;
+  onOpenSubThread?: (session: ChatSession, hostSessionId?: string) => void;
   onCloseSubThread?: () => void;
   onCreateSubThread?: (messageId: string, agent: WorkspaceAgent, messageContent?: string) => void;
   onSendSubThreadMessage?: (content: string) => void;
@@ -379,7 +375,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
 }: ChatWindowContentProps) {
   const [subThreadPickerMessageId, setSubThreadPickerMessageId] = useState<string | null>(null);
   const [input, setInput] = useState('');
-  const [selectedModel, setSelectedModel] = useState(() => getSettings().ai_default_model || 'auto');
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
   const [linkedGroups, setLinkedGroups] = useState<CanvasGroup[]>([]);
   const [linkedFiles, setLinkedFiles] = useState<LinkedFile[]>([]);
@@ -469,16 +464,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     () => composerProjectGroups.flatMap(group => group.files.slice(0, 8).map(file => ({ file, source: group.source }))),
     [composerProjectGroups],
   );
-  const { gateways } = useGateways(workspaceId || null);
-  const modelOptions = useMemo(
-    () => workspaceChatModels(workspaceId, agentConnections, gateways),
-    [workspaceId, agentConnections, gateways],
-  );
-
-  useEffect(() => {
-    setSelectedModel(current => availableChatModelId(current, modelOptions));
-  }, [modelOptions]);
-
   const skillOptions = useMemo(() => {
     const fromCapabilities = systemCapabilities?.skills
       .filter(skill => skill.available && (skill.type === 'skills' || skill.type === 'agents'))
@@ -580,7 +565,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     const attachments = buildMessageAttachments(draft.linkedFiles);
     const outcome = await onSendMessage(
       content,
-      selectedModel,
       memoryFacts,
       draft.linkedDocs.length > 0 ? draft.linkedDocs : undefined,
       attachments.length > 0 ? attachments : undefined,
@@ -1722,7 +1706,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
     setSidePanel('thread');
   };
   const openSubThreadPanel = (session: ChatSession) => {
-    onOpenSubThread?.(session);
+    onOpenSubThread?.(session, inferredSessionId || undefined);
     setSidePanel('sub-thread');
   };
   const openAgentProfilePanel = (agentIdOrHandle?: string | null) => {
@@ -2192,7 +2176,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 onBlockerAnswered={(item, response) => {
                   // Post the answered blocker back into the chat so it's tracked
                   // in the thread and wakes the agent that raised it.
-                  onSendMessage(`**Answered blocker:** ${item.content}\n\n${response}`, 'auto');
+                  onSendMessage(`**Answered blocker:** ${item.content}\n\n${response}`);
                 }}
               />
             )}
@@ -2519,7 +2503,6 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                     </div>
 
                     <div className="flex min-w-0 items-center gap-1">
-                      <ModelSelector value={selectedModel} onChange={setSelectedModel} models={modelOptions} />
                       <Button
                         type="button"
                         size="icon-sm"
@@ -2595,7 +2578,6 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
               streaming={streaming}
               resolveMessageAccent={(message) => resolveMessageAccent(message, agentAccentLookup)}
               onSendReply={onSendThreadReply}
-              models={modelOptions}
               agents={agents}
               workspaceId={workspaceId}
               onAgentProfile={openAgentProfilePanel}

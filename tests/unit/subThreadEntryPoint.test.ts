@@ -28,6 +28,14 @@ describe('sub-thread creation has a live entry point', () => {
     expect(app, 'createSubThread is exported but never invoked').toMatch(/await createSubThread\(/);
   });
 
+  it('dispatching to one agent creates a one-agent roster', () => {
+    const app = read('src/App.tsx');
+    const hook = read('src/hooks/useSubThreads.ts');
+    expect(app).not.toContain('additionalAgents:');
+    expect(hook).not.toContain('additionalAgents');
+    expect(hook).toContain('participants: [primaryParticipant]');
+  });
+
   it('the prop reaches the message bubble that renders the button', () => {
     const app = read('src/App.tsx');
     const chat = read('src/components/windows/ChatWindowContent.tsx');

@@ -1,21 +1,26 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { backendClient, apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
-import { extractSseDataLines, finalAssistantStreamContent, messageText, parseAiStreamPayload } from '../lib/chatStream';
 import { classifyWriteFailure, type SendOutcome } from '../lib/writeFeedback';
+import { messageText } from '../lib/chatStream';
 import type { ChatSession, Message } from '../types';
 
 export function useSubThreads(workspaceId: string | null) {
   const [subThreadsByMessage, setSubThreadsByMessage] = useState<Record<string, ChatSession[]>>({});
   const [activeSubThread, setActiveSubThread] = useState<ChatSession | null>(null);
+  const [activeSubThreadHostSessionId, setActiveSubThreadHostSessionId] = useState<string | null>(null);
   const [subThreadMessages, setSubThreadMessages] = useState<Message[]>([]);
-  const [subThreadStreaming, setSubThreadStreaming] = useState(false);
-  const streamAbortRef = useRef<AbortController | null>(null);
-  useEffect(() => () => streamAbortRef.current?.abort(), []);
+  const activeSubThreadIdRef = useRef<string | null>(null);
 
   // Load all sub-thread sessions for this workspace so message badges show immediately.
   useEffect(() => {
+    activeSubThreadIdRef.current = null;
+    setActiveSubThread(null);
+    setActiveSubThreadHostSessionId(null);
+    setSubThreadMessages([]);
+    setSubThreadsByMessage({});
     if (!workspaceId) return;
+    let cancelled = false;
     backendClient
       .from('chat_sessions')
       .select('*')
@@ -23,7 +28,7 @@ export function useSubThreads(workspaceId: string | null) {
       .not('parent_message_id', 'is', null)
       .order('created_at', { ascending: true })
       .then(({ data }) => {
-        if (!data) return;
+        if (cancelled || !data) return;
         const grouped: Record<string, ChatSession[]> = {};
         for (const session of data) {
           const mid = session.parent_message_id as string;
@@ -32,6 +37,7 @@ export function useSubThreads(workspaceId: string | null) {
         }
         setSubThreadsByMessage(grouped);
       });
+    return () => { cancelled = true; };
   }, [workspaceId]);
 
   const loadSubThreadsForMessage = useCallback(async (messageId: string) => {
@@ -53,7 +59,9 @@ export function useSubThreads(workspaceId: string | null) {
       .select('*')
       .eq('session_id', sessionId)
       .order('created_at', { ascending: true });
-    if (data) {
+    // A slower request for A must not replace B after the user has already
+    // switched panels. The main session loader uses the same identity guard.
+    if (data && activeSubThreadIdRef.current === sessionId) {
       setSubThreadMessages(data.map(normalizeMessage));
     }
   }, []);
@@ -70,6 +78,8 @@ export function useSubThreads(workspaceId: string | null) {
     },
     (payload) => {
       if (!messageDeduper.shouldProcess(payload)) return;
+      const payloadSessionId = String(payload.new?.session_id || payload.old?.session_id || '');
+      if (payloadSessionId && payloadSessionId !== activeSubThreadIdRef.current) return;
       if (payload.eventType === 'INSERT') {
         const row = payload.new;
         if (!row) return;
@@ -123,7 +133,6 @@ export function useSubThreads(workspaceId: string | null) {
     agentName: string,
     options?: {
       contextMessage?: string;
-      additionalAgents?: Array<{ id: string | null; name: string; handle: string }>;
     },
   ): Promise<ChatSession | null> => {
     if (!workspaceId) return null;
@@ -142,16 +151,6 @@ export function useSubThreads(workspaceId: string | null) {
       direct: true,
       added_at: now,
     };
-    const extraParticipants = (options?.additionalAgents || []).map(a => ({
-      id: a.id ? `agent:${a.id}` : `agent:${a.handle}`,
-      name: a.name,
-      kind: 'agent',
-      handle: a.handle,
-      agent_id: a.id,
-      direct: false,
-      added_at: now,
-    }));
-    const participants = [primaryParticipant, ...extraParticipants];
     const { data } = await backendClient
       .from('chat_sessions')
       .insert({
@@ -161,7 +160,7 @@ export function useSubThreads(workspaceId: string | null) {
         conversation_mode: 'auto',
         folder: 'sub-thread',
         parent_message_id: messageId,
-        participants,
+        participants: [primaryParticipant],
       })
       .select()
       .single();
@@ -200,14 +199,18 @@ export function useSubThreads(workspaceId: string | null) {
     return data;
   }, [workspaceId]);
 
-  const openSubThread = useCallback(async (session: ChatSession) => {
+  const openSubThread = useCallback(async (session: ChatSession, hostSessionId?: string) => {
+    activeSubThreadIdRef.current = session.id;
     setActiveSubThread(session);
+    setActiveSubThreadHostSessionId(hostSessionId || null);
     setSubThreadMessages([]);
     await loadSubThreadMessages(session.id);
   }, [loadSubThreadMessages]);
 
   const closeSubThread = useCallback(() => {
+    activeSubThreadIdRef.current = null;
     setActiveSubThread(null);
+    setActiveSubThreadHostSessionId(null);
     setSubThreadMessages([]);
   }, []);
 
@@ -258,10 +261,6 @@ export function useSubThreads(workspaceId: string | null) {
         messageId: userMsgId,
         content,
         threadParentId: null,
-        messages: [...subThreadMessages, userMsg].map(m => ({
-          role: m.role,
-          content: messageText(m.content),
-        })),
       }),
     }).catch(() => null);
 
@@ -280,112 +279,29 @@ export function useSubThreads(workspaceId: string | null) {
       return { delivered: true };
     }
 
-    // Fallback: stream direct AI if dispatch failed entirely
-    if (!dispatchResponse?.ok) {
-      setSubThreadStreaming(true);
-      const assistantMsgId = crypto.randomUUID();
-      const placeholder: Message = {
-        id: assistantMsgId,
-        session_id: activeSubThread.id,
-        role: 'assistant',
-        content: '',
-        created_at: new Date().toISOString(),
-      };
-      setSubThreadMessages(prev => [...prev, placeholder]);
-
-      let flushHandle: number | null = null;
-
-      try {
-        const controller = new AbortController();
-        streamAbortRef.current = controller;
-        const response = await fetch(apiUrl('/backend/ai-chat'), {
-          method: 'POST',
-          signal: controller.signal,
-          headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
-          body: JSON.stringify({
-            workspaceId,
-            messages: [...subThreadMessages, userMsg].map(m => ({
-              role: m.role,
-              content: messageText(m.content),
-            })),
-            model: 'auto',
-          }),
-        });
-
-        if (!response.ok || !response.body) {
-          setSubThreadMessages(prev => prev.map(m =>
-            m.id === assistantMsgId ? { ...m, content: 'Failed to get response.' } : m));
-          // The user's message is saved; only the reply failed.
-          return { delivered: true };
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let fullContent = '';
-        let streamError = '';
-        let buffer = '';
-
-        // Use the shared parser: the /backend/ai-chat stream frames are
-        // { delta: { text } } (not choices[].delta.content), so the old shape
-        // yielded blank replies and persisted an empty message (M13).
-        const flushStreamContent = () => {
-          flushHandle = null;
-          const snapshot = fullContent;
-          setSubThreadMessages(prev => prev.map(m =>
-            m.id === assistantMsgId ? { ...m, content: snapshot } : m));
-        };
-
-        const consume = (data: string) => {
-          if (data === '[DONE]') return;
-          try {
-            const { text, error } = parseAiStreamPayload(JSON.parse(data));
-            if (error) { streamError = error; return; }
-            if (text) {
-              fullContent += text;
-              if (flushHandle === null) flushHandle = requestAnimationFrame(flushStreamContent);
-            }
-          } catch { /* ignore malformed frame */ }
-        };
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const { data, remainder } = extractSseDataLines(buffer);
-          buffer = remainder;
-          for (const line of data) consume(line);
-        }
-        // Flush any trailing partial line left in the buffer.
-        for (const line of extractSseDataLines(buffer, true).data) consume(line);
-
-        if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
-
-        const finalContent = finalAssistantStreamContent(fullContent, streamError);
-        setSubThreadMessages(prev => prev.map(m =>
-          m.id === assistantMsgId ? { ...m, content: finalContent } : m));
-        await backendClient.from('messages').insert({
-          id: assistantMsgId,
-          session_id: activeSubThread.id,
-          role: 'assistant',
-          content: finalContent,
-        });
-      } catch (error) {
-        if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
-        // Unmount aborted the stream. The user's message is saved either way.
-        if (error instanceof DOMException && error.name === 'AbortError') return { delivered: true };
-      } finally {
-        setSubThreadStreaming(false);
-      }
-    }
-    // The user's message is stored; only the reply may be missing.
+    // Never substitute a generic model for the agent the user chose. The old
+    // fallback called /ai-chat with model:auto and no persona, identity, or
+    // configured agent model, then rendered that output as the delegate's.
+    const detail = String(dispatchPayload?.error?.message || '').trim();
+    setSubThreadMessages(prev => [...prev, {
+      id: crypto.randomUUID(),
+      session_id: activeSubThread.id,
+      role: 'assistant',
+      sender_name: 'Agensis',
+      content: detail
+        ? `Couldn't reach the configured agent — ${detail}`
+        : "Couldn't reach the configured agent. Your message was saved, but no fallback model was run.",
+      created_at: new Date().toISOString(),
+    }]);
     return { delivered: true };
   }, [activeSubThread, workspaceId, subThreadMessages]);
 
   return {
     subThreadsByMessage,
     activeSubThread,
+    activeSubThreadHostSessionId,
     subThreadMessages,
-    subThreadStreaming,
+    subThreadStreaming: false,
     loadSubThreadsForMessage,
     createSubThread,
     openSubThread,

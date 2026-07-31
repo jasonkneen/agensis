@@ -38,7 +38,6 @@ import { FeedbackButton } from './components/feedback/FeedbackButton';
 import { NotificationsBell } from './components/notifications/NotificationsBell';
 import { Separator } from './components/ui/separator';
 import { apiAuthHeaders, apiUrl, backendClient, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
-import { inviteUrl } from './hooks/useWorkspaceUsers';
 import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from './lib/openpets';
 import {
@@ -744,6 +743,7 @@ function AppContent() {
   const {
     subThreadsByMessage,
     activeSubThread,
+    activeSubThreadHostSessionId,
     subThreadMessages,
     subThreadStreaming,
     createSubThread,
@@ -1499,20 +1499,20 @@ function AppContent() {
     cleanupLaunchParams();
   }, [user, wsLoading, activeWorkspaceId, workspaces, handleOpenAgents]);
 
-  // Quick "copy invite link" used by the presence popup: mints an editor invite
-  // for the active workspace and copies the shareable URL.
+  // Quick "copy invite link" used by the presence popup. This is the SAME
+  // short-lived, single-use URL for a person or an agent; the join page chooses
+  // the correct instructions without User-Agent sniffing.
   const handleCopyInviteLink = useCallback(async (): Promise<string | null> => {
     if (!activeWorkspaceId) return null;
     try {
-      const res = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(activeWorkspaceId)}/invites`), {
+      const res = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(activeWorkspaceId)}/join-links`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
-        body: JSON.stringify({ role: 'editor' }),
+        body: JSON.stringify({ role: 'editor', audience: 'both', label: 'Quick invite' }),
       });
       const payload = await res.json().catch(() => null);
-      const token = payload?.data?.token;
-      if (!token) return null;
-      const url = inviteUrl(window.location.origin, token);
+      const url = typeof payload?.data?.url === 'string' ? payload.data.url : '';
+      if (!res.ok || !url) return null;
       await navigator.clipboard?.writeText(url);
       return url;
     } catch {
@@ -1571,7 +1571,7 @@ function AppContent() {
         const res = await fetch(apiUrl(`/backend/join/${encodeURIComponent(token)}/redeem`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
-          body: JSON.stringify({}),
+          body: JSON.stringify({ as: 'human' }),
         });
         joined = res.ok;
       } catch {
@@ -2131,20 +2131,12 @@ function AppContent() {
   const handleToggleWorkspaceCtx = useCallback(() => setUseWorkspaceCtx(v => !v), []);
   const handleCreateSubThreadFromScene = useCallback(async (messageId: string, agent: WorkspaceAgent, messageContent?: string) => {
     const slug = agent.handle || agent.name.toLowerCase().replace(/\s+/g, '-');
-    const otherAgents = agents
-      .filter(a => a.enabled !== false && a.id !== agent.id)
-      .map(a => ({
-        id: a.id,
-        name: a.name,
-        handle: a.handle || a.name.toLowerCase().replace(/\s+/g, '-'),
-      }));
     await createSubThread(messageId, slug, agent.id, agent.name, {
       contextMessage: messageContent,
-      additionalAgents: otherAgents,
     });
     // Background task — don't open the sub-thread panel; let it run autonomously.
     // The user can view it from the Threads panel.
-  }, [agents, createSubThread]);
+  }, [createSubThread]);
   const handleDeleteDocumentFromScene = useCallback(async (id: string) => {
     const doc = documents.find(d => d.id === id);
     await deleteDocument(id);
@@ -2473,6 +2465,7 @@ function AppContent() {
                   onDisconnectAgent={disconnectAgent}
                   onCreateAgentWebhook={createAgentWebhook}
                   onUpdateAgentWebhook={updateAgentWebhook}
+                  onInviteAgent={handleOpenUsers}
                   onOpenConnections={() => openLayerSettings(activeLayerId, 'connections')}
                   topLevelMessages={topLevelMessages}
                   threadMessages={threadMessages}
@@ -2482,6 +2475,7 @@ function AppContent() {
                   onCloseThread={closeThread}
                   subThreadsByMessage={subThreadsByMessage}
                   activeSubThread={activeSubThread}
+                  activeSubThreadHostSessionId={activeSubThreadHostSessionId}
                   subThreadMessages={subThreadMessages}
                   subThreadStreaming={subThreadStreaming}
                   onOpenSubThread={openSubThread}
@@ -2711,6 +2705,7 @@ function AppContent() {
           onClose={() => setSettingsOpen(false)}
           workspace={settingsWorkspace}
           secretsWorkspaceId={activeWorkspace?.id ?? null}
+          isWorkspaceOwner={Boolean(activeWorkspace?.user_id && activeWorkspace.user_id === user.id)}
           initialTab={settingsInitialTab}
           onUpdateWorkspace={handleUpdateSettingsWorkspace}
           workspaceName={settingsWorkspace?.name || 'Personal'}
@@ -2815,6 +2810,7 @@ function CanvasLayerScene({
   onSessionMetaSaved,
   onCreateAgentWebhook,
   onUpdateAgentWebhook,
+  onInviteAgent,
   onOpenConnections,
   topLevelMessages,
   threadMessages,
@@ -2824,6 +2820,7 @@ function CanvasLayerScene({
   onCloseThread,
   subThreadsByMessage,
   activeSubThread,
+  activeSubThreadHostSessionId,
   subThreadMessages,
   subThreadStreaming,
   onOpenSubThread,
@@ -2912,6 +2909,7 @@ function CanvasLayerScene({
   onSessionMetaSaved?: (sessionId: string, patch: Record<string, unknown>) => void;
   onCreateAgentWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
   onUpdateAgentWebhook: (id: string, updates: Partial<AgentWebhook>) => Promise<AgentWebhook | null>;
+  onInviteAgent: () => void;
   onOpenConnections: () => void;
   topLevelMessages: import('./types').Message[];
   threadMessages: import('./types').Message[];
@@ -2921,9 +2919,10 @@ function CanvasLayerScene({
   onCloseThread: () => void;
   subThreadsByMessage: Record<string, import('./types').ChatSession[]>;
   activeSubThread: import('./types').ChatSession | null;
+  activeSubThreadHostSessionId: string | null;
   subThreadMessages: import('./types').Message[];
   subThreadStreaming: boolean;
-  onOpenSubThread: (session: import('./types').ChatSession) => void;
+  onOpenSubThread: (session: import('./types').ChatSession, hostSessionId?: string) => void;
   onCloseSubThread: () => void;
   onCreateSubThread: (messageId: string, agent: WorkspaceAgent) => void;
   onSendSubThreadMessage: (content: string) => void;
@@ -3059,6 +3058,9 @@ function CanvasLayerScene({
 
         if (win.type === 'chat') {
           const winSession = sessions.find(s => s.id === win.sessionId);
+          const ownsActiveSubThread = Boolean(
+            winSession && activeSubThreadHostSessionId === winSession.id,
+          );
           return (
             <FloatingWindowShell
               key={win.id}
@@ -3143,9 +3145,9 @@ function CanvasLayerScene({
                     onOpenThread={onOpenThread}
                     onCloseThread={onCloseThread}
                     subThreadsByMessage={subThreadsByMessage}
-                    activeSubThread={activeSubThread}
-                    subThreadMessages={subThreadMessages}
-                    subThreadStreaming={subThreadStreaming}
+                    activeSubThread={ownsActiveSubThread ? activeSubThread : null}
+                    subThreadMessages={ownsActiveSubThread ? subThreadMessages : EMPTY_MESSAGES}
+                    subThreadStreaming={ownsActiveSubThread && subThreadStreaming}
                     onOpenSubThread={onOpenSubThread}
                     onCloseSubThread={onCloseSubThread}
                     onCreateSubThread={onCreateSubThreadProp}
@@ -3435,6 +3437,7 @@ function CanvasLayerScene({
                   onDisconnectAgent={onDisconnectAgent}
                   onCreateWebhook={onCreateAgentWebhook}
                   onUpdateWebhook={onUpdateAgentWebhook}
+                  onInviteAgent={onInviteAgent}
                   onOpenConnections={onOpenConnections}
                   // The chat surface needs ~40 inputs that already exist here;
                   // handing the agents window a closure keeps that wiring in ONE
@@ -3821,9 +3824,9 @@ function InactiveChatWindow({
 
   // Stable references, or the React.memo on ChatWindowContent never hits.
   const handleSendMessage = useCallback(
-    (content: string, model: string, mf?: MemoryFact[], docs?: Document[], attachments?: MessageAttachment[]) => {
+    (content: string, mf?: MemoryFact[], docs?: Document[], attachments?: MessageAttachment[]) => {
       onSetActiveSession(session);
-      return onSendMessage(content, model, mf, docs, null, session, undefined, attachments);
+      return onSendMessage(content, 'auto', mf, docs, null, session, undefined, attachments);
     },
     [onSetActiveSession, onSendMessage, session],
   );

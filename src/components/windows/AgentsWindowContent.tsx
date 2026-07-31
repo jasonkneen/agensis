@@ -188,6 +188,9 @@ interface AgentsWindowContentProps {
   onDisconnectAgent: (id: string) => Promise<unknown>;
   onCreateWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
   onUpdateWebhook: (id: string, updates: Partial<AgentWebhook>) => Promise<AgentWebhook | null>;
+  /** Opens the single-use person/agent join-link surface. */
+  onInviteAgent: () => void;
+  /** Opens the owner-issued whole-workspace control credential surface. */
   onOpenConnections: () => void;
 }
 
@@ -324,6 +327,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   onDisconnectAgent,
   onCreateWebhook,
   onUpdateWebhook,
+  onInviteAgent,
   onOpenConnections,
 }: AgentsWindowContentProps) {
   // Creation flow: null = not creating, 'choose' = Template/Custom/BYO picker,
@@ -688,7 +692,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
             type="button"
             size="sm"
             variant="outline"
-            onClick={onOpenConnections}
+            onClick={onInviteAgent}
           >
             <Plug data-icon="inline-start" />
             Invite an Agent
@@ -739,8 +743,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   onClick={onOpenConnections}
                   className="group flex min-h-[104px] flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
                   <span className="grid size-9 place-items-center rounded-lg bg-muted"><Plug className="size-5" /></span>
-                  <span className="text-sm font-semibold">Bring your own</span>
-                  <span className="text-xs text-muted-foreground">Connect a local CLI or MCP client as an agent.</span>
+                  <span className="text-sm font-semibold">Workspace control</span>
+                  <span className="text-xs text-muted-foreground">Connect a trusted MCP client that may register agents and create shared resources.</span>
                 </button>
               </div>
 

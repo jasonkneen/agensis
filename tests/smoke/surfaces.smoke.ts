@@ -141,17 +141,14 @@ describe('smoke: every surface shows its data', () => {
 
   it('Members lists every member', async () => {
     mounted = await mount(createElement(UsersWindowContent, {
-      workspaceId: WORKSPACE_ID,
       workspaceName: 'Smoke',
       currentUserId: CURRENT_USER_ID,
       currentUserEmail: CURRENT_USER_EMAIL,
-      inviteOrigin: 'https://smoke.test',
       members: seedMembers(),
-      invites: [],
-      onCreateInvite: asyncNull,
-      onRevokeInvite: asyncNoop,
-      onSetInviteDismissed: asyncNoop,
-      onDismissSpentInvites: asyncNoop,
+      joinLinks: [],
+      canManage: true,
+      onCreateJoinLink: async () => { throw new Error('not called'); },
+      onRevokeJoinLink: asyncNoop,
       onRemoveMember: asyncNoop,
       onChangeMemberRole: asyncNoop,
     }));

@@ -22,7 +22,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import type { ThemeMode } from '../../hooks/useTheme';
-import { AI_MODELS, type Workspace } from '../../types';
+import type { Workspace } from '../../types';
 import { applyUiAppearanceSettings, getSettings, setSetting, type AppSettings, type NotificationLevel, type UiFontFamily } from '../../lib/settings';
 import { THEME_PRESETS, applyThemePreset } from '../../showcase/themePresets';
 import { NEO_THEMES, NEO_GROUPS, applyNeoTheme, resolveNeoStyle } from '../../showcase/neoThemes';
@@ -74,6 +74,8 @@ interface SettingsDialogProps {
   // prop above is a layer-flavored view whose id is the canvas layer id (e.g.
   // 'base'), which is NOT a uuid and must never reach a workspace_id column.
   secretsWorkspaceId: string | null;
+  /** Workspace control credentials are owner-only, not merely manage-gated. */
+  isWorkspaceOwner: boolean;
   // Which tab to show when the dialog opens (defaults to General). Lets callers
   // deep-link — e.g. the Agents window "Connect a client" button opens Connections.
   initialTab?: SettingsTabId;
@@ -109,6 +111,7 @@ export function SettingsDialog({
   themeMode,
   onThemeChange,
   secretsWorkspaceId,
+  isWorkspaceOwner,
   initialTab,
 }: SettingsDialogProps) {
   const [tab, setTab] = useState<TabId>(initialTab ?? 'general');
@@ -162,7 +165,12 @@ export function SettingsDialog({
               )}
               {tab === 'ai' && <AIPanel workspaceId={secretsWorkspaceId} />}
               {tab === 'tools' && <ToolsPanel workspace={workspace} />}
-              {tab === 'connections' && <ConnectionsPanel workspaceId={secretsWorkspaceId} />}
+              {tab === 'connections' && (
+                <ConnectionsPanel
+                  workspaceId={secretsWorkspaceId}
+                  isWorkspaceOwner={isWorkspaceOwner}
+                />
+              )}
               {tab === 'secrets' && <SecretsPanel workspaceId={secretsWorkspaceId} />}
               {tab === 'audit' && <AuditLogPanel workspaceId={secretsWorkspaceId} />}
               {tab === 'usage' && <UsagePanel workspaceId={secretsWorkspaceId} workspaceName={workspaceName} />}
@@ -942,8 +950,9 @@ function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
     <Field>
       <FieldLabel>Inference gateways</FieldLabel>
       <FieldDescription>
-        Route a chat through an external OpenAI-compatible endpoint. The API key is stored
-        encrypted and never shown again. Select a gateway from the model picker in any chat.
+        Store an external OpenAI-compatible endpoint for provider integrations. The API key is
+        encrypted and never shown again. Chat composers route through configured agents and do
+        not choose models directly.
       </FieldDescription>
       {gateways.length > 0 && (
         <div className="mt-2 space-y-1.5">
@@ -988,57 +997,10 @@ function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
 }
 
 function AIPanel({ workspaceId }: { workspaceId: string | null }) {
-  const [model, setModel] = useState(getSettings().ai_default_model);
   const [useCtx, setUseCtx] = useState(getSettings().ai_use_workspace_context);
-  const [models, setModels] = useState(AI_MODELS);
-
-  useEffect(() => {
-    if (!workspaceId) {
-      setModels(AI_MODELS);
-      return;
-    }
-    let cancelled = false;
-    fetch(apiUrl(`/backend/inference/v1/models?workspaceId=${encodeURIComponent(workspaceId)}`), { headers: apiAuthHeaders() })
-      .then(async response => response.ok ? response.json() : Promise.reject(new Error('Shared models unavailable')))
-      .then(payload => {
-        if (cancelled) return;
-        const shared = (Array.isArray(payload?.data) ? payload.data : []).map((entry: { id: string; farm?: { modelId?: string; host?: string; provider?: string } }) => ({
-          id: entry.id,
-          label: `${entry.farm?.modelId || entry.id} · ${entry.farm?.host || 'Agensis agent'}`,
-          description: `${entry.farm?.provider || 'local'} workspace model`,
-        }));
-        const next = [...AI_MODELS, ...shared];
-        if (model && !next.some(item => item.id === model)) next.unshift({ id: model, label: model, description: 'Saved model (currently unavailable)' });
-        setModels(next);
-      })
-      .catch(() => setModels(model && !AI_MODELS.some(item => item.id === model)
-        ? [{ id: model, label: model, description: 'Saved model (currently unavailable)' }, ...AI_MODELS]
-        : AI_MODELS));
-    return () => { cancelled = true; };
-  }, [workspaceId, model]);
 
   return (
     <FieldGroup>
-      <Field>
-        <FieldLabel htmlFor="default-ai-model">Default model</FieldLabel>
-        <NativeSelect
-          id="default-ai-model"
-          value={model}
-          onChange={e => {
-            setModel(e.target.value);
-            setSetting('ai_default_model', e.target.value);
-          }}
-          className="w-full"
-        >
-          {models.map(item => (
-            <NativeSelectOption key={item.id} value={item.id}>
-              {item.label} - {item.description}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-        <FieldDescription>The model new chats start with. You can still switch per chat.</FieldDescription>
-      </Field>
-
       <Field orientation="horizontal">
         <Switch
           checked={useCtx}
@@ -1155,11 +1117,17 @@ function ToolsPanel({ workspace }: { workspace: Workspace | null }) {
   );
 }
 
-// Workspace connections — mint the ONE workspace MCP token, show the paste-able
-// config, and toggle auto-approve. Any client that pastes this token can
-// register_agent and join the whole workspace; this is intentionally NOT scoped
-// to a single agent (that confusion is why it lives here, not the Agents window).
-function ConnectionsPanel({ workspaceId }: { workspaceId: string | null }) {
+// Workspace control — mint the ONE owner-issued workspace MCP token, show the
+// paste-able config, and toggle auto-approve. It can register agents and create
+// workspace-visible resources, but it is not a human identity and does not
+// inherit the owner's private-session access.
+function ConnectionsPanel({
+  workspaceId,
+  isWorkspaceOwner,
+}: {
+  workspaceId: string | null;
+  isWorkspaceOwner: boolean;
+}) {
   const [info, setInfo] = useState<McpConnectInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [auto, setAuto] = useState(false);
@@ -1167,11 +1135,23 @@ function ConnectionsPanel({ workspaceId }: { workspaceId: string | null }) {
   const [err, setErr] = useState<string | null>(null);
   const [flowsOpen, setFlowsOpen] = useState(false);
 
+  useEffect(() => {
+    // A token is shown once. It must never remain on screen after the person
+    // switches to another workspace, where it would look like that workspace's
+    // credential and could be copied under the wrong name.
+    setInfo(null);
+    setAuto(false);
+    setCopied(null);
+    setErr(null);
+    setFlowsOpen(false);
+  }, [workspaceId]);
+
   const generate = async () => {
     // No workspace id means the workspace list never loaded. The button used to
     // be silently `disabled` in that state, so clicking it did nothing at all
     // and nothing said why. Say why instead.
     if (!workspaceId) { setErr(WORKSPACE_UNAVAILABLE.reason); return; }
+    if (!isWorkspaceOwner) { setErr('Only the workspace owner can issue its control credential.'); return; }
     setBusy(true); setErr(null);
     try {
       const next = await generateMcpToken(workspaceId);
@@ -1184,6 +1164,7 @@ function ConnectionsPanel({ workspaceId }: { workspaceId: string | null }) {
 
   const toggleAuto = async (next: boolean) => {
     if (!workspaceId) { setErr(WORKSPACE_UNAVAILABLE.reason); return; }
+    if (!isWorkspaceOwner) { setErr('Only the workspace owner can change workspace credential policy.'); return; }
     setAuto(next);
     setErr(null);
     try {
@@ -1201,34 +1182,42 @@ function ConnectionsPanel({ workspaceId }: { workspaceId: string | null }) {
 
   return (
     <FieldGroup>
-      <FieldDescription>
-        Hand out one key that lets an MCP client — Claude Code, Cursor, Codex — join <strong>this whole workspace</strong> as an agent.
-        It is not tied to a single agent: any client that pastes this token can register itself, which you approve with a popup
-        (or instantly when auto-approve is on).
-      </FieldDescription>
+      {isWorkspaceOwner ? (
+        <>
+          <FieldDescription>
+            Issue the owner-only workspace control credential for an MCP client such as Claude Code, Cursor, or Codex.
+            A holder may register agents and create workspace-visible resources, but does not become you and cannot silently read private conversations.
+          </FieldDescription>
 
-      {!info ? (
-        <Button type="button" onClick={generate} disabled={busy}>{busy ? 'Generating…' : 'Generate connection token'}</Button>
-      ) : (
-        <div className="space-y-3 overflow-hidden">
-          {/* Placeholder token, never the live one — see ConnectMcpDialog. */}
-          <ConnectionRow label="claude mcp add" value={info.claudeMcpAdd} copied={copied === 'cmd'} onCopy={() => copy('cmd', info.claudeMcpAdd)} />
-          <p className="pl-[7.5rem] text-xs text-muted-foreground">
-            Replace <code className="rounded bg-muted px-1">aga_YOUR_AGENT_TOKEN</code> with the bearer token below.
-          </p>
-          <ConnectionRow label="Endpoint" value={info.endpoint} copied={copied === 'ep'} onCopy={() => copy('ep', info.endpoint)} />
-          <ConnectionRow label="Bearer token" value={info.token} secret copied={copied === 'tok'} onCopy={() => copy('tok', info.token)} />
-          <div className="flex items-center justify-between rounded-md border bg-card/50 px-3 py-2">
-            <div>
-              <div className="text-sm">Auto-approve new agents</div>
-              <div className="text-xs text-muted-foreground">Skip the popup — a registering client is approved instantly.</div>
+          {!info ? (
+            <Button type="button" onClick={generate} disabled={busy}>{busy ? 'Generating…' : 'Generate workspace control credential'}</Button>
+          ) : (
+            <div className="space-y-3 overflow-hidden">
+              {/* Placeholder token, never the live one — see ConnectMcpDialog. */}
+              <ConnectionRow label="claude mcp add" value={info.claudeMcpAdd} copied={copied === 'cmd'} onCopy={() => copy('cmd', info.claudeMcpAdd)} />
+              <p className="pl-[7.5rem] text-xs text-muted-foreground">
+                Replace <code className="rounded bg-muted px-1">aga_YOUR_AGENT_TOKEN</code> with the bearer token below.
+              </p>
+              <ConnectionRow label="Endpoint" value={info.endpoint} copied={copied === 'ep'} onCopy={() => copy('ep', info.endpoint)} />
+              <ConnectionRow label="Bearer token" value={info.token} secret copied={copied === 'tok'} onCopy={() => copy('tok', info.token)} />
+              <div className="flex items-center justify-between rounded-md border bg-card/50 px-3 py-2">
+                <div>
+                  <div className="text-sm">Auto-approve new agents</div>
+                  <div className="text-xs text-muted-foreground">Skip the popup — a registering client is approved instantly.</div>
+                </div>
+                <Switch checked={auto} onCheckedChange={toggleAuto} aria-label="Auto-approve new agents" />
+              </div>
+              <Button type="button" variant="ghost" size="sm" onClick={generate} disabled={busy}>Rotate credential</Button>
             </div>
-            <Switch checked={auto} onCheckedChange={toggleAuto} aria-label="Auto-approve new agents" />
-          </div>
-          <Button type="button" variant="ghost" size="sm" onClick={generate} disabled={busy}>Regenerate token</Button>
-        </div>
+          )}
+          {err && <p className="text-xs text-destructive">{err}</p>}
+        </>
+      ) : (
+        <FieldDescription>
+          Workspace control credentials are owner-only because they can register agents and create shared resources.
+          Ask the owner for an individual join URL when you only need to invite one person or agent.
+        </FieldDescription>
       )}
-      {err && <p className="text-xs text-destructive">{err}</p>}
 
       <div className="border-t border-border pt-4">
         <div className="mb-2 text-sm font-medium">Connect Flows</div>
@@ -1278,6 +1267,15 @@ function SecretsPanel({ workspaceId }: { workspaceId: string | null }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState(0);
+
+  useEffect(() => {
+    // Drafts are plaintext secrets. Keeping one after a workspace switch risks
+    // writing workspace A's credential into workspace B under the same key.
+    setDrafts({});
+    setReveal({});
+    setSavedAt(0);
+    setError(null);
+  }, [workspaceId]);
 
   const load = useCallback(async () => {
     if (!workspaceId) {
