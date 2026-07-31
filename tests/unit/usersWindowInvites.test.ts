@@ -1,174 +1,293 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { UsersWindow } from '../../src/components/windows/UsersWindow';
 import { UsersWindowContent } from '../../src/components/windows/UsersWindowContent';
-import type { WorkspaceInvite } from '../../src/hooks/useWorkspaceUsers';
-
-// inviteDismissal.test.ts proves the rule. This file proves the LIST OBEYS it —
-// that the Dismiss button is genuinely absent next to a live link rather than
-// merely computed-absent, and that a dismissed row is reachable again through
-// the toggle. Those are the two things a human would check by eye, and neither
-// is visible from the pure function alone.
+import type {
+  CreatedWorkspaceJoinLink,
+  CreateWorkspaceJoinLinkInput,
+  WorkspaceJoinLink,
+  WorkspaceMember,
+} from '../../src/features/workspace-connections';
 
 const NOW = Date.now();
 const YESTERDAY = new Date(NOW - 86_400_000).toISOString();
-const NEXT_WEEK = new Date(NOW + 7 * 86_400_000).toISOString();
+const IN_TEN_MINUTES = new Date(NOW + 10 * 60_000).toISOString();
 
-function makeInvite(o: Partial<WorkspaceInvite> & { id: string }): WorkspaceInvite {
+function makeMember(overrides: Partial<WorkspaceMember> = {}): WorkspaceMember {
   return {
-    workspace_id: 'ws-1',
-    token: '',
-    email: '',
+    id: 'member-1',
+    user_id: 'u-member',
+    email: 'member@example.test',
     role: 'editor',
-    status: 'pending',
-    created_by_email: 'owner@example.com',
-    accepted_by_email: null,
-    accepted_at: null,
-    expires_at: NEXT_WEEK,
-    dismissed_at: null,
+    invited_by: 'u-owner',
     created_at: YESTERDAY,
-    ...o,
+    ...overrides,
   };
 }
 
-const INVITES: WorkspaceInvite[] = [
-  makeInvite({ id: 'live', email: 'live@example.com' }),
-  makeInvite({ id: 'revoked', email: 'revoked@example.com', status: 'revoked' }),
-  makeInvite({
-    id: 'accepted',
-    email: 'accepted@example.com',
-    status: 'accepted',
-    accepted_by_email: 'joined@example.com',
-    accepted_at: YESTERDAY,
-  }),
-  makeInvite({ id: 'expired', email: 'expired@example.com', expires_at: YESTERDAY }),
-  makeInvite({ id: 'tidied', email: 'tidied@example.com', status: 'revoked', dismissed_at: YESTERDAY }),
-];
+function makeJoinLink(overrides: Partial<WorkspaceJoinLink> = {}): WorkspaceJoinLink {
+  return {
+    id: 'join-1',
+    workspace_id: 'ws-1',
+    label: 'Build agent',
+    role: 'editor',
+    audience: 'both',
+    status: 'pending',
+    redeemed_as: null,
+    redeemed_by: null,
+    redeemed_agent_id: null,
+    redeemed_at: null,
+    expires_at: IN_TEN_MINUTES,
+    created_by: 'u-owner',
+    created_by_email: 'owner@example.test',
+    created_at: YESTERDAY,
+    ...overrides,
+  };
+}
+
+function makeCreatedJoinLink(overrides: Partial<CreatedWorkspaceJoinLink> = {}): CreatedWorkspaceJoinLink {
+  return {
+    ...makeJoinLink(),
+    url: 'https://agensis.io/join/agj_once',
+    expiresInMs: 15 * 60_000,
+    singleUse: true,
+    ...overrides,
+  };
+}
 
 let container: HTMLDivElement;
 let root: Root;
-let calls: Array<{ id: string; dismissed: boolean }>;
-let bulkCalls: number;
+let originalFetch: typeof globalThis.fetch;
+let originalClipboard: PropertyDescriptor | undefined;
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 });
 
-function render(invites: WorkspaceInvite[]) {
-  act(() => {
-    root.render(createElement(UsersWindowContent, {
-      workspaceName: 'Test workspace',
-      currentUserId: 'u1',
-      currentUserEmail: 'owner@example.com',
-      inviteOrigin: 'https://agensis.io',
-      members: [],
-      invites,
-      onCreateInvite: async () => null,
-      onRevokeInvite: async () => { },
-      onSetInviteDismissed: async (id: string, dismissed: boolean) => { calls.push({ id, dismissed }); },
-      onDismissSpentInvites: async () => { bulkCalls += 1; },
-      onRemoveMember: async () => { },
-      onChangeMemberRole: async () => { },
-    } as never));
-  });
-}
-
-function buttons(): HTMLButtonElement[] {
-  return Array.from(container.querySelectorAll('button'));
-}
-
-function buttonByLabel(label: string): HTMLButtonElement | undefined {
-  return buttons().find(b => b.getAttribute('aria-label') === label);
-}
-
-function buttonByText(text: string): HTMLButtonElement | undefined {
-  return buttons().find(b => (b.textContent || '').includes(text));
-}
-
-function click(node: Element) {
-  act(() => {
-    node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-  });
-}
-
 beforeEach(() => {
-  calls = [];
-  bulkCalls = 0;
+  originalFetch = globalThis.fetch;
+  originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
   container = document.createElement('div');
   document.body.appendChild(container);
-  act(() => { root = createRoot(container); });
+  act(() => {
+    root = createRoot(container);
+  });
 });
 
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  globalThis.fetch = originalFetch;
+  if (originalClipboard) {
+    Object.defineProperty(navigator, 'clipboard', originalClipboard);
+  } else {
+    Reflect.deleteProperty(navigator, 'clipboard');
+  }
+  vi.restoreAllMocks();
 });
 
-describe('invite links list', () => {
-  it('offers no Dismiss on a live link — only Revoke', () => {
-    render(INVITES);
-    expect(buttonByLabel('Dismiss invite for live@example.com')).toBeUndefined();
-    expect(buttonByLabel('Revoke invite for live@example.com')).toBeDefined();
+function renderContent(options: {
+  members?: WorkspaceMember[];
+  joinLinks?: WorkspaceJoinLink[];
+  canManage?: boolean;
+  onCreateJoinLink?: (input: CreateWorkspaceJoinLinkInput) => Promise<CreatedWorkspaceJoinLink>;
+  onRevokeJoinLink?: (linkId: string) => Promise<void>;
+} = {}) {
+  const members = options.members ?? [
+    makeMember({ id: null, user_id: 'u-owner', email: 'owner@example.test', role: 'owner' }),
+    makeMember(),
+  ];
+  act(() => {
+    root.render(createElement(UsersWindowContent, {
+      workspaceName: 'Test workspace',
+      currentUserId: 'u-owner',
+      currentUserEmail: 'owner@example.test',
+      members,
+      joinLinks: options.joinLinks ?? [],
+      canManage: options.canManage ?? true,
+      onCreateJoinLink: options.onCreateJoinLink ?? (async () => makeCreatedJoinLink()),
+      onRevokeJoinLink: options.onRevokeJoinLink ?? (async () => undefined),
+      onRemoveMember: async () => undefined,
+      onChangeMemberRole: async () => undefined,
+    }));
+  });
+}
+
+function buttonByText(text: string): HTMLButtonElement | undefined {
+  return Array.from(container.querySelectorAll('button'))
+    .find(button => (button.textContent || '').includes(text));
+}
+
+function buttonByLabel(label: string): HTMLButtonElement | undefined {
+  return Array.from(container.querySelectorAll('button'))
+    .find(button => button.getAttribute('aria-label') === label);
+}
+
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function setSelectValue(select: HTMLSelectElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+  setter?.call(select, value);
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+async function click(node: Element) {
+  await act(async () => {
+    node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+  });
+}
+
+async function flushEffects() {
+  await act(async () => {
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+    await Promise.resolve();
+  });
+}
+
+describe('unified workspace join links', () => {
+  it('creates one audience-aware link and copies the exact one-time URL', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const create = vi.fn(async () => makeCreatedJoinLink());
+    renderContent({ onCreateJoinLink: create });
+
+    expect(container.textContent).toContain('One URL works for people and agents');
+    expect(container.textContent).toContain('expires after 15 minutes');
+    expect(container.textContent).toContain('used once');
+
+    act(() => {
+      setSelectValue(container.querySelector('#join-audience') as HTMLSelectElement, 'agent');
+      setSelectValue(container.querySelector('#join-role') as HTMLSelectElement, 'viewer');
+      setInputValue(container.querySelector('#join-label') as HTMLInputElement, ' Remote code handler ');
+    });
+    await click(buttonByText('Create & copy link')!);
+
+    expect(create).toHaveBeenCalledWith({
+      audience: 'agent',
+      role: 'viewer',
+      label: 'Remote code handler',
+    });
+    expect(writeText).toHaveBeenCalledWith('https://agensis.io/join/agj_once');
+    expect(container.textContent).toContain('Link copied');
   });
 
-  it('offers Dismiss on every spent link', () => {
-    render(INVITES);
-    for (const email of ['revoked@example.com', 'accepted@example.com', 'expired@example.com']) {
-      expect(buttonByLabel(`Dismiss invite for ${email}`)).toBeDefined();
-    }
-  });
+  it('derives expired/redeemed states, shows the redemption lane, and only revokes a live link', async () => {
+    const revoke = vi.fn(async () => undefined);
+    renderContent({
+      onRevokeJoinLink: revoke,
+      joinLinks: [
+        makeJoinLink({ id: 'live', label: 'Live connection' }),
+        makeJoinLink({ id: 'expired', label: 'Expired connection', expires_at: YESTERDAY }),
+        makeJoinLink({
+          id: 'redeemed',
+          label: 'Agent connection',
+          status: 'redeemed',
+          audience: 'agent',
+          redeemed_as: 'agent',
+          redeemed_agent_id: 'agent-1',
+          redeemed_at: YESTERDAY,
+        }),
+        makeJoinLink({ id: 'revoked', label: 'Revoked connection', status: 'revoked' }),
+      ],
+    });
 
-  it('hides a dismissed row until the toggle is used, then offers Restore', () => {
-    render(INVITES);
-    expect(container.textContent).not.toContain('tidied@example.com');
-
-    const toggle = buttonByText('Show dismissed (1)');
-    expect(toggle).toBeDefined();
-    click(toggle!);
-
-    expect(container.textContent).toContain('tidied@example.com');
-    const restore = buttonByLabel('Restore invite for tidied@example.com');
-    expect(restore).toBeDefined();
-    click(restore!);
-    expect(calls).toEqual([{ id: 'tidied', dismissed: false }]);
-  });
-
-  it('keeps the live link visible in both modes', () => {
-    render(INVITES);
-    expect(container.textContent).toContain('live@example.com');
-    click(buttonByText('Show dismissed (1)')!);
-    expect(container.textContent).toContain('live@example.com');
-  });
-
-  it('sends a dismiss for the clicked row only', () => {
-    render(INVITES);
-    click(buttonByLabel('Dismiss invite for revoked@example.com')!);
-    expect(calls).toEqual([{ id: 'revoked', dismissed: true }]);
-  });
-
-  it('labels an expired link expired, not pending', () => {
-    render([makeInvite({ id: 'expired', email: 'expired@example.com', expires_at: YESTERDAY })]);
     expect(container.textContent).toContain('expired');
-    expect(container.textContent).not.toContain('pending');
+    expect(container.textContent).toContain('redeemed as agent');
+    expect(container.textContent).toContain('revoked');
+    expect(buttonByLabel('Revoke join link Live connection')).toBeDefined();
+    expect(buttonByLabel('Revoke join link Expired connection')).toBeUndefined();
+    expect(buttonByLabel('Revoke join link Agent connection')).toBeUndefined();
+
+    await click(buttonByLabel('Revoke join link Live connection')!);
+    expect(revoke).toHaveBeenCalledWith('live');
   });
 
-  it('counts only the spent links on the bulk clear, and confirms before running it', () => {
-    render(INVITES);
-    // live is excluded; tidied is already dismissed. 3 remain.
-    const clear = buttonByText('Clear spent (3)');
-    expect(clear).toBeDefined();
+  it('keeps a non-manager read-only and removes all join/member management controls', () => {
+    renderContent({
+      canManage: false,
+      members: [
+        makeMember({ id: 'me', user_id: 'u-owner', email: 'reader@example.test', role: 'editor' }),
+        makeMember(),
+      ],
+    });
 
-    click(clear!);
-    expect(bulkCalls).toBe(0);
-    expect(buttonByText('Clear 3?')).toBeDefined();
-
-    click(buttonByText('Clear 3?')!);
-    expect(bulkCalls).toBe(1);
+    expect(container.textContent).toContain('Join links are private to workspace owners and admins');
+    expect(buttonByText('Create & copy link')).toBeUndefined();
+    expect(buttonByLabel('Remove member@example.test')).toBeUndefined();
+    expect(container.querySelector('[aria-label="Change role for member@example.test"]')).toBeNull();
   });
 
-  it('shows no bulk clear when every link is still live', () => {
-    render([makeInvite({ id: 'live', email: 'live@example.com' })]);
-    expect(buttonByText('Clear spent')).toBeUndefined();
-    expect(buttonByText('Show dismissed')).toBeUndefined();
+  it('does not call either join-links or the legacy invites endpoint for a non-manager', async () => {
+    const requests: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes('/members')) {
+        return jsonResponse([
+          makeMember({ id: 'me', user_id: 'u-reader', email: 'reader@example.test', role: 'editor' }),
+        ]);
+      }
+      return jsonResponse([]);
+    }) as typeof fetch;
+
+    act(() => {
+      root.render(createElement(UsersWindow, {
+        workspaceId: 'ws-reader',
+        workspaceName: 'Read only',
+        currentUserId: 'u-reader',
+        currentUserEmail: 'reader@example.test',
+      }));
+    });
+    await flushEffects();
+    await flushEffects();
+
+    expect(requests.some(url => url.includes('/members'))).toBe(true);
+    expect(requests.some(url => url.includes('/join-links'))).toBe(false);
+    expect(requests.some(url => /\/invites(?:\/|$|\?)/.test(url))).toBe(false);
+  });
+
+  it('loads join links after the member list proves the user is an owner', async () => {
+    const requests: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes('/members')) {
+        return jsonResponse([
+          makeMember({ id: null, user_id: 'u-owner', email: 'owner@example.test', role: 'owner' }),
+        ]);
+      }
+      return jsonResponse([]);
+    }) as typeof fetch;
+
+    act(() => {
+      root.render(createElement(UsersWindow, {
+        workspaceId: 'ws-owner',
+        workspaceName: 'Managed',
+        currentUserId: 'u-owner',
+        currentUserEmail: 'owner@example.test',
+      }));
+    });
+    await flushEffects();
+    await flushEffects();
+
+    expect(requests.some(url => url.includes('/join-links'))).toBe(true);
+    expect(requests.some(url => /\/invites(?:\/|$|\?)/.test(url))).toBe(false);
   });
 });
+
+function jsonResponse<T>(data: T): Response {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ data, error: null }),
+  } as Response;
+}
