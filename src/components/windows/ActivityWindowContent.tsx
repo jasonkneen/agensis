@@ -213,7 +213,7 @@ function ActivityFilterTabs({
             onClick={() => onChange(tab.id)}
             aria-pressed={active}
             className={cn(
-              'flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-[11px] font-medium transition-colors',
+              'flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-xs font-medium transition-colors',
               'focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2',
               active ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
             )}
@@ -425,14 +425,14 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
           onWheel={hiddenCount > 0 ? (e) => { if (e.deltaY > 0) setExpanded(true); } : undefined}
         >
           {days.length === 0 && (
-            <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+            <p className="px-2 py-6 text-center text-sm text-muted-foreground">
               Nothing in this category yet.
             </p>
           )}
           {days.map(group => (
             <section key={group.label} className="flex flex-col">
               <Marker variant="separator" className="px-1.5 py-1">
-                <MarkerContent className="text-[10px] uppercase tracking-wide text-muted-foreground">{group.label}</MarkerContent>
+                <MarkerContent className="text-[11px] uppercase tracking-wide text-muted-foreground">{group.label}</MarkerContent>
               </Marker>
               <div className="flex flex-col">
                 {group.items.map(event => {
@@ -458,18 +458,18 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
                       onClick={() => setSelectedId(selected ? null : event.id)}
                       title={`${full}\n${formatFullDate(event.created_at)}`}
                       className={cn(
-                        'group flex w-full items-center gap-2 rounded-md border-l-2 border-transparent px-1.5 py-1 text-left text-xs transition-colors',
+                        'group flex w-full items-center gap-2 rounded-md border-l-2 border-transparent px-1.5 py-1 text-left text-[14px] transition-colors',
                         selected ? 'border-l-primary bg-primary/10' : 'hover:bg-muted/50',
                       )}
                     >
-                      <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{formatClock(event.created_at)}</span>
-                      <span className="shrink-0 text-muted-foreground [&_svg]:size-3.5">{iconFor(event.event_type)}</span>
+                      <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">{formatClock(event.created_at)}</span>
+                      <span className="shrink-0 text-muted-foreground [&_svg]:size-4">{iconFor(event.event_type)}</span>
                       <span className="min-w-0 flex-1 truncate">{activityEntryLabel(event)}</span>
                       {/* Shrinkable, not fixed: the label absorbs every pixel of
                           shrink first, so this only gives at the 320px window
                           minimum — where the alternative is the badge hanging
                           outside the pane. */}
-                      <Badge variant="secondary" className="min-w-0 shrink overflow-hidden text-[10px]">{event.event_type.replace(/_/g, ' ')}</Badge>
+                      <Badge variant="secondary" className="min-w-0 shrink overflow-hidden text-[11px]">{event.event_type.replace(/_/g, ' ')}</Badge>
                     </button>
                     </div>
                   );
@@ -481,7 +481,7 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
             <button
               type="button"
               onClick={() => setExpanded(true)}
-              className="mt-0.5 rounded-md px-1.5 py-1.5 text-center text-[11px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+              className="mt-0.5 rounded-md px-1.5 py-1.5 text-center text-sm text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
             >
               {`Show ${hiddenCount} earlier`}
             </button>
