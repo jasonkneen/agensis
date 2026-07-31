@@ -1300,6 +1300,37 @@ CREATE TABLE IF NOT EXISTS tenant_campaign_recipients (
 CREATE INDEX IF NOT EXISTS idx_tenant_campaign_recipients_campaign
   ON tenant_campaign_recipients(campaign_id);
 
+-- Durable queue for work delivered to connected agents. This table used to
+-- exist only in ensureRuntimeSchema, so a fresh database created with
+-- `npm run db:neon:push` had schedules and sessions but no queue for the work
+-- they dispatched. Keep this definition byte-for-byte compatible with the
+-- runtime bootstrap in server/index.cjs.
+CREATE TABLE IF NOT EXISTS agent_jobs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+  connection_id uuid REFERENCES agent_connections(id) ON DELETE SET NULL,
+  session_id uuid REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  message_id uuid REFERENCES messages(id) ON DELETE SET NULL,
+  created_by uuid,
+  prompt text NOT NULL DEFAULT '',
+  status text NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'running', 'done', 'error', 'cancelled')),
+  response text DEFAULT '',
+  error text DEFAULT '',
+  metadata jsonb DEFAULT '{}'::jsonb,
+  started_at timestamptz,
+  finished_at timestamptz,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_jobs_workspace_id ON agent_jobs(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_agent_jobs_agent_id ON agent_jobs(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_jobs_session_id ON agent_jobs(session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_jobs_active_per_session_agent
+  ON agent_jobs(session_id, agent_id)
+  WHERE status IN ('queued', 'running');
+
 -- Scheduled agent runs. A schedule posts a prompt into a session on a cadence
 -- (interval_seconds) and lets the orchestrator dispatch. Mirrors the runtime
 -- bootstrap DDL in server/index.cjs so a fresh neon-push has the tables too.
