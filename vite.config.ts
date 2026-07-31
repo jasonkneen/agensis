@@ -90,7 +90,7 @@ function browserRuntimeAssets(): Plugin {
   // failure. Hence the explicit existsSync check below.
   const fs = require('node:fs') as typeof import('node:fs');
   const resolve = (spec: string) => {
-    const full = path.resolve(__dirname, 'node_modules', spec);
+    const full = path.resolve(import.meta.dirname, 'node_modules', spec);
     if (!fs.existsSync(full)) {
       throw new Error(
         `browser runtime asset missing: ${spec}. Run npm install — the web browser panel cannot work without it.`,
