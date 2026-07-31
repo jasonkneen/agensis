@@ -18,8 +18,29 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text DEFAULT '';
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS reactions jsonb DEFAULT '{}';
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS source_task_id uuid;
 CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
 CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_at);
+CREATE INDEX IF NOT EXISTS idx_messages_source_task_id ON messages(session_id, source_task_id);
+
+-- Conversation derivation columns are referenced by later privacy migrations,
+-- so a fresh chronological migration run must establish them here rather than
+-- depending on runtime startup to repair the database first.
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS parent_message_id uuid REFERENCES messages(id) ON DELETE CASCADE;
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS split_parent_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL;
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS split_at timestamptz;
+ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent_message ON chat_sessions(parent_message_id);
+
+-- Runtime/control columns that predate dedicated migrations. These are included
+-- in this historical sync for clean installs and repeated in the newest
+-- catch-up migration for databases that already recorded this migration.
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS mcp_token_hash text DEFAULT '';
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS mcp_auto_approve boolean NOT NULL DEFAULT false;
+ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS metadata jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS memory_dir text DEFAULT '';
+ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS mcp_approved boolean NOT NULL DEFAULT false;
+ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS agent_id uuid;
 
 CREATE TABLE IF NOT EXISTS thread_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

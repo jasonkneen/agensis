@@ -38,6 +38,10 @@ CREATE TABLE IF NOT EXISTS workspaces (
   background_opacity numeric DEFAULT 0.7,
   background_image text DEFAULT '',
   version integer NOT NULL DEFAULT 1,
+  -- Workspace-control bearer verifier. Owner-only routes are the only readers
+  -- and writers; generic DB projections deliberately omit both control fields.
+  mcp_token_hash text DEFAULT '',
+  mcp_auto_approve boolean NOT NULL DEFAULT false,
   -- Groupable workspaces. A workspace with children renders as a group, one
   -- without renders as a leaf; there is no separate folder entity and no new
   -- tier. Children inherit AGENTS and MEMBERS from their ancestors; CONTENT
@@ -581,6 +585,9 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   instructions text DEFAULT '',
   tools jsonb DEFAULT '[]'::jsonb,
   skills jsonb DEFAULT '[]'::jsonb,
+  -- Runtime/host configuration. metadata is manage-only because host_folders
+  -- becomes a daemon --add-dir argument.
+  metadata jsonb DEFAULT '{}'::jsonb,
   -- Descriptive intent only. These fields grant no tools, permissions, host
   -- folders, runtime placement or other authority.
   purpose text NOT NULL DEFAULT 'collaborator'
@@ -602,6 +609,8 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   connect_token_hash text DEFAULT '',
   model text NOT NULL DEFAULT 'auto',
   run_mode text NOT NULL DEFAULT 'builtin',
+  sandbox_provider text,
+  sandbox_config jsonb NOT NULL DEFAULT '{}'::jsonb,
   memory_dir text DEFAULT '',
   enabled boolean NOT NULL DEFAULT true,
   -- May this agent be drawn into a channel post that named nobody?
@@ -611,6 +620,7 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   -- column entirely — see shared/ambientAddressing.cjs.
   ambient_replies boolean NOT NULL DEFAULT true,
   permission_mode text NOT NULL DEFAULT 'default',
+  mcp_approved boolean NOT NULL DEFAULT false,
   version integer NOT NULL DEFAULT 1,
   created_by uuid,
   created_at timestamptz DEFAULT now(),
