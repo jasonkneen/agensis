@@ -177,6 +177,11 @@ function permissionDb({ requests = [] } = {}) {
         const row = db.requests.find((entry) => entry.id === params[0] && entry.workspace_id === params[1]);
         return row ? [{ ...row }] : [];
       }
+      if (text.startsWith('select id, visibility, folder from chat_sessions where id')) {
+        return params[0] === 'session-1'
+          ? [{ id: 'session-1', visibility: 'workspace', folder: 'General' }]
+          : [];
+      }
       if (text.startsWith('update agent_permission_requests set status = $2')) {
         const row = db.requests.find((entry) => entry.id === params[0] && entry.status === 'pending');
         if (!row) return [];

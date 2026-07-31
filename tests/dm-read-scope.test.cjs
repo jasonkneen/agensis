@@ -334,7 +334,7 @@ test('sessionReadableSql groups its OR correctly', () => {
  );
 });
 
-test('appendSessionAccessClause constrains chat_sessions and messages, and nothing else', () => {
+test('appendSessionAccessClause constrains session rows and permission requests, and nothing else', () => {
  const base = { clause: ' WHERE "chat_sessions"."workspace_id" = $1', params: ['w1'] };
  const sessions = core.appendSessionAccessClause({ ...base, params: [...base.params] }, OWNER, 'chat_sessions');
  assert.match(sessions.clause, /EXISTS \(SELECT 1 FROM chat_sessions cs WHERE cs\.id = "chat_sessions"\."id"/);
@@ -343,6 +343,23 @@ test('appendSessionAccessClause constrains chat_sessions and messages, and nothi
  const messages = core.appendSessionAccessClause({ clause: '', params: [] }, OWNER, 'messages');
  assert.match(messages.clause, /cs\.id = "messages"\."session_id"/, 'messages joins through session_id');
  assert.match(messages.clause, /^ WHERE /, 'an empty base clause still produces a valid WHERE');
+
+ const permissionRequests = core.appendSessionAccessClause(
+  { clause: ' WHERE "agent_permission_requests"."workspace_id" = $1', params: ['w1'] },
+  OWNER,
+  'agent_permission_requests',
+ );
+ assert.match(
+  permissionRequests.clause,
+  /cs\.id = "agent_permission_requests"\."session_id"/,
+  'permission requests inherit the privacy of the conversation holding the tool call',
+ );
+ assert.match(
+  permissionRequests.clause,
+  /"agent_permission_requests"\."session_id" IS NULL OR EXISTS/,
+  'legacy unattached requests keep their previous workspace visibility',
+ );
+ assert.deepEqual(permissionRequests.params, ['w1', OWNER]);
 
  // Untouched tables must come back byte-identical, or this helper would start
  // silently filtering things that have nothing to do with sessions.

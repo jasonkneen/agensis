@@ -53,6 +53,9 @@ function createRealtime(deps = {}) {
   // a second copy here is exactly how the fanout would drift back open.
   isPrivateSessionRow = () => false,
   sessionMemberUserIds = async () => new Set(),
+  // Permission requests subscribe at workspace scope but inherit their source
+  // session's audience. Null means the session could not be proven: fail closed.
+  sessionRealtimeAudience = async () => null,
   logMessageActivity,
   markAgentConnectionOffline,
   refreshConnectedAgentConfigs,
@@ -381,7 +384,14 @@ function createRealtime(deps = {}) {
   // and holds no handle (see emitAgentStatus above for the same constraint), so
   // these rows leave through an async lane instead.
   const privateRows = table === 'chat_sessions' ? rowList.filter(isPrivateSessionRow) : [];
-  const openRows = privateRows.length > 0 ? rowList.filter((row) => !isPrivateSessionRow(row)) : rowList;
+  const permissionRows = table === 'agent_permission_requests'
+   ? rowList.filter((row) => row?.session_id)
+   : [];
+  const openRows = permissionRows.length > 0
+   ? rowList.filter((row) => !row?.session_id)
+   : privateRows.length > 0
+     ? rowList.filter((row) => !isPrivateSessionRow(row))
+     : rowList;
 
   const deliver = (ws, row) => {
    const outRow = sanitizeRealtimeRow(table, row);
@@ -411,6 +421,7 @@ function createRealtime(deps = {}) {
   }
 
   if (privateRows.length > 0) void fanoutPrivateSessionRows(privateRows, eventType, deliver);
+  if (permissionRows.length > 0) void fanoutPermissionRequestRows(permissionRows, eventType, deliver);
  }
 
  /**
@@ -439,6 +450,42 @@ function createRealtime(deps = {}) {
     for (const subscription of ws.subscriptions || []) {
      if (subscription.type !== 'db_changes') continue;
      if (subscription.table && subscription.table !== 'chat_sessions') continue;
+     if (subscription.schema && subscription.schema !== 'public') continue;
+     if (subscription.event && subscription.event !== '*' && subscription.event !== eventType) continue;
+     if (!matchesFilter(subscription.filter, row)) continue;
+     deliver(ws, row);
+    }
+   }
+  }
+ }
+
+ /**
+  * Fan permission-request rows according to the conversation holding the tool
+  * call. The client subscribes by workspace so it can maintain one approvals
+  * inbox; that broad binding must not turn a DM request into workspace data.
+  *
+  * Audience resolution is one query pair per row, never per socket. Unknown
+  * sessions and lookup failures send nothing. Open-session requests retain the
+  * existing workspace-wide behavior.
+  */
+ async function fanoutPermissionRequestRows(rows, eventType, deliver) {
+  for (const row of rows) {
+   let audience;
+   try {
+    audience = await sessionRealtimeAudience(row?.session_id);
+   } catch (error) {
+    console.error('permission request fanout audience lookup failed', error?.message || error);
+    continue;
+   }
+   if (!audience) continue;
+   const members = audience.memberUserIds;
+   if (members !== null && !(members instanceof Set)) continue;
+
+   for (const ws of websocketClients) {
+    if (members !== null && (!ws.userId || !members.has(String(ws.userId)))) continue;
+    for (const subscription of ws.subscriptions || []) {
+     if (subscription.type !== 'db_changes') continue;
+     if (subscription.table && subscription.table !== 'agent_permission_requests') continue;
      if (subscription.schema && subscription.schema !== 'public') continue;
      if (subscription.event && subscription.event !== '*' && subscription.event !== eventType) continue;
      if (!matchesFilter(subscription.filter, row)) continue;

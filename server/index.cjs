@@ -814,6 +814,25 @@ async function sessionMemberUserIds(sessionId) {
  return new Set(rows.map((row) => String(row.user_id)));
 }
 
+/**
+ * Resolve the audience for a session-derived workspace-wide realtime row.
+ *
+ * A null result means the source session could not be proven and the row must
+ * be withheld. `memberUserIds: null` means the session is workspace-visible;
+ * a Set means only those current private-session members may receive it.
+ */
+async function sessionRealtimeAudience(sessionId) {
+ if (!sessionId) return null;
+ const rows = await sharedDbAdapter(
+  'select id, visibility, folder from chat_sessions where id = $1 limit 1',
+  [String(sessionId)],
+ );
+ const session = rows[0] || null;
+ if (!session) return null;
+ if (!isPrivateSessionRow(session)) return { memberUserIds: null };
+ return { memberUserIds: await sessionMemberUserIds(session.id) };
+}
+
 // Adapter so shared enforceDbOperationAccess can use postgres.js (getDb().unsafe).
 function sharedDbAdapter(sql, params = []) {
  return getDb().unsafe(sql, params);
@@ -7513,7 +7532,9 @@ const {
 // reason: a pending approval must survive a server restart, because the daemon
 // on the other side is still holding its turn open waiting for the answer.
 const agentPermissions = createAgentPermissions({
- badRequest, forbidden, getDb, parseJsonObject, normalizeAgentPermissionMode,
+ appendSessionAccessClause, badRequest, forbidden, getDb, parseJsonObject,
+ normalizeAgentPermissionMode,
+ enforceSessionRead: (...a) => enforceSessionRead(...a),
  enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
  notifyDbSubscribers: (...a) => realtime.notifyDbSubscribers(...a),
  sendWs: (...a) => realtime.sendWs(...a),
@@ -7523,7 +7544,7 @@ const agentPermissions = createAgentPermissions({
 const {
  decideAgentPermissionRequest, expireConnectionPermissionRequests,
  expireStalePermissionRequests, handleAgentPermissionRequest,
- publicPermissionRequest, rehomePendingPermissionRequests,
+ listAgentPermissionRequests, publicPermissionRequest, rehomePendingPermissionRequests,
  revokeAgentPermissionRule, setAgentPermissionMode,
 } = agentPermissions;
 
@@ -7611,7 +7632,7 @@ const realtime = createRealtime({
  handleAgentPermissionRequest,
  handleBridgeMessage: (...args) => channelBridges.handleBridgeMessage(...args),
  handlePeerListRequest, handlePeerTicketRequest, inferenceBroker,
- isPrivateSessionRow, sessionMemberUserIds,
+ isPrivateSessionRow, sessionMemberUserIds, sessionRealtimeAudience,
  logMessageActivity, markAgentConnectionOffline,
  refreshConnectedAgentConfigs, registerAgentConnection, updateAgentHeartbeat,
  // Lets the agent-status broadcast resolve both workspace and canonical
@@ -7867,7 +7888,13 @@ function createApp() {
  mountInferenceRoutes(app, { ...coreDeps(), authorizeUserOrFarmWorkspace, bindInferenceAbort, createOpenAIInferenceStreamRelay, inferenceBroker, liveSharedModelRoutes, publicInferenceModel });
 
  mountConnectionsRoutes(app, { ...coreDeps(), buildInboxSql, isConnectionSocketLive, publicAgentConnection });
- mountAgentPermissionRoutes(app, { ...coreDeps(), decideAgentPermissionRequest, publicPermissionRequest, revokeAgentPermissionRule, setAgentPermissionMode });
+ mountAgentPermissionRoutes(app, {
+  ...coreDeps(),
+  decideAgentPermissionRequest,
+  listAgentPermissionRequests,
+  revokeAgentPermissionRule,
+  setAgentPermissionMode,
+ });
  // Reviewing what a discarded thread proposed. Accepting is a ROUTE, not a
  // client write, for the same reason thread_harvests is read-only to clients:
  // the request names which proposal, never what gets written into memory.
@@ -8864,6 +8891,7 @@ module.exports = {
   handleAgentJobStep,
   handleAgentPermissionRequest,
   decideAgentPermissionRequest,
+  listAgentPermissionRequests,
   expireStalePermissionRequests,
   expireConnectionPermissionRequests,
   rehomePendingPermissionRequests,

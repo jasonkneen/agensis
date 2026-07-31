@@ -138,7 +138,9 @@ function requestContent({ tool_name: toolName, tool_detail: detail }) {
 
 function createAgentPermissions(deps = {}) {
  const {
+  appendSessionAccessClause,
   badRequest,
+  enforceSessionRead,
   forbidden,
   enforceWorkspaceRole,
   normalizeAgentPermissionMode,
@@ -344,6 +346,35 @@ function createAgentPermissions(deps = {}) {
  }
 
  /**
+  * Pending requests this human may actually answer.
+  *
+  * Workspace `read` remains the first gate. The shared session clause is the
+  * second: a workspace-wide list must remove requests parked inside private
+  * conversations the caller does not belong to.
+  */
+ async function listAgentPermissionRequests({ userId, workspaceId } = {}) {
+  const targetWorkspaceId = String(workspaceId || '').trim();
+  if (!targetWorkspaceId) throw badRequest('workspace id is required');
+  await enforceWorkspaceRole(userId, targetWorkspaceId, 'read');
+  const where = appendSessionAccessClause(
+   {
+    clause: ` WHERE "agent_permission_requests"."workspace_id" = $1
+       AND "agent_permission_requests"."status" = 'pending'
+       AND ("agent_permission_requests"."expires_at" IS NULL OR "agent_permission_requests"."expires_at" > now())`,
+    params: [targetWorkspaceId],
+   },
+   String(userId || ''),
+   'agent_permission_requests',
+  );
+  const rows = await getDb().unsafe(
+   `select * from agent_permission_requests${where.clause}
+      order by created_at desc limit 50`,
+   where.params,
+  );
+  return rows.map(publicPermissionRequest);
+ }
+
+ /**
   * A human answers. Returns the settled request.
   *
   * The RBAC split is the point: `write` is what already lets a member @mention
@@ -370,6 +401,7 @@ function createAgentPermissions(deps = {}) {
   // an admin. Only a permanent ALLOW escalates.
   const permanent = decision === 'allow' && requestedScope === 'always';
   await enforceWorkspaceRole(userId, request.workspace_id, permanent ? 'manage' : 'write');
+  await enforceSessionRead(userId, request.session_id);
   if (permanent && !(Array.isArray(request.rules) && request.rules.length)) {
    throw badRequest('This request has no rule that can be granted permanently');
   }
@@ -633,6 +665,7 @@ function createAgentPermissions(deps = {}) {
   expireConnectionPermissionRequests,
   expireStalePermissionRequests,
   handleAgentPermissionRequest,
+  listAgentPermissionRequests,
   publicPermissionRequest,
   rehomePendingPermissionRequests,
   revokeAgentPermissionRule,
@@ -645,9 +678,9 @@ function createAgentPermissions(deps = {}) {
 
 function mountAgentPermissionRoutes(app, deps = {}) {
  const {
-  requireAuth, jsonError, enforceWorkspaceRole, getDb,
+  requireAuth, jsonError,
   decideAgentPermissionRequest, revokeAgentPermissionRule, setAgentPermissionMode,
-  publicPermissionRequest,
+  listAgentPermissionRequests,
  } = deps;
 
  // Everything still awaiting an answer in this workspace. The card in the
@@ -656,14 +689,8 @@ function mountAgentPermissionRoutes(app, deps = {}) {
   try {
    const workspaceId = String(req.params.workspaceId || '').trim();
    if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
-   await enforceWorkspaceRole(req.userId, workspaceId, 'read');
-   const rows = await getDb().unsafe(
-    `select * from agent_permission_requests
-       where workspace_id = $1 and status = 'pending' and (expires_at is null or expires_at > now())
-       order by created_at desc limit 50`,
-    [workspaceId],
-   );
-   res.json({ data: rows.map(publicPermissionRequest), error: null });
+   const requests = await listAgentPermissionRequests({ userId: req.userId, workspaceId });
+   res.json({ data: requests, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }

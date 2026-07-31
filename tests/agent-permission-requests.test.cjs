@@ -33,6 +33,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { __test } = require('../server/index.cjs');
 
 const AUTH = { agentId: 'agent-1', workspaceId: 'ws-1', name: 'Scout', handle: 'scout' };
@@ -73,11 +75,24 @@ const REQUEST = {
   scope: '',
 };
 
-function installDb({ job = JOB, request = REQUEST, agentMetadata = {}, role = 'owner' } = {}) {
+function installDb({
+  job = JOB,
+  request = REQUEST,
+  agentMetadata = {},
+  role = 'owner',
+  session = {
+    id: 'session-1',
+    visibility: 'workspace',
+    folder: 'General',
+  },
+  sessionMembers = ['user-1'],
+  sessionReadError = false,
+} = {}) {
   const calls = [];
   __test.setTestDb({
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
+      const q = n.toLowerCase();
       calls.push({ n, params, sql });
       if (n.startsWith('select j.*, a.name as agent_name')) {
         // Mirror the real WHERE: a mismatched agent or workspace matches nothing.
@@ -91,9 +106,29 @@ function installDb({ job = JOB, request = REQUEST, agentMetadata = {}, role = 'o
         return [{ ...REQUEST, id: params[0], request_key: params[7], rules: params[12], scopes: params[13] }];
       }
       if (n.startsWith('insert into messages')) return [{ id: params[0], session_id: params[1], content: params[2] }];
+      if (q.startsWith('select * from agent_permission_requests')
+        && q.includes("= 'pending'")
+        && q.includes('order by created_at')) {
+        assert.match(q, /chat_session_members/, 'the list query must carry the canonical session membership predicate');
+        if (!request) return [];
+        if (!request.session_id) return [request];
+        if (!session || String(session.id) !== String(request.session_id)) return [];
+        const isPrivate = session.visibility === 'private' || session.folder === 'Direct messages';
+        return !isPrivate || sessionMembers.includes(String(params[1])) ? [request] : [];
+      }
       if (n.startsWith('select * from agent_permission_requests where id')) {
         if (!request || params[0] !== request.id || params[1] !== request.workspace_id) return [];
         return [request];
+      }
+      if (q.startsWith('select id, visibility, folder from chat_sessions where id')) {
+        if (sessionReadError) throw new Error('session lookup failed');
+        return session && String(params[0]) === String(session.id) ? [session] : [];
+      }
+      if (q.startsWith('select 1 from chat_session_members')) {
+        return sessionMembers.includes(String(params[1])) ? [{ ok: 1 }] : [];
+      }
+      if (q.startsWith('select user_id from chat_session_members')) {
+        return sessionMembers.map((user_id) => ({ user_id }));
       }
       if (n.startsWith('update agent_permission_requests set status = $2')) {
         return [{ ...request, status: params[1], scope: params[2], decided_by: params[3], decided_by_name: params[4] }];
@@ -228,6 +263,91 @@ test('a request with no job id is denied instead of throwing at the socket', asy
   assert.equal(sent[0].behavior, 'deny');
 });
 
+// --- listing ---------------------------------------------------------------
+
+test('a workspace reader outside a private session cannot list its permission request, but a member can', async () => {
+  const privateSession = {
+    id: 'session-1',
+    visibility: 'private',
+    folder: 'Direct messages',
+  };
+
+  installDb({ role: 'viewer', session: privateSession, sessionMembers: ['member-1'] });
+  const hidden = await __test.listAgentPermissionRequests({
+    userId: 'outsider-1',
+    workspaceId: 'ws-1',
+  });
+  assert.deepEqual(hidden, [], 'workspace read alone must not reveal a DM tool request');
+
+  installDb({ role: 'viewer', session: privateSession, sessionMembers: ['member-1'] });
+  const visible = await __test.listAgentPermissionRequests({
+    userId: 'member-1',
+    workspaceId: 'ws-1',
+  });
+  assert.deepEqual(visible.map((entry) => entry.id), ['req-1']);
+});
+
+test('a workspace reader can still list a request from a workspace-visible session', async () => {
+  installDb({
+    role: 'viewer',
+    session: { id: 'session-1', visibility: 'workspace', folder: 'General' },
+    sessionMembers: [],
+  });
+
+  const visible = await __test.listAgentPermissionRequests({
+    userId: 'reader-1',
+    workspaceId: 'ws-1',
+  });
+
+  assert.deepEqual(visible.map((entry) => entry.id), ['req-1']);
+});
+
+test('both generic DB backends route selects through the shared session access clause', () => {
+  const root = path.resolve(__dirname, '..');
+  for (const relative of ['server/index.cjs', 'netlify/functions/backend.mjs']) {
+    const source = fs.readFileSync(path.join(root, relative), 'utf8');
+    assert.match(
+      source,
+      /appendSessionAccessClause\(buildWhereClause\(filters, \[\]\), (?:req\.userId|userId), table\)/,
+      `${relative} must keep generic selects behind the shared session clause`,
+    );
+  }
+});
+
+test('no workspace role can forge, settle, or delete a permission request through generic DB writes', async () => {
+  installDb({ role: 'owner' });
+  const attempts = [
+    {
+      op: 'insert',
+      payload: { values: { ...REQUEST } },
+    },
+    {
+      op: 'update',
+      payload: {
+        values: { status: 'allowed', scope: 'always' },
+        filters: [{ column: 'id', operator: 'eq', value: 'req-1' }],
+      },
+    },
+    {
+      op: 'delete',
+      payload: { filters: [{ column: 'id', operator: 'eq', value: 'req-1' }] },
+    },
+  ];
+
+  for (const { op, payload } of attempts) {
+    await assert.rejects(
+      () => __test.enforceDbOperationAccess(
+        'user-1',
+        'agent_permission_requests',
+        op,
+        payload,
+      ),
+      /dedicated permission route/i,
+      `${op} must remain server-only even for a workspace owner`,
+    );
+  }
+});
+
 // --- deciding ---------------------------------------------------------------
 
 function connectAgent({ connectionId = 'conn-1', agentId = 'agent-1' } = {}) {
@@ -296,6 +416,82 @@ test('a member with only write cannot make a grant permanent, but can allow once
     userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'allow', scope: 'once',
   });
   assert.equal(once.status, 'allowed');
+});
+
+test('a workspace editor outside a private session cannot decide its permission request', async () => {
+  const calls = installDb({
+    role: 'editor',
+    session: { id: 'session-1', visibility: 'private', folder: 'Direct messages' },
+    sessionMembers: ['member-1'],
+  });
+  const frames = connectAgent();
+
+  for (const behavior of ['allow', 'deny']) {
+    await assert.rejects(
+      () => __test.decideAgentPermissionRequest({
+        userId: 'outsider-1',
+        workspaceId: 'ws-1',
+        requestId: 'req-1',
+        behavior,
+        scope: 'once',
+      }),
+      /private/i,
+      `a non-member must not ${behavior} the private request`,
+    );
+  }
+  assert.equal(frames.length, 0, 'an unauthorized decision must never reach the daemon');
+  assert.equal(
+    calls.some((call) => call.n.startsWith('update agent_permission_requests set status')),
+    false,
+    'an unauthorized decision must not settle the request',
+  );
+});
+
+test('workspace ownership does not grant silent permission to decide a private-session request', async () => {
+  const calls = installDb({
+    role: 'owner',
+    session: { id: 'session-1', visibility: 'private', folder: 'Direct messages' },
+    sessionMembers: ['member-1'],
+  });
+  const frames = connectAgent();
+
+  await assert.rejects(
+    () => __test.decideAgentPermissionRequest({
+      userId: 'owner-outside-dm',
+      workspaceId: 'ws-1',
+      requestId: 'req-1',
+      behavior: 'allow',
+      scope: 'always',
+    }),
+    /private/i,
+  );
+  assert.equal(frames.length, 0);
+  assert.equal(
+    calls.some((call) => call.n.startsWith('update workspace_agents set metadata')),
+    false,
+    'the private-session gate must run before a permanent rule is written',
+  );
+});
+
+test('an editor who belongs to the private session can decide its permission request', async () => {
+  installDb({
+    role: 'editor',
+    session: { id: 'session-1', visibility: 'private', folder: 'Direct messages' },
+    sessionMembers: ['member-1'],
+  });
+  const frames = connectAgent();
+
+  const settled = await __test.decideAgentPermissionRequest({
+    userId: 'member-1',
+    workspaceId: 'ws-1',
+    requestId: 'req-1',
+    behavior: 'allow',
+    scope: 'once',
+  });
+
+  assert.equal(settled.status, 'allowed');
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].behavior, 'allow');
 });
 
 test('denying never needs more than write, whatever scope was asked for', async () => {
@@ -372,6 +568,86 @@ test('behavior and scope are validated before anything is written', async () => 
     () => __test.decideAgentPermissionRequest({ userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'allow', scope: 'forever' }),
     /scope must be/,
   );
+});
+
+// --- realtime --------------------------------------------------------------
+
+test('a private-session request is broadcast only to a session member', async () => {
+  installDb({
+    session: { id: 'session-1', visibility: 'private', folder: 'Direct messages' },
+    sessionMembers: ['member-1'],
+  });
+
+  const client = (userId) => __test.registerTestWebsocketClient({
+    userId,
+    readyState: 1,
+    subscriptions: [{
+      type: 'db_changes',
+      table: 'agent_permission_requests',
+      event: '*',
+      schema: 'public',
+      filter: 'workspace_id=eq.ws-1',
+    }],
+    sent: [],
+    send(raw) { this.sent.push(JSON.parse(raw)); },
+  });
+  const member = client('member-1');
+  const reader = client('reader-1');
+  const editor = client('editor-1');
+
+  __test.notifyDbSubscribers('agent_permission_requests', 'INSERT', [REQUEST]);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(member.sent.length, 1, 'the DM member must receive the live request');
+  assert.equal(reader.sent.length, 0, 'a workspace reader outside the DM must receive nothing');
+  assert.equal(editor.sent.length, 0, 'a workspace editor outside the DM must receive nothing');
+
+  for (const socket of [member, reader, editor]) socket.sent.length = 0;
+  __test.notifyDbSubscribers('agent_permission_requests', 'UPDATE', [{
+    ...REQUEST,
+    status: 'allowed',
+    scope: 'once',
+  }]);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(member.sent.length, 1, 'the DM member must receive a settled private request');
+  assert.equal(reader.sent.length, 0, 'a workspace reader outside the DM must not receive its settlement');
+  assert.equal(editor.sent.length, 0, 'a workspace editor outside the DM must not receive its settlement');
+
+  for (const socket of [member, reader, editor]) socket.sent.length = 0;
+  installDb({
+    session: { id: 'session-1', visibility: 'workspace', folder: 'General' },
+    sessionMembers: [],
+  });
+  __test.notifyDbSubscribers('agent_permission_requests', 'UPDATE', [REQUEST]);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(
+    [member, reader, editor].map((socket) => socket.sent.length),
+    [1, 1, 1],
+    'a request in a workspace-visible session must keep its existing fanout',
+  );
+});
+
+test('permission-request fanout fails closed when its session audience cannot be resolved', async () => {
+  installDb({ sessionReadError: true });
+  const socket = __test.registerTestWebsocketClient({
+    userId: 'user-1',
+    readyState: 1,
+    subscriptions: [{
+      type: 'db_changes',
+      table: 'agent_permission_requests',
+      event: '*',
+      schema: 'public',
+      filter: 'workspace_id=eq.ws-1',
+    }],
+    sent: [],
+    send(raw) { this.sent.push(JSON.parse(raw)); },
+  });
+
+  __test.notifyDbSubscribers('agent_permission_requests', 'INSERT', [REQUEST]);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(socket.sent.length, 0, 'lookup failure must withhold rather than guess workspace-wide');
 });
 
 // --- the seam that carries a permanent grant to the daemon -------------------

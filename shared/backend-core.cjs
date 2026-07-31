@@ -342,8 +342,9 @@ const DB_TABLE_ACCESS = {
  orb_deliveries: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  // Read-only to the client, same shape and same reason as orb_deliveries: the
  // rows are written by the daemon socket and settled by the decide route, which
- // is where the "did the answer actually reach the agent?" check lives. A
- // client-forged or client-updated row would claim a grant nothing acted on.
+ // is where the "did the answer actually reach the agent?" check lives. The
+ // explicit refusal in enforceDbOperationAccess below makes this declaration
+ // defense in depth; `manage` must never become a generic write door.
  agent_permission_requests: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  // Read-only to the client, same reason as agent_permission_requests above: every
  // row is written by the server's own harvest worker. These are PROPOSALS mined
@@ -1275,6 +1276,15 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   return;
  }
 
+ // Server-authored and server-settled. A generic write would bypass the daemon
+ // socket identity check on INSERT and the exact-connection delivery invariant
+ // on UPDATE; DELETE would erase a pending question from its private session.
+ // Keep SELECT for the live client subscription, but make every write use the
+ // dedicated permission flow regardless of workspace role.
+ if (table === 'agent_permission_requests' && op !== 'select') {
+  throw forbidden('Permission requests can only be changed through the dedicated permission route');
+ }
+
  if (!WORKSPACE_SCOPED_TABLES.has(table) && table !== 'messages') return;
 
  const mode = capabilityForDbOperation(table, op);
@@ -1336,24 +1346,29 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
  }
 }
 
-// Constrain a SELECT on `chat_sessions` / `messages` to rows in a session the
-// user may read. The sibling of appendWorkspaceAccessClause, and needed for the
-// same reason: enforceDbOperationAccess can only ANSWER "may you", it cannot
-// remove rows from a result set. Without this a select on chat_sessions
-// filtered by workspace_id returns every DM's title and roster, which leaks the
-// existence and subject of a private conversation without reading one message.
+// Constrain a SELECT on `chat_sessions`, `messages`, or
+// `agent_permission_requests` to rows in a session the user may read. The
+// sibling of appendWorkspaceAccessClause, and needed for the same reason:
+// enforceDbOperationAccess can only ANSWER "may you", it cannot remove rows
+// from a result set. Without this a workspace-filtered select returns every
+// DM's title/roster or parked tool request, leaking private conversation data
+// without reading one message.
 //
-// Both tables route through one subquery alias so the two cases differ only in
+// All three tables route through one subquery alias so the cases differ only in
 // the join column. Slightly more work than inlining the predicate on
 // chat_sessions itself; worth it because there is then exactly ONE spelling of
-// the readability rule to keep correct.
+// the readability rule to keep correct. Legacy permission rows with no session
+// retain their workspace visibility; a non-null orphan is withheld.
 function appendSessionAccessClause(where, userId, table) {
- if (table !== 'chat_sessions' && table !== 'messages') return where;
+ if (!['chat_sessions', 'messages', 'agent_permission_requests'].includes(table)) return where;
  const params = where.params || [];
  params.push(userId);
  const userParam = `$${params.length}`;
- const joinColumn = table === 'chat_sessions' ? `"chat_sessions"."id"` : `"messages"."session_id"`;
- const accessClause = `EXISTS (SELECT 1 FROM chat_sessions cs WHERE cs.id = ${joinColumn} AND ${sessionReadableSql('cs', userParam)})`;
+ const joinColumn = table === 'chat_sessions' ? `"chat_sessions"."id"` : `"${table}"."session_id"`;
+ const sessionExists = `EXISTS (SELECT 1 FROM chat_sessions cs WHERE cs.id = ${joinColumn} AND ${sessionReadableSql('cs', userParam)})`;
+ const accessClause = table === 'agent_permission_requests'
+  ? `("${table}"."session_id" IS NULL OR ${sessionExists})`
+  : sessionExists;
  return {
   clause: where.clause ? `${where.clause} AND ${accessClause}` : ` WHERE ${accessClause}`,
   params,
