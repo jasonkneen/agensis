@@ -2,6 +2,11 @@ import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { AuthError, handleAuthCallback, MissingIdentityError, oauthLogin } from '@netlify/identity';
 import { backendClient } from '../lib/backendClient';
 import { clearAuthNotice, getAuthNotice, setAuthNotice, subscribeAuthNotice } from '../lib/authNotice';
+import {
+  getSocialAuthProviders,
+  hasSocialAuthProvider,
+  type SocialAuthProvider,
+} from '../lib/socialAuth';
 
 type User = { id: string; email?: string | null };
 type Session = { access_token: string; user: User };
@@ -10,6 +15,7 @@ export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [socialAuthProviders, setSocialAuthProviders] = useState<SocialAuthProvider[]>([]);
   // The message the sign-in screen must show (expired session, failed social
   // login). Lives outside React because backendClient writes it from a 401.
   const authNotice = useSyncExternalStore(subscribeAuthNotice, getAuthNotice, getAuthNotice);
@@ -61,6 +67,9 @@ export function useAuth() {
       }
     }
 
+    void getSocialAuthProviders().then(providers => {
+      if (active) setSocialAuthProviders(providers);
+    });
     initializeAuth();
     const { data: { subscription } } = backendClient.auth.onAuthStateChange((_event: string, s: Session | null) => {
       setSession(s);
@@ -97,6 +106,12 @@ export function useAuth() {
   }, []);
 
   const signInWithOAuth = useCallback(async (provider: 'google' | 'github') => {
+    if (!(await hasSocialAuthProvider(provider))) {
+      const providerName = provider === 'github' ? 'GitHub' : 'Google';
+      return {
+        error: `${providerName} sign-in is not configured for this site. On a self-hosted instance, use email and password instead.`,
+      };
+    }
     try {
       oauthLogin(provider);
       return { error: null };
@@ -115,7 +130,18 @@ export function useAuth() {
     clearAuthNotice();
   }, []);
 
-  return { user, session, loading, signUp, signIn, signOut, signInWithOAuth, authNotice, dismissAuthNotice };
+  return {
+    user,
+    session,
+    loading,
+    signUp,
+    signIn,
+    signOut,
+    signInWithOAuth,
+    socialAuthProviders,
+    authNotice,
+    dismissAuthNotice,
+  };
 }
 
 function consumeOAuthRedirectStatus() {

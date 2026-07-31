@@ -642,7 +642,17 @@ export default function App() {
 }
 
 function AppContent() {
-  const { user, loading: authLoading, signIn, signUp, signOut, signInWithOAuth, authNotice, dismissAuthNotice } = useAuth();
+  const {
+    user,
+    loading: authLoading,
+    signIn,
+    signUp,
+    signOut,
+    signInWithOAuth,
+    socialAuthProviders,
+    authNotice,
+    dismissAuthNotice,
+  } = useAuth();
   // The update surface (deploy toast + "what's new" dialog + version check +
   // cache-bust reload) is mounted as <AppUpdateManager /> in the tree below.
   // Seeded from the last workspace this browser was in, so a reload lands you
@@ -2200,6 +2210,7 @@ function AppContent() {
           onSignIn={signIn}
           onSignUp={signUp}
           onOAuthSignIn={signInWithOAuth}
+          socialAuthProviders={socialAuthProviders}
           notice={authNotice}
           onDismissNotice={dismissAuthNotice}
         />

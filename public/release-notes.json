@@ -1,5 +1,17 @@
 [
   {
+    "version": "self-hosted-social-sign-in",
+    "date": "2026-07-31",
+    "title": "Self-hosted sign-in now shows the local account path",
+    "summary": "Google and GitHub sign-in use Netlify Identity on sites where those providers are configured. A self-hosted server does not include that service, but the account page still showed both buttons. Clicking one briefly left the page and returned to the same form. The account page now asks which providers are available and shows only those buttons. Self-hosted users see the local email and password form, while configured hosted providers continue to work as before.",
+    "highlights": [
+      "Unavailable Google and GitHub buttons stay off the account page",
+      "Self-hosted accounts continue to use local email and password",
+      "A final provider check prevents stale buttons from starting a broken redirect",
+      "Configured Netlify Identity providers continue to appear and work"
+    ]
+  },
+  {
     "version": "template-export-import",
     "date": "2026-07-30",
     "title": "Move a persona between workspaces",
