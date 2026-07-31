@@ -160,6 +160,8 @@ function AgentStatusFeedOverlay({
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { WORKSPACE_CHROME_GAP } from '../../lib/workspaceLayout';
 import { partitionSidebarSessions } from '../../lib/sidebarSessions';
+import { splitNostrChannelGroups } from '../../lib/nostrChannelGroups';
+import type { NostrConnection, NostrChannelSubscription } from '../../lib/nostrCommunities';
 import { isHuddleSession } from '../../lib/huddleTranscript';
 import { oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { cn } from '../../lib/utils';
@@ -225,6 +227,8 @@ interface SidebarProps {
  onOpenCommandPalette: () => void;
  onOpenWorkspaceGrid?: () => void;
  onNewChat: () => void;
+ /** Re-enter an imported community to add or pause channel subscriptions. */
+ onManageNostrCommunity?: (connection: NostrConnection) => void;
  onNewDocument: () => void;
  onUploadFile: () => void;
  onCreateWorkspace: () => void;
@@ -279,6 +283,11 @@ interface SidebarProps {
  inboxUnreadCount?: number;
  recents: Document[];
  sessions: ChatSession[];
+ nostrConnections?: NostrConnection[];
+ /** False until imported-channel source metadata has resolved for this workspace. */
+ nostrConnectionsResolved?: boolean;
+ nostrConnectionsError?: string;
+ onRetryNostrConnections?: () => void;
  agents?: WorkspaceAgent[];
  agentConnections?: AgentConnection[];
  floatingWindows: FloatingWindow[];
@@ -307,6 +316,7 @@ export const Sidebar = React.memo(function Sidebar({
  onOpenCommandPalette,
  onOpenWorkspaceGrid,
  onNewChat,
+ onManageNostrCommunity,
  onNewDocument,
  onCreateWorkspace,
  onDocumentOpen,
@@ -343,6 +353,10 @@ export const Sidebar = React.memo(function Sidebar({
  inboxUnreadCount = 0,
  recents,
  sessions,
+ nostrConnections = [],
+ nostrConnectionsResolved = true,
+ nostrConnectionsError = '',
+ onRetryNostrConnections,
  agents = [],
  agentConnections = [],
  floatingWindows,
@@ -502,7 +516,14 @@ export const Sidebar = React.memo(function Sidebar({
  React.useEffect(() => {
   threadInbox.refetch();
  }, [latestActivitySig, threadInbox.refetch]);
- const groupedSessions = React.useMemo(() => groupSessionsByFolder(activeChannelSessions), [activeChannelSessions]);
+ const nostrChannelGroups = React.useMemo(
+  () => splitNostrChannelGroups(activeChannelSessions, nostrConnections),
+  [activeChannelSessions, nostrConnections],
+ );
+ const groupedSessions = React.useMemo(
+  () => groupSessionsByFolder(nostrChannelGroups.localSessions),
+  [nostrChannelGroups.localSessions],
+ );
  const groupedDocuments = React.useMemo(() => groupDocumentsByFolder(uniqueRecents), [uniqueRecents]);
  const focusedWindow = floatingWindows
   .filter(win => !win.minimized)
@@ -822,7 +843,20 @@ export const Sidebar = React.memo(function Sidebar({
        open={openSections.has('channels')}
        onOpenChange={open => toggleSection('channels', open)}
       >
-       {groupedSessions.map(group => (
+       {!nostrConnectionsResolved ? (
+        <div className="rounded-md px-2 py-1.5 text-xs text-muted-foreground">
+         <span>{nostrConnectionsError ? 'Could not verify imported channel sources.' : 'Checking imported channel sources…'}</span>
+         {nostrConnectionsError && onRetryNostrConnections && (
+          <button
+           type="button"
+           className="ml-1 font-medium text-foreground underline-offset-2 hover:underline"
+           onClick={onRetryNostrConnections}
+          >
+           Retry
+          </button>
+         )}
+        </div>
+       ) : groupedSessions.map(group => (
         group.folder === 'General' ? (
          <SessionTree
           key={group.folder}
@@ -871,6 +905,51 @@ export const Sidebar = React.memo(function Sidebar({
          </SidebarFolderGroup>
         )
        ))}
+       {nostrConnectionsResolved && nostrChannelGroups.communities.map(group => {
+        const sourceBySessionId = new Map(group.channels.map(channel => [channel.session.id, channel.subscription]));
+        const groupId = `nostr-community:${group.connection.id}`;
+        return (
+         <SidebarFolderGroup
+          key={group.connection.id}
+          id={groupId}
+          label={group.connection.name || group.connection.host || 'Nostr community'}
+          count={group.channels.length}
+          icon={<Globe />}
+          actionLabel={`Manage ${group.connection.name || group.connection.host || 'Nostr'} Nostr community`}
+          onAction={onManageNostrCommunity ? () => onManageNostrCommunity(group.connection) : undefined}
+          open={openSections.has(groupId)}
+          onOpenChange={open => toggleSection(groupId, open)}
+         >
+          {group.channels.length > 0 ? (
+           <SessionTree
+            sessions={group.channels.map(channel => channel.session)}
+            icon={<Globe />}
+            sourceBySessionId={sourceBySessionId}
+            chatPresence={chatPresence}
+            activeSessionId={activeSessionId}
+            onSessionOpen={onSessionOpen}
+            onSessionUpdate={onSessionUpdate}
+            onSessionArchive={onSessionArchive}
+            onSessionDelete={onSessionDelete}
+            onSessionSplit={onSessionSplit}
+            onSessionMerge={onSessionMerge}
+            escalateChannels={escalateChannels}
+            onSessionEscalateToChannel={onSessionEscalateToChannel}
+            escalateAgents={escalateAgents}
+            onSessionEscalateToAgent={onSessionEscalateToAgent}
+           />
+          ) : (
+           <button
+            type="button"
+            className="w-full rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={() => onManageNostrCommunity?.(group.connection)}
+           >
+            No imported channels. Choose channels…
+           </button>
+          )}
+         </SidebarFolderGroup>
+        );
+       })}
       </SidebarSection>
       <SidebarSection
        id="documents"
@@ -1638,6 +1717,9 @@ function SidebarFolderGroup({
  id,
  label,
  count,
+ icon,
+ actionLabel,
+ onAction,
  open,
  onOpenChange,
  children,
@@ -1645,33 +1727,52 @@ function SidebarFolderGroup({
  id: string;
  label: string;
  count: number;
+ icon?: React.ReactNode;
+ actionLabel?: string;
+ onAction?: () => void;
  open: boolean;
  onOpenChange: (open: boolean) => void;
  children: React.ReactNode;
 }) {
  return (
   <Collapsible open={open} onOpenChange={onOpenChange} className="pt-1">
-   <CollapsibleTrigger asChild>
-    <button
-     type="button"
+   <div className="flex items-center gap-0.5">
+    <CollapsibleTrigger asChild>
+     <button
+      type="button"
      // text-sm, not text-xs. A folder is one of the things IN the workspace, the
      // same as the documents inside it and the same as Inbox/Tasks/Skills — it is
      // not a label for a group the way a section heading is. text-xs put it at
      // exactly the section-heading size (11.25px against the items' 13.125px at a
      // 15px UI font), so "Applets" read as a heading for its own contents.
-     className="sidebar-folder-trigger flex w-full items-center gap-1 rounded-md px-1.5 py-1 text-left text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-     aria-controls={`${id}-content`}
-    >
-     <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
-     <Folder className="size-4 shrink-0" />
-     <span className="sidebar-section-label min-w-0 truncate text-left">{label}</span>
-     {count > 0 && (
-      <span className="sidebar-section-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-primary-foreground">
-       {formatCount(count)}
-      </span>
-     )}
-    </button>
-   </CollapsibleTrigger>
+      className="sidebar-folder-trigger flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-1 text-left text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+      aria-controls={`${id}-content`}
+     >
+      <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+      <span className="size-4 shrink-0">{icon || <Folder className="size-4" />}</span>
+      <span className="sidebar-section-label min-w-0 flex-1 truncate text-left">{label}</span>
+      {count > 0 && (
+       <span className="sidebar-section-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-primary-foreground">
+        {formatCount(count)}
+       </span>
+      )}
+     </button>
+    </CollapsibleTrigger>
+    {onAction && (
+     <button
+      type="button"
+      className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+      aria-label={actionLabel}
+      title={actionLabel}
+      onClick={event => {
+       event.stopPropagation();
+       onAction();
+      }}
+     >
+      <Settings className="size-3.5" />
+     </button>
+    )}
+   </div>
    <CollapsibleContent id={`${id}-content`} className="pt-1 pl-5">
     {children}
    </CollapsibleContent>
@@ -1785,6 +1886,7 @@ function SessionTree({
  icon,
  archiveNoun,
  limit,
+ sourceBySessionId,
  chatPresence,
  activeSessionId = null,
  onSessionOpen,
@@ -1802,6 +1904,7 @@ function SessionTree({
  icon?: React.ReactNode;
  archiveNoun?: string;
  limit?: number;
+ sourceBySessionId?: Map<string, NostrChannelSubscription>;
  chatPresence: Record<string, ItemPresenceUser[]>;
  activeSessionId?: string | null;
  onSessionOpen: (session: ChatSession) => void;
@@ -1831,6 +1934,7 @@ function SessionTree({
      archiveNoun={archiveNoun}
      depth={depth}
      chip={chip}
+     source={sourceBySessionId?.get(session.id)}
      canMerge={chip === 'SPLIT'}
      active={session.id === activeSessionId}
      onOpen={() => onSessionOpen(session)}
@@ -1860,6 +1964,7 @@ function SessionRow({
  archiveNoun = 'channel',
  depth = 0,
  chip = null,
+ source,
  canMerge = false,
  active = false,
  onOpen,
@@ -1880,6 +1985,7 @@ function SessionRow({
  archiveNoun?: string;
  depth?: number;
  chip?: 'SPLIT' | 'SUB' | null;
+ source?: NostrChannelSubscription;
  canMerge?: boolean;
  /** This session is the one currently open/focused — render it boxed. */
  active?: boolean;
@@ -1951,6 +2057,25 @@ function SessionRow({
        </span>
       )}
       <span className="min-w-0 flex-1 truncate text-left">{session.title}</span>
+      {source && (
+       <>
+        <span
+         data-testid="nostr-source-chip"
+         className="shrink-0 rounded border border-sky-500/30 bg-sky-500/10 px-1 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-wide text-sky-700 dark:text-sky-300"
+         title="Mirrored from a Nostr community"
+        >
+         Nostr
+        </span>
+        {!source.enabled && (
+         <span
+          data-testid="nostr-subscription-state"
+          className="shrink-0 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-wide text-amber-700 dark:text-amber-300"
+         >
+          Paused
+         </span>
+        )}
+       </>
+      )}
       {/* "# general   5m 55s" while an agent is working in this session. Mounts
           its own 1s clock only while there IS work, so an idle sidebar runs no
           timers; the row itself never re-renders on that tick. */}

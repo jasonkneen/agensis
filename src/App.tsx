@@ -127,6 +127,8 @@ import { useSharing } from './hooks/useSharing';
 import { useCanvasObjects } from './hooks/useCanvasObjects';
 import { useCanvasLayers } from './hooks/useCanvasLayers';
 import { useTasks } from './hooks/useTasks';
+import { useNostrCommunities } from './hooks/useNostrCommunities';
+import type { NostrConnection } from './lib/nostrCommunities';
 import { useActivity } from './hooks/useActivity';
 import { useInbox } from './hooks/useInbox';
 import { useAgents, type CreateAgentInput } from './hooks/useAgents';
@@ -704,6 +706,12 @@ function AppContent() {
     [workspaces],
   );
   const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) || defaultWorkspace;
+  const {
+    connections: nostrConnections,
+    resolved: nostrConnectionsResolved,
+    error: nostrConnectionsError,
+    refetch: refetchNostrCommunities,
+  } = useNostrCommunities(activeWorkspace?.id || null);
 
   useEffect(() => {
     if (wsLoading || workspaces.length === 0) return;
@@ -1171,7 +1179,20 @@ function AppContent() {
   // The "+" beside Channels opens the template gallery rather than creating a
   // channel outright. Creation still happens here, once a template is picked.
   const [newChannelOpen, setNewChannelOpen] = useState(false);
-  const handleNewChat = useCallback(() => { setNewChannelOpen(true); }, []);
+  const [managedNostrConnectionId, setManagedNostrConnectionId] = useState<string | null>(null);
+  const managedNostrConnection = nostrConnections.find(connection => connection.id === managedNostrConnectionId) || null;
+  const handleNewChat = useCallback(() => {
+    setManagedNostrConnectionId(null);
+    setNewChannelOpen(true);
+  }, []);
+  const handleManageNostrCommunity = useCallback((connection: NostrConnection) => {
+    setManagedNostrConnectionId(connection.id);
+    setNewChannelOpen(true);
+  }, []);
+  const handleNewChannelOpenChange = useCallback((open: boolean) => {
+    setNewChannelOpen(open);
+    if (!open) setManagedNostrConnectionId(null);
+  }, []);
 
   // RETURNS the created session. BridgeSetup reads `.id` off this to attach a
   // transport to the channel it just made — it always did, but this function
@@ -2259,6 +2280,11 @@ function AppContent() {
             onOpenCommandPalette={handleOpenCommandPalette}
             onOpenWorkspaceGrid={handleOpenCanvasGrid}
             onNewChat={handleNewChat}
+            nostrConnections={nostrConnections}
+            nostrConnectionsResolved={nostrConnectionsResolved}
+            nostrConnectionsError={nostrConnectionsError}
+            onRetryNostrConnections={() => { void refetchNostrCommunities(); }}
+            onManageNostrCommunity={handleManageNostrCommunity}
             onNewDocument={handleNewDocument}
             onUploadFile={handleSidebarUploadFile}
             onCreateWorkspace={handleCreateWorkspace}
@@ -2741,12 +2767,14 @@ function AppContent() {
       </div>
       <NewChannelDialog
         open={newChannelOpen}
-        onOpenChange={setNewChannelOpen}
+        onOpenChange={handleNewChannelOpenChange}
         onCreate={createChannelFromTemplate}
         workspaceId={activeWorkspaceId || null}
         agents={agents}
         agentConnections={agentConnections}
         sessions={sessions}
+        nostrConnection={managedNostrConnection}
+        onNostrChange={() => { void refetchNostrCommunities(); }}
       />
       <RegistrationApprovalPopup workspaceId={activeWorkspaceId || null} />
       <FeedbackButton
