@@ -343,13 +343,29 @@ const stopReason: WireframeScene = {
   ],
 };
 
+/** A selected local CLI becoming the explicit runtime in its connect command. */
+const codexRuntime: WireframeScene = {
+  id: 'codex-runtime',
+  alt: 'Codex is selected from two local CLI choices, then appears as the highlighted runtime in the generated connection command.',
+  shapes: [
+    { kind: 'panel', x: 6, y: 10, w: 66, h: 80, tone: 'muted', motion: 'none' },
+    { kind: 'row', x: 14, y: 22, w: 48, h: 12, tone: 'base', motion: 'fade', delay: 0.15 },
+    { kind: 'row', x: 14, y: 42, w: 48, h: 12, tone: 'accent', motion: 'pulse', delay: 0.45 },
+    { kind: 'button', x: 14, y: 66, w: 30, h: 12, tone: 'accent', motion: 'pop', delay: 0.75 },
+    { kind: 'panel', x: 82, y: 10, w: 72, h: 80, tone: 'base', motion: 'slide-left', delay: 1.0 },
+    { kind: 'bar', x: 90, y: 26, w: 54, h: 6, tone: 'muted', motion: 'fade', delay: 1.2 },
+    { kind: 'chip', x: 90, y: 44, w: 46, h: 13, tone: 'accent', motion: 'pulse', delay: 1.4 },
+    { kind: 'bar', x: 90, y: 68, w: 38, h: 5, tone: 'muted', motion: 'fade', delay: 1.55 },
+  ],
+};
+
 export const WIREFRAME_SCENES = {
   // In the gallery today.
-  dmPrivacy, automationRule, savedTemplate, auditLog, typingDots, stopReason,
+  codexRuntime, dmPrivacy, automationRule, savedTemplate, auditLog, typingDots,
   // Retired from the gallery when their feature stopped being news. Kept as
   // authored vocabulary — a scene costs nothing and is the reference for how
   // this format is meant to read.
-  splitView, chips, cadence, toolLoop, preview, showDesktop,
+  splitView, chips, cadence, toolLoop, preview, showDesktop, stopReason,
 } as const;
 
 export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
@@ -367,6 +383,12 @@ export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
  * its scene stays in WIREFRAME_SCENES.
  */
 export const GALLERY_SLIDES: GallerySlide[] = [
+  {
+    note: 'onboarding-codex-runtime',
+    title: 'Choosing Codex now connects Codex',
+    body: 'The setup choice is saved before the command is made, so a Codex agent uses the Codex CLI and your logged-in OpenAI account.',
+    scene: codexRuntime,
+  },
   {
     note: 'private-direct-messages',
     title: 'Direct messages are private',
@@ -396,12 +418,6 @@ export const GALLERY_SLIDES: GallerySlide[] = [
     title: 'See when someone is typing',
     body: 'A dot indicator shows when another person or an agent is part-way through a reply, so you know one is coming.',
     scene: typingDots,
-  },
-  {
-    note: 'why-an-agent-stopped',
-    title: 'An agent says why it stopped',
-    body: 'A run that ends early now carries its reason, instead of being a reply that just stops mid-sentence.',
-    scene: stopReason,
   },
 ];
 

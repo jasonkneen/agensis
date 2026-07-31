@@ -3500,7 +3500,7 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
 async function verifyAgentConnectToken(token, req = null) {
  if (!token || typeof token !== 'string') return null;
  const rows = await getDb().unsafe(
-  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, metadata, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
      from workspace_agents
      where connect_token_hash = $1
      limit 1`,
@@ -3511,7 +3511,7 @@ async function verifyAgentConnectToken(token, req = null) {
   const { workspaceId, agentId } = agentIdsFromWsRequest(req);
   if (workspaceId && agentId) {
    const fallbackRows = await getDb().unsafe(
-    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
+    `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, metadata, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
          from workspace_agents
          where id = $1 and workspace_id = $2
          limit 1`,
@@ -3744,6 +3744,8 @@ function isAgentEnabled(agent) {
 function agentRuntimePayload(agent) {
  if (!agent) return null;
  const permissionMode = normalizeAgentPermissionMode(agent.permission_mode || agent.permissionMode);
+ const metadata = parseJsonObject(agent.metadata);
+ const runtime = normalizeExecutionRuntime(metadata.runtime);
  return {
   id: agent.id,
   workspace_id: agent.workspace_id,
@@ -3760,13 +3762,13 @@ function agentRuntimePayload(agent) {
   instructions: agent.instructions || '',
   tools: parseJsonArray(agent.tools),
   skills: parseJsonArray(agent.skills),
-  metadata: parseJsonObject(agent.metadata),
+  metadata,
   // { voice, human_set } — see shared/agentIdentity.cjs. Every explicit
   // workspace_agents select above lists `identity` too; a column left out of
   // one of them reads blank in exactly one screen, which is how host_folders
   // and canvas_id each got shipped broken.
   identity: parseJsonObject(agent.identity),
-  model: resolveAnthropicModel(agent.model),
+  model: resolveExecutionModel(agent.model, runtime),
   run_mode: agent.run_mode === 'daemon' ? 'daemon'
    : agent.run_mode === 'sandbox' ? 'sandbox'
     : 'builtin',
@@ -8787,6 +8789,7 @@ module.exports = {
   WORKSPACE_SCOPED_TABLES,
   getTokenTtlSec,
   DEFAULT_TOKEN_TTL_SEC,
+  verifyAgentConnectToken,
   verifyToken,
   // Token revocation cache — exposed so tests can assert the cache is real
   // (not a no-op) without hardcoding its TTL.
