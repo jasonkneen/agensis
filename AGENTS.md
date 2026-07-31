@@ -132,18 +132,23 @@ on it:
   leave synchronous workspace fanout and use the same fail-closed live audience
   lookup. The generic database path is read-only for these tables and applies
   the corresponding session predicate to workspace-wide reads.
+- **`thread_items`, `agent_jobs` and `agent_schedules` are session-scoped.**
+  Each row carries or resolves one `session_id`, and its realtime event leaves
+  synchronous workspace fanout for the fail-closed live audience lane. Generic
+  job/schedule writes are server-owned and refused; thread mutations must prove
+  one session and pass its access gate. Schedule execution re-checks both the
+  creator's current workspace role and private-session membership at run time.
 - **`messages` is covered by a different argument**, not by that split. An
   unfiltered `messages` subscription cannot be established at all, so a message
   only ever reaches a socket that named its session.
 - **Every other allowlisted table is covered by none of those lanes.** A table that is
-  subscribable on a `workspace_id` filter and that can hold DM-derived rows —
-  `thread_items`, for example, hangs off a thread that may be a DM sub-thread —
-  fans those rows to every socket in the workspace that holds `read`. The REST
+  subscribable on a `workspace_id` filter and that can hold DM-derived rows fans
+  those rows to every socket in the workspace that holds `read`. The REST
   projection for those tables is not the control here, because the fanout does
   not go through it.
 
 **So the session granularity is enforced broadly on the REST/MCP side but only
-for the five named table shapes above.** If you are adding a table that can carry
+for the eight named table shapes above.** If you are adding a table that can carry
 content derived from a private session, do not assume realtime will scope it.
 Add an explicit session-audience lane and tests, or raise the gap rather than
 allowlisting quietly.
