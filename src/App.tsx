@@ -757,7 +757,7 @@ function AppContent() {
     activeWorkspaceId,
     (workspaceBootstrap?.files as import('./types').UploadedFile[] | undefined) || null,
   );
-  const { online, syncing, pendingCount, syncError, flushQueue, clearPendingQueue } = useNetworkStatus();
+  const { online, syncing, pendingCount, syncError, flushQueue, clearPendingQueue } = useNetworkStatus(user?.id ?? null);
   const { mode: themeMode, setTheme } = useTheme();
 
   useEffect(() => {

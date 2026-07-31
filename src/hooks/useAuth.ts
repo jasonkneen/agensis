@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { AuthError, handleAuthCallback, MissingIdentityError, oauthLogin } from '@netlify/identity';
 import { backendClient } from '../lib/backendClient';
 import { clearAuthNotice, getAuthNotice, setAuthNotice, subscribeAuthNotice } from '../lib/authNotice';
+import { prepareOfflineDataForUser } from '../lib/offlineDb';
 
 type User = { id: string; email?: string | null };
 type Session = { access_token: string; user: User };
@@ -16,6 +17,19 @@ export function useAuth() {
 
   useEffect(() => {
     let active = true;
+    let authGeneration = 0;
+
+    async function applySession(nextSession: Session | null) {
+      const generation = ++authGeneration;
+      // The offline queue can contain writes as well as cached reads. Establish
+      // its account owner before any workspace hook is allowed to see this
+      // session, so switching accounts can neither render nor replay the prior
+      // account's data.
+      await prepareOfflineDataForUser(nextSession?.user.id ?? null);
+      if (!active || generation !== authGeneration) return;
+      setSession(nextSession);
+      setUser(nextSession?.user ?? null);
+    }
 
     async function initializeAuth() {
       // Set when the OAuth exchange comes back with an error. Held rather than
@@ -30,8 +44,7 @@ export function useAuth() {
           if (callbackResult?.type === 'oauth') {
             const { data, error } = await backendClient.auth.signInWithOAuthSession();
             if (!error && active) {
-              setSession(data.session);
-              setUser(data.user);
+              await applySession(data.session);
               return;
             }
             // A failed exchange used to fall straight through to `finally`,
@@ -54,8 +67,7 @@ export function useAuth() {
         if (active) {
           const { data: { session: s } } = await backendClient.auth.getSession();
           if (oauthFailure && !s) setAuthNotice(oauthFailure);
-          setSession(s);
-          setUser(s?.user ?? null);
+          await applySession(s);
           setLoading(false);
         }
       }
@@ -63,8 +75,7 @@ export function useAuth() {
 
     initializeAuth();
     const { data: { subscription } } = backendClient.auth.onAuthStateChange((_event: string, s: Session | null) => {
-      setSession(s);
-      setUser(s?.user ?? null);
+      void applySession(s);
     });
 
     return () => {
@@ -93,7 +104,13 @@ export function useAuth() {
   }, []);
 
   const signOut = useCallback(async () => {
-    await backendClient.auth.signOut();
+    // Clear cached reads and queued writes before revoking the session. If the
+    // browser closes during sign-out, no later account can inherit them.
+    try {
+      await prepareOfflineDataForUser(null);
+    } finally {
+      await backendClient.auth.signOut();
+    }
   }, []);
 
   const signInWithOAuth = useCallback(async (provider: 'google' | 'github') => {

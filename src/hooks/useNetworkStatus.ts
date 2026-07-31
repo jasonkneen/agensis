@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { peekQueue, dequeue, recordSyncFailure, clearQueue as clearOfflineQueue } from '../lib/offlineDb';
 
-export function useNetworkStatus() {
+export function useNetworkStatus(userId: string | null) {
   const [online, setOnline] = useState(navigator.onLine);
   const [syncing, setSyncing] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
@@ -21,7 +21,7 @@ export function useNetworkStatus() {
   }, []);
 
   const flushQueue = useCallback(async () => {
-    if (syncingRef.current || !navigator.onLine) return;
+    if (!userId || syncingRef.current || !navigator.onLine) return;
     syncingRef.current = true;
     setSyncing(true);
 
@@ -88,17 +88,17 @@ export function useNetworkStatus() {
       const remaining = await peekQueue();
       setPendingCount(remaining.length);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
-    if (online) flushQueue();
-  }, [online, flushQueue]);
+    if (online && userId) flushQueue();
+  }, [online, userId, flushQueue]);
 
   useEffect(() => {
-    if (!online) return;
+    if (!online || !userId) return;
     const interval = setInterval(flushQueue, 30_000);
     return () => clearInterval(interval);
-  }, [online, flushQueue]);
+  }, [online, userId, flushQueue]);
 
   const clearPendingQueue = useCallback(async () => {
     await clearOfflineQueue();
@@ -107,8 +107,13 @@ export function useNetworkStatus() {
   }, []);
 
   useEffect(() => {
+    if (!userId) {
+      setPendingCount(0);
+      setSyncError(null);
+      return;
+    }
     peekQueue().then(items => setPendingCount(items.length));
-  }, []);
+  }, [userId]);
 
   return { online, syncing, pendingCount, syncError, flushQueue, clearPendingQueue };
 }

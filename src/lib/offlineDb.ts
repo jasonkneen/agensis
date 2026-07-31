@@ -2,6 +2,7 @@ const DB_NAME = 'agensis_offline';
 const DB_VERSION = 1;
 const QUEUE_STORE = 'sync_queue';
 const CACHE_STORE = 'data_cache';
+const OWNER_STORAGE_KEY = 'agensis_offline_owner';
 
 // Bounds so a long offline session (or a wedged sync) can't grow IndexedDB
 // without limit. Oldest entries are evicted first once either bound is exceeded.
@@ -53,6 +54,42 @@ function req<T>(r: IDBRequest<T>): Promise<T> {
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
   });
+}
+
+/**
+ * Make the one browser-level offline database belong to exactly one signed-in
+ * account. The first use after this guard was introduced deliberately clears
+ * the unowned legacy database: there is no safe way to prove whose rows it
+ * contains.
+ *
+ * Call this before exposing an authenticated session to the rest of the app.
+ * Keeping the account marker outside IndexedDB lets us make the ownership
+ * decision before reading either store.
+ */
+export async function prepareOfflineDataForUser(userId: string | null): Promise<void> {
+  if (typeof localStorage === 'undefined' || typeof indexedDB === 'undefined') return;
+  const nextOwner = String(userId || '').trim();
+  const currentOwner = localStorage.getItem(OWNER_STORAGE_KEY) || '';
+  if (nextOwner && currentOwner === nextOwner) return;
+
+  await clearOfflineData();
+  if (nextOwner) localStorage.setItem(OWNER_STORAGE_KEY, nextOwner);
+  else localStorage.removeItem(OWNER_STORAGE_KEY);
+}
+
+/** Remove both cached reads and queued writes for the current browser account. */
+export async function clearOfflineData(): Promise<void> {
+  if (typeof indexedDB === 'undefined') return;
+  const db = await openDb();
+  try {
+    const transaction = db.transaction([QUEUE_STORE, CACHE_STORE], 'readwrite');
+    await Promise.all([
+      req(transaction.objectStore(QUEUE_STORE).clear()),
+      req(transaction.objectStore(CACHE_STORE).clear()),
+    ]);
+  } finally {
+    db.close();
+  }
 }
 
 export async function enqueue(entry: Omit<SyncEntry, 'id' | 'created_at'>): Promise<void> {
