@@ -50,11 +50,11 @@ describe('channel templates', () => {
 describe('bridges are real, and each one has somewhere to send you', () => {
   const bridges = CHANNEL_TEMPLATES.filter(t => t.kind === 'bridge');
 
-  it('ships the five that have a transport', () => {
+  it('ships every provider that has a transport', () => {
     // These are exactly the providers server/channel-bridges.cjs carries
     // (DAEMON_PROVIDERS + HUB_PROVIDERS). A template for a sixth would be a
     // card that opens a setup step the backend cannot honour.
-    expect(bridges.map(b => b.id).sort()).toEqual(['openclaw', 'signal', 'slack', 'telegram', 'whatsapp']);
+    expect(bridges.map(b => b.id).sort()).toEqual(['nostr', 'openclaw', 'signal', 'slack', 'telegram', 'whatsapp']);
   });
 
   it('every bridge has a provider spec to ask for credentials with', () => {
@@ -65,7 +65,10 @@ describe('bridges are real, and each one has somewhere to send you', () => {
       const spec = bridgeSpec(bridge.id);
       expect(spec, bridge.id).toBeTruthy();
       expect(spec!.provider, bridge.id).toBe(bridge.id);
-      expect(spec!.fields.length + (spec!.pairing ? 1 : 0), bridge.id).toBeGreaterThan(0);
+      expect(
+        spec!.fields.length + (spec!.pairing ? 1 : 0) + (spec!.setup === 'invite' ? 1 : 0),
+        bridge.id,
+      ).toBeGreaterThan(0);
     }
   });
 

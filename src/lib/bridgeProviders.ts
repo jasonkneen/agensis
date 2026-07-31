@@ -10,7 +10,7 @@
 // whatever handshake the provider supports. So every field here is something a
 // human copies out of somebody else's dashboard.
 
-export type BridgeProvider = 'telegram' | 'slack' | 'whatsapp' | 'signal' | 'openclaw';
+export type BridgeProvider = 'telegram' | 'slack' | 'whatsapp' | 'signal' | 'openclaw' | 'nostr';
 
 export interface BridgeField {
   key: string;
@@ -37,9 +37,19 @@ export interface BridgeProviderSpec {
   /** Set when the provider links by scanning a code on a phone. */
   pairing?: 'qr';
   warning?: string;
+  /** This provider uses its own invite wizard instead of the generic credential form. */
+  setup?: 'invite';
 }
 
 export const BRIDGE_PROVIDERS: Record<BridgeProvider, BridgeProviderSpec> = {
+  nostr: {
+    provider: 'nostr',
+    lane: 'hub',
+    summary: 'Join a Nostr community with an invite and choose which channels to mirror.',
+    fields: [],
+    steps: [],
+    setup: 'invite',
+  },
   telegram: {
     provider: 'telegram',
     lane: 'hub',

@@ -28,6 +28,7 @@ import { ChannelMemberStep, type MemberChoice } from './ChannelMemberStep';
 import { bridgeSpec } from '@/lib/bridgeProviders';
 import { apiUrl, apiAuthHeaders } from '@/lib/backendClient';
 import type { AgentConnection, ChatSession, WorkspaceAgent } from '@/types';
+import { NostrCommunitySetup } from './NostrCommunitySetup';
 
 // ---------------------------------------------------------------------------
 // The "+" beside Channels opens this instead of silently creating "New Channel".
@@ -136,7 +137,14 @@ export function NewChannelDialog({
           so above 640px the base media query won and this dialog rendered at
           384px, collapsing its content to a single cramped column. */}
       <DialogContent className="flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-2xl">
-        {preview ? (
+        {preview?.id === 'nostr' ? (
+          <NostrCommunitySetup
+            workspaceId={workspaceId}
+            onBack={() => setPreview(null)}
+            onCreate={onCreate}
+            onClose={() => handleOpenChange(false)}
+          />
+        ) : preview ? (
           <BridgeSetup
             template={preview}
             onBack={() => setPreview(null)}

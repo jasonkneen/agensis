@@ -9,6 +9,7 @@ import {
   Send,
   ShieldCheck,
   Radio,
+  Globe2,
   type LucideIcon,
 } from 'lucide-react';
 import type { ConversationMode } from './channelMentions';
@@ -165,6 +166,20 @@ export const CHANNEL_TEMPLATES: ChannelTemplate[] = [
   // Each of these opens a setup step before anything is created. What they ask
   // for is in src/lib/bridgeProviders.ts; what carries the traffic is
   // server/channel-bridges.cjs.
+  {
+    id: 'nostr',
+    name: 'Nostr community',
+    category: 'Bring your own',
+    description: 'Join with a Nostr invite and mirror its channels with live two-way messages.',
+    kind: 'bridge',
+    icon: Globe2,
+    channelIcon: 'globe',
+    title: 'Nostr',
+    channelDescription: 'Bridged from a Nostr community.',
+    intent: 'This channel is bridged with Nostr. Preserve remote authorship and use @mentions when addressing a specific Nostr agent.',
+    conversationMode: 'mention',
+    available: true,
+  },
   {
     id: 'slack',
     name: 'Slack',
