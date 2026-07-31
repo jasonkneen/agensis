@@ -632,6 +632,8 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
 );
 
 CREATE INDEX IF NOT EXISTS idx_workspace_agents_workspace_id ON workspace_agents(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_agents_handle ON workspace_agents(workspace_id, handle);
+CREATE INDEX IF NOT EXISTS idx_workspace_agents_connect_token_hash ON workspace_agents(connect_token_hash);
 
 -- Agent file-memory mirror: read-only snapshots of the memory files an agent's
 -- daemon enumerates from its palace dir. Pushed up by the daemon; never edited
@@ -1263,6 +1265,21 @@ CREATE TABLE IF NOT EXISTS activity_events (
 
 CREATE INDEX IF NOT EXISTS idx_activity_events_workspace_created ON activity_events(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_events_entity ON activity_events(entity_type, entity_id);
+-- Match the forward migration/runtime repair before adding the partial UNIQUE
+-- index, so pushing this canonical file over an older database cannot fail on
+-- message-activity duplicates that predate idempotent logging.
+DELETE FROM activity_events a
+USING activity_events b
+WHERE a.event_type = 'message_sent'
+  AND a.entity_type = 'message'
+  AND b.event_type = 'message_sent'
+  AND b.entity_type = 'message'
+  AND a.entity_id IS NOT NULL
+  AND a.entity_id = b.entity_id
+  AND a.ctid > b.ctid;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_activity_events_message_sent
+  ON activity_events (entity_id)
+  WHERE event_type = 'message_sent' AND entity_type = 'message';
 
 -- Notes left on an activity log entry ("comment I can look at later"), anchored
 -- to the activity_events row itself. Mirrors memory_file_comments' shape.

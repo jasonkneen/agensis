@@ -100,15 +100,12 @@ import { emitReactionFlowEventsForUpdate } from '../../shared/reaction-events.cj
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
 // createTokenVersionCache doc comments for the full rationale.
 //
-// requireUserId (-> verifyAuthToken -> getTokenVersion) runs BEFORE any
-// route-specific handler, on every protected route — including ones that never
-// call ensureAppUserProfileColumns() themselves (db/*, settings/secrets,
-// ai-chat, ...). So this is the one place that must ensure token_version
-// exists itself, or a cold container's very first authenticated request on a
-// DB that hasn't run migrations yet would 500 on a missing column.
+// requireUserId (-> verifyAuthToken -> getTokenVersion) runs before every
+// protected route. Schema provisioning is deliberately not part of that request:
+// Netlify shares the primary database, so canonical schema + migrations must
+// establish app_users.token_version before this function is deployed.
 const tokenVersionCache = createTokenVersionCache();
 async function getTokenVersion(userId) {
- await ensureAppUserProfileColumns();
  return tokenVersionCache.get(userId, query);
 }
 
@@ -744,39 +741,7 @@ function vaultWriteUnavailable() {
  ));
 }
 
-async function ensureSecretsTables() {
- await query(`
-    CREATE TABLE IF NOT EXISTS app_settings (
-      key text PRIMARY KEY,
-      value text NOT NULL DEFAULT '',
-      updated_at timestamptz DEFAULT now()
-    )
-  `);
- await query(`
-    CREATE TABLE IF NOT EXISTS workspace_secrets (
-      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      key text NOT NULL,
-      value text NOT NULL DEFAULT '',
-      secret_cipher text DEFAULT '',
-      description text DEFAULT '',
-      updated_by uuid,
-      updated_at timestamptz DEFAULT now(),
-      PRIMARY KEY (workspace_id, key)
-    )
-  `);
- // Idempotent backfill for databases whose workspace_secrets predates
- // encryption-at-rest (CREATE TABLE IF NOT EXISTS above is a no-op for them).
- // Mirrors ensureRuntimeSchema in server/index.cjs — this mirror now writes
- // ciphertext, so the columns have to exist wherever it runs.
- await query(`
-    ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS secret_cipher text DEFAULT '';
-    ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT '';
-  `);
- await query('CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id)');
-}
-
 async function getSettingValue(key) {
- await ensureSecretsTables();
  const rows = await query('select value from app_settings where key = $1 limit 1', [key]);
  return rows[0]?.value || '';
 }
@@ -788,12 +753,10 @@ async function getSettingValue(key) {
 // through Netlify.
 async function getWorkspaceSecretValue(workspaceId, key) {
  if (!workspaceId) return '';
- await ensureSecretsTables();
  return coreGetWorkspaceSecretValue(workspaceId, key, { db: query, getAuthSecret });
 }
 
 async function setWorkspaceSecretValue(workspaceId, key, value, userId = null) {
- await ensureSecretsTables();
  await coreSetWorkspaceSecretValue(workspaceId, key, value, { db: query, getAuthSecret, userId });
 }
 
@@ -810,7 +773,6 @@ async function resolveSecret(key, workspaceId = null) {
 // characters of the app-level ANTHROPIC_API_KEY. `scope` already says which key is
 // in play.
 async function listManagedSecrets(workspaceId = null) {
- await ensureSecretsTables();
  const meta = new Map();
  if (workspaceId) {
   const rows = await listWorkspaceSecretMeta(workspaceId, { db: query }).catch(() => []);
@@ -1002,55 +964,6 @@ function publicCursorBuddyConnectionKey(row) {
  };
 }
 
-async function ensureAgentConnectionsTable() {
- await query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
- await query(`
-    CREATE TABLE IF NOT EXISTS agent_connections (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
-      name text NOT NULL DEFAULT 'Agent',
-      handle text NOT NULL DEFAULT '',
-      host text DEFAULT '',
-      cwd text DEFAULT '',
-      status text NOT NULL DEFAULT 'offline' CHECK (status IN ('online', 'offline', 'busy')),
-      metadata jsonb DEFAULT '{}'::jsonb,
-      connected_at timestamptz DEFAULT now(),
-      last_seen_at timestamptz DEFAULT now(),
-      updated_at timestamptz DEFAULT now()
-    )
-  `);
- await query('CREATE INDEX IF NOT EXISTS idx_agent_connections_workspace_id ON agent_connections(workspace_id)');
- await query('CREATE INDEX IF NOT EXISTS idx_agent_connections_agent_id ON agent_connections(agent_id)');
- await query('CREATE INDEX IF NOT EXISTS idx_agent_connections_status ON agent_connections(workspace_id, status)');
-}
-
-async function ensureCursorBuddyConnectionKeyTables() {
- await query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
- await ensureAgentRuntimeTables();
- await query(`
-    CREATE TABLE IF NOT EXISTS cursorbuddy_connection_keys (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
-      created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
-      key_hash text NOT NULL UNIQUE,
-      name text NOT NULL DEFAULT 'CursorBuddy runtime',
-      surface text NOT NULL DEFAULT 'machine',
-      scope text NOT NULL DEFAULT 'machine',
-      domain text NOT NULL DEFAULT '',
-      status text NOT NULL DEFAULT 'created' CHECK (status IN ('created', 'claimed', 'expired', 'revoked')),
-      metadata jsonb DEFAULT '{}'::jsonb,
-      expires_at timestamptz NOT NULL DEFAULT now() + interval '15 minutes',
-      claimed_at timestamptz,
-      created_at timestamptz DEFAULT now(),
-      updated_at timestamptz DEFAULT now()
-    )
-  `);
- await query('CREATE INDEX IF NOT EXISTS idx_cursorbuddy_connection_keys_workspace ON cursorbuddy_connection_keys(workspace_id, status)');
- await query('CREATE INDEX IF NOT EXISTS idx_cursorbuddy_connection_keys_hash ON cursorbuddy_connection_keys(key_hash)');
-}
-
 async function handleWorkspaces(userId) {
  const rows = await query(
   `select w.id, w.name, w.description, w.icon, w.is_system, w.parent_id,
@@ -1102,7 +1015,6 @@ async function handleDeleteWorkspaceMember(workspaceId, memberId, userId) {
 async function handleWorkspaceAgents(workspaceId, userId) {
  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
  await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
- await ensureAgentRuntimeTables();
  // Same column list as the Fly server's /agents route — the parity test
  // extracts and diffs both, so a column added on one side fails until it is
  // added here too.
@@ -1216,7 +1128,6 @@ async function handleAgentConnections(req, userId) {
  const workspaceId = String(url.searchParams.get('workspaceId') || '').trim();
  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
  await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
- await ensureAgentConnectionsTable();
  const rows = await query(
   `select *
      from agent_connections
@@ -1229,7 +1140,6 @@ async function handleAgentConnections(req, userId) {
 }
 
 async function handleCursorBuddyConnectionKeys(req, userId) {
- await ensureCursorBuddyConnectionKeyTables();
  const url = new URL(req.url);
  const workspaceId = String(url.searchParams.get('workspaceId') || '').trim();
  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
@@ -1246,7 +1156,6 @@ async function handleCursorBuddyConnectionKeys(req, userId) {
 }
 
 async function handleCreateCursorBuddyConnectionKey(req, userId) {
- await ensureCursorBuddyConnectionKeyTables();
  const body = await readBody(req);
  const workspaceId = String(body?.workspaceId || body?.workspace_id || '').trim();
  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
@@ -1288,7 +1197,6 @@ async function handleCreateCursorBuddyConnectionKey(req, userId) {
 }
 
 async function ensureCursorBuddyAgentForKey(connectionKey, claim = {}) {
- await ensureAgentRuntimeTables();
  if (connectionKey?.agent_id) {
   const rows = await query(
    'select * from workspace_agents where id = $1 and workspace_id = $2 limit 1',
@@ -1384,7 +1292,6 @@ function mergeCursorBuddyProviderMetadata(existingAgent, nextMetadata) {
 }
 
 async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }) {
- await ensureAgentRuntimeTables();
  const { scope, domain, metadata } = cursorBuddyProviderAgentMetadata(body, userId);
  const resolvedScope = scope === 'domain' && domain ? 'domain' : scope === 'global' ? 'global' : 'workspace';
  metadata.providerScope = resolvedScope;
@@ -1509,7 +1416,6 @@ async function buildCursorBuddyAgentConnectionCommand({ agentId, workspaceId = n
 }
 
 async function handleClaimCursorBuddyConnectionKey(req) {
- await ensureCursorBuddyConnectionKeyTables();
  const body = await readBody(req);
  const key = String(body?.key || '').trim();
  if (!/^cbk_[a-z0-9_]+_[A-Z2-9]{18}$/.test(key)) return jsonError(400, new Error('A valid CursorBuddy connection key is required'));
@@ -1584,59 +1490,6 @@ async function handleClaimCursorBuddyConnectionKey(req) {
  });
 }
 
-let appUserProfileColumnsEnsured = false;
-async function ensureAppUserProfileColumns() {
- if (appUserProfileColumnsEnsured) return;
- await query(`
-    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS display_name text DEFAULT '';
-    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '';
-    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 1;
-    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS share_read_receipts boolean NOT NULL DEFAULT true;
-  `);
- appUserProfileColumnsEnsured = true;
-}
-
-async function ensureAgentRuntimeTables() {
- await query(`
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS soul text DEFAULT '';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS instructions text DEFAULT '';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS tools jsonb DEFAULT '[]'::jsonb;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS metadata jsonb DEFAULT '{}'::jsonb;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS handle text DEFAULT '';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS openpet_avatar_id text DEFAULT '';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '#00a95c';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS connect_token_hash text DEFAULT '';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS identity jsonb NOT NULL DEFAULT '{}'::jsonb;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS sandbox_provider text;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS sandbox_config jsonb NOT NULL DEFAULT '{}'::jsonb;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS memory_dir text DEFAULT '';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS run_mode text NOT NULL DEFAULT 'builtin';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS permission_mode text NOT NULL DEFAULT 'default';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT true;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS ambient_replies boolean NOT NULL DEFAULT true;
-  `);
- await query('CREATE INDEX IF NOT EXISTS idx_workspace_agents_handle ON workspace_agents(workspace_id, handle)');
- await query('CREATE INDEX IF NOT EXISTS idx_workspace_agents_connect_token_hash ON workspace_agents(connect_token_hash)');
- await query(`
-    CREATE TABLE IF NOT EXISTS agent_webhooks (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
-      name text NOT NULL DEFAULT 'Webhook',
-      token text NOT NULL UNIQUE,
-      enabled boolean NOT NULL DEFAULT true,
-      last_triggered_at timestamptz,
-      created_at timestamptz DEFAULT now(),
-      updated_at timestamptz DEFAULT now(),
-      version integer NOT NULL DEFAULT 1
-    )
-  `);
- await query('CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id)');
- await query('CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id)');
-}
-
 async function handleAgentDispatch(req, userId) {
  const body = await readBody(req);
  const { workspaceId, sessionId, content } = body || {};
@@ -1690,7 +1543,6 @@ async function proxyAgentDispatchToDaemon(req, baseUrl, body) {
 }
 
 async function handleCreateAgentWebhook(req, userId) {
- await ensureAgentRuntimeTables();
  const body = await readBody(req);
  const workspaceId = String(body?.workspace_id || '').trim();
  const agentId = body?.agent_id ? String(body.agent_id).trim() : null;
@@ -1715,7 +1567,6 @@ async function handleCreateAgentWebhook(req, userId) {
 }
 
 async function handleAgentConnectionCommand(req, agentId, userId) {
- await ensureAgentRuntimeTables();
  const body = await readBody(req);
  const rows = await query('select * from workspace_agents where id = $1 limit 1', [agentId]);
  const agent = rows[0];
@@ -1782,7 +1633,6 @@ async function handleAgentConnectionCommand(req, agentId, userId) {
 }
 
 async function handleAuth(pathname, req) {
- await ensureAppUserProfileColumns();
  const body = await readBody(req);
  const email = String(body?.email || '').trim().toLowerCase();
  const password = String(body?.password || '');
@@ -1838,7 +1688,6 @@ async function handleAuth(pathname, req) {
 }
 
 async function handleOAuthAuth() {
- await ensureAppUserProfileColumns();
  const identityUser = await getUser();
  const email = String(identityUser?.email || '').trim().toLowerCase();
  if (!email) return jsonError(401, new Error('Social login was not completed'));
@@ -1862,14 +1711,12 @@ async function handleOAuthAuth() {
 }
 
 async function handleGetMyProfile(userId) {
- await ensureAppUserProfileColumns();
  const rows = await query('select id, email, display_name, accent_color, share_read_receipts, created_at from app_users where id = $1 limit 1', [userId]);
  if (!rows[0]) return jsonError(404, new Error('User not found'));
  return json({ data: rows[0], error: null });
 }
 
 async function handleUpdateMyProfile(req, userId) {
- await ensureAppUserProfileColumns();
  const body = await readBody(req);
  const updates = {};
  if (body?.display_name !== undefined) {
@@ -1938,29 +1785,9 @@ async function handleSignOut(userId) {
 }
 
 // Logs an `activity_events` row for each inserted chat message so it surfaces in
-// the Activity feed. Delegates to the shared idempotent logger so both backends
-// use ONE implementation (idempotent: skips messages already logged).
-// C3 — ensure the partial unique index that makes message-activity logging
-// idempotent. Mirrors the migration + server runtime DDL. Runs at most once per
-// warm instance and never throws into the caller (the ON CONFLICT insert
-// degrades gracefully if this hasn't landed yet).
-let activityIndexEnsured = false;
-async function ensureActivityEventsIndex() {
- if (activityIndexEnsured) return;
- try {
-  await query(
-   `CREATE UNIQUE INDEX IF NOT EXISTS uq_activity_events_message_sent
-       ON activity_events (entity_id)
-       WHERE event_type = 'message_sent' AND entity_type = 'message'`,
-  );
-  activityIndexEnsured = true;
- } catch (error) {
-  console.error('ensureActivityEventsIndex failed', error);
- }
-}
-
+// the Activity feed. The canonical schema and migration own the partial unique
+// index that makes this idempotent; request handling only writes data.
 async function logMessageActivity(rows) {
- await ensureActivityEventsIndex();
  await logMessageActivityIdempotent(rows, { db: query });
 }
 
@@ -2981,7 +2808,6 @@ async function route(req) {
 
    if (req.method === 'GET' && !key) {
     await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
-    await ensureSecretsTables();
     const data = await listWorkspaceVaultEntries(workspaceId, { db: query, managedKeys: MANAGED_SECRET_KEYS });
     return json({ data, error: null });
    }
@@ -2997,7 +2823,6 @@ async function route(req) {
     if (MANAGED_SECRET_KEYS.includes(key)) return jsonError(400, new Error('That key is managed elsewhere'));
     if (!vaultWritesEnabled()) return vaultWriteUnavailable();
     await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
-    await ensureSecretsTables();
     if (req.method === 'DELETE') {
      await query('delete from workspace_secrets where workspace_id = $1 and key = $2', [workspaceId, key]);
      return json({ data: { key }, error: null });
