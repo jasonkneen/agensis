@@ -209,6 +209,11 @@ function createRealtime(deps = {}) {
  const REALTIME_HEAVY_FIELDS = {
   agent_memory_files: ['content_cache'],
   agent_jobs: ['prompt', 'response'],
+  // Server-owned routing provenance for queued agent task work. It identifies
+  // the human whose private per-human agent DM receives the eventual run.
+  // Task mention paths broadcast raw `returning *` rows, so the generic REST
+  // projection is not a control for this field.
+  tasks: ['dispatch_requested_by'],
   // These three are bearer verifiers. Generic mutation rows and several
   // dedicated routes reach this chokepoint as raw `returning *`, so response
   // projection alone is not a realtime control.

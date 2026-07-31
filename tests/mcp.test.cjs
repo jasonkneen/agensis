@@ -13,6 +13,7 @@ const COMMENTER_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-comme
 const EDITOR_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-editor', name: 'editor@x.com', autoApprove: true, role: 'editor' };
 const ADMIN_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-admin', name: 'admin@x.com', autoApprove: true, role: 'admin' };
 const WORKSPACE = { kind: 'workspace', workspaceId: WS, name: 'MCP client', autoApprove: false };
+const USER_IDENTITY = { kind: 'user', userId: 'user-1', workspaceId: WS, name: 'MCP client', autoApprove: false };
 const FLOW_CHANNEL = {
   kind: 'integration',
   connectionId: 'flow-1',
@@ -118,6 +119,7 @@ function makeDeps(overrides = {}) {
     'good-token': AGENT,
     'invite-token': INVITE,
     'ws-token': WORKSPACE,
+    'user-token': USER_IDENTITY,
     'viewer-invite-token': VIEWER_INVITE,
     'commenter-invite-token': COMMENTER_INVITE,
     'editor-invite-token': EDITOR_INVITE,
@@ -732,6 +734,34 @@ test('create_task without parent_id still writes a top-level task (null parent)'
   assert.equal(insert.params[8], null);
 });
 
+test('a human login identity creating an assigned task stamps and dispatches as that human', async () => {
+  const db = makeDb();
+  const dispatches = [];
+  const { deps } = makeDeps({
+    db,
+    deps: {
+      dispatchTaskAssignment: async (args) => { dispatches.push(args); },
+    },
+  });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, {
+    token: 'user-token',
+    body: rpc('tools/call', {
+      name: 'create_task',
+      arguments: { title: 'Owned route', assignee_id: 'agent-next' },
+    }),
+  });
+
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const insert = db.calls.find((c) => c.n.startsWith('insert into tasks'));
+  assert.ok(insert.n.includes('dispatch_requested_by'));
+  assert.equal(insert.params[11], USER_IDENTITY.userId, 'created_by is authenticated, never client-authored');
+  assert.equal(insert.params[12], USER_IDENTITY.userId, 'the delayed route belongs to the assigning human');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(dispatches.length, 1, 'assigned task creation follows the same dispatch contract as the UI');
+  assert.equal(dispatches[0].actorUserId, USER_IDENTITY.userId);
+});
+
 test('create_task rejects a parent in ANOTHER workspace — before any insert', async () => {
   const { db, res } = await callTask('create_task', { title: 'Leaky', parent_id: 't-other' });
   assert.equal(res.body.result.isError, true);
@@ -775,6 +805,38 @@ test('update_task without parent_id leaves the existing parent untouched', async
   const update = db.calls.find((c) => c.n.startsWith('update tasks set'));
   assert.equal(update.params[9], false, 'the guard must be OFF when the caller never mentions parent_id');
   assert.ok(update.n.includes('else parent_id end'), 'must fall back to the row\'s own parent_id');
+});
+
+test('a human login identity assigning through MCP durably owns the dispatch route', async () => {
+  const db = makeDb();
+  const dispatches = [];
+  const { deps } = makeDeps({
+    db,
+    deps: {
+      dispatchTaskAssignment: async (args) => { dispatches.push(args); },
+    },
+  });
+  const handler = createMcpHandler(deps);
+  const res = await call(handler, {
+    token: 'user-token',
+    body: rpc('tools/call', {
+      name: 'update_task',
+      arguments: { task_id: 't-child', assignee_id: 'agent-next' },
+    }),
+  });
+
+  assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
+  const update = db.calls.find((c) => c.n.startsWith('update tasks set'));
+  assert.ok(update, 'the task assignment must be written');
+  assert.ok(
+    update.n.includes('when $14 and assignee_id is distinct from $7 then $15'),
+    'requester changes only on a real assignee transition',
+  );
+  assert.equal(update.params[13], true, 'the caller explicitly assigned an agent');
+  assert.equal(update.params[14], USER_IDENTITY.userId, 'the durable requester is the login identity');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(dispatches.length, 1);
+  assert.equal(dispatches[0].actorUserId, USER_IDENTITY.userId);
 });
 
 test('update_task rejects self-parenting — before any update', async () => {
@@ -1031,4 +1093,17 @@ test('create_channel normalizes an unrecognised mode to auto rather than storing
   assert.ok(!res.body.result.isError, res.body.result?.content?.[0]?.text);
   const insert = db.calls.find((c) => c.n.startsWith('insert into chat_sessions'));
   assert.equal(insert.params[3], 'auto');
+});
+
+test('create_channel refuses folders reserved for private or derived conversations', async () => {
+  for (const folder of ['Direct messages', 'huddle', 'sub-thread', ' DIRECT MESSAGES ']) {
+    const { db, res } = await callTask('create_channel', { title: 'orphan attempt', folder });
+    assert.equal(res.body.result.isError, true, folder);
+    assert.match(res.body.result.content[0].text, /reserved for system-created conversations/i);
+    assert.equal(
+      db.calls.some((call) => call.n.startsWith('insert into chat_sessions')),
+      false,
+      `${folder} must be refused before insert`,
+    );
+  }
 });

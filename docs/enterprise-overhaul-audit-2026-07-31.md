@@ -60,7 +60,7 @@ This review combined:
   parallel overhaul work;
 - an end-to-end browser pass over onboarding, channels, messages, threads,
   sub-threads, agent routing, join redemption, and the Users window;
-- a behavioural comparison with the sibling Buzz checkout;
+- a behavioural comparison with the sibling reference desktop checkout;
 - review of the sibling persistent-service implementation in
   `agensis-agent`.
 
@@ -760,9 +760,9 @@ Execution hosts and placements should be first-class:
 That model permits a thinking agent and a code handler on different boxes
 without giving the thinking agent the code host’s filesystem authority.
 
-## Behavioural comparison with Buzz
+## Behavioural comparison with the sibling desktop reference
 
-The sibling Buzz repository was studied only for behaviour and lifecycle
+The sibling reference repository was studied only for behaviour and lifecycle
 concepts. No source should be copied.
 
 Useful concepts:
@@ -772,14 +772,14 @@ Useful concepts:
 - use an adapter layer for agent protocols, including ACP;
 - make agent-owned credentials and actions inspectable.
 
-The important non-example is shutdown behaviour. Buzz’s desktop shutdown path
+The important non-example is shutdown behaviour. The reference desktop shutdown path
 explicitly stops managed agents. Agensis has the opposite product requirement:
 agent work must survive desktop quit. That makes the persistent supervisor the
 lifetime owner and the desktop a control client.
 
 Agensis should retain its existing React/Vite, Express/WebSocket, Netlify,
 Neon, and Electron platform. This is a behavioural reference, not a request to
-adopt Buzz’s Tauri, protocol, or persistence architecture.
+adopt the reference application’s platform, protocol, or persistence architecture.
 
 ## Feature/package target
 

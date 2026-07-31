@@ -95,9 +95,13 @@ function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
       log.sql.push({ n, params });
 
       // --- tasks -----------------------------------------------------------
-      if (n.startsWith('select id, workspace_id, title, description, status, assignee_id, source_type, source_id from tasks')) {
+      if (n.startsWith('select id, workspace_id, title, description, status, assignee_id, source_type, source_id')) {
         const task = findTask(params[0]);
         return task ? [{ ...task }] : [];
+      }
+      if (n.startsWith('select dispatch_requested_by from tasks')) {
+        const task = findTask(params[0]);
+        return task ? [{ dispatch_requested_by: task.dispatch_requested_by || null }] : [];
       }
       if (n.startsWith('select id, title, workspace_id, created_at from tasks')) {
         return state.tasks
@@ -211,8 +215,8 @@ function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
         // writes is the human's nag. The agent's reply arrives on the daemon
         // result path instead — see postAgentReply.
         const row = nested
-          ? { id: `m-${seq}`, session_id: params[0], content: params[1], thread_parent_id: params[2], source_task_id: params[3], sender_kind: 'user' }
-          : { id: `m-${seq}`, session_id: params[0], content: params[1], thread_parent_id: null, source_task_id: params[2], sender_kind: 'user' };
+          ? { id: `m-${seq}`, session_id: params[0], content: params[1], thread_parent_id: params[2], source_task_id: params[3], sender_kind: 'user', sender_id: params[4] }
+          : { id: `m-${seq}`, session_id: params[0], content: params[1], thread_parent_id: null, source_task_id: params[2], sender_kind: 'user', sender_id: params[3] };
         state.messages.push(row);
         return [{ ...row }];
       }
@@ -459,6 +463,93 @@ test('a queued task keeps the status the human left it in and gains no chat link
   assert.equal(world.state.tasks[0].source_id, null, 'and not pretending to be worked in a chat');
   assert.equal(world.log.taskWrites.length, 0, 'the task row was not touched at all');
   assert.equal(world.state.messages.length, 0, 'and nothing was posted into the DM');
+});
+
+test('a task created by A and queued by B drains into B’s private agent DM', async () => {
+  const creatorA = 'human-a';
+  const assignerB = 'human-b';
+  const sessionA = {
+    id: 'dm-a',
+    workspace_id: WS,
+    folder: 'Direct messages',
+    archived_at: null,
+    deleted_at: null,
+    participants: [{ kind: 'agent', agent_id: AGENT.id, handle: AGENT.handle, direct: true }],
+  };
+  const sessionB = { ...sessionA, id: 'dm-b' };
+  const world = makeWorld({
+    tasks: [taskRow('t-ab', {
+      created_by: creatorA,
+      dispatch_requested_by: assignerB,
+    })],
+    jobs: [{
+      id: 'job-live',
+      workspace_id: WS,
+      agent_id: AGENT.id,
+      session_id: sessionB.id,
+      status: 'running',
+      metadata: { mode: 'builtin' },
+    }],
+  });
+
+  const baseUnsafe = world.db.unsafe.bind(world.db);
+  world.db.unsafe = async (sql, params = []) => {
+    const n = String(sql).replace(/\s+/g, ' ').trim();
+    if (n.startsWith('select 1 from workspaces where id = $1 and user_id = $2')) return [];
+    if (n.startsWith('select role from workspace_members where workspace_id = $1 and user_id = $2')) {
+      return String(params[1]) === assignerB ? [{ role: 'editor' }] : [];
+    }
+    if (n.startsWith('select display_name, email from app_users')) {
+      return String(params[0]) === assignerB
+        ? [{ display_name: 'Assigner B', email: 'b@example.com' }]
+        : [{ display_name: 'Creator A', email: 'a@example.com' }];
+    }
+    return baseUnsafe(sql, params);
+  };
+  world.db.begin = async (callback) => {
+    const transaction = {
+      async unsafe(sql, params = []) {
+        const n = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+        if (n.startsWith('select user_id from workspaces')) return [{ user_id: creatorA }];
+        if (n.startsWith('select pg_advisory_xact_lock')) return [{ pg_advisory_xact_lock: null }];
+        if (n.startsWith('select * from chat_sessions')) return [sessionA, sessionB];
+        if (n.startsWith('select user_id, source, (user_id = $2::uuid) as requested_user')) {
+          return [{
+            user_id: String(params[0]) === sessionB.id ? assignerB : creatorA,
+            source: 'participant',
+          }];
+        }
+        throw new Error(`Unexpected transaction SQL in A/B queue test: ${n}`);
+      },
+    };
+    return callback(transaction);
+  };
+  __test.setTestDb(world.db);
+  const { runs, run } = jobRunner(world);
+
+  const queued = await __test.dispatchTaskAssignment({
+    workspaceId: WS,
+    taskId: 't-ab',
+    agentId: AGENT.id,
+    actorUserId: assignerB,
+    run,
+  });
+  assert.equal(queued.reason, 'queued');
+
+  world.state.jobs[0].status = 'done';
+  const drained = await __test.drainAgentTaskQueue({
+    workspaceId: WS,
+    agentId: AGENT.id,
+    cause: 'test',
+    run,
+  });
+
+  assert.equal(drained.dispatched, true);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].sessionId, sessionB.id, 'the durable requester chooses B’s DM');
+  assert.equal(world.state.messages[0].session_id, sessionB.id);
+  assert.equal(world.state.messages[0].sender_id, assignerB);
+  assert.notEqual(runs[0].sessionId, sessionA.id, 'created_by cannot steer the drain into A’s DM');
 });
 
 // --- (2) draining on completion ---------------------------------------------

@@ -118,13 +118,13 @@ test('Fly and Netlify validate the normalized rows before building generic inser
     const normalizedRows = route.indexOf('const rows = (Array.isArray(values) ? values : [values]).map');
     const inputValidation = route.indexOf('validateUniformInsertRows([row]);');
     const fieldStripping = route.indexOf('stripPrivilegedDbValues(table, row)');
-    const validation = route.indexOf('const columns = validateUniformInsertRows(rows);');
+    const validation = route.indexOf('const columns = validateUniformInsertRows(effectiveRows);');
     const sql = route.indexOf('insert into');
 
     assert.ok(normalizedRows >= 0, `${surface.name} normalizes insert rows`);
     assert.ok(inputValidation > normalizedRows, `${surface.name} validates each input row`);
     assert.ok(fieldStripping > inputValidation, `${surface.name} validates before normalization can spread a value`);
-    assert.ok(validation > normalizedRows, `${surface.name} validates after normalization`);
+    assert.ok(validation > normalizedRows, `${surface.name} validates the effective rows after normalization and session policy`);
     assert.ok(sql > validation, `${surface.name} validates before SQL`);
     assert.doesNotMatch(route, /Object\.keys\(rows\[0\]\)/);
   }

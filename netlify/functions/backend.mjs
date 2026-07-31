@@ -24,6 +24,8 @@ import {
  stripPrivilegedDbValues,
  validateUniformInsertRows,
  applyAgentPurposeInsertDefaults,
+ stampTaskWriteIdentity,
+ taskDispatchRequesterSql,
  safeSelectColumns,
  getWorkspaceSecretValue as coreGetWorkspaceSecretValue,
  setWorkspaceSecretValue as coreSetWorkspaceSecretValue,
@@ -97,6 +99,11 @@ import { voiceCapabilities, unavailableReason, mintCartesiaToken, scrubError } f
 // other is this repo's most repeated bug. Shared implementation; the ONLY
 // difference is the jsonb bind (see encodeJsonb at the call site).
 import { emitReactionFlowEventsForUpdate } from '../../shared/reaction-events.cjs';
+import {
+ installCreatedSessionMemberships,
+ prepareSessionCreateRows,
+ projectSessionCreateRows,
+} from '../../shared/session-lineage.cjs';
 
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
 // createTokenVersionCache doc comments for the full rationale.
@@ -710,6 +717,25 @@ function normalizeAiChatMessages(messages) {
 async function query(text, params = []) {
  const result = await dbPool().query(text, params);
  return result.rows;
+}
+
+async function withDbTransaction(callback) {
+ const client = await dbPool().connect();
+ try {
+  await client.query('BEGIN');
+  const transactionQuery = async (text, params = []) => {
+   const result = await client.query(text, params);
+   return result.rows;
+  };
+  const value = await callback(transactionQuery);
+  await client.query('COMMIT');
+  return value;
+ } catch (error) {
+  await client.query('ROLLBACK').catch(() => {});
+  throw error;
+ } finally {
+  client.release?.();
+ }
 }
 
 // ----------------------------------------------------------------------------
@@ -2039,6 +2065,7 @@ async function handleDb(pathname, req, userId) {
    // value into a record that appears safe only after server normalization.
    validateUniformInsertRows([row]);
    let next = stripPrivilegedDbValues(table, row);
+   next = stampTaskWriteIdentity(table, next, userId, { insert: true });
    next = applyAgentPurposeInsertDefaults(table, next);
    if (table === 'workspaces') next = { ...next, user_id: userId };
    // Mirrors server/index.cjs — see the comment there for why this route
@@ -2059,16 +2086,45 @@ async function handleDb(pathname, req, userId) {
    next = synthesizeHumanIdentityInsert(table, next);
    return next;
   });
-  const columns = validateUniformInsertRows(rows);
-  const params = [];
-  const valueSql = rows.map((row) => `(${columns.map((column) => {
-   return bindDbParam(params, table, column, row[column]);
-  }).join(', ')})`).join(', ');
-
-  const result = await query(
-   `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(safeSelectColumns(table, returning))}`,
-   params,
-  );
+  // Validate the caller-visible projection before opening a transaction or
+  // writing anything. A forbidden/invalid RETURNING shape must not create a
+  // conversation and then fail while formatting the response.
+  if (table === 'chat_sessions') projectSessionCreateRows([], returning);
+  const insertRows = async (db) => {
+   let effectiveRows = rows;
+   let lineage = null;
+   if (table === 'chat_sessions') {
+    const prepared = await prepareSessionCreateRows({
+     db,
+     userId,
+     rows,
+    });
+    effectiveRows = prepared.rows;
+    lineage = prepared.lineage;
+   }
+   const columns = validateUniformInsertRows(effectiveRows);
+   const params = [];
+   const valueSql = effectiveRows.map((row) => `(${columns.map((column) => {
+    return bindDbParam(params, table, column, row[column]);
+   }).join(', ')})`).join(', ');
+   const returningColumns = table === 'chat_sessions' ? '*' : returning;
+   const inserted = await db(
+    `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(safeSelectColumns(table, returningColumns))}`,
+    params,
+   );
+   if (table === 'chat_sessions') {
+    await installCreatedSessionMemberships({
+     db,
+     userId,
+     createdRows: inserted,
+     lineage,
+    });
+   }
+   return inserted;
+  };
+  const result = table === 'chat_sessions'
+   ? await withDbTransaction(insertRows)
+   : await insertRows(query);
   if (table === 'messages') {
    await logMessageActivity(result);
   }
@@ -2081,7 +2137,10 @@ async function handleDb(pathname, req, userId) {
     }
    }
   }
-  return json({ data: single ? (result[0] ?? null) : result, error: null });
+  const responseRows = table === 'chat_sessions'
+   ? projectSessionCreateRows(result, returning)
+   : result;
+  return json({ data: single ? (responseRows[0] ?? null) : responseRows, error: null });
  }
 
  if (pathname === '/backend/db/update') {
@@ -2094,7 +2153,11 @@ async function handleDb(pathname, req, userId) {
   if (table === 'workspace_agents' && isReservedAgentHandle(values.handle)) {
    return jsonError(400, new Error(reservedAgentHandleMessage(values.handle)));
   }
-  const safeValues = stripPrivilegedDbValues(table, values);
+  const safeValues = stampTaskWriteIdentity(
+   table,
+   stripPrivilegedDbValues(table, values),
+   userId,
+  );
 
   // Mirrors server/index.cjs: a human's edit to an agent's identity is recorded
   // in identity.human_set, so the agent's next self-declaration on connect
@@ -2108,6 +2171,19 @@ async function handleDb(pathname, req, userId) {
 
   const params = [];
   const setParts = keys.map((column) => `${quoteIdent(column)} = ${bindDbParam(params, table, column, markedValues[column])}`);
+  if (table === 'tasks' && Object.prototype.hasOwnProperty.call(markedValues, 'assignee_id')) {
+   const assigneeBind = bindDbParam(params, table, 'assignee_id', markedValues.assignee_id);
+   const assigned = typeof markedValues.assignee_id === 'string'
+    ? markedValues.assignee_id.trim()
+    : markedValues.assignee_id;
+   const requesterBind = bindDbParam(
+    params,
+    table,
+    'dispatch_requested_by',
+    assigned ? userId : null,
+   );
+   setParts.push(taskDispatchRequesterSql(assigneeBind, requesterBind));
+  }
   if (lockPatch) {
    const voiceBound = voice !== undefined ? bindDbParam(params, table, 'identity', voice) : null;
    setParts.push(`"identity" = ${identityWriteSql(voiceBound, bindDbParam(params, table, 'identity', lockPatch))}`);

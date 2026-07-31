@@ -58,6 +58,11 @@ async function advanceAgentReadMarker(db, deps, sessionId, agentId) {
 
 const PROTOCOL_VERSION_DEFAULT = '2024-11-05';
 const SERVER_NAME = 'agensis';
+const RESERVED_CHANNEL_FOLDERS = new Set([
+ 'direct messages',
+ 'huddle',
+ 'sub-thread',
+]);
 
 const SERVER_INSTRUCTIONS = [
  'You are connected to an agensis workspace as a named agent (see whoami).',
@@ -700,6 +705,9 @@ function buildTools() {
    }
    const title = requireString(args, 'title');
    const folder = typeof args?.folder === 'string' && args.folder.trim() ? args.folder.trim() : 'General';
+   if (RESERVED_CHANNEL_FOLDERS.has(folder.toLowerCase())) {
+    throw new ToolError(`The folder "${folder}" is reserved for system-created conversations`);
+   }
    // Defaults to 'auto', matching a channel created in the UI. It used to
    // default to 'mention', which was harmless only because the dispatcher was
    // ignoring the column entirely — now that it reads it again, that default
@@ -944,11 +952,15 @@ function buildTools() {
    const dependsOn = args?.depends_on === undefined
     ? []
     : await resolveDependsOn(db, identity.workspaceId, args.depends_on, null);
+   const assigneeId = typeof args?.assignee_id === 'string' && args.assignee_id.trim()
+    ? args.assignee_id.trim()
+    : null;
+   const actorUserId = mcpSubjectUserId(identity) || null;
    const rows = await db.unsafe(
-    `insert into tasks (workspace_id, created_by, assignee_id, title, description, status, priority, due_date, source_type, source_id, parent_id, start_date, depends_on)
-         values ($1, null, $2, $3, $4, $5, $6, $7, 'ai', $8, $9, $10, $11::uuid[]) returning *`,
+    `insert into tasks (workspace_id, created_by, assignee_id, title, description, status, priority, due_date, source_type, source_id, parent_id, start_date, depends_on, dispatch_requested_by)
+         values ($1, $12, $2, $3, $4, $5, $6, $7, 'ai', $8, $9, $10, $11::uuid[], $13) returning *`,
     [identity.workspaceId,
-    typeof args?.assignee_id === 'string' && args.assignee_id.trim() ? args.assignee_id.trim() : null,
+     assigneeId,
      title,
     typeof args?.description === 'string' ? args.description : '',
      status, priority,
@@ -956,8 +968,19 @@ function buildTools() {
     identity.agentId ? String(identity.agentId) : null,
      parentId,
      startDate,
-    toPgArrayLiteral(dependsOn)]);
+     toPgArrayLiteral(dependsOn),
+     actorUserId,
+     assigneeId ? actorUserId : null]);
    deps.notifyDbSubscribers('tasks', 'INSERT', rows);
+   if (assigneeId && rows[0]?.id && deps.dispatchTaskAssignment) {
+    void Promise.resolve(deps.dispatchTaskAssignment({
+     workspaceId: identity.workspaceId,
+     taskId: rows[0].id,
+     agentId: assigneeId,
+     actorUserId,
+     actorName: identity.kind === 'agent' ? (identity.name || 'An agent') : null,
+    })).catch(() => { });
+   }
    return { task: rows[0] };
   },
  });
@@ -1022,6 +1045,12 @@ function buildTools() {
    const nextDependsOn = touchesDependsOn
     ? await resolveDependsOn(db, identity.workspaceId, args.depends_on, taskId)
     : [];
+   const nextAssigneeId = typeof args?.assignee_id === 'string' ? args.assignee_id.trim() : '';
+   const touchesAssignee = Boolean(nextAssigneeId);
+   // Only a real human principal owns a private per-human agent conversation.
+   // Agent/workspace principals deliberately write null on an actual transition
+   // so they cannot inherit a previous human's routing authority.
+   const actorUserId = mcpSubjectUserId(identity) || null;
    const rows = await db.unsafe(
     `update tasks set
            title = coalesce($3, title),
@@ -1033,6 +1062,10 @@ function buildTools() {
            parent_id = case when $10 then $9 else parent_id end,
            start_date = coalesce($11, start_date),
            depends_on = case when $13 then $12::uuid[] else depends_on end,
+           dispatch_requested_by = case
+             when $14 and assignee_id is distinct from $7 then $15
+             else dispatch_requested_by
+           end,
            completed_at = case when $5 = 'done' then now() else completed_at end,
            version = version + 1,
            updated_at = now()
@@ -1045,17 +1078,18 @@ function buildTools() {
      dueDate,
      nextParentId, touchesParent,
      startDate,
-     toPgArrayLiteral(nextDependsOn), touchesDependsOn]);
+     toPgArrayLiteral(nextDependsOn), touchesDependsOn,
+     touchesAssignee, actorUserId]);
    deps.notifyDbSubscribers('tasks', 'UPDATE', rows);
    // Assigning a task to an agent dispatches it, exactly as it does from the UI.
    // `existing` was read BEFORE the write, so an agent re-writing the assignee it
    // already had (or updating only status/title as it works) never re-runs it.
-   const nextAssigneeId = typeof args?.assignee_id === 'string' ? args.assignee_id.trim() : '';
    if (nextAssigneeId && String(existing[0].assignee_id || '') !== nextAssigneeId && deps.dispatchTaskAssignment) {
     void Promise.resolve(deps.dispatchTaskAssignment({
      workspaceId: identity.workspaceId,
      taskId,
      agentId: nextAssigneeId,
+     actorUserId,
      actorName: identity.kind === 'agent' ? (identity.name || 'An agent') : null,
     })).catch(() => { });
    }

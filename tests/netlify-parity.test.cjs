@@ -414,8 +414,13 @@ test('M7: app_users selects are projected to a safe column set', () => {
   assert.equal(core.safeSelectColumns('app_users', 'id, email'), 'id, email');
   assert.throws(() => core.safeSelectColumns('app_users', 'password_hash'), { status: 403 });
   assert.throws(() => core.safeSelectColumns('app_users', 'id,token_version'), { status: 403 });
-  // Tables without an allow-list are untouched.
-  assert.equal(core.safeSelectColumns('tasks', '*'), '*');
+  // Tasks are now pinned too: dispatch_requested_by is server-owned private-DM
+  // routing provenance, not task content a generic reader should receive.
+  assert.equal(
+    core.safeSelectColumns('tasks', '*'),
+    'id, workspace_id, created_by, assignee_id, title, description, status, priority, due_date, source_type, source_id, completed_at, version, created_at, updated_at, parent_id, start_date, depends_on, attachments',
+  );
+  assert.equal(core.safeSelectColumns('tasks', '*').includes('dispatch_requested_by'), false);
   assert.equal(core.safeSelectColumns('tasks', 'id, title'), 'id, title');
 });
 
