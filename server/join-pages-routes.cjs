@@ -101,32 +101,40 @@ function mountJoinPagesRoutes(app, deps = {}) {
  // The only thing holding a join link lets you do. Two lanes, one route, chosen
  // by what the caller PRESENTS:
  //
- //   human — a valid agensis session token in Authorization. Adds the user to
- //           the workspace as a member. Returns NO credential: their own
- //           sign-in is their access, and there is nothing new to show them.
- //   agent — no session. Creates a workspace agent and mints its bearer token,
- //           returned ONCE, in this response, in exactly one field.
+ //   human — body.as='human' plus a valid agensis session token in
+ //           Authorization. Adds the user to the workspace as a member. Returns
+ //           NO credential: their own sign-in is their access.
+ //   agent — body.as='agent' and no Authorization header. Creates a workspace
+ //           agent and mints its bearer token, returned ONCE, in this response.
  //
- // No User-Agent is read. A browser with a session and a CLI with a session take
- // the same lane; a browser without one and a curl without one take the same
- // other lane.
+ // No User-Agent is read. The human button and the machine-readable agent
+ // contract set `as` themselves, so there is still one URL and no identity
+ // choice in the visible flow. Explicit intent prevents a failed authentication
+ // check from changing a person into an agent.
  app.post(['/backend/join/:token/redeem', '/join/:token/redeem'], async (req, res) => {
   try {
    if (await dbRateLimitBlocked(res, joinRedeemRateLimiter, joinRedeemDbRateLimiter, `join-redeem:${clientIpFromReq(req)}`)) return;
    const token = String(req.params.token || '');
    if (!isJoinLinkToken(token)) return joinLinkRefused(res);
 
-   // Which lane? Purely "did they present a valid session".
-   //
-   // An INVALID Authorization header — an expired session, or an agent's own
-   // aga_ token — resolves to null and therefore takes the agent lane. That is
-   // the right default: the alternative is refusing the request outright, and
-   // the caller who most often arrives without a usable session is exactly the
-   // agent this route exists for. A person whose session has expired gets an
-   // agent record rather than a membership, and the response says `as: 'agent'`
-   // in so many words.
-   const userId = await verifyToken(bearerToken(req)).catch(() => null);
-   const lane = userId ? 'human' : 'agent';
+   const lane = String(req.body?.as || '').trim().toLowerCase();
+   if (lane !== 'human' && lane !== 'agent') {
+    return jsonError(res, 400, new Error('as must be human or agent'));
+   }
+
+   // Authentication must agree with the stated subject. Falling a failed human
+   // session through to the unauthenticated agent lane used to consume the link
+   // and provision an unintended agent. Conversely, an ambient browser session
+   // must not be enough to create an agent through the human-facing action.
+   const authorization = String(req.headers?.authorization || '').trim();
+   const presentedToken = bearerToken(req);
+   const userId = presentedToken ? await verifyToken(presentedToken).catch(() => null) : null;
+   if (lane === 'human' && !userId) {
+    return jsonError(res, 401, new Error('Authentication failed'));
+   }
+   if (lane === 'agent' && authorization) {
+    return jsonError(res, 400, new Error('Agent redemption must not include Authorization'));
+   }
 
    // THE guard. Single statement, so the row lock makes it atomic: two
    // concurrent redemptions of the same link cannot both return a row. The

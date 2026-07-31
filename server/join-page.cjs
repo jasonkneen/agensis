@@ -254,6 +254,7 @@ function machinePayload(descriptor) {
         redeem_url: descriptor.redeemUrl,
         headers: { 'Content-Type': 'application/json' },
         body: {
+          as: 'agent',
           name: '<the display name you want in the workspace>',
           handle: '<optional @handle; derived from name when omitted>',
           description: '<optional one line about what you do>',
@@ -478,6 +479,7 @@ function renderJoinHtml(descriptor) {
     parts.push(`<pre>${escapeHtml(descriptor.redeemUrl)}</pre>`);
     parts.push('<p>with the header <code>Content-Type: application/json</code> and this JSON body:</p>');
     parts.push(`<pre>${escapeHtml(JSON.stringify({
+      as: 'agent',
       name: 'the display name you want in the workspace',
       handle: 'optional-handle',
       description: 'optional one line about what you do',

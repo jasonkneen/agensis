@@ -253,7 +253,7 @@ test('an agent redeems a join link exactly once; the second attempt is refused',
     const first = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Backend Agent', handle: 'backend' }),
+      body: JSON.stringify({ as: 'agent', name: 'Backend Agent', handle: 'backend' }),
     });
     assert.equal(first.status, 200);
     const firstBody = await first.json();
@@ -265,7 +265,7 @@ test('an agent redeems a join link exactly once; the second attempt is refused',
     const second = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Backend Agent', handle: 'backend' }),
+      body: JSON.stringify({ as: 'agent', name: 'Backend Agent', handle: 'backend' }),
     });
     assert.equal(second.status, 410);
     const secondBody = await second.json();
@@ -292,7 +292,7 @@ test('a joining agent does not silently take an existing @handle', async () => {
     const res = await fetch(`${base}/backend/join/${token}/redeem`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Backend', handle: 'backend' }),
+      body: JSON.stringify({ as: 'agent', name: 'Backend', handle: 'backend' }),
     });
     const body = await res.json();
     assert.equal(res.status, 200);
@@ -310,7 +310,7 @@ test('a human redeems with their own session and gets NO credential back', async
     const res = await fetch(`${base}/backend/join/${token}/redeem`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session}` },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ as: 'human' }),
     });
     assert.equal(res.status, 200);
     const body = await res.json();
@@ -321,6 +321,49 @@ test('a human redeems with their own session and gets NO credential back', async
     assert.equal(db.agents.length, 0, 'the human lane must not provision an agent');
     assert.equal(db.state.link.redeemed_as, 'human');
     assert.equal(db.state.link.redeemed_by, USER);
+  });
+});
+
+test('an invalid presented session is refused without provisioning or consuming the link', async () => {
+  const token = __test.createJoinLinkToken();
+  const db = makeDb({ link: liveLink({ token_hash: sha256(token) }) });
+  __test.setTestDb(db);
+
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/backend/join/${token}/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer expired-session' },
+      body: JSON.stringify({ as: 'human' }),
+    });
+    assert.equal(res.status, 401);
+    assert.equal(db.agents.length, 0, 'an invalid human session must not provision an agent');
+    assert.equal(db.state.link.status, 'pending', 'authentication failure must not consume the link');
+    assert.equal(db.state.link.redeemed_as, '');
+  });
+});
+
+test('missing or contradictory redemption intent is refused before the link is consumed', async () => {
+  const token = __test.createJoinLinkToken();
+  const db = makeDb({ link: liveLink({ token_hash: sha256(token) }) });
+  __test.setTestDb(db);
+
+  await withServer(async (base) => {
+    const missing = await fetch(`${base}/backend/join/${token}/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Ambiguous caller' }),
+    });
+    assert.equal(missing.status, 400);
+
+    const session = await __test.issueToken(USER, '1');
+    const contradictory = await fetch(`${base}/backend/join/${token}/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session}` },
+      body: JSON.stringify({ as: 'agent', name: 'Ambient browser agent' }),
+    });
+    assert.equal(contradictory.status, 400);
+    assert.equal(db.agents.length, 0);
+    assert.equal(db.state.link.status, 'pending');
   });
 });
 
@@ -339,7 +382,7 @@ test('an expired join link is refused', async () => {
     const res = await fetch(`${base}/backend/join/${token}/redeem`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Too Late' }),
+      body: JSON.stringify({ as: 'agent', name: 'Too Late' }),
     });
     assert.equal(res.status, 410);
     assert.equal(db.agents.length, 0);
@@ -402,7 +445,7 @@ test('unknown, malformed, expired, revoked and spent links are indistinguishable
       const res = await fetch(`${base}/backend/join/${token}/redeem`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Prober' }),
+        body: JSON.stringify({ as: 'agent', name: 'Prober' }),
       });
       return { status: res.status, body: await res.text() };
     });
@@ -463,7 +506,7 @@ test('the join token appears in no response body, no activity row and no log lin
     const redeem = await fetch(`${base}/backend/join/${token}/redeem`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Backend Agent' }),
+      body: JSON.stringify({ as: 'agent', name: 'Backend Agent' }),
     });
     const redeemBody = await redeem.text();
     return { pageBody, jsonBody, redeemBody };
@@ -505,7 +548,7 @@ test('the agent credential appears exactly once in the redemption response', asy
     const res = await fetch(`${base}/backend/join/${token}/redeem`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Backend Agent' }),
+      body: JSON.stringify({ as: 'agent', name: 'Backend Agent' }),
     });
     const text = await res.text();
     const body = JSON.parse(text);
@@ -530,13 +573,15 @@ test('a join link is not a bearer token anywhere in the auth chain', () => {
   const source = require('./helpers/fly-lane.cjs').flyLaneSource();
 
   // verifyMcpToken is the chain an MCP client's Authorization header runs
-  // through. workspace_invites IS in it (verifyInviteToken) and is therefore a
-  // live credential for its full 14 days — the shape this feature replaces. A
-  // join link must never be added to that list.
+  // through. Neither the secure join link nor the legacy human invite is an MCP
+  // credential; individual agents receive their own aga_ token only after the
+  // secure join redemption endpoint provisions them.
   const at = source.indexOf('async function verifyMcpToken');
   assert.ok(at > 0, 'verifyMcpToken must still exist');
   const chain = codeOnly(source.slice(at, source.indexOf('\n}', at)));
   assert.ok(!/join/i.test(chain), `a join link must not be accepted as an MCP bearer:\n${chain}`);
+  assert.ok(!/invite/i.test(chain), `a legacy human invite must not be accepted as an MCP bearer:\n${chain}`);
+  assert.ok(!/function verifyInviteToken/.test(source), 'the retired invite verifier must not remain available for accidental reuse');
 
   // And no verify* function may read the table at all. Only the two dedicated
   // join routes touch it, plus the manage-role mint/list/revoke routes.
@@ -579,6 +624,7 @@ test('the HTML page carries the machine-readable block, the JSON-LD and the pros
     assert.equal(parsed['@context'], 'https://schema.org');
     assert.equal(parsed.agensis.kind, 'workspace_join_invitation');
     assert.match(parsed.agensis.agent.redeem_url, /\/redeem$/);
+    assert.equal(parsed.agensis.agent.body.as, 'agent');
 
     // (c) plain prose an LLM can act on without parsing anything
     assert.ok(html.includes('If you are an AI agent reading this page'));
