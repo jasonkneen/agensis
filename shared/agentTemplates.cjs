@@ -19,7 +19,8 @@
 // ----------------------------------------------------------------------------
 // THE SECURITY RULE, which is the reason this file exists as its own module:
 //
-//   A template carries PROSE and REQUESTS. It never carries AUTHORITY.
+//   A template carries PROSE, REQUESTS and DESCRIPTIVE INTENT. It never carries
+//   AUTHORITY.
 //   The columns that grant authority are not fields of the artifact — not in
 //   its table, not in its envelope, not in this validator's output.
 //   You cannot import what the shape cannot hold.
@@ -101,7 +102,15 @@ const PROSE_FIELDS = Object.freeze([
  */
 const REQUEST_FIELDS = Object.freeze(['tools', 'skills', 'runMode', 'runtime']);
 
-const CARRIED_FIELDS = Object.freeze([...PROSE_FIELDS, ...REQUEST_FIELDS]);
+/**
+ * Descriptive intent, orthogonal to execution and authority.
+ *
+ * A resource facet says what teammates may use the agent for. It does not
+ * attach a tool, permission mode, host folder, runtime or placement.
+ */
+const INTENT_FIELDS = Object.freeze(['purpose', 'resourceFacets']);
+
+const CARRIED_FIELDS = Object.freeze([...PROSE_FIELDS, ...REQUEST_FIELDS, ...INTENT_FIELDS]);
 
 /**
  * Never carried, at any role, in any envelope. Listed in BOTH camelCase and the
@@ -142,6 +151,9 @@ const TEMPLATE_SOURCES = Object.freeze(new Set(['authored', 'derived', 'imported
 
 const RUN_MODES = Object.freeze(new Set(['builtin', 'daemon', 'sandbox']));
 const RUNTIMES = Object.freeze(new Set(['', 'claude', 'codex', 'amp']));
+const PURPOSES = Object.freeze(new Set(['collaborator', 'resource']));
+const RESOURCE_FACETS = Object.freeze(['context', 'knowledge', 'tooling', 'code']);
+const RESOURCE_FACET_SET = new Set(RESOURCE_FACETS);
 
 const MAX_NAME = 120;
 const MAX_SLUG = 80;
@@ -249,7 +261,7 @@ function normalizeAgentTemplate(raw, { allowUnknown = false } = {}) {
  if (rejected.length && !allowUnknown) {
   return {
    ok: false,
-   errors: rejected.map((key) => `${key} cannot be carried by a template (it grants authority; a template carries prose and requests only)`),
+   errors: rejected.map((key) => `${key} cannot be carried by a template (it grants authority; a template carries prose, requests and descriptive intent only)`),
    template: null,
    rejected,
   };
@@ -272,6 +284,24 @@ function normalizeAgentTemplate(raw, { allowUnknown = false } = {}) {
  const skills = stringListOrNull(raw.skills);
  if (skills === null) errors.push('skills must be an array of strings');
 
+ const purpose = String(raw.purpose || 'collaborator');
+ if (!PURPOSES.has(purpose)) errors.push(`purpose must be one of ${[...PURPOSES].join(', ')}`);
+
+ const parsedFacets = stringListOrNull(raw.resourceFacets);
+ if (parsedFacets === null) errors.push('resourceFacets must be an array of strings');
+ const invalidFacets = (parsedFacets || []).filter((facet) => !RESOURCE_FACET_SET.has(facet));
+ if (invalidFacets.length) {
+  errors.push(`resourceFacets may contain only ${RESOURCE_FACETS.join(', ')}`);
+ }
+ const selectedFacets = new Set((parsedFacets || []).filter((facet) => RESOURCE_FACET_SET.has(facet)));
+ const resourceFacets = RESOURCE_FACETS.filter((facet) => selectedFacets.has(facet));
+ if (purpose === 'resource' && resourceFacets.length === 0) {
+  errors.push('a resource template must select at least one resource facet');
+ }
+ if (purpose === 'collaborator' && resourceFacets.length > 0) {
+  errors.push('a collaborator template cannot carry resource facets');
+ }
+
  if (errors.length) return { ok: false, errors, template: null, rejected };
 
  return {
@@ -289,6 +319,8 @@ function normalizeAgentTemplate(raw, { allowUnknown = false } = {}) {
    instructions: text(raw.instructions, MAX_PROSE),
    tools,
    skills,
+   purpose,
+   resourceFacets,
    model: text(raw.model, MAX_NAME) || 'auto',
    runMode,
    runtime,
@@ -319,6 +351,10 @@ function agentToTemplateDraft(row = {}) {
   instructions: text(row.instructions, MAX_PROSE),
   tools: stringList(parseList(row.tools)),
   skills: stringList(parseList(row.skills)),
+  purpose: row.purpose === 'resource' ? 'resource' : 'collaborator',
+  resourceFacets: row.purpose === 'resource'
+   ? RESOURCE_FACETS.filter((facet) => new Set(parseList(row.resource_facets)).has(facet))
+   : [],
   model: text(row.model, MAX_NAME) || 'auto',
   runMode: RUN_MODES.has(String(row.run_mode)) ? String(row.run_mode) : 'builtin',
   runtime: '',
@@ -357,6 +393,10 @@ function templateToAgentDraft(template = {}) {
   instructions: template.instructions || '',
   tools: Array.isArray(template.tools) ? [...template.tools] : [],
   skills: Array.isArray(template.skills) ? [...template.skills] : [],
+  purpose: template.purpose === 'resource' ? 'resource' : 'collaborator',
+  resourceFacets: template.purpose === 'resource' && Array.isArray(template.resourceFacets)
+   ? RESOURCE_FACETS.filter((facet) => template.resourceFacets.includes(facet))
+   : [],
   model: template.model || 'auto',
   runMode: template.runMode || 'builtin',
   runtime: template.runtime || '',
@@ -447,7 +487,9 @@ function buildTemplateExport(template = {}, { exportedAt = new Date().toISOStrin
  const body = {};
  for (const field of CARRIED_FIELDS) {
   const value = template[field];
-  body[field] = Array.isArray(value) ? [...value] : (value ?? '');
+  body[field] = Array.isArray(value)
+   ? [...value]
+   : (field === 'tools' || field === 'skills' || field === 'resourceFacets' ? [] : (value ?? ''));
  }
  return {
   format: TEMPLATE_EXPORT_FORMAT,
@@ -517,7 +559,9 @@ function templateFingerprint(template = {}) {
  const canonical = {};
  for (const field of [...CARRIED_FIELDS].sort()) {
   const value = template[field];
-  canonical[field] = Array.isArray(value) ? [...value] : (value ?? '');
+  canonical[field] = Array.isArray(value)
+   ? [...value]
+   : (field === 'tools' || field === 'skills' || field === 'resourceFacets' ? [] : (value ?? ''));
  }
  return crypto.createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex');
 }
@@ -526,10 +570,13 @@ module.exports = {
  CARRIED_FIELDS,
  PROSE_FIELDS,
  REQUEST_FIELDS,
+ INTENT_FIELDS,
  NEVER_CARRIED_FIELDS,
  TEMPLATE_SOURCES,
  RUN_MODES,
  RUNTIMES,
+ PURPOSES,
+ RESOURCE_FACETS,
  TOOLS_ARE_ADVISORY,
  DAEMON_LEAN_PROMPT_MAX_BYTES,
  MAX_PROSE,

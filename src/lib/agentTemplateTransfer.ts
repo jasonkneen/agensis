@@ -5,9 +5,9 @@ import type { StoredAgentTemplate } from './agentTemplates';
 //
 // WHAT MAKES THIS SAFE IS NOT IN THIS FILE. `workspace_agent_templates` has no
 // column for permission_mode, sandbox config, connect tokens or identity, so a
-// template carries prose and requests and never authority — and a file built
-// from one cannot carry what the row could not hold. There is nothing here to
-// strip because there is nothing there to strip.
+// template carries prose, requests and descriptive intent, never authority —
+// and a file built from one cannot carry what the row could not hold. There is
+// nothing here to strip because there is nothing there to strip.
 //
 // The consequence for this file is a rule, not a filter: BUILD THE BODY FROM
 // EXPORT_FIELDS, never by spreading the stored row. The row carries `id`,
@@ -32,7 +32,7 @@ import type { StoredAgentTemplate } from './agentTemplates';
 export const EXPORT_FIELDS = [
   'slug', 'name', 'category', 'description', 'handleHint',
   'systemPrompt', 'soul', 'instructions', 'avatar', 'accentColor', 'model',
-  'tools', 'skills', 'runMode', 'runtime',
+  'tools', 'skills', 'runMode', 'runtime', 'purpose', 'resourceFacets',
 ] as const;
 
 export const TEMPLATE_EXPORT_FORMAT = 'agensis.agent-template';
@@ -54,7 +54,9 @@ export function buildTemplateExport(
   const body: Record<string, unknown> = {};
   for (const field of EXPORT_FIELDS) {
     const value = source[field];
-    body[field] = Array.isArray(value) ? [...value] : (value ?? '');
+    body[field] = Array.isArray(value)
+      ? [...value]
+      : (field === 'tools' || field === 'skills' || field === 'resourceFacets' ? [] : (value ?? ''));
   }
   return {
     format: TEMPLATE_EXPORT_FORMAT,
@@ -112,7 +114,7 @@ export function parseTemplateExport(text: string): { ok: true; envelope: unknown
  * speak as its own instructions.
  */
 export const TEMPLATE_IMPORT_NOTE =
-  'A template file carries wording only — a name, a prompt, and which tools and '
-  + 'skills to ask for. It cannot carry a permission mode, a sandbox setting, a '
-  + 'token or an identity, because a template has nowhere to keep them. Read the '
-  + 'prompt before you use it: it becomes the instructions an agent here follows.';
+  'A template file carries wording, requested tools and skills, and a descriptive '
+  + 'collaborator or resource label. It cannot carry a permission mode, a sandbox '
+  + 'setting, a token or an identity, because a template has nowhere to keep them. '
+  + 'Read the prompt before you use it: it becomes the instructions an agent here follows.';

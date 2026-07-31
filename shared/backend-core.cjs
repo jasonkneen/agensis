@@ -186,7 +186,7 @@ const VERSIONED_TABLES = new Set([
 const JSON_COLUMNS_BY_TABLE = {
  chat_sessions: new Set(['participants']),
  canvas_objects: new Set(['points']),
- workspace_agents: new Set(['tools', 'skills', 'metadata', 'sandbox_config', 'identity']),
+ workspace_agents: new Set(['tools', 'skills', 'resource_facets', 'metadata', 'sandbox_config', 'identity']),
  agent_connections: new Set(['metadata', 'capabilities']),
  agent_registrations: new Set(['requested_identity']),
  agent_jobs: new Set(['metadata']),
@@ -197,7 +197,7 @@ const JSON_COLUMNS_BY_TABLE = {
  // reused as-is for tasks since the column is generic.
  tasks: new Set(['attachments']),
  feedback_reports: new Set(['page', 'selections', 'diagnostics']),
- workspace_agent_templates: new Set(['tools', 'skills', 'origin']),
+ workspace_agent_templates: new Set(['tools', 'skills', 'resource_facets', 'origin']),
  workspace_skills: new Set(['origin']),
  automations: new Set(['definition']),
  automation_runs: new Set(['payload', 'steps']),
@@ -598,6 +598,23 @@ function stripPrivilegedDbValues(table, values) {
   if (Object.prototype.hasOwnProperty.call(next, key)) delete next[key];
  }
  return next;
+}
+
+/**
+ * Resource agents are explicit-use infrastructure by default. Apply that
+ * creation default at the shared HTTP boundary so a future caller cannot
+ * accidentally opt a new resource into ambient channel replies by omitting the
+ * field. Explicit choices are preserved, and UPDATE never calls this helper, so
+ * reclassifying an existing agent cannot silently change its behaviour.
+ */
+function applyAgentPurposeInsertDefaults(table, values) {
+ if (table !== 'workspace_agents' || !values || typeof values !== 'object' || Array.isArray(values)) {
+  return values;
+ }
+ if (values.purpose !== 'resource' || Object.prototype.hasOwnProperty.call(values, 'ambient_replies')) {
+  return values;
+ }
+ return { ...values, ambient_replies: false };
 }
 
 /**
@@ -2612,6 +2629,7 @@ module.exports = {
  SELECTABLE_COLUMNS_BY_TABLE,
  safeSelectColumns,
  stripPrivilegedDbValues,
+ applyAgentPurposeInsertDefaults,
  encryptVaultSecret,
  decryptVaultSecret,
  getWorkspaceSecretValue,

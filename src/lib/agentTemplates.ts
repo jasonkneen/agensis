@@ -14,6 +14,12 @@ import {
   Wrench,
   type LucideIcon,
 } from 'lucide-react';
+import {
+  normalizeAgentPurpose,
+  normalizeResourceFacets,
+  type AgentPurpose,
+  type ResourceFacet,
+} from './agentPurpose';
 
 /** Return `base`, or `base-2`, `base-3`, … when the handle is already taken
  *  (case-insensitive). Used by one-click agent creation so repeat runs never
@@ -36,6 +42,8 @@ export interface AgentTemplate {
   systemPrompt: string;
   tools: string[];
   skills: string[];
+  purpose: AgentPurpose;
+  resourceFacets: ResourceFacet[];
   runMode: 'builtin' | 'daemon' | 'sandbox';
   runtime?: AgentExecutionRuntime;
   metadata?: Record<string, unknown>;
@@ -99,7 +107,11 @@ export function agentMetadataWithRuntime(
 // Starter templates shown in the create gallery. Picking one prefills the form —
 // nothing is created until the user reviews and submits, so these are honest
 // starting points, not hidden magic.
-export const AGENT_TEMPLATES: AgentTemplate[] = [
+type AgentTemplateDefinition =
+  Omit<AgentTemplate, 'purpose' | 'resourceFacets'>
+  & Partial<Pick<AgentTemplate, 'purpose' | 'resourceFacets'>>;
+
+const AGENT_TEMPLATE_DEFINITIONS: AgentTemplateDefinition[] = [
   {
     id: 'researcher', name: 'Researcher', handle: 'researcher', category: 'Research',
     description: 'Digs through docs and the web to answer questions with sources.',
@@ -119,6 +131,13 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     systemPrompt: 'You are a precise coding agent. Make focused changes, explain what you did with file and line references, and never touch code you were not asked to.',
     tools: [], skills: [], runMode: 'daemon', runtime: 'claude', icon: Terminal,
     avatar: '/agent-avatars/set1-raccoon-denim.png',
+  },
+  {
+    id: 'code-handler', name: 'Code Handler', handle: 'code-handler', category: 'Engineering',
+    description: 'Applies reviewed code changes on its connected host as a shared execution resource.',
+    systemPrompt: 'You are a focused code handler. Execute concrete, reviewed change requests in the repository you are connected to, verify the result, and report exact files and checks. Do not broaden the requested design or claim access you have not been granted.',
+    tools: [], skills: [], purpose: 'resource', resourceFacets: ['code', 'tooling'],
+    runMode: 'daemon', runtime: 'codex', icon: Wrench,
   },
   {
     id: 'amp-orb', name: 'Amp Orb', handle: 'amp-orb', category: 'Engineering',
@@ -253,6 +272,16 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
   },
 ];
 
+// Old bundled definitions predate the classification. They remain
+// collaborators unless a reviewed definition opts into resource intent.
+export const AGENT_TEMPLATES: AgentTemplate[] = AGENT_TEMPLATE_DEFINITIONS.map(template => ({
+  ...template,
+  purpose: normalizeAgentPurpose(template.purpose),
+  resourceFacets: template.purpose === 'resource'
+    ? normalizeResourceFacets(template.resourceFacets)
+    : [],
+}));
+
 // ---------------------------------------------------------------------------
 // Authored templates
 // ---------------------------------------------------------------------------
@@ -264,10 +293,10 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
 //
 // A workspace can now also author templates, which live in
 // workspace_agent_templates and arrive through useAgentTemplates. They carry
-// PROSE and REQUESTS only — there is no field here for permission_mode,
-// metadata, sandbox config or a connect token, because the table has no column
-// for them. See shared/agentTemplates.cjs for why that is structural rather
-// than a filter.
+// PROSE, REQUESTS and DESCRIPTIVE INTENT only — there is no field here for
+// permission_mode, metadata, sandbox config or a connect token, because the
+// table has no column for them. See shared/agentTemplates.cjs for why that is
+// structural rather than a filter.
 
 /** One authored template, as the server projects it. */
 export interface StoredAgentTemplate {
@@ -283,6 +312,8 @@ export interface StoredAgentTemplate {
   instructions: string;
   tools: string[];
   skills: string[];
+  purpose: AgentPurpose;
+  resourceFacets: ResourceFacet[];
   model: string;
   runMode: AgentTemplate['runMode'];
   runtime: string;
@@ -304,6 +335,7 @@ export type GalleryTemplate = AgentTemplate & {
 };
 
 function storedToGalleryTemplate(stored: StoredAgentTemplate): GalleryTemplate {
+  const purpose = normalizeAgentPurpose(stored.purpose);
   return {
     id: `authored:${stored.slug}`,
     name: stored.name,
@@ -313,6 +345,8 @@ function storedToGalleryTemplate(stored: StoredAgentTemplate): GalleryTemplate {
     systemPrompt: stored.systemPrompt || '',
     tools: Array.isArray(stored.tools) ? stored.tools : [],
     skills: Array.isArray(stored.skills) ? stored.skills : [],
+    purpose,
+    resourceFacets: purpose === 'resource' ? normalizeResourceFacets(stored.resourceFacets) : [],
     runMode: stored.runMode || 'builtin',
     runtime: (stored.runtime || undefined) as AgentExecutionRuntime | undefined,
     // Deliberately NO metadata key. The form spreads what it gets, and even an

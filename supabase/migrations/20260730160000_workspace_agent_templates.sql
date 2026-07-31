@@ -12,8 +12,9 @@
 --
 -- There is deliberately no permission_mode, metadata, sandbox_provider,
 -- sandbox_config, connect_token_hash, connect_token, mcp_approved, memory_dir
--- or identity column here. A template carries PROSE and REQUESTS; it never
--- carries AUTHORITY. You cannot import what the shape cannot hold.
+-- or identity column here. A template carries PROSE, REQUESTS and DESCRIPTIVE
+-- INTENT; it never carries AUTHORITY. You cannot import what the shape cannot
+-- hold.
 --
 --   permission_mode  'yolo' is unrestricted shell on the daemon host. It sits in
 --                    PRIVILEGED_DB_COLUMNS_BY_TABLE so no generic write reaches
@@ -47,6 +48,15 @@ CREATE TABLE IF NOT EXISTS workspace_agent_templates (
   -- next unrelated edit.
   tools jsonb NOT NULL DEFAULT '[]'::jsonb,
   skills jsonb NOT NULL DEFAULT '[]'::jsonb,
+  -- Descriptive intent only. These fields grant no permission mode, tools,
+  -- host folders, runtime placement, token, or other authority.
+  purpose text NOT NULL DEFAULT 'collaborator'
+    CHECK (purpose IN ('collaborator', 'resource')),
+  resource_facets jsonb NOT NULL DEFAULT '[]'::jsonb
+    CHECK (
+      jsonb_typeof(resource_facets) = 'array'
+      AND resource_facets <@ '["context", "knowledge", "tooling", "code"]'::jsonb
+    ),
   model text NOT NULL DEFAULT 'auto',
   run_mode text NOT NULL DEFAULT 'builtin',
   runtime text DEFAULT '',
@@ -63,6 +73,10 @@ CREATE TABLE IF NOT EXISTS workspace_agent_templates (
   created_by uuid,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now(),
+  CONSTRAINT workspace_agent_templates_resource_facets_match_purpose CHECK (
+    (purpose = 'collaborator' AND resource_facets = '[]'::jsonb)
+    OR (purpose = 'resource' AND jsonb_array_length(resource_facets) > 0)
+  ),
   UNIQUE (workspace_id, slug)
 );
 

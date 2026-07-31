@@ -200,6 +200,7 @@ const {
  WORKSPACE_ROLE_CAPABILITIES: SHARED_WORKSPACE_ROLE_CAPABILITIES,
  DB_TABLE_ACCESS: SHARED_DB_TABLE_ACCESS,
  stripPrivilegedDbValues,
+ applyAgentPurposeInsertDefaults,
  safeSelectColumns,
  storagePathBelongsToWorkspace,
  issueAuthToken,
@@ -1105,6 +1106,30 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS instructions text DEFAULT '';
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS tools jsonb DEFAULT '[]'::jsonb;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
+    -- Descriptive intent only. Neither column grants tools, permissions, host
+    -- folders, runtime placement or other authority.
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS purpose text NOT NULL DEFAULT 'collaborator'
+      CHECK (purpose IN ('collaborator', 'resource'));
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS resource_facets jsonb NOT NULL DEFAULT '[]'::jsonb
+      CHECK (
+        jsonb_typeof(resource_facets) = 'array'
+        AND resource_facets <@ '["context", "knowledge", "tooling", "code"]'::jsonb
+      );
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'workspace_agents_resource_facets_match_purpose'
+           AND conrelid = 'workspace_agents'::regclass
+      ) THEN
+        ALTER TABLE workspace_agents
+          ADD CONSTRAINT workspace_agents_resource_facets_match_purpose CHECK (
+            (purpose = 'collaborator' AND resource_facets = '[]'::jsonb)
+            OR (purpose = 'resource' AND jsonb_array_length(resource_facets) > 0)
+          );
+      END IF;
+    END
+    $$;
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS metadata jsonb DEFAULT '{}'::jsonb;
     -- How the agent presents itself, and who decided each part of it:
     --   { voice: { locale, variant, rate, pitch }, human_set: { name: true, ... } }
@@ -1654,6 +1679,15 @@ async function ensureRuntimeSchema() {
       -- definition on the next unrelated edit.
       tools jsonb NOT NULL DEFAULT '[]'::jsonb,
       skills jsonb NOT NULL DEFAULT '[]'::jsonb,
+      -- Safe template intent, not authority. Instantiation still uses the
+      -- existing generic agent creation path and its permission guards.
+      purpose text NOT NULL DEFAULT 'collaborator'
+        CHECK (purpose IN ('collaborator', 'resource')),
+      resource_facets jsonb NOT NULL DEFAULT '[]'::jsonb
+        CHECK (
+          jsonb_typeof(resource_facets) = 'array'
+          AND resource_facets <@ '["context", "knowledge", "tooling", "code"]'::jsonb
+        ),
       model text NOT NULL DEFAULT 'auto',
       run_mode text NOT NULL DEFAULT 'builtin',
       runtime text DEFAULT '',
@@ -1668,8 +1702,34 @@ async function ensureRuntimeSchema() {
       created_by uuid,
       created_at timestamptz DEFAULT now(),
       updated_at timestamptz DEFAULT now(),
+      CONSTRAINT workspace_agent_templates_resource_facets_match_purpose CHECK (
+        (purpose = 'collaborator' AND resource_facets = '[]'::jsonb)
+        OR (purpose = 'resource' AND jsonb_array_length(resource_facets) > 0)
+      ),
       UNIQUE (workspace_id, slug)
     );
+    ALTER TABLE workspace_agent_templates ADD COLUMN IF NOT EXISTS purpose text NOT NULL DEFAULT 'collaborator'
+      CHECK (purpose IN ('collaborator', 'resource'));
+    ALTER TABLE workspace_agent_templates ADD COLUMN IF NOT EXISTS resource_facets jsonb NOT NULL DEFAULT '[]'::jsonb
+      CHECK (
+        jsonb_typeof(resource_facets) = 'array'
+        AND resource_facets <@ '["context", "knowledge", "tooling", "code"]'::jsonb
+      );
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'workspace_agent_templates_resource_facets_match_purpose'
+           AND conrelid = 'workspace_agent_templates'::regclass
+      ) THEN
+        ALTER TABLE workspace_agent_templates
+          ADD CONSTRAINT workspace_agent_templates_resource_facets_match_purpose CHECK (
+            (purpose = 'collaborator' AND resource_facets = '[]'::jsonb)
+            OR (purpose = 'resource' AND jsonb_array_length(resource_facets) > 0)
+          );
+      END IF;
+    END
+    $$;
     CREATE INDEX IF NOT EXISTS idx_workspace_agent_templates_workspace_id
       ON workspace_agent_templates(workspace_id);
 
@@ -3753,6 +3813,10 @@ function agentRuntimePayload(agent) {
   instructions: agent.instructions || '',
   tools: parseJsonArray(agent.tools),
   skills: parseJsonArray(agent.skills),
+  purpose: agent.purpose === 'resource' ? 'resource' : 'collaborator',
+  resource_facets: agent.purpose === 'resource'
+   ? parseJsonArray(agent.resource_facets).filter((facet) => ['context', 'knowledge', 'tooling', 'code'].includes(facet))
+   : [],
   metadata: parseJsonObject(agent.metadata),
   // { voice, human_set } — see shared/agentIdentity.cjs. Every explicit
   // workspace_agents select above lists `identity` too; a column left out of
@@ -3814,7 +3878,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId, userId],
   ),
   db.unsafe(
-   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, ambient_replies, created_by
+   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, purpose, resource_facets, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, ambient_replies, created_by
        from workspace_agents
        where workspace_id = $1
        order by created_at asc, name asc
@@ -8120,6 +8184,7 @@ function createApp() {
    const rows = (Array.isArray(values) ? values : [values]).map(row => {
     if (!row || typeof row !== 'object') return row;
     let next = stripPrivilegedDbValues(table, row);
+    next = applyAgentPurposeInsertDefaults(table, next);
     if (table === 'workspaces') next = { ...next, user_id: req.userId };
     // `visibility` is server-decided. A client may not declare a session public
     // when its parent is private — that would be a one-line way to publish any

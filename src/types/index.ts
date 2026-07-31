@@ -1,6 +1,7 @@
 // Type-only, so it erases at build time and cannot create a runtime cycle.
 import type { AgentVoicePreference } from '../lib/agentVoice';
 import type { ConversationMode } from '../lib/channelMentions';
+import type { AgentPurpose, ResourceFacet } from '../lib/agentPurpose';
 
 export interface Workspace {
  id: string;
@@ -700,6 +701,9 @@ export interface WorkspaceAgent {
  instructions?: string;
  tools?: string[];
  skills?: string[];
+ /** Descriptive intent only; never a permission, runtime, or placement grant. */
+ purpose?: AgentPurpose;
+ resource_facets?: ResourceFacet[];
  metadata?: Record<string, unknown> | null;
  /**
   * How this agent presents itself, and who chose it.

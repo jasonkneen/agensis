@@ -48,6 +48,8 @@ function stored(overrides: Partial<StoredAgentTemplate> = {}): StoredAgentTempla
     instructions: 'Ask before destructive things.',
     tools: ['Bash'],
     skills: ['deploy'],
+    purpose: 'collaborator',
+    resourceFacets: [],
     model: 'auto',
     runMode: 'daemon',
     runtime: 'claude',
@@ -99,7 +101,9 @@ describe('buildTemplateExport', () => {
     const source = stored();
     const file = buildTemplateExport(source);
     (file.template.tools as string[]).push('Write');
+    (file.template.resourceFacets as string[]).push('code');
     expect(source.tools).toEqual(['Bash']);
+    expect(source.resourceFacets).toEqual([]);
   });
 
   it('fills a missing field rather than emitting undefined', () => {
@@ -108,6 +112,7 @@ describe('buildTemplateExport', () => {
     const file = buildTemplateExport(stored({ soul: undefined as never }));
     expect(file.template.soul).toBe('');
     expect(JSON.stringify(file)).toContain('"soul"');
+    expect(buildTemplateExport(stored({ resourceFacets: undefined as never })).template.resourceFacets).toEqual([]);
   });
 });
 

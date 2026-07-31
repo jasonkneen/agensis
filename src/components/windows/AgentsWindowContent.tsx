@@ -114,7 +114,16 @@ import {
 } from '../../lib/agentTemplateTransfer';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { SkillChipsInput } from '../agents/SkillChipsInput';
+import { AgentPurposeFields } from '../agents/AgentPurposeFields';
 import { buildSkillEntries, type SkillEntry } from '../../lib/skillsView';
+import {
+  defaultAmbientRepliesForPurpose,
+  normalizeAgentPurpose,
+  normalizeResourceFacets,
+  resourceFacetSummary,
+  type AgentPurpose,
+  type ResourceFacet,
+} from '../../lib/agentPurpose';
 import {
   buildSkillSuggestions,
   parseSkillTokens,
@@ -173,6 +182,9 @@ interface AgentsWindowContentProps {
     instructions?: string;
     tools?: string[];
     skills?: string[];
+    purpose?: AgentPurpose;
+    resource_facets?: ResourceFacet[];
+    ambient_replies?: boolean;
     metadata?: Record<string, unknown>;
     handle?: string;
     model?: string;
@@ -215,6 +227,8 @@ interface AgentEditForm {
   instructions: string;
   tools: string;
   skills: string;
+  purpose: AgentPurpose;
+  resourceFacets: ResourceFacet[];
   model: string;
   runMode: 'builtin' | 'daemon' | 'sandbox';
   runtime: AgentExecutionRuntime;
@@ -239,6 +253,8 @@ function agentFormUpdates(form: AgentEditForm): Partial<WorkspaceAgent> {
     instructions: form.instructions.trim(),
     tools: splitList(form.tools),
     skills: splitList(form.skills),
+    purpose: normalizeAgentPurpose(form.purpose),
+    resource_facets: form.purpose === 'resource' ? normalizeResourceFacets(form.resourceFacets) : [],
     model: form.model,
     run_mode: form.runMode,
     metadata: agentMetadataWithRuntime(form.metadata, form.runtime, form.runMode),
@@ -347,6 +363,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [newInstructions, setNewInstructions] = useState('');
   const [newTools, setNewTools] = useState('');
   const [newSkills, setNewSkills] = useState('');
+  const [newPurpose, setNewPurpose] = useState<AgentPurpose>('collaborator');
+  const [newResourceFacets, setNewResourceFacets] = useState<ResourceFacet[]>([]);
   const [newModel, setNewModel] = useState('auto');
   const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
   const [newRuntime, setNewRuntime] = useState<AgentExecutionRuntime>('claude');
@@ -529,6 +547,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     setNewInstructions('');
     setNewTools('');
     setNewSkills('');
+    setNewPurpose('collaborator');
+    setNewResourceFacets([]);
     setNewModel('auto');
     setNewRunMode('builtin');
     setNewRuntime('claude');
@@ -555,6 +575,12 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         instructions: newInstructions.trim(),
         tools: splitList(newTools),
         skills: splitList(newSkills),
+        purpose: newPurpose,
+        resource_facets: newPurpose === 'resource' ? newResourceFacets : [],
+        // Resource agents are explicit-use infrastructure by default. This is
+        // set only at creation; reclassifying an existing row never changes its
+        // ambient behaviour.
+        ambient_replies: defaultAmbientRepliesForPurpose(newPurpose),
         model: newModel,
         run_mode: newRunMode,
         metadata: agentMetadataWithRuntime(newMetadata, newRuntime, newRunMode),
@@ -590,6 +616,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     setNewSystemPrompt(tpl.systemPrompt);
     setNewTools(tpl.tools.join(', '));
     setNewSkills(tpl.skills.join(', '));
+    setNewPurpose(normalizeAgentPurpose(tpl.purpose));
+    setNewResourceFacets(
+      tpl.purpose === 'resource' ? normalizeResourceFacets(tpl.resourceFacets) : [],
+    );
     const stored = 'stored' in tpl ? tpl.stored : undefined;
     setNewModel(stored?.model || 'auto');
     setNewRunMode(tpl.runMode);
@@ -837,7 +867,11 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                             <span className="text-sm font-semibold">{tpl.name}</span>
                             <span className="line-clamp-2 text-xs text-muted-foreground">{tpl.description}</span>
                             <span className="mt-auto text-[11px] text-muted-foreground opacity-70">
-                              {tpl.category} · {tpl.runMode === 'daemon' ? `Remote · ${runtimeChoices.find(choice => choice.id === tpl.runtime)?.label || 'Claude'}` : 'Built-in'}
+                              {tpl.purpose === 'resource'
+                                ? `Shared resource · ${resourceFacetSummary(tpl.resourceFacets)}`
+                                : 'Collaborator'}
+                              {' · '}
+                              {tpl.runMode === 'daemon' ? `Remote · ${runtimeChoices.find(choice => choice.id === tpl.runtime)?.label || 'Claude'}` : 'Built-in'}
                             </span>
                           </button>
                           {stored && (
@@ -879,6 +913,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 instructions={newInstructions}
                 tools={newTools}
                 skills={newSkills}
+                purpose={newPurpose}
+                resourceFacets={newResourceFacets}
                 model={newModel}
                 runMode={newRunMode}
                 runtime={newRuntime}
@@ -903,6 +939,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 onInstructionsChange={setNewInstructions}
                 onToolsChange={setNewTools}
                 onSkillsChange={setNewSkills}
+                onPurposeChange={setNewPurpose}
+                onResourceFacetsChange={setNewResourceFacets}
                 onModelChange={setNewModel}
                 onRunModeChange={setNewRunMode}
                 onRuntimeChange={setNewRuntime}
@@ -1109,6 +1147,11 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                           </div>
                           <span className="block truncate text-[11px] text-muted-foreground opacity-70">@{agent.handle || agentHandle(agent.name)}</span>
                           <span className="mt-0.5 block truncate text-[11px] text-muted-foreground opacity-80">{displayModel(agent.model)}</span>
+                          {normalizeAgentPurpose(agent.purpose) === 'resource' && (
+                            <span className="mt-0.5 block truncate text-[11px] font-medium text-primary">
+                              Shared resource · {resourceFacetSummary(agent.resource_facets)}
+                            </span>
+                          )}
                         </div>
                       </button>
                     );
@@ -1399,6 +1442,8 @@ function AgentForm({
   instructions,
   tools,
   skills,
+  purpose,
+  resourceFacets,
   model,
   runMode,
   runtime,
@@ -1417,6 +1462,8 @@ function AgentForm({
   onInstructionsChange,
   onToolsChange,
   onSkillsChange,
+  onPurposeChange,
+  onResourceFacetsChange,
   onModelChange,
   onRunModeChange,
   onRuntimeChange,
@@ -1442,6 +1489,8 @@ function AgentForm({
   instructions: string;
   tools: string;
   skills: string;
+  purpose: AgentPurpose;
+  resourceFacets: ResourceFacet[];
   model: string;
   runMode: 'builtin' | 'daemon' | 'sandbox';
   runtime: AgentExecutionRuntime;
@@ -1464,6 +1513,8 @@ function AgentForm({
   onInstructionsChange: (value: string) => void;
   onToolsChange: (value: string) => void;
   onSkillsChange: (value: string) => void;
+  onPurposeChange: (value: AgentPurpose) => void;
+  onResourceFacetsChange: (value: ResourceFacet[]) => void;
   onModelChange: (value: string) => void;
   onRunModeChange: (value: 'builtin' | 'daemon' | 'sandbox') => void;
   onRuntimeChange: (value: AgentExecutionRuntime) => void;
@@ -1483,7 +1534,9 @@ function AgentForm({
   extraSections?: React.ReactNode;
 }) {
   const options = modelOptionsForRuntime(model, runMode, runtime);
-  const canSubmit = Boolean(name.trim());
+  const canSubmit = Boolean(
+    name.trim() && (purpose === 'collaborator' || resourceFacets.length > 0),
+  );
   const paneRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
@@ -1724,6 +1777,13 @@ function AgentForm({
         />
       </Field>
 
+      <AgentPurposeFields
+        purpose={purpose}
+        resourceFacets={resourceFacets}
+        onPurposeChange={onPurposeChange}
+        onResourceFacetsChange={onResourceFacetsChange}
+      />
+
       <Field>
         <FieldLabel htmlFor="agent-system-prompt">System Prompt</FieldLabel>
         <Textarea
@@ -1915,6 +1975,8 @@ function AgentDetailPane({
   const [editInstructions, setEditInstructions] = useState('');
   const [editTools, setEditTools] = useState('');
   const [editSkills, setEditSkills] = useState('');
+  const [editPurpose, setEditPurpose] = useState<AgentPurpose>('collaborator');
+  const [editResourceFacets, setEditResourceFacets] = useState<ResourceFacet[]>([]);
   const [editModel, setEditModel] = useState('auto');
   const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
   const [editRuntime, setEditRuntime] = useState<AgentExecutionRuntime>('claude');
@@ -1948,6 +2010,10 @@ function AgentDetailPane({
       instructions: agent.instructions || '',
       tools: joinList(agent.tools),
       skills: joinList(agent.skills),
+      purpose: normalizeAgentPurpose(agent.purpose),
+      resourceFacets: agent.purpose === 'resource'
+        ? normalizeResourceFacets(agent.resource_facets)
+        : [],
       model: agent.model || 'auto',
       runMode: (agent.run_mode === 'daemon' ? 'daemon' : agent.run_mode === 'sandbox' ? 'sandbox' : 'builtin') as 'builtin' | 'daemon' | 'sandbox',
       runtime: agentExecutionRuntime(agent),
@@ -1966,6 +2032,8 @@ function AgentDetailPane({
     setEditInstructions(seed.instructions);
     setEditTools(seed.tools);
     setEditSkills(seed.skills);
+    setEditPurpose(seed.purpose);
+    setEditResourceFacets(seed.resourceFacets);
     setEditModel(seed.model);
     setEditRunMode(seed.runMode);
     setEditRuntime(seed.runtime);
@@ -2027,6 +2095,8 @@ function AgentDetailPane({
       instructions: editInstructions,
       tools: editTools,
       skills: editSkills,
+      purpose: editPurpose,
+      resourceFacets: editResourceFacets,
       model: editModel,
       runMode: editRunMode,
       runtime: editRuntime,
@@ -2087,6 +2157,8 @@ function AgentDetailPane({
             instructions={editInstructions}
             tools={editTools}
             skills={editSkills}
+            purpose={editPurpose}
+            resourceFacets={editResourceFacets}
             model={editModel}
             runMode={editRunMode}
             runtime={editRuntime}
@@ -2111,6 +2183,8 @@ function AgentDetailPane({
             onInstructionsChange={setEditInstructions}
             onToolsChange={setEditTools}
             onSkillsChange={setEditSkills}
+            onPurposeChange={setEditPurpose}
+            onResourceFacetsChange={setEditResourceFacets}
             onModelChange={setEditModel}
             onRunModeChange={(value) => {
               setEditRunMode(value);
@@ -2173,6 +2247,9 @@ function AgentDetailPane({
             <div className="mt-2 flex flex-wrap gap-1">
               <Badge variant={agent.run_mode === 'daemon' ? 'default' : 'outline'}>
                 {agentTransportLabel(agent.run_mode)}
+              </Badge>
+              <Badge variant={agent.purpose === 'resource' ? 'default' : 'outline'}>
+                {agent.purpose === 'resource' ? 'Shared resource' : 'Collaborator'}
               </Badge>
               {agent.run_mode === 'daemon' && <Badge variant="outline">{agentExecutionRuntime(agent)}</Badge>}
               <Badge variant="outline">{displayModel(agent.model)}</Badge>
@@ -2245,6 +2322,22 @@ function AgentDetailPane({
         </div>
 
         <div className="mt-3 grid gap-3">
+          <AgentDetailSection title="Purpose">
+            <AgentDetailField
+              label="Type"
+              value={agent.purpose === 'resource' ? 'Shared resource' : 'Collaborator'}
+            />
+            {agent.purpose === 'resource' && (
+              <AgentDetailField
+                label="Facets"
+                value={resourceFacetSummary(agent.resource_facets) || 'Not classified'}
+              />
+            )}
+            <div className="text-xs text-muted-foreground">
+              Purpose is descriptive. Permissions, tools, folders, runtime, and placement are configured separately.
+            </div>
+          </AgentDetailSection>
+
           <AgentDetailSection title="Runtime">
             <AgentDetailField label="Location" value={agentTransportLabel(agent.run_mode)} />
             {agent.run_mode === 'daemon' && <AgentDetailField label="Runtime" value={agentExecutionRuntime(agent) === 'amp' ? 'Amp (managed orb)' : agentExecutionRuntime(agent)} />}

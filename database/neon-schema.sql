@@ -581,6 +581,15 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   instructions text DEFAULT '',
   tools jsonb DEFAULT '[]'::jsonb,
   skills jsonb DEFAULT '[]'::jsonb,
+  -- Descriptive intent only. These fields grant no tools, permissions, host
+  -- folders, runtime placement or other authority.
+  purpose text NOT NULL DEFAULT 'collaborator'
+    CHECK (purpose IN ('collaborator', 'resource')),
+  resource_facets jsonb NOT NULL DEFAULT '[]'::jsonb
+    CHECK (
+      jsonb_typeof(resource_facets) = 'array'
+      AND resource_facets <@ '["context", "knowledge", "tooling", "code"]'::jsonb
+    ),
   -- How the agent presents itself, and who chose each part:
   --   { voice: { locale, variant, rate, pitch }, human_set: { name: true, ... } }
   -- `voice` stores a PREFERENCE (accent + a variant index + rate/pitch), never a
@@ -605,7 +614,11 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   version integer NOT NULL DEFAULT 1,
   created_by uuid,
   created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now()
+  updated_at timestamptz DEFAULT now(),
+  CONSTRAINT workspace_agents_resource_facets_match_purpose CHECK (
+    (purpose = 'collaborator' AND resource_facets = '[]'::jsonb)
+    OR (purpose = 'resource' AND jsonb_array_length(resource_facets) > 0)
+  )
 );
 
 CREATE INDEX IF NOT EXISTS idx_workspace_agents_workspace_id ON workspace_agents(workspace_id);
@@ -666,8 +679,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_agent_id ON agent_skill_doc
 -- THE ABSENT COLUMNS ARE THE SECURITY CONTROL. There is deliberately no
 -- permission_mode, metadata, sandbox_provider, sandbox_config,
 -- connect_token_hash, mcp_approved, memory_dir or identity. A template carries
--- prose and requests; it never carries authority, and you cannot import what
--- the shape cannot hold. metadata is the field that looks harmless and is not:
+-- prose, requests and descriptive intent; it never carries authority, and you
+-- cannot import what the shape cannot hold. metadata is the field that looks
+-- harmless and is not:
 -- it holds host_folders (which the daemon turns into `--add-dir <path>` on a
 -- real machine) and sandbox_skills (a baseUrl the server fetches plus a vault
 -- credential key). Adding any of them later is a security decision.
@@ -687,6 +701,15 @@ CREATE TABLE IF NOT EXISTS workspace_agent_templates (
   -- and is saved back over the real definition on the next edit.
   tools jsonb NOT NULL DEFAULT '[]'::jsonb,
   skills jsonb NOT NULL DEFAULT '[]'::jsonb,
+  -- Safe template intent, not authority. Instantiation still uses the existing
+  -- generic agent creation path and its permission guards.
+  purpose text NOT NULL DEFAULT 'collaborator'
+    CHECK (purpose IN ('collaborator', 'resource')),
+  resource_facets jsonb NOT NULL DEFAULT '[]'::jsonb
+    CHECK (
+      jsonb_typeof(resource_facets) = 'array'
+      AND resource_facets <@ '["context", "knowledge", "tooling", "code"]'::jsonb
+    ),
   model text NOT NULL DEFAULT 'auto',
   run_mode text NOT NULL DEFAULT 'builtin',
   runtime text DEFAULT '',
@@ -698,6 +721,10 @@ CREATE TABLE IF NOT EXISTS workspace_agent_templates (
   created_by uuid,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now(),
+  CONSTRAINT workspace_agent_templates_resource_facets_match_purpose CHECK (
+    (purpose = 'collaborator' AND resource_facets = '[]'::jsonb)
+    OR (purpose = 'resource' AND jsonb_array_length(resource_facets) > 0)
+  ),
   UNIQUE (workspace_id, slug)
 );
 

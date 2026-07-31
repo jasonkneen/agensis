@@ -22,6 +22,7 @@ import {
  arrayColumnElemType,
  toPgArrayLiteral,
  stripPrivilegedDbValues,
+ applyAgentPurposeInsertDefaults,
  safeSelectColumns,
  getWorkspaceSecretValue as coreGetWorkspaceSecretValue,
  setWorkspaceSecretValue as coreSetWorkspaceSecretValue,
@@ -916,6 +917,10 @@ function publicWorkspaceAgent(row) {
   instructions: row.instructions || '',
   tools: parseJsonArray(row.tools),
   skills: parseJsonArray(row.skills),
+  purpose: row.purpose === 'resource' ? 'resource' : 'collaborator',
+  resource_facets: row.purpose === 'resource'
+   ? parseJsonArray(row.resource_facets).filter((facet) => ['context', 'knowledge', 'tooling', 'code'].includes(facet))
+   : [],
   metadata: parseJsonObject(row.metadata),
   identity: parseJsonObject(row.identity),
   model: resolveAnthropicModel(row.model),
@@ -1102,7 +1107,7 @@ async function handleWorkspaceAgents(workspaceId, userId) {
  // extracts and diffs both, so a column added on one side fails until it is
  // added here too.
  const rows = await query(
-  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, ambient_replies, created_by
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, purpose, resource_facets, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, ambient_replies, created_by
      from workspace_agents
      where workspace_id = $1
      order by created_at asc, name asc`,
@@ -2204,6 +2209,7 @@ async function handleDb(pathname, req, userId) {
   const rows = (Array.isArray(values) ? values : [values]).map((row) => {
    if (!row || typeof row !== 'object') return row;
    let next = stripPrivilegedDbValues(table, row);
+   next = applyAgentPurposeInsertDefaults(table, next);
    if (table === 'workspaces') next = { ...next, user_id: userId };
    // Mirrors server/index.cjs — see the comment there for why this route
    // strips the title but never infers parent_id from it.

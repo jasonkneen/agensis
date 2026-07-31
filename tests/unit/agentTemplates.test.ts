@@ -53,6 +53,23 @@ describe('AGENT_TEMPLATES', () => {
       expect(['claude', 'codex', 'amp'], `${template.id} has a supported runtime`).toContain(template.runtime);
     }
   });
+
+  it('keeps Coder collaborative and provides an explicit code-handling resource', () => {
+    const coder = AGENT_TEMPLATES.find(template => template.id === 'coder');
+    const handler = AGENT_TEMPLATES.find(template => template.id === 'code-handler');
+    expect(coder?.purpose).toBe('collaborator');
+    expect(coder?.resourceFacets).toEqual([]);
+    expect(handler?.purpose).toBe('resource');
+    expect(handler?.resourceFacets).toEqual(['tooling', 'code']);
+  });
+
+  it('backfills every pre-classification bundled template as a collaborator', () => {
+    for (const template of AGENT_TEMPLATES) {
+      expect(['collaborator', 'resource']).toContain(template.purpose);
+      if (template.purpose === 'collaborator') expect(template.resourceFacets).toEqual([]);
+      else expect(template.resourceFacets.length).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe('agentMetadataWithRuntime', () => {
