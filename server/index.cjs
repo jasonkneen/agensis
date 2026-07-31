@@ -6923,10 +6923,12 @@ function workspaceSessionCacheSet(sessionId, workspaceId) {
  *
  * One query and one cache entry for both, so the privacy check is free.
  */
-async function resolveSessionActivityContext(sessionId) {
+async function resolveSessionActivityContext(sessionId, { fresh = false } = {}) {
  if (!sessionId) return null;
- const cached = workspaceSessionCacheGet(sessionId);
- if (cached !== undefined) return cached;
+ if (!fresh) {
+  const cached = workspaceSessionCacheGet(sessionId);
+  if (cached !== undefined) return cached;
+ }
  try {
   const rows = await getDb().unsafe(
    'select workspace_id, visibility, folder from chat_sessions where id = $1 limit 1',
@@ -6938,7 +6940,7 @@ async function resolveSessionActivityContext(sessionId) {
   // Fail closed: an unreadable/absent row is treated as private by
   // isPrivateSessionRow's own folder backstop rather than assumed open.
   const context = { workspaceId, isPrivate: isPrivateSessionRow(row) };
-  workspaceSessionCacheSet(sessionId, context);
+  if (!fresh) workspaceSessionCacheSet(sessionId, context);
   return context;
  } catch (error) {
   console.error('resolveSessionActivityContext failed', error);
@@ -7612,9 +7614,9 @@ const realtime = createRealtime({
  isPrivateSessionRow, sessionMemberUserIds,
  logMessageActivity, markAgentConnectionOffline,
  refreshConnectedAgentConfigs, registerAgentConnection, updateAgentHeartbeat,
- // Lets the agent-status broadcast resolve a row's workspace. `messages` has no
- // workspace_id column, so without this the broadcast cannot fire at all.
- resolveWorkspaceIdForSession,
+ // Lets the agent-status broadcast resolve both workspace and canonical
+ // private/open classification. `messages` carries neither.
+ resolveSessionActivityContext: (sessionId) => resolveSessionActivityContext(sessionId, { fresh: true }),
  verifyAgentConnectToken, verifyToken, voiceRelay, voiceStreamRateLimiter,
 });
 const {
@@ -8655,6 +8657,7 @@ function resetTestState() {
  taskDispatch.reset();
  conversationLocks.clear();
  ambientElectionBudget.reset();
+ workspaceIdBySessionCache.clear();
 }
 
 

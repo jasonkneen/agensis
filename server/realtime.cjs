@@ -57,10 +57,12 @@ function createRealtime(deps = {}) {
   markAgentConnectionOffline,
   refreshConnectedAgentConfigs,
   registerAgentConnection,
-  // Resolves a session's workspace. Injected rather than duplicated: the
-  // caller's resolveWorkspaceIdForSession already owns a bounded LRU, and a
-  // second cache here would be a second thing to keep correct.
-  resolveWorkspaceIdForSession,
+  // Resolves a session's workspace AND canonical private/open classification.
+  // The production injection bypasses its ordinary workspace cache because
+  // privacy is mutable and Netlify can update the shared DB without notifying
+  // this Fly process. Keeping the two values together prevents a message from
+  // being routed on workspace alone and forgetting the session boundary.
+  resolveSessionActivityContext = async () => null,
   updateAgentHeartbeat,
   verifyAgentConnectToken,
   verifyToken,
@@ -250,9 +252,9 @@ function createRealtime(deps = {}) {
 
  // Broadcast the sidebar's lean agent-status payload for agent-authored rows.
  //
- // One workspace lookup per distinct session_id per batch, not per row: a turn
- // that writes several rows at once resolves once. The lookup is cached by the
- // injected resolver, so in steady state this costs nothing.
+ // One session-context lookup per distinct session_id per batch, not per row: a
+ // turn that writes several rows at once resolves once. Privacy is read
+ // authoritatively on every batch: workspace id is stable, visibility is not.
  //
  // Best-effort by construction. A failed or missing lookup means no broadcast —
  // the same outcome as before this worked — and must never reject into the
@@ -261,34 +263,44 @@ function createRealtime(deps = {}) {
   try {
    const agentRows = rowList.filter((row) => row && row.sender_kind === 'agent' && row.sender_id && row.session_id);
    if (agentRows.length === 0) return;
-   const workspaceBySession = new Map();
+   const contextBySession = new Map();
    for (const sessionId of new Set(agentRows.map((row) => String(row.session_id)))) {
     try {
-     const workspaceId = await resolveWorkspaceIdForSession(sessionId);
-     if (workspaceId) workspaceBySession.set(sessionId, workspaceId);
+     const context = await resolveSessionActivityContext(sessionId);
+     if (!context?.workspaceId) continue;
+     if (!context.isPrivate) {
+      contextBySession.set(sessionId, context);
+      continue;
+     }
+     // Private sessions take the SAME membership path as private chat-session
+     // rows. The lookup includes grant expiry, and any failure withholds the
+     // status entirely — missing a sidebar update is recoverable; publishing a
+     // DM's words to a workspace reader is not.
+     const allowedUserIds = await sessionMemberUserIds(sessionId);
+     if (!(allowedUserIds instanceof Set)) continue;
+     contextBySession.set(sessionId, { ...context, allowedUserIds });
     } catch {
-     // Defence in depth, and deliberately UNREACHABLE through the resolver we
-     // inject today: resolveWorkspaceIdForSession catches its own errors and
-     // returns null. It stays because the resolver is an injected dependency
-     // whose contract nothing enforces — if one ever throws, a single bad
-     // session must not silence the whole batch. There is no test pinning this
-     // branch, because through this seam there is no way to reach it; the
-     // reachable failure (a null resolution) is covered.
+     // Fail closed per session. The production context resolver catches its own
+     // DB errors and returns null, but sessionMemberUserIds can still throw, and
+     // an injected replacement has no enforced contract.
     }
    }
    for (const row of agentRows) {
-    const workspaceId = workspaceBySession.get(String(row.session_id));
-    if (!workspaceId) continue;
-    // The workspace comes from the row's OWN session, so a message can only
-    // ever reach its own workspace's channel — which authorizeRealtimeBroadcast
-    // already gates with enforceWorkspaceRole(read).
-    relayBroadcast(`agent-status:${workspaceId}`, 'agent_status', {
+    const context = contextBySession.get(String(row.session_id));
+    if (!context) continue;
+    const payload = {
      id: row.id,
      agentId: row.sender_id,
      senderName: row.sender_name || null,
      content: typeof row.content === 'string' ? row.content : '',
      eventType,
-    });
+    };
+    const channel = `agent-status:${context.workspaceId}`;
+    if (context.isPrivate) {
+     relayBroadcastToUserIds(channel, 'agent_status', payload, context.allowedUserIds);
+    } else {
+     relayBroadcast(channel, 'agent_status', payload);
+    }
    }
   } catch (error) {
    console.error('[agent-status] broadcast failed:', error?.message || error);
@@ -437,7 +449,12 @@ function createRealtime(deps = {}) {
  }
 
  function relayBroadcast(channel, event, payload) {
+  relayBroadcastToUserIds(channel, event, payload, null);
+ }
+
+ function relayBroadcastToUserIds(channel, event, payload, allowedUserIds) {
   for (const ws of websocketClients) {
+   if (allowedUserIds && (!ws.userId || !allowedUserIds.has(String(ws.userId)))) continue;
    const subscriptions = ws.subscriptions || [];
    const matches = subscriptions.some((subscription) => (
     subscription.type === 'broadcast' && subscription.channel === channel && subscription.event === event
