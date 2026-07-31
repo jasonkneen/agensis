@@ -29,6 +29,7 @@ import { bridgeSpec } from '@/lib/bridgeProviders';
 import { apiUrl, apiAuthHeaders } from '@/lib/backendClient';
 import type { AgentConnection, ChatSession, WorkspaceAgent } from '@/types';
 import { NostrCommunitySetup } from './NostrCommunitySetup';
+import type { NostrConnection } from '@/lib/nostrCommunities';
 
 // ---------------------------------------------------------------------------
 // The "+" beside Channels opens this instead of silently creating "New Channel".
@@ -70,10 +71,13 @@ interface Props {
   agents: WorkspaceAgent[];
   agentConnections: AgentConnection[];
   sessions: ChatSession[];
+  nostrConnection?: NostrConnection | null;
+  onNostrChange?: () => void;
 }
 
 export function NewChannelDialog({
   open, onOpenChange, onCreate, workspaceId, agents, agentConnections, sessions,
+  nostrConnection = null, onNostrChange,
 }: Props) {
   const [step, setStep] = useState<ChannelCreateStep>('name');
   const [name, setName] = useState('');
@@ -137,12 +141,22 @@ export function NewChannelDialog({
           so above 640px the base media query won and this dialog rendered at
           384px, collapsing its content to a single cramped column. */}
       <DialogContent className="flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-2xl">
-        {preview?.id === 'nostr' ? (
+        {nostrConnection ? (
+          <NostrCommunitySetup
+            workspaceId={workspaceId}
+            existingConnection={nostrConnection}
+            onBack={() => handleOpenChange(false)}
+            onCreate={onCreate}
+            onClose={() => handleOpenChange(false)}
+            onCommunityChange={onNostrChange}
+          />
+        ) : preview?.id === 'nostr' ? (
           <NostrCommunitySetup
             workspaceId={workspaceId}
             onBack={() => setPreview(null)}
             onCreate={onCreate}
             onClose={() => handleOpenChange(false)}
+            onCommunityChange={onNostrChange}
           />
         ) : preview ? (
           <BridgeSetup

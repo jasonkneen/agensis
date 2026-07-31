@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Globe2, Link2, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -6,12 +6,15 @@ import { DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/di
 import { Input } from '@/components/ui/input';
 import {
   connectNostrCommunity,
+  getNostrChannels,
   importableNostrChannels,
   mapNostrChannels,
   previewNostrInvite,
+  setNostrChannelSubscription,
   type NostrChannel,
   type NostrConnectResult,
   type NostrInvitePreview,
+  type NostrConnection,
 } from '@/lib/nostrCommunities';
 import type { ConversationMode } from '@/lib/channelMentions';
 
@@ -28,9 +31,13 @@ interface Props {
   onBack: () => void;
   onClose: () => void;
   onCreate: (draft: ChannelDraft) => Promise<{ id?: string } | null | undefined> | { id?: string } | null | undefined;
+  existingConnection?: NostrConnection | null;
+  onCommunityChange?: () => void;
 }
 
-export function NostrCommunitySetup({ workspaceId, onBack, onClose, onCreate }: Props) {
+export function NostrCommunitySetup({
+  workspaceId, onBack, onClose, onCreate, existingConnection = null, onCommunityChange,
+}: Props) {
   const [inviteUrl, setInviteUrl] = useState('');
   const [preview, setPreview] = useState<NostrInvitePreview | null>(null);
   const [connected, setConnected] = useState<NostrConnectResult | null>(null);
@@ -38,8 +45,27 @@ export function NostrCommunitySetup({ workspaceId, onBack, onClose, onCreate }: 
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [ageConfirmed, setAgeConfirmed] = useState(false);
-  const [busy, setBusy] = useState<'preview' | 'connect' | 'import' | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const managing = !!existingConnection;
+
+  useEffect(() => {
+    if (!existingConnection) return;
+    const controller = new AbortController();
+    setConnected({ connection: existingConnection, channels: [], alreadyConnected: true });
+    setSelected(new Set());
+    setBusy('load');
+    setError('');
+    getNostrChannels(existingConnection.id, controller.signal)
+      .then(channels => setConnected({ connection: existingConnection, channels, alreadyConnected: true }))
+      .catch(reason => {
+        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setBusy(null);
+      });
+    return () => controller.abort();
+  }, [existingConnection]);
 
   const resetConsent = () => {
     setTermsAccepted(false);
@@ -86,6 +112,7 @@ export function NostrCommunitySetup({ workspaceId, onBack, onClose, onCreate }: 
       });
       setConnected(result);
       setSelected(new Set(importableNostrChannels(result.channels).map(channel => channel.id)));
+      onCommunityChange?.();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -93,7 +120,26 @@ export function NostrCommunitySetup({ workspaceId, onBack, onClose, onCreate }: 
     }
   };
 
-  const toggleChannel = (channel: NostrChannel) => {
+  const toggleChannel = async (channel: NostrChannel) => {
+    if (channel.subscription) {
+      const enabled = !channel.subscription.enabled;
+      if (enabled && (channel.archived || channel.visibility === 'private')) return;
+      setBusy(`subscription:${channel.id}`);
+      setError('');
+      try {
+        const subscription = await setNostrChannelSubscription(connected!.connection.id, channel.id, enabled);
+        setConnected(current => current ? {
+          ...current,
+          channels: current.channels.map(item => item.id === channel.id ? { ...item, subscription } : item),
+        } : current);
+        onCommunityChange?.();
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
     if (channel.archived || channel.visibility === 'private') return;
     setSelected(current => {
       const next = new Set(current);
@@ -127,7 +173,13 @@ export function NostrCommunitySetup({ workspaceId, onBack, onClose, onCreate }: 
           return next;
         });
       }
-      onClose();
+      onCommunityChange?.();
+      if (managing) {
+        const channels = await getNostrChannels(connected.connection.id);
+        setConnected(current => current ? { ...current, channels } : current);
+      } else {
+        onClose();
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -139,16 +191,24 @@ export function NostrCommunitySetup({ workspaceId, onBack, onClose, onCreate }: 
     <>
       <DialogHeader>
         <div className="flex items-center gap-2">
-          <Button type="button" variant="ghost" size="icon-xs" onClick={onBack} aria-label="Back to templates">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={onBack}
+            aria-label={managing ? 'Close community settings' : 'Back to templates'}
+          >
             <ArrowLeft />
           </Button>
           <span className="grid size-7 place-items-center rounded-lg bg-muted">
             <Globe2 className="size-4" />
           </span>
-          <DialogTitle>Nostr community</DialogTitle>
+          <DialogTitle>{managing ? `Manage ${existingConnection?.name || 'Nostr community'}` : 'Nostr community'}</DialogTitle>
         </div>
         <DialogDescription>
-          Join a Nostr community and mirror its channels here with live two-way messages and semantic agent mentions.
+          {managing
+            ? 'Add accessible channels or pause and resume their live two-way subscriptions.'
+            : 'Join a Nostr community and mirror its channels here with live two-way messages and semantic agent mentions.'}
         </DialogDescription>
       </DialogHeader>
 
@@ -232,36 +292,85 @@ export function NostrCommunitySetup({ workspaceId, onBack, onClose, onCreate }: 
 
         {connected && (
           <div className="space-y-3">
-            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
-              <div className="font-medium">Connected to {connected.connection.name}</div>
+            <div className={connected.connection.status === 'connected'
+              ? 'rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3'
+              : 'rounded-lg border border-amber-500/30 bg-amber-500/10 p-3'}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="font-medium">
+                  {connected.connection.status === 'connected' ? 'Connected to' : 'Connection paused for'} {connected.connection.name}
+                </div>
+                {managing && connected.connection.status === 'disconnected' && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setConnected(null);
+                      setPreview(null);
+                      setInviteUrl('');
+                      resetConsent();
+                    }}
+                  >
+                    Reconnect with invite
+                  </Button>
+                )}
+              </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                Choose which accessible Nostr channels become Agensis channels. Agents are not added automatically.
+                {connected.connection.status === 'disconnected'
+                  ? 'Existing imports stay visible and can be paused. Use a fresh invite before resuming or adding channels.'
+                  : 'Choose which accessible Nostr channels become Agensis channels. Agents are not added automatically.'}
               </p>
             </div>
 
             <div className="space-y-1">
-              {connected.channels.length === 0 && (
+              {busy === 'load' && (
+                <p className="rounded-lg border border-border p-3 text-sm text-muted-foreground">
+                  Loading community channels…
+                </p>
+              )}
+              {busy !== 'load' && connected.channels.length === 0 && (
                 <p className="rounded-lg border border-border p-3 text-sm text-muted-foreground">
                   This identity cannot currently see any Nostr channels.
                 </p>
               )}
               {connected.channels.map(channel => {
                 const unavailable = channel.archived || channel.visibility === 'private';
+                const subscribed = channel.subscription?.enabled === true;
+                const selectionChecked = channel.subscription ? subscribed : selected.has(channel.id);
+                const toggleUnavailable = busy !== null || (unavailable && !subscribed);
                 return (
                   <label key={channel.id} className="flex items-start gap-3 rounded-lg border border-border p-3">
                     <Checkbox
-                      checked={selected.has(channel.id)}
-                      disabled={unavailable}
-                      onCheckedChange={() => toggleChannel(channel)}
+                      checked={selectionChecked}
+                      disabled={toggleUnavailable}
+                      aria-label={channel.subscription
+                        ? `${subscribed ? 'Pause' : 'Resume'} #${channel.name}`
+                        : `Import #${channel.name}`}
+                      onCheckedChange={() => void toggleChannel(channel)}
                     />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">#{channel.name}</span>
+                      <span className="flex items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium">#{channel.name}</span>
+                        {channel.subscription && (
+                          <span className={subscribed
+                            ? 'shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-700 dark:text-emerald-300'
+                            : 'shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300'}
+                          >
+                            {subscribed ? 'Live' : 'Paused'}
+                          </span>
+                        )}
+                      </span>
                       <span className="block text-xs text-muted-foreground">
-                        {channel.archived
+                        {channel.subscription
+                          ? subscribed
+                            ? 'Subscribed with live two-way sync'
+                            : 'Paused; the Agensis channel and message history are kept'
+                          : channel.archived
                           ? 'Archived in Nostr'
                           : channel.visibility === 'private'
                             ? 'Private channels stay unavailable until Agensis can preserve equivalent access'
-                            : channel.description || (channel.joined ? 'Joined channel' : 'Accessible public channel')}
+                            : channel.description || (channel.joined ? 'Joined channel; not imported yet' : 'Accessible public channel; not imported yet')}
                       </span>
                     </span>
                   </label>
@@ -275,7 +384,9 @@ export function NostrCommunitySetup({ workspaceId, onBack, onClose, onCreate }: 
       </div>
 
       <div className="flex justify-end gap-2 border-t pt-3">
-        <Button type="button" variant="outline" size="sm" onClick={onBack} disabled={busy !== null}>Back</Button>
+        <Button type="button" variant="outline" size="sm" onClick={onBack} disabled={busy !== null}>
+          {managing ? 'Close' : 'Back'}
+        </Button>
         {connected && (
           <Button type="button" size="sm" onClick={() => void importChannels()} disabled={selected.size === 0 || busy !== null}>
             <Plus data-icon="inline-start" />
