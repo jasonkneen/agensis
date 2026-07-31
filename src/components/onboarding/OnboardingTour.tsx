@@ -512,6 +512,13 @@ export function OnboardingTour({
                       {commandCopied ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
                     </Button>
                   </div>
+                  <div className="mt-2 rounded-md border border-border bg-muted/30 p-2 text-[11px] leading-snug text-muted-foreground">
+                    Once connected, keep it alive after this shell or the desktop app closes with{' '}
+                    <code className="rounded bg-muted px-1 py-0.5">
+                      agensis service install --profile {connectAgent?.handle}
+                    </code>
+                    . The service stores only the profile name, never the token.
+                  </div>
                   <div className={cn('mt-2 text-[11px] font-medium', connected ? 'text-emerald-500' : 'text-muted-foreground')}>
                     {connected
                       ? `Connected — @${connectAgent?.handle} is online.`

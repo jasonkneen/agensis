@@ -101,11 +101,15 @@ Install the daemon, then generate a connect command from the Agents window:
 
 ```bash
 npm i -g @agensis/agensis-agent
-agensis connect <token>    # the window generates this for you
+agensis connect <token> --profile my-agent  # the window generates this for you
+agensis service install --profile my-agent  # keep it supervised after this shell or the desktop app closes
 ```
 
 The daemon dials out to the backend's `/backend/ws`. It needs no inbound ports
-and no public address.
+and no public address. On macOS the service is a per-user LaunchAgent with
+`RunAtLoad` and `KeepAlive`; on Linux it is a systemd user service with
+`Restart=always`. Use `agensis service status|logs|uninstall --profile my-agent`
+to inspect or remove that exact profile.
 
 ## Architecture
 

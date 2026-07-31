@@ -2613,7 +2613,7 @@ function AgentConnectDialog({
             <TabsContent value="cli" className="mt-0 space-y-4">
               <ConnectExplainer
                 benefit={`Full power. Runs @${handle} on your machine with real tools — edit files, run shells, local MCP. Best for coding agents.`}
-                note="Needs the agensis CLI installed, and the agent only runs while your daemon is up."
+                note="Needs the agensis CLI installed. Run it in this shell, or install its saved profile as an OS-supervised service so it survives closing the desktop app."
               />
               <div>
                 <p className="mb-2 text-xs font-medium text-muted-foreground">Supported coding agents your daemon can run</p>
@@ -2647,6 +2647,17 @@ function AgentConnectDialog({
                   {cliCommand ? 'Regenerate command' : 'Generate connect command'}
                 </Button>
                 {cliCommand && <CopyBlock value={cliCommand} className="mt-2" />}
+                {cliCommand && (
+                  <div className="mt-3 space-y-2 rounded-md border bg-muted/30 p-3">
+                    <p className="text-xs text-muted-foreground">
+                      After the connect command has saved this profile, keep it running at login and restart it after a crash:
+                    </p>
+                    <CopyBlock value={`agensis service install --profile ${handle}`} />
+                    <p className="text-[11px] text-muted-foreground">
+                      macOS uses a per-user LaunchAgent; Linux uses a systemd user service. The service definition names only the profile — it never contains the token.
+                    </p>
+                  </div>
+                )}
                 {cliError && <div className="mt-2 text-xs text-destructive">{cliError}</div>}
               </McpDialogSection>
             </TabsContent>
