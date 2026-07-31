@@ -634,6 +634,46 @@ function stripPrivilegedDbValues(table, values) {
 }
 
 /**
+ * Validate the normalized rows used by the generic insert surface and return
+ * the SQL column order. PostgreSQL applies one column list to every VALUES
+ * tuple, so silently reading each later row through the first row's keys turns
+ * a missing field into `undefined` and ignores every extra field. Both backend
+ * runtimes call this once per incoming row before normalization (so spreading
+ * cannot disguise an array or other non-record), then once on the normalized
+ * batch so the shape checked there is the shape that will actually be bound.
+ */
+function validateUniformInsertRows(rows) {
+ if (!Array.isArray(rows) || rows.length === 0) {
+  throw badRequest('Insert values are required');
+ }
+
+ let columns = null;
+ let columnSet = null;
+ for (const row of rows) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) {
+   throw badRequest('Insert values must be plain objects');
+  }
+  const prototype = Object.getPrototypeOf(row);
+  if (prototype !== Object.prototype && prototype !== null) {
+   throw badRequest('Insert values must be plain objects');
+  }
+
+  const keys = Object.keys(row);
+  if (keys.length === 0) throw badRequest('Insert values are required');
+  if (columns === null) {
+   columns = keys;
+   columnSet = new Set(keys);
+   continue;
+  }
+  if (keys.length !== columns.length || keys.some((key) => !columnSet.has(key))) {
+   throw badRequest('All insert rows must use the same columns');
+  }
+ }
+
+ return columns;
+}
+
+/**
  * Resource agents are explicit-use infrastructure by default. Apply that
  * creation default at the shared HTTP boundary so a future caller cannot
  * accidentally opt a new resource into ambient channel replies by omitting the
@@ -2662,6 +2702,7 @@ module.exports = {
  SELECTABLE_COLUMNS_BY_TABLE,
  safeSelectColumns,
  stripPrivilegedDbValues,
+ validateUniformInsertRows,
  applyAgentPurposeInsertDefaults,
  encryptVaultSecret,
  decryptVaultSecret,

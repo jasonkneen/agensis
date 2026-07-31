@@ -22,6 +22,7 @@ import {
  arrayColumnElemType,
  toPgArrayLiteral,
  stripPrivilegedDbValues,
+ validateUniformInsertRows,
  applyAgentPurposeInsertDefaults,
  safeSelectColumns,
  getWorkspaceSecretValue as coreGetWorkspaceSecretValue,
@@ -2034,7 +2035,9 @@ async function handleDb(pathname, req, userId) {
   // Force a workspace's owner to the authed user (never trust a client user_id).
   // Strip privileged columns (storage_path, mcp_approved, …) from generic writes.
   const rows = (Array.isArray(values) ? values : [values]).map((row) => {
-   if (!row || typeof row !== 'object') return row;
+   // Validate before any object spread can turn an array or other non-record
+   // value into a record that appears safe only after server normalization.
+   validateUniformInsertRows([row]);
    let next = stripPrivilegedDbValues(table, row);
    next = applyAgentPurposeInsertDefaults(table, next);
    if (table === 'workspaces') next = { ...next, user_id: userId };
@@ -2056,10 +2059,7 @@ async function handleDb(pathname, req, userId) {
    next = synthesizeHumanIdentityInsert(table, next);
    return next;
   });
-  if (!rows[0] || typeof rows[0] !== 'object') return jsonError(400, new Error('Insert values are required'));
-
-  const columns = Object.keys(rows[0]);
-  if (columns.length === 0) return jsonError(400, new Error('Insert values are required'));
+  const columns = validateUniformInsertRows(rows);
   const params = [];
   const valueSql = rows.map((row) => `(${columns.map((column) => {
    return bindDbParam(params, table, column, row[column]);

@@ -200,6 +200,7 @@ const {
  WORKSPACE_ROLE_CAPABILITIES: SHARED_WORKSPACE_ROLE_CAPABILITIES,
  DB_TABLE_ACCESS: SHARED_DB_TABLE_ACCESS,
  stripPrivilegedDbValues,
+ validateUniformInsertRows,
  applyAgentPurposeInsertDefaults,
  safeSelectColumns,
  storagePathBelongsToWorkspace,
@@ -8182,7 +8183,9 @@ function createApp() {
     ? await resolveInheritedSessionVisibility(Array.isArray(values) ? values : [values])
     : null;
    const rows = (Array.isArray(values) ? values : [values]).map(row => {
-    if (!row || typeof row !== 'object') return row;
+    // Validate before any object spread can turn an array or other non-record
+    // value into a record that appears safe only after server normalization.
+    validateUniformInsertRows([row]);
     let next = stripPrivilegedDbValues(table, row);
     next = applyAgentPurposeInsertDefaults(table, next);
     if (table === 'workspaces') next = { ...next, user_id: req.userId };
@@ -8212,10 +8215,7 @@ function createApp() {
     next = synthesizeHumanIdentityInsert(table, next);
     return next;
    });
-   if (!rows[0] || typeof rows[0] !== 'object') return jsonError(res, 400, new Error('Insert values are required'));
-
-   const columns = Object.keys(rows[0]);
-   if (columns.length === 0) return jsonError(res, 400, new Error('Insert values are required'));
+   const columns = validateUniformInsertRows(rows);
    const params = [];
    const valueSql = rows.map((row) => `(${columns.map((column) => {
     return bindDbParam(params, table, column, row[column]);
