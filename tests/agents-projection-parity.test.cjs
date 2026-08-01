@@ -100,6 +100,20 @@ test('both backends emit the same /agents payload keys', () => {
     'agentRuntimePayload (Fly) and publicWorkspaceAgent (Netlify) disagree — the mirror blanks fields the primary returns');
 });
 
+test('both agent projections resolve automatic models for the selected runtime', () => {
+  const flyStart = flySource.indexOf('function agentRuntimePayload(');
+  const netlifyStart = netlifySource.indexOf('function publicWorkspaceAgent(');
+  assert.ok(flyStart >= 0, 'could not find agentRuntimePayload');
+  assert.ok(netlifyStart >= 0, 'could not find publicWorkspaceAgent');
+
+  const fly = flySource.slice(flyStart, flyStart + 1800);
+  const netlify = netlifySource.slice(netlifyStart, netlifyStart + 1800);
+  for (const [label, source] of [['Fly', fly], ['Netlify', netlify]]) {
+    assert.match(source, /const runtime = normalizeExecutionRuntime\(metadata\.runtime\)/, `${label} must read the saved runtime`);
+    assert.match(source, /model: resolveExecutionModel\([^,]+, runtime\)/, `${label} must not apply the Claude default to Codex or Amp`);
+  }
+});
+
 test('the identity fields that already shipped broken stay in both projections', () => {
   // Belt and braces: the generic diffs above would catch these too, but if
   // someone ever "simplifies" both sides at once, this names the exact fields

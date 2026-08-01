@@ -27,10 +27,70 @@ test('generated daemon commands lock explicit agents to their selected runtime',
   const ampCommand = __test.agentConnectionCommand({ ...common, runtime: 'amp', model: 'auto' }).portableCommand;
   assert.match(ampCommand, / --runtime amp(?: |$)/);
   assert.doesNotMatch(ampCommand, / --model /, 'Amp chooses its model inside the Amp thread');
-  assert.doesNotMatch(__test.agentConnectionCommand({ ...common, runtime: 'codex', model: 'auto' }).portableCommand, / --model /);
+  const codexCommand = __test.agentConnectionCommand({ ...common, runtime: 'codex', model: 'auto' }).portableCommand;
+  assert.match(codexCommand, / --runtime codex(?: |$)/);
+  assert.doesNotMatch(codexCommand, / --model /);
   assert.match(__test.agentConnectionCommand({ ...common, runtime: 'codex', model: 'gpt-5.4' }).portableCommand, / --model gpt-5\.4(?: |$)/);
   assert.match(__test.agentConnectionCommand({ ...common, runtime: 'claude', model: 'auto' }).portableCommand, / --model claude-opus-4-8(?: |$)/);
   assert.doesNotMatch(__test.agentConnectionCommand(common).portableCommand, / --runtime /);
+});
+
+test('agent payloads resolve automatic models for the selected runtime', () => {
+  const common = {
+    id: 'agent-1',
+    workspace_id: 'workspace-1',
+    name: 'Worker',
+    handle: 'worker',
+    model: 'auto',
+    run_mode: 'daemon',
+    enabled: true,
+  };
+
+  assert.equal(
+    __test.agentRuntimePayload({ ...common, metadata: { runtime: 'codex' } }).model,
+    'auto',
+    'Codex must reach the daemon without an Anthropic model override',
+  );
+  assert.equal(
+    __test.agentRuntimePayload({ ...common, metadata: { runtime: 'amp' } }).model,
+    'auto',
+    'Amp chooses its model inside the Amp thread',
+  );
+  assert.equal(
+    __test.agentRuntimePayload({ ...common, metadata: { runtime: 'claude' } }).model,
+    'claude-opus-4-8',
+  );
+  assert.equal(__test.agentRuntimePayload(common).model, 'claude-opus-4-8');
+});
+
+test('agent-token auth carries runtime metadata into the daemon config payload', async () => {
+  const row = {
+    id: 'agent-1',
+    workspace_id: 'workspace-1',
+    name: 'Worker',
+    handle: 'worker',
+    model: 'auto',
+    metadata: { runtime: 'codex' },
+    run_mode: 'daemon',
+    enabled: true,
+  };
+  const queries = [];
+  __test.setTestDb({
+    async unsafe(sql) {
+      queries.push(String(sql));
+      return queries.length === 1 ? [] : [row];
+    },
+  });
+
+  const auth = await __test.verifyAgentConnectToken(
+    'aga_test-token',
+    { socket: { remoteAddress: '127.0.0.1' }, url: '/backend/ws?workspaceId=workspace-1&agentId=agent-1' },
+  );
+
+  assert.equal(queries.length, 2, 'the loopback fallback exercises both token-auth selects');
+  for (const sql of queries) assert.match(sql, /\bmetadata\b/, 'runtime metadata must survive agent-token auth');
+  assert.equal(auth.agent.metadata.runtime, 'codex');
+  assert.equal(auth.agent.model, 'auto');
 });
 
 test('Amp dispatch requires the exact live daemon to advertise runtime support', () => {

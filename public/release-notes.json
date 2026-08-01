@@ -1,5 +1,17 @@
 [
   {
+    "version": "onboarding-codex-runtime",
+    "date": "2026-07-31",
+    "title": "Choosing Codex now connects Codex",
+    "summary": "The setup tour offered Claude Code and Codex, but the choice did not make it into the new agent's saved configuration. Choosing Codex created an agent called Codex and then generated a Claude connection command. The tour now saves the selected CLI before it asks the server for the command, so Codex setup includes --runtime codex and uses the OpenAI account already signed in on that machine.",
+    "highlights": [
+      "The Codex choice is saved as the agent's execution runtime",
+      "Generated Codex connection commands include --runtime codex",
+      "Codex with automatic model selection no longer falls back to a Claude model",
+      "Claude Code setup continues to use the logged-in Claude account"
+    ]
+  },
+  {
     "version": "template-export-import",
     "date": "2026-07-30",
     "title": "Move a persona between workspaces",

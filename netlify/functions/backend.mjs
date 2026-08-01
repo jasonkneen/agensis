@@ -902,6 +902,8 @@ function publicWorkspace(row) {
 function publicWorkspaceAgent(row) {
  if (!row) return row;
  const permissionMode = normalizeAgentPermissionMode(row.permission_mode || row.permissionMode);
+ const metadata = parseJsonObject(row.metadata);
+ const runtime = normalizeExecutionRuntime(metadata.runtime);
  return {
   id: row.id,
   workspace_id: row.workspace_id,
@@ -916,9 +918,9 @@ function publicWorkspaceAgent(row) {
   instructions: row.instructions || '',
   tools: parseJsonArray(row.tools),
   skills: parseJsonArray(row.skills),
-  metadata: parseJsonObject(row.metadata),
+  metadata,
   identity: parseJsonObject(row.identity),
-  model: resolveAnthropicModel(row.model),
+  model: resolveExecutionModel(row.model, runtime),
   run_mode: row.run_mode === 'daemon' ? 'daemon'
    : row.run_mode === 'sandbox' ? 'sandbox'
     : 'builtin',
