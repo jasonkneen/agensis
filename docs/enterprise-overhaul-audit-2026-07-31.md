@@ -4,7 +4,7 @@
 
 **Initial audited snapshot:** `84987556` (`fix(ui): remove inert composer controls`)
 
-**Current implementation snapshot:** main `62f0b8d` plus the uncommitted
+**Current implementation snapshot:** main `f19f57a` plus the uncommitted
 `enterprise-controller-resources` and `enterprise-message-integrity` worktrees.
 This is a staged review state, not a release snapshot.
 

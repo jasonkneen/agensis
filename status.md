@@ -12,7 +12,7 @@ Latest verification (2026-08-01): controller/resource syntax and `git diff --che
 
 ## Branches and worktrees
 
-- Main: `enterprise-overhaul-2026-07-31` at `260286e` (`fix(nostr): mirror invite preview on Netlify`). Existing dirty files: `docs/enterprise-overhaul-audit-2026-07-31.md`, `public/release-notes.json`, `status.md`.
+- Main: `enterprise-overhaul-2026-07-31` at `f19f57a` (`docs: make overhaul audit status explicit`). Existing dirty file: `public/release-notes.json`.
 - Integration: `.worktrees/enterprise-integration`, `enterprise-integration-2026-07-31` at `55ebd943`, clean before this handoff. Foundation work is integrated here.
 - Controller/resources: `.worktrees/controller-resources`, `enterprise-controller-resources` at `55ebd943`, large substantive uncommitted diff. Read its `WORKTREE_NOTES.md`. Do not reset or clean.
 - Message integrity: `.worktrees/message-integrity`, `enterprise-message-integrity` at `eff5f069`, large substantive uncommitted diff. Read its `WORKTREE_NOTES.md`. Do not reset or clean.
