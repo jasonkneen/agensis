@@ -29,7 +29,24 @@ DO $$ BEGIN
   END IF;
 END $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_user_uidx
-  ON session_read_state (session_id, user_id) WHERE user_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_agent_uidx
-  ON session_read_state (session_id, agent_id) WHERE agent_id IS NOT NULL;
+-- A database that has already booted a newer runtime may already carry the
+-- thread-scoped shape from 20260731181000 (or database/neon-schema.sql). In
+-- that shape, two rows for the same session/agent are valid when they belong to
+-- different thread roots, so the transitional session-wide index would reject
+-- real data before the scoped migration gets a chance to replace it. Fresh
+-- migration-only databases do not have thread_parent_id yet and still receive
+-- the temporary indexes below; 20260731181000 drops them after adding scope.
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'session_read_state'
+       AND column_name = 'thread_parent_id'
+  ) THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_user_uidx
+      ON session_read_state (session_id, user_id) WHERE user_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_agent_uidx
+      ON session_read_state (session_id, agent_id) WHERE agent_id IS NOT NULL;
+  END IF;
+END $$;

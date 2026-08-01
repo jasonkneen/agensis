@@ -683,6 +683,21 @@ test('the upgrade steps drop the primary key BEFORE dropping user_id NOT NULL', 
   assert.ok(!/;\s*\S/.test(SESSION_READ_STATE_DDL.trim().replace(/;\s*$/, '')), 'the CREATE DDL is one statement');
 });
 
+test('the agent-receipt migration does not apply a session-wide index to thread-scoped data', () => {
+  // A Fly boot can already have installed the later thread-scoped shape before
+  // the migration ledger catches up. In that state, duplicate (session, agent)
+  // rows are valid across different thread roots; the transitional index from
+  // this migration must be skipped so the scope migration can install the right
+  // constraint instead.
+  const migration = fs.readFileSync(
+    path.resolve(__dirname, '../supabase/migrations/20260731130000_agent_read_receipts.sql'),
+    'utf8',
+  );
+  assert.match(migration, /information_schema\.columns[\s\S]*column_name\s*=\s*'thread_parent_id'/i);
+  assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_agent_uidx/i);
+  assert.match(migration, /IF NOT EXISTS \([\s\S]*thread_parent_id[\s\S]*\) THEN[\s\S]*session_read_state_agent_uidx/i);
+});
+
 test('the opt-out reverse lookup has the same partial user index in all three schema authorities', () => {
   const lookupIndex =
     /create index if not exists session_read_state_user_lookup_idx\s+on session_read_state\s*\(user_id\)\s+where user_id is not null/i;
