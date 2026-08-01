@@ -2,22 +2,19 @@
 
 Snapshot: 2026-08-01
 
-Current follow-up: the root checkout is now `main` at `1ff006e`; the earlier
-`pre-main` details below describe the reboot handoff before the merge. The
-resource steward/agensis relay and soft-delete follow-up is uncommitted and
-has not been pushed. See the resource section in `status.md` for the current
-verification counts.
+Current release: the root checkout is `main` at `1d9c7fc`, pushed to
+`origin/main`, with Neon current through the resource soft-delete migration.
+Fly release **v155** and the Netlify production deploy are live. The earlier
+`pre-main` details below describe the reboot handoff before the merge and are
+historical. See the current release section in `status.md` for verification
+counts and deployment URLs.
 
-The enterprise overhaul is merged on `main` at `4235d6a`. This review is now
-on the local `pre-main` branch at `eb55dbe`, which contains the forwarding and
-conflict-resolution follow-ups. The source tree is clean with no unmerged
-paths or conflict markers; only these handoff notes remain modified locally.
-Do not reset, clean, rebase, or discard them. The branch is intentionally not
-pushed.
+The enterprise overhaul and resource follow-up are merged on `main`. The
+historical `pre-main` details below are retained for audit context only. Do
+not reset, clean, rebase, or discard the preserved worktrees.
 
-- Active branch: `pre-main` (`eb55dbe`).
-- The root checkout is not deployed. Do not reset, clean, rebase, or discard
-  changes.
+- Historical active branch at the time of this handoff: `pre-main` (`eb55dbe`).
+- The current root checkout is the deployed `main` release described above.
 - Git metadata is shared with the other local worktrees; verify `git status`
   before staging any follow-up. No remote push has been performed.
 - See [`status.md`](status.md) for the verified gates, browser evidence, and

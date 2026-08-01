@@ -1,12 +1,31 @@
 # Enterprise overhaul reboot handoff
 
-Snapshot: 2026-08-01. The working tree is **not committed or deployed**. Do not reset, clean, rebase, or discard it.
+Snapshot: 2026-08-01. The release is committed on `main` and deployed. Do not reset, clean, rebase, or discard the historical worktrees below.
+
+## Current release (2026-08-01 12:36)
+
+`main` is at `1d9c7fc` (`Fix receipt migration for thread-scoped rows`) and
+matches `origin/main`. Neon migration tracking is current through
+`20260801090000_workspace_resources_soft_delete.sql`.
+
+- Fly backend: release **v155**, healthy at `https://agensis-backend.fly.dev`.
+- Netlify production: live at `https://agensis.io`; deploy
+  `6a6dd9f040083d24f31c7165`.
+- The `requestText` resource-operation contract is now present in the
+  deployed frontend, Fly backend, and Netlify function mirror.
+- The migration runner initially found an existing-data edge case in the
+  agent read-receipt transition. The migration now skips its temporary
+  session-wide index when the newer thread-scoped shape is already present;
+  the production migration completed successfully after that fix.
+- Release checks: typecheck, production build, resource/MCP matrix (**162
+  pass, 1 optional PostgreSQL lock skip**), read-receipt/migration matrix
+  (**30/30**), and `git diff --check` passed.
 
 ## Resource relay follow-up (2026-08-01 12:15)
 
-The live checkout is now `main` at `1ff006e` (the earlier `pre-main` handoff
-below is historical). The follow-up is intentionally uncommitted and has not
-been pushed. Resource requests now use the steward/agensis proxy boundary:
+The live checkout was `main` at `1ff006e` (the earlier `pre-main` handoff
+below is historical). The resource relay and soft-delete follow-up is now
+committed in the release above. Resource requests now use the steward/agensis proxy boundary:
 the UI accepts plain-language work, the server stores a bounded request
 artifact, and the steward runs it with its ordinary built-in tools or connected
 agent CLI. Per-resource names such as `infinity_read` are no longer presented.
@@ -20,10 +39,14 @@ and the resource window use the same service.
 
 Focused verification: **163 passing, 1 optional PostgreSQL lock test skipped**
 across the MCP/resource/schema/route/dispatch matrix; typecheck, production
-build, focused ESLint, Vitest model/smoke, and `git diff --check` pass. The
-full Node suite remains **2,472 passing / 24 failing** on unrelated existing
-listener/session/message/schedule/source-hygiene tests; no resource/MCP test is
-in that failure set. No deployment or push was performed.
+build, focused ESLint, Vitest model/smoke, and `git diff --check` passed before
+deployment. The full Node suite remains **2,472 passing / 24 failing** on
+unrelated existing listener/session/message/schedule/source-hygiene tests; no
+resource/MCP test is in that failure set. The current release details are
+above.
+
+The remainder of this file is the earlier reboot/handoff snapshot and is kept
+for audit context; it is not the current branch or deployment state.
 
 The enterprise overhaul is merged on `main` at `4235d6a`. This review is on
 the local `pre-main` branch at `eb55dbe`, with the forwarding and
