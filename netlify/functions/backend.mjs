@@ -536,6 +536,7 @@ function isLegacyMembershipInvitePath(pathname) {
 // never reaches the live worker.
 function isFlyOwnedControlPath(pathname) {
  return /^\/backend\/agents\/connections\/[^/]+$/.test(pathname)
+  || /^\/backend\/agents\/[^/]+\/connection-command$/.test(pathname)
   || /^\/backend\/agents\/[^/]+\/(?:disconnect|memory-refresh|capabilities-refresh)$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/audit$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/(?:automations|automation-runs)(?:\/[^/]+)?$/.test(pathname)

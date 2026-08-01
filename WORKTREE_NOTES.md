@@ -2,14 +2,15 @@
 
 Snapshot: 2026-08-01
 
-The enterprise overhaul is merged on `main` at `4235d6a`; the current local
-follow-up commit is `5205d06`. The working tree may contain additional review
-edits, but it has no unmerged paths or conflict markers. Do not reset, clean,
-rebase, or discard them. The branch is intentionally not pushed.
+The enterprise overhaul is merged on `main` at `4235d6a`. This review is now
+on the local `pre-main` branch at `1733fe7`, which contains the forwarding and
+conflict-resolution follow-ups. The working tree is clean, with no unmerged
+paths or conflict markers. Do not reset, clean, rebase, or discard it. The
+branch is intentionally not pushed.
 
-- Active branch: `main` (`5205d06`).
-- The root checkout is intentionally dirty and not deployed. Do not reset,
-  clean, rebase, or discard changes.
+- Active branch: `pre-main` (`1733fe7`).
+- The root checkout is not deployed. Do not reset, clean, rebase, or discard
+  changes.
 - Git metadata is shared with the other local worktrees; verify `git status`
   before staging any follow-up. No remote push has been performed.
 - See [`status.md`](status.md) for the verified gates, browser evidence, and
@@ -37,6 +38,40 @@ rebase, or discard them. The branch is intentionally not pushed.
 - The supplied `Continue`/`Ask` typography crop does not match any literal
   Agensis control in this checkout (only the generated document `Ask` block is
   present); identify that surface before changing the global UI font scale.
+
+## Branch/worktree cleanup audit (2026-08-01)
+
+All local refs and attached worktrees were inspected against `pre-main`; no
+remote branch was changed and nothing was pushed.
+
+- Clean, already integrated or patch-equivalent branches: `chore/drop-visual-editor`,
+  `chore/publish-fixes`, `enterprise-agent-resource-taxonomy`,
+  `enterprise-audit-documentation`, `enterprise-buzz-architecture`,
+  `enterprise-conversation-foundation-2026-07-31`,
+  `enterprise-generic-db-projections`, `enterprise-integration-2026-07-31`,
+  `enterprise-legacy-invite-atomic`, `enterprise-netlify-no-ddl`,
+  `enterprise-overhaul-2026-07-31`, `enterprise-review-context`,
+  `enterprise-review-size`, `enterprise-session-derived-scope`,
+  `enterprise-uniform-batch-insert`, `feat/agent-read-receipts`,
+  `feat/cross-instance-fanout`, `fix/channels-dm-threads-receipts`,
+  `fix/connection-reliability`, `fix/deploy-guard`, and the three UI
+  worktree branches. Their clean worktrees are candidates for local removal.
+- Retain for explicit review: `docs/readme-rewrite` and `feat/docker` have a
+  separate four-commit history with Docker/README work; `enterprise-review-testing`
+  has a unique permission-protocol commit that is not patch-equivalent and
+  must not be deleted without a decision.
+- Preserve untouched: `enterprise-controller-resources` (50 dirty paths),
+  `enterprise-message-integrity` (155 dirty paths), `feat/docker-port` (8 dirty
+  paths including Docker files), `fix/agent-receipt-daemon-finalize` (dirty
+  `server/agent-jobs.cjs`), and `worktree-huddle-voice-defaults` (2 dirty
+  files). The root `pre-main` edits are the active handoff changes.
+- `/private/tmp/dep2` is already missing and is only a stale detached-worktree
+  registration; it is safe to prune once Git metadata is writable.
+
+This sandbox rejects `.git` lock creation (`Operation not permitted`), so
+`git worktree remove`, `git branch -d`, and `git worktree prune` could not be
+executed here. On a normal host, remove only the clean candidates above, then
+prune the missing detached worktree; do not use `--force` on any dirty path.
 
 ## Resume first
 

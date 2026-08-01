@@ -308,7 +308,6 @@ export function OnboardingTour({
         system_prompt: CODER_TEMPLATE?.systemPrompt || '',
         tools: [],
         skills: [],
-        metadata: agentMetadataWithRuntime({}, cliId, 'daemon'),
         model: 'auto',
         // The connection-command route reads the execution runtime from agent
         // metadata before it builds CLI flags. Storing this as a built-in agent

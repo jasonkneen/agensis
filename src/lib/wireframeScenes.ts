@@ -394,7 +394,7 @@ export const WIREFRAME_SCENES = {
   // Retired from the gallery when their feature stopped being news. Kept as
   // authored vocabulary — a scene costs nothing and is the reference for how
   // this format is meant to read.
-  splitView, chips, cadence, toolLoop, preview, showDesktop, stopReason
+  splitView, chips, cadence, toolLoop, preview, showDesktop
 } as const;
 
 export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
@@ -437,12 +437,6 @@ export const GALLERY_SLIDES: GallerySlide[] = [
     scene: dmPrivacy,
   },
   {
-    note: 'automations-window',
-    title: 'Rules you can set up yourself',
-    body: 'Pick what to watch for, choose where the message goes, and switch the rule on once you have read it back.',
-    scene: automationRule,
-  },
-  {
     note: 'agent-templates',
     title: 'Save an agent as a template',
     body: 'Tune an agent once, save it, and start the next one from it. Your own templates sit alongside the built-in ones.',
@@ -453,18 +447,6 @@ export const GALLERY_SLIDES: GallerySlide[] = [
     title: 'A record of who changed what',
     body: 'Sensitive changes are written to a log you can read back: who did it, what changed, and when.',
     scene: auditLog,
-  },
-  {
-    note: 'typing-indicators',
-    title: 'See when someone is typing',
-    body: 'A dot indicator shows when another person or an agent is part-way through a reply, so you know one is coming.',
-    scene: typingDots,
-  },
-  {
-    note: 'why-an-agent-stopped',
-    title: 'An agent says why it stopped',
-    body: 'A run that ends early now carries its reason, instead of being a reply that just stops mid-sentence.',
-    scene: stopReason,
   },
 ];
 

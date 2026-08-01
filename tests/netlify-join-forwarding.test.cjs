@@ -236,6 +236,7 @@ test('Netlify forwards the remaining Fly-owned workspace and conversation surfac
   ['GET', 'https://app.example.test/backend/workspaces/ws-1/agent-registrations?status=pending', undefined],
   ['POST', 'https://app.example.test/backend/agent-registrations/registration-1/approve', {}],
   ['POST', 'https://app.example.test/backend/agensis/setup/connect', { workspaceId: 'ws-1' }],
+  ['POST', 'https://app.example.test/backend/agents/agent-1/connection-command', { runtime: 'codex' }],
 ];
  for (const [method, url, body] of cases) {
   requests.length = 0;

@@ -2,17 +2,39 @@
 
 Snapshot: 2026-08-01. The working tree is **not committed or deployed**. Do not reset, clean, rebase, or discard it.
 
-The enterprise overhaul is merged on `main` at `4235d6a`. The latest local
-follow-up is `5205d06`; no remote push has been performed. The current review
-edits are intentionally local and there are no unmerged paths or conflict
-markers.
+The enterprise overhaul is merged on `main` at `4235d6a`. This review is on
+the local `pre-main` branch at `1733fe7`, with the forwarding and
+conflict-resolution follow-ups applied. No remote push has been performed; the
+branch has no unmerged paths or conflict markers.
 
 ## Current answer
 
 The local integration is materially further along, but it is not complete. The
-main checkout contains the integration baseline plus the controller/resources
-and message-integrity lanes. The remaining local edits are the conflict-
-resolution review and release handoff; no remote publication has been done.
+pre-main checkout contains the integration baseline plus the
+controller/resources and message-integrity lanes. The remaining release work
+is documented below; no remote publication has been done.
+
+## Branch/worktree cleanup
+
+All local refs and attached worktrees were inspected against `pre-main`. No
+remote branch was changed and nothing was pushed. Clean integrated or
+patch-equivalent branches are candidates for removal: the old enterprise
+feature/review refs, `chore/drop-visual-editor`, `chore/publish-fixes`,
+`feat/agent-read-receipts`, `feat/cross-instance-fanout`,
+`fix/channels-dm-threads-receipts`, `fix/connection-reliability`,
+`fix/deploy-guard`, and the three clean UI worktree refs.
+
+Retain `docs/readme-rewrite`, `feat/docker`, and `enterprise-review-testing`
+until their separate/unique commits receive an explicit decision. Preserve
+the dirty worktrees `enterprise-controller-resources`,
+`enterprise-message-integrity`, `feat/docker-port`,
+`fix/agent-receipt-daemon-finalize`, and `worktree-huddle-voice-defaults`;
+their uncommitted changes were not touched. `/private/tmp/dep2` is a missing,
+detached worktree registration that can be pruned.
+
+This sandbox rejects `.git` lock creation, so branch/worktree removal and
+pruning could not be executed here. On a normal host, remove only clean
+candidates and never use `--force` on a dirty worktree.
 
 ## Verified locally
 
@@ -69,7 +91,8 @@ Latest continuation verification (2026-08-01):
   covers all currently identified Fly-owned HTTP surfaces, including bootstrap,
   messages/access, huddles, gateways, skills, schedules, Nostr, permissions,
   files, project-git, TTS, bridge, Farm, link-preview, MCP skill, Flow,
-  workspace-MCP, agent-registration, and Agensis setup operations.
+  workspace-MCP, agent-registration, Agensis setup, and agent connection-
+  command operations.
 - Closed three concrete UI interaction gaps: sidebar file upload now opens a
   real picker and calls `useFiles.uploadFiles`, ordinary thread panels expose
   the owning session's earlier-history pagination, and embedded sketch Clear
