@@ -57,7 +57,7 @@ export function modelSurvivesRuntimeChange(model: string, next: AgentExecutionRu
  */
 export function modelOptionsForRuntime(
   current: string,
-  runMode: 'builtin' | 'daemon' | 'sandbox',
+  runMode: 'builtin' | 'daemon' | 'sandbox' | 'external',
   runtime: AgentExecutionRuntime,
 ): AIModel[] {
   if (runMode === 'daemon' && runtime === 'desktop') {

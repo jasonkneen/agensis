@@ -28,7 +28,7 @@ export interface CreateAgentInput {
   metadata?: Record<string, unknown>;
   handle?: string;
   model?: string;
-  run_mode?: 'builtin' | 'daemon' | 'sandbox';
+  run_mode?: 'builtin' | 'daemon' | 'sandbox' | 'external';
   sandbox_provider?: string | null;
   sandbox_config?: Record<string, unknown>;
 }

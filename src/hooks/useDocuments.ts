@@ -40,10 +40,11 @@ export function applyDocumentRealtimeToContentCache(
     return;
   }
   if (!nextDoc?.id) return;
-  if (nextDoc.content !== undefined) {
-    cache.set(nextDoc.id, nextDoc.content);
+  const nextId = nextDoc.id;
+  if (typeof nextDoc.content === 'string') {
+    cache.set(nextId, nextDoc.content);
   } else if (eventType === 'UPDATE' || eventType === 'INSERT') {
-    cache.delete(nextDoc.id);
+    cache.delete(nextId);
   }
 }
 
@@ -107,7 +108,7 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
     },
     (payload) => {
       if (!deduper.shouldProcess(payload)) return;
-      const eventType = payload.eventType;
+      const eventType = String(payload.eventType || '');
       if (eventType === 'DELETE') {
         const oldDoc = payload.old;
         applyDocumentRealtimeToContentCache(contentCache.current, eventType, null, oldDoc);
@@ -120,7 +121,7 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
       const nextDoc = payload.new;
       if (!nextDoc?.id) return;
       applyDocumentRealtimeToContentCache(contentCache.current, eventType, nextDoc);
-      const listDoc = toListDocument(nextDoc);
+      const listDoc = toListDocument(nextDoc as Document);
       setDocuments(prev => {
         const existingIndex = prev.findIndex(doc => doc.id === listDoc.id);
         if (existingIndex === -1) {

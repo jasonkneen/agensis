@@ -115,7 +115,6 @@ import {
   resolveFormRuntimeSelection,
   runtimeChoicesFromAcpHarnesses,
   runtimeChoicesFromConnections,
-  type AgentExecutionRuntime,
   type AgentFormRuntimeValue,
   type AgentRuntimeChoice,
   type AgentTemplate,
@@ -202,7 +201,7 @@ interface AgentsWindowContentProps {
     metadata?: Record<string, unknown>;
     handle?: string;
     model?: string;
-    run_mode?: 'builtin' | 'daemon' | 'sandbox';
+    run_mode?: 'builtin' | 'daemon' | 'sandbox' | 'external';
     sandbox_provider?: string | null;
     sandbox_config?: Record<string, unknown>;
     // Resolves false when the agent was NOT created, so the form can stay put
@@ -303,10 +302,6 @@ function agentTransportLabel(runMode?: string | null): string {
 
 function isAmpAgent(agent: WorkspaceAgent): boolean {
   return String(agent.metadata?.runtime || '').trim().toLowerCase() === 'amp';
-}
-
-function agentExecutionRuntime(agent: WorkspaceAgent): AgentExecutionRuntime {
-  return agentExecutionRuntimeFromMetadata(agent.metadata as Record<string, unknown> | undefined);
 }
 
 function agentRuntimeDisplayLabel(
@@ -414,7 +409,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [newPurpose, setNewPurpose] = useState<AgentPurpose>('collaborator');
   const [newResourceFacets, setNewResourceFacets] = useState<ResourceFacet[]>([]);
   const [newModel, setNewModel] = useState('auto');
-  const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
+  const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon' | 'sandbox' | 'external'>('builtin');
   const hasDesktopAcpShell = typeof window !== 'undefined' && Boolean(window.electronAPI?.acp);
   const [acpHarnessCatalog, setAcpHarnessCatalog] = useState<Array<{
     id: string;
@@ -683,7 +678,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         ambient_replies: defaultAmbientRepliesForPurpose(newPurpose),
         model: newModel,
         run_mode: newRunMode,
-        metadata: agentMetadataWithRuntime(newMetadata, newRuntime, newRunMode),
+        metadata: (() => {
+          const { runtime, acpHarness } = resolveFormRuntimeSelection(newRuntime);
+          return agentMetadataWithRuntime(newMetadata, runtime, newRunMode, acpHarness);
+        })(),
         ...(newRunMode === 'sandbox' ? { sandbox_provider: newSandboxProvider, sandbox_config: safeParseSandboxConfig(newSandboxConfig) } : {}),
       });
     } finally {

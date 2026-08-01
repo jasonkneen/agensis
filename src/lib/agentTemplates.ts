@@ -196,24 +196,24 @@ export function runtimeChoicesFromAcpHarnesses(harnesses: Array<{
   label: string;
   available: boolean;
 }>): AgentRuntimeChoice[] {
-  return harnesses
-    .map(h => {
-      const id = normalizeAcpHarnessId(h.id);
-      if (!id) return null;
-      return {
-        id: acpFormRuntimeValue(id),
-        label: String(h.label || '').trim() || acpHarnessLabel(id),
-        available: h.available === true,
-        reason: h.available === true ? null : `${id}_not_available`,
-      } satisfies AgentRuntimeChoice;
-    })
-    .filter((choice): choice is AgentRuntimeChoice => Boolean(choice));
+  const choices: AgentRuntimeChoice[] = [];
+  for (const h of harnesses) {
+    const id = normalizeAcpHarnessId(h.id);
+    if (!id) continue;
+    choices.push({
+      id: acpFormRuntimeValue(id),
+      label: String(h.label || '').trim() || acpHarnessLabel(id),
+      available: h.available === true,
+      reason: h.available === true ? null : `${id}_not_available`,
+    });
+  }
+  return choices;
 }
 
 export function agentMetadataWithRuntime(
   metadata: Record<string, unknown> | null | undefined,
   runtime: AgentExecutionRuntime,
-  runMode: AgentTemplate['runMode'],
+  runMode: AgentTemplate['runMode'] | 'external',
   acpHarness?: string | null,
 ): Record<string, unknown> {
   const next = { ...(metadata || {}) };
