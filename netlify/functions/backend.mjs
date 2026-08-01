@@ -557,6 +557,12 @@ function isFlyOwnedControlPath(pathname) {
   || /^\/backend\/integrations\/farm(?:\/|$)/.test(pathname)
   || /^\/backend\/link-previews(?:\/|$)/.test(pathname)
   || /^\/backend\/system\/skill-content(?:\/|$)/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/flow-connections(?:\/|$)/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/mcp-token$/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/mcp-auto-approve$/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/agent-registrations(?:\/|$)/.test(pathname)
+  || /^\/backend\/agent-registrations\/[^/]+\/(?:approve|deny)$/.test(pathname)
+  || /^\/backend\/agensis\/setup\/connect$/.test(pathname)
   || /^(?:\/backend\/skill(?:\/|$)|\/api\/skill(?:\/|$)|\/skill(?:\/|$)|\/.well-known\/agent-skill(?:\/|$))/.test(pathname);
 }
 

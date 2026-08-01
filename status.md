@@ -2,18 +2,17 @@
 
 Snapshot: 2026-08-01. The working tree is **not committed or deployed**. Do not reset, clean, rebase, or discard it.
 
-Recovery note: a shared-agent process switched the root checkout to `main` and
-fast-forwarded it at 09:06 while this pass was running. The integrated tree is
-recoverable as commit `c9092a3` on `enterprise-overhaul-2026-07-31`; the root
-files were restored from that commit, but this sandbox cannot update `.git`
-locks, so `git branch --show-current` may still report `main` and the index may
-show staged/unmerged paths even though the worktree has no conflict markers.
-On a normal host, run `git checkout enterprise-overhaul-2026-07-31` and verify
-before making more edits. No reset or discard was run.
+The enterprise overhaul is merged on `main` at `4235d6a`. The latest local
+follow-up is `5205d06`; no remote push has been performed. The current review
+edits are intentionally local and there are no unmerged paths or conflict
+markers.
 
 ## Current answer
 
-The local integration is materially further along, but it is not complete. The main checkout now contains the integration baseline plus the controller/resources and message-integrity lanes. Git cannot write its index in this environment (`.git/index.lock: Operation not permitted`), so the edits are intentionally present but unstaged/uncommitted. Git may still show the resolved audit document as `UU`; its worktree has no conflict markers, but the index cannot be updated here.
+The local integration is materially further along, but it is not complete. The
+main checkout contains the integration baseline plus the controller/resources
+and message-integrity lanes. The remaining local edits are the conflict-
+resolution review and release handoff; no remote publication has been done.
 
 ## Verified locally
 

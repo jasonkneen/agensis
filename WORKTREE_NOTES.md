@@ -2,20 +2,16 @@
 
 Snapshot: 2026-08-01
 
-The intended branch is `enterprise-overhaul-2026-07-31` at integration commit
-`c9092a3`. A shared-agent checkout/pull briefly moved the root HEAD to `main`
-while this pass was running. The files are restored from `c9092a3`, but the
-sandbox cannot write `.git` lock files, so branch/index metadata may remain
-misaligned until reboot on a normal host. Run `git checkout
-enterprise-overhaul-2026-07-31` before continuing; do not reset or clean.
+The enterprise overhaul is merged on `main` at `4235d6a`; the current local
+follow-up commit is `5205d06`. The working tree may contain additional review
+edits, but it has no unmerged paths or conflict markers. Do not reset, clean,
+rebase, or discard them. The branch is intentionally not pushed.
 
-- Active branch: `enterprise-overhaul-2026-07-31`.
+- Active branch: `main` (`5205d06`).
 - The root checkout is intentionally dirty and not deployed. Do not reset,
   clean, rebase, or discard changes.
-- Git index writes are denied in this environment (`.git/index.lock:
-  Operation not permitted`), so the root edits cannot be staged or committed
-  here. The audit document may still appear as `UU` even though its worktree
-  file has no conflict markers.
+- Git metadata is shared with the other local worktrees; verify `git status`
+  before staging any follow-up. No remote push has been performed.
 - See [`status.md`](status.md) for the verified gates, browser evidence, and
   remaining stop-ship work.
 - Latest local gates include typecheck/build/smoke/lint, plus **2,814 unit
