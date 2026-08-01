@@ -3599,6 +3599,11 @@ async function route(req) {
     actor,
     status: requestUrl.searchParams.get('status') || undefined,
     limit: requestUrl.searchParams.get('limit') || undefined,
+    includeDeleted: queryBoolean(
+     requestUrl.searchParams.get('includeDeleted')
+       ?? requestUrl.searchParams.get('include_deleted'),
+     false,
+    ),
    });
    return json({ data, error: null });
   }
@@ -3637,6 +3642,11 @@ async function route(req) {
       ?? requestUrl.searchParams.get('include_artifacts'),
     false,
    ),
+   includeDeleted: queryBoolean(
+    requestUrl.searchParams.get('includeDeleted')
+      ?? requestUrl.searchParams.get('include_deleted'),
+    false,
+   ),
   });
   return json({ data, error: null });
  }
@@ -3653,6 +3663,11 @@ async function route(req) {
     requestUrl.searchParams.get('includeArtifacts')
       ?? requestUrl.searchParams.get('include_artifacts'),
     true,
+   ),
+   includeDeleted: queryBoolean(
+    requestUrl.searchParams.get('includeDeleted')
+      ?? requestUrl.searchParams.get('include_deleted'),
+    false,
    ),
   });
   return json({ data, error: null });
@@ -3674,6 +3689,11 @@ async function route(req) {
     includeArtifacts: queryBoolean(
      requestUrl.searchParams.get('includeArtifacts')
        ?? requestUrl.searchParams.get('include_artifacts'),
+     false,
+    ),
+    includeDeleted: queryBoolean(
+     requestUrl.searchParams.get('includeDeleted')
+       ?? requestUrl.searchParams.get('include_deleted'),
      false,
     ),
    });
@@ -3707,7 +3727,16 @@ async function route(req) {
   const userId = await requireUserId(req);
   const actor = { kind: 'user', userId, workspaceId };
   if (req.method === 'GET') {
-   const data = await workspaceResources.getResource({ workspaceId, resourceId, actor });
+   const data = await workspaceResources.getResource({
+    workspaceId,
+    resourceId,
+    actor,
+    includeDeleted: queryBoolean(
+     requestUrl.searchParams.get('includeDeleted')
+       ?? requestUrl.searchParams.get('include_deleted'),
+     false,
+    ),
+   });
    return json({ data, error: null });
   }
   if (req.method === 'PATCH') {
@@ -3726,6 +3755,35 @@ async function route(req) {
    });
    return json({ data, error: null });
   }
+  if (req.method === 'DELETE') {
+   const blocked = await dbRateLimitBlock(
+    resourceOperationRateLimiter,
+    resourceOperationDbRateLimiter,
+    `${userId}:${workspaceId}`,
+   );
+   if (blocked) return blocked;
+   const data = await workspaceResources.deleteResource({ workspaceId, resourceId, actor });
+   return json({ data, error: null });
+  }
+ }
+
+ const resourceRestoreMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/resources\/([^/]+)\/restore$/);
+ if (req.method === 'POST' && resourceRestoreMatch) {
+  const workspaceId = decodeURIComponent(resourceRestoreMatch[1]);
+  const resourceId = decodeURIComponent(resourceRestoreMatch[2]);
+  const userId = await requireUserId(req);
+  const blocked = await dbRateLimitBlock(
+   resourceOperationRateLimiter,
+   resourceOperationDbRateLimiter,
+   `${userId}:${workspaceId}`,
+  );
+  if (blocked) return blocked;
+  const data = await workspaceResources.restoreResource({
+   workspaceId,
+   resourceId,
+   actor: { kind: 'user', userId, workspaceId },
+  });
+  return json({ data, error: null });
  }
 
  const workspaceUsageMatch = pathname.match(/^\/backend\/workspace\/([^/]+)\/usage$/);

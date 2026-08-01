@@ -43,6 +43,7 @@ const RESOURCE_COLUMN_NAMES = Object.freeze([
  'version',
  'visibility',
  'status',
+ 'deleted_at',
  'created_by',
  'created_at',
  'updated_at',
@@ -115,7 +116,8 @@ const RESOURCE_UPDATE_FIELDS = new Set([
  'steward_agent_id',
 ]);
 const RESOURCE_OPERATION_REQUEST_FIELDS = new Set([
- 'operation', 'inputArtifact', 'input_artifact', 'idempotencyKey', 'idempotency_key',
+ 'operation', 'inputArtifact', 'input_artifact', 'requestText', 'request_text',
+ 'idempotencyKey', 'idempotency_key',
 ]);
 const RESOURCE_OPERATION_RESULT_FIELDS = new Set([
  'status', 'outputArtifact', 'output_artifact', 'error',
@@ -509,7 +511,13 @@ function createWorkspaceResourceService(deps = {}) {
   return publicResource(created.row);
  }
 
- async function listResources({ workspaceId: rawWorkspaceId, actor, status = 'active', limit = RESOURCE_LIST_DEFAULT_LIMIT }) {
+ async function listResources({
+  workspaceId: rawWorkspaceId,
+  actor,
+  status = 'active',
+  limit = RESOURCE_LIST_DEFAULT_LIMIT,
+  includeDeleted = false,
+ }) {
   const workspaceId = requiredId(rawWorkspaceId, 'workspaceId');
   const resolvedStatus = String(status || 'active').trim();
   if (resolvedStatus !== 'all' && !RESOURCE_STATUSES.includes(resolvedStatus)) {
@@ -521,7 +529,13 @@ function createWorkspaceResourceService(deps = {}) {
   );
   const db = database();
   const authorization = await authorizeViewer(db, actor, workspaceId);
-  const where = ['workspace_id = $1'];
+  const withDeleted = normalizeBooleanOption(includeDeleted, false, 'includeDeleted');
+  if (withDeleted) {
+   // Deleted resources are a manager-only recovery view. Ordinary workspace
+   // readers must not learn that a resource or its descriptor ever existed.
+   await authorizeManager(db, actor, workspaceId, 'resources:manage_own');
+  }
+  const where = withDeleted ? ['workspace_id = $1'] : ['workspace_id = $1', 'deleted_at is null'];
   const params = [workspaceId];
   if (resolvedStatus !== 'all') {
    params.push(resolvedStatus);
@@ -546,12 +560,21 @@ function createWorkspaceResourceService(deps = {}) {
   return rows.map(publicResource).filter(Boolean);
  }
 
- async function getResource({ workspaceId: rawWorkspaceId, resourceId: rawResourceId, actor }) {
+ async function getResource({
+  workspaceId: rawWorkspaceId,
+  resourceId: rawResourceId,
+  actor,
+  includeDeleted = false,
+ }) {
   const workspaceId = requiredId(rawWorkspaceId, 'workspaceId');
   const resourceId = requiredId(rawResourceId, 'resourceId');
   const db = database();
   const authorization = await authorizeViewer(db, actor, workspaceId);
-  const where = ['id = $1', 'workspace_id = $2'];
+  const withDeleted = normalizeBooleanOption(includeDeleted, false, 'includeDeleted');
+  if (withDeleted) await authorizeManager(db, actor, workspaceId, 'resources:manage_own');
+  const where = withDeleted
+   ? ['id = $1', 'workspace_id = $2']
+   : ['id = $1', 'workspace_id = $2', 'deleted_at is null'];
   const params = [resourceId, workspaceId];
   if (authorization.identity.kind === 'controller') {
    params.push(authorization.identity.id);
@@ -594,6 +617,7 @@ function createWorkspaceResourceService(deps = {}) {
   status = 'all',
   limit = RESOURCE_OPERATION_LIST_DEFAULT_LIMIT,
   includeArtifacts = false,
+  includeDeleted = false,
  }) {
   const workspaceId = requiredId(rawWorkspaceId, 'workspaceId');
   const resourceId = String(rawResourceId || '').trim();
@@ -613,6 +637,8 @@ function createWorkspaceResourceService(deps = {}) {
   const db = database();
   const authorization = await authorizeViewer(db, actor, workspaceId);
   const withArtifacts = normalizeBooleanOption(includeArtifacts, false, 'includeArtifacts');
+  const withDeleted = normalizeBooleanOption(includeDeleted, false, 'includeDeleted');
+  if (withDeleted) await authorizeManager(db, actor, workspaceId, 'resources:manage_own');
   const where = ['operation.workspace_id = $1'];
   const params = [workspaceId];
   if (resourceId) {
@@ -634,6 +660,7 @@ function createWorkspaceResourceService(deps = {}) {
       join workspace_resources resource
         on resource.id = operation.resource_id
        and resource.workspace_id = operation.workspace_id
+       ${withDeleted ? '' : 'and resource.deleted_at is null'}
      where ${where.join(' and ')}
      order by operation.created_at desc, operation.id asc
      limit $${params.length}`,
@@ -649,11 +676,14 @@ function createWorkspaceResourceService(deps = {}) {
   operationId: rawOperationId,
   actor,
   includeArtifacts = true,
+  includeDeleted = false,
  }) {
   const workspaceId = requiredId(rawWorkspaceId, 'workspaceId');
   const operationId = requiredId(rawOperationId, 'operationId');
   const db = database();
   const authorization = await authorizeViewer(db, actor, workspaceId);
+  const withDeleted = normalizeBooleanOption(includeDeleted, false, 'includeDeleted');
+  if (withDeleted) await authorizeManager(db, actor, workspaceId, 'resources:manage_own');
   const where = ['operation.id = $1', 'operation.workspace_id = $2'];
   const params = [operationId, workspaceId];
   appendOperationAudience(where, params, authorization.identity);
@@ -667,6 +697,7 @@ function createWorkspaceResourceService(deps = {}) {
       join workspace_resources resource
         on resource.id = operation.resource_id
        and resource.workspace_id = operation.workspace_id
+       ${withDeleted ? '' : 'and resource.deleted_at is null'}
      where ${where.join(' and ')}
      limit 1`,
    params,
@@ -683,9 +714,9 @@ function createWorkspaceResourceService(deps = {}) {
   const updated = await inTransaction(async tx => {
    const authorization = await authorizeManager(tx, actor, workspaceId, 'resources:manage_own');
    const currentRows = await tx.unsafe(
-    `select ${RESOURCE_PROJECTION}
+   `select ${RESOURCE_PROJECTION}
        from workspace_resources
-      where id = $1 and workspace_id = $2
+      where id = $1 and workspace_id = $2 and deleted_at is null
       limit 1
       for update`,
     [resourceId, workspaceId],
@@ -793,7 +824,7 @@ function createWorkspaceResourceService(deps = {}) {
             steward_agent_id = $9,
             controller_id = $10,
             updated_at = now()
-      where id = $1 and workspace_id = $2
+      where id = $1 and workspace_id = $2 and deleted_at is null
       returning ${RESOURCE_PROJECTION}`,
     [
      resourceId,
@@ -852,6 +883,173 @@ function createWorkspaceResourceService(deps = {}) {
    });
   }
   return publicResource(updated.row);
+ }
+
+ async function deleteResource({ workspaceId: rawWorkspaceId, resourceId: rawResourceId, actor }) {
+  const workspaceId = requiredId(rawWorkspaceId, 'workspaceId');
+  const resourceId = requiredId(rawResourceId, 'resourceId');
+  const deleted = await inTransaction(async tx => {
+   const authorization = await authorizeManager(tx, actor, workspaceId, 'resources:manage_own');
+   const currentRows = await tx.unsafe(
+    `select ${RESOURCE_PROJECTION}
+       from workspace_resources
+      where id = $1 and workspace_id = $2
+      limit 1
+      for update`,
+    [resourceId, workspaceId],
+   );
+   const current = currentRows[0];
+   if (!current) throw notFound('Workspace resource was not found');
+   if (
+    authorization.identity.kind === 'controller'
+    && String(current.controller_id || '') !== authorization.identity.id
+   ) {
+    throw forbidden('The workspace controller does not own this resource');
+   }
+   if (current.deleted_at) return {
+    row: current,
+    identity: authorization.identity,
+    deleted: false,
+    beforeStatus: String(current.status || 'active'),
+    cancelledOperations: [],
+   };
+
+   const live = await tx.unsafe(
+    `select id
+       from resource_operations
+      where resource_id = $1
+        and workspace_id = $2
+        and status = 'claimed'
+        and lease_expires_at > now()
+      order by created_at asc
+      limit 1
+      for update`,
+    [resourceId, workspaceId],
+   );
+   if (live[0]) throw conflict('A live claimed operation must settle or expire before deleting this resource');
+
+   const cancelledOperations = await tx.unsafe(
+    `update resource_operations
+        set status = 'cancelled',
+            error = 'Cancelled because the resource was deleted',
+            lease_expires_at = null,
+            completed_at = now(),
+            updated_at = now()
+      where resource_id = $1
+        and workspace_id = $2
+        and (
+         status = 'pending'
+         or (status = 'claimed' and (lease_expires_at is null or lease_expires_at <= now()))
+        )
+      returning id, resource_id, operation, status`,
+    [resourceId, workspaceId],
+   );
+   const rows = await tx.unsafe(
+    `update workspace_resources
+        set status = 'archived',
+            deleted_at = now(),
+            updated_at = now()
+      where id = $1 and workspace_id = $2 and deleted_at is null
+      returning ${RESOURCE_PROJECTION}`,
+    [resourceId, workspaceId],
+   );
+   if (!rows[0]) throw conflict('Workspace resource changed before it could be deleted');
+   return {
+    row: rows[0],
+    identity: authorization.identity,
+    deleted: true,
+    beforeStatus: String(current.status || 'active'),
+    cancelledOperations,
+   };
+  });
+
+  if (deleted.deleted) {
+   await safeRecordAudit({
+    workspaceId,
+    actor: auditActor(deleted.identity),
+    action: 'resource.deleted',
+    target: { type: 'workspace_resource', id: String(deleted.row.id), label: String(deleted.row.name || '') },
+    before: deleted.beforeStatus || 'active',
+    after: 'deleted',
+    detail: {
+     stewardAgentId: String(deleted.row.steward_agent_id),
+     controllerId: deleted.row.controller_id ? String(deleted.row.controller_id) : '',
+     cancelledOperationCount: deleted.cancelledOperations.length,
+    },
+   });
+   for (const operation of deleted.cancelledOperations) {
+    await safeRecordAudit({
+     workspaceId,
+     actor: auditActor(deleted.identity),
+     action: 'resource.operation_settled',
+     target: { type: 'resource_operation', id: String(operation.id), label: String(operation.operation || '') },
+     before: 'pending_or_expired_claim',
+     after: 'cancelled',
+     detail: { resourceId: String(operation.resource_id), reason: 'resource_deleted' },
+    });
+   }
+  }
+  return publicResource(deleted.row);
+ }
+
+ async function restoreResource({ workspaceId: rawWorkspaceId, resourceId: rawResourceId, actor }) {
+  const workspaceId = requiredId(rawWorkspaceId, 'workspaceId');
+  const resourceId = requiredId(rawResourceId, 'resourceId');
+  const restored = await inTransaction(async tx => {
+   const authorization = await authorizeManager(tx, actor, workspaceId, 'resources:manage_own');
+   const currentRows = await tx.unsafe(
+    `select ${RESOURCE_PROJECTION}
+       from workspace_resources
+      where id = $1 and workspace_id = $2
+      limit 1
+      for update`,
+    [resourceId, workspaceId],
+   );
+   const current = currentRows[0];
+   if (!current) throw notFound('Workspace resource was not found');
+   if (
+    authorization.identity.kind === 'controller'
+    && String(current.controller_id || '') !== authorization.identity.id
+   ) {
+    throw forbidden('The workspace controller does not own this resource');
+   }
+   if (!current.deleted_at) return { row: current, identity: authorization.identity, restored: false };
+   const steward = await requireAgent(tx, String(current.steward_agent_id), workspaceId, {
+    lock: true,
+    unavailableStatus: 404,
+   });
+   assertResourceSteward(steward, String(current.facet));
+   if (String(steward.controller_id || '') !== String(current.controller_id || '')) {
+    throw conflict('The resource controller lineage no longer matches its steward');
+   }
+   const rows = await tx.unsafe(
+    `update workspace_resources
+        set status = 'active',
+            deleted_at = null,
+            updated_at = now()
+      where id = $1 and workspace_id = $2 and deleted_at is not null
+      returning ${RESOURCE_PROJECTION}`,
+    [resourceId, workspaceId],
+   );
+   if (!rows[0]) throw conflict('Workspace resource changed before it could be restored');
+   return { row: rows[0], identity: authorization.identity, restored: true };
+  });
+
+  if (restored.restored) {
+   await safeRecordAudit({
+    workspaceId,
+    actor: auditActor(restored.identity),
+    action: 'resource.restored',
+    target: { type: 'workspace_resource', id: String(restored.row.id), label: String(restored.row.name || '') },
+    before: 'deleted',
+    after: 'active',
+    detail: {
+     stewardAgentId: String(restored.row.steward_agent_id),
+     controllerId: restored.row.controller_id ? String(restored.row.controller_id) : '',
+    },
+   });
+  }
+  return publicResource(restored.row);
  }
 
  async function authorizeRequester(tx, requester, workspaceId) {
@@ -915,7 +1113,9 @@ function createWorkspaceResourceService(deps = {}) {
    );
    const resource = resources[0];
    if (!resource) throw notFound('Workspace resource was not found');
-   if (String(resource.status) !== 'active') throw conflict('Archived resources cannot accept operations');
+   if (String(resource.status) !== 'active' || resource.deleted_at) {
+    throw conflict('Archived or deleted resources cannot accept operations');
+   }
    if (
     authorization.identity.kind === 'controller'
     && String(resource.controller_id || '') !== authorization.identity.id
@@ -1075,7 +1275,7 @@ function createWorkspaceResourceService(deps = {}) {
    const resources = await tx.unsafe(
     `select id, workspace_id, steward_agent_id, controller_id, visibility, status
        from workspace_resources
-      where id = $1 and workspace_id = $2
+       where id = $1 and workspace_id = $2 and deleted_at is null
       limit 1`,
     [String(operation.resource_id), workspaceId],
    );
@@ -1300,6 +1500,7 @@ function createWorkspaceResourceService(deps = {}) {
        where candidate.workspace_id = $1
          and candidate.steward_agent_id = $2
          and resource.status = 'active'
+         and resource.deleted_at is null
          and resource.steward_agent_id = $2
          and resource.controller_id is not distinct from steward.controller_id
          and steward.enabled = true
@@ -1421,7 +1622,7 @@ function createWorkspaceResourceService(deps = {}) {
    const preflight = await tx.unsafe(
     `select resource_id
        from resource_operations
-      where id = $1 and workspace_id = $2
+       where id = $1 and workspace_id = $2
       limit 1`,
     [operationId, workspaceId],
    );
@@ -1432,7 +1633,7 @@ function createWorkspaceResourceService(deps = {}) {
    const resources = await tx.unsafe(
     `select ${RESOURCE_PROJECTION}
        from workspace_resources
-      where id = $1 and workspace_id = $2
+      where id = $1 and workspace_id = $2 and deleted_at is null
       limit 1
       for update`,
     [String(preflight[0].resource_id), workspaceId],
@@ -1585,6 +1786,7 @@ function createWorkspaceResourceService(deps = {}) {
          and workspace_id = $2
          and version = $3
          and status = 'active'
+         and deleted_at is null
        returning ${RESOURCE_PROJECTION}`,
      [String(resource.id), workspaceId, resourceVersion],
     );
@@ -1667,6 +1869,8 @@ function createWorkspaceResourceService(deps = {}) {
   listOperations,
   getOperation,
   updateResource,
+  deleteResource,
+  restoreResource,
   requestOperation,
   claimOperation,
   renewOperation,

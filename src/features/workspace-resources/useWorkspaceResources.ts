@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   createWorkspaceResource,
+  deleteWorkspaceResource,
   getWorkspaceResourceOperation,
   listWorkspaceResourceOperations,
   listWorkspaceResources,
   requestWorkspaceResourceOperation,
+  restoreWorkspaceResource,
   updateWorkspaceResource,
 } from './api';
 import {
@@ -18,7 +20,11 @@ import {
 
 const ACTIVE_OPERATION_POLL_MS = 4_000;
 
-export function useWorkspaceResources(workspaceId: string | null) {
+export function useWorkspaceResources(
+  workspaceId: string | null,
+  options: { includeDeleted?: boolean } = {},
+) {
+  const includeDeleted = options.includeDeleted === true;
   const [resources, setResources] = useState<WorkspaceResource[]>([]);
   const [operations, setOperations] = useState<WorkspaceResourceOperation[]>([]);
   const [operationDetails, setOperationDetails] = useState<Record<string, WorkspaceResourceOperation>>({});
@@ -39,8 +45,8 @@ export function useWorkspaceResources(workspaceId: string | null) {
     if (!quiet) setLoading(true);
     try {
       const [nextResources, nextOperations] = await Promise.all([
-        listWorkspaceResources(workspaceId),
-        listWorkspaceResourceOperations(workspaceId),
+        listWorkspaceResources(workspaceId, { includeDeleted }),
+        listWorkspaceResourceOperations(workspaceId, { includeDeleted }),
       ]);
       if (requestRef.current !== requestId) return;
       setResources(nextResources);
@@ -53,7 +59,7 @@ export function useWorkspaceResources(workspaceId: string | null) {
     } finally {
       if (requestRef.current === requestId && !quiet) setLoading(false);
     }
-  }, [workspaceId]);
+  }, [includeDeleted, workspaceId]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -66,7 +72,7 @@ export function useWorkspaceResources(workspaceId: string | null) {
     if (!workspaceId || !hasLiveOperations) return undefined;
     const interval = window.setInterval(() => { void refresh({ quiet: true }); }, ACTIVE_OPERATION_POLL_MS);
     return () => window.clearInterval(interval);
-  }, [hasLiveOperations, refresh, workspaceId]);
+  }, [hasLiveOperations, includeDeleted, refresh, workspaceId]);
 
   const createResource = useCallback(async (
     input: CreateWorkspaceResourceInput,
@@ -96,6 +102,36 @@ export function useWorkspaceResources(workspaceId: string | null) {
     }
   }, [workspaceId]);
 
+  const deleteResource = useCallback(async (resourceId: string): Promise<string | null> => {
+    if (!workspaceId) return 'No workspace selected.';
+    try {
+      const deleted = await deleteWorkspaceResource(workspaceId, resourceId);
+      if (includeDeleted) {
+        setResources(previous => previous.map(entry => (entry.id === deleted.id ? deleted : entry)));
+      } else {
+        setResources(previous => previous.filter(entry => entry.id !== deleted.id));
+      }
+      setError(null);
+      await refresh({ quiet: true });
+      return null;
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : 'Could not delete the resource.';
+    }
+  }, [includeDeleted, refresh, workspaceId]);
+
+  const restoreResource = useCallback(async (resourceId: string): Promise<string | null> => {
+    if (!workspaceId) return 'No workspace selected.';
+    try {
+      const restored = await restoreWorkspaceResource(workspaceId, resourceId);
+      setResources(previous => previous.map(entry => (entry.id === restored.id ? restored : entry)));
+      setError(null);
+      await refresh({ quiet: true });
+      return null;
+    } catch (cause) {
+      return cause instanceof Error ? cause.message : 'Could not restore the resource.';
+    }
+  }, [refresh, workspaceId]);
+
   const requestOperation = useCallback(async (
     resourceId: string,
     input: RequestWorkspaceResourceOperationInput,
@@ -114,14 +150,14 @@ export function useWorkspaceResources(workspaceId: string | null) {
   const loadOperation = useCallback(async (operationId: string): Promise<string | null> => {
     if (!workspaceId) return 'No workspace selected.';
     try {
-      const operation = await getWorkspaceResourceOperation(workspaceId, operationId);
+      const operation = await getWorkspaceResourceOperation(workspaceId, operationId, { includeDeleted });
       setOperationDetails(previous => ({ ...previous, [operation.id]: operation }));
       setOperations(previous => previous.map(entry => (entry.id === operation.id ? operation : entry)));
       return null;
     } catch (cause) {
       return cause instanceof Error ? cause.message : 'Could not load the operation.';
     }
-  }, [workspaceId]);
+  }, [includeDeleted, workspaceId]);
 
   return {
     resources,
@@ -132,6 +168,8 @@ export function useWorkspaceResources(workspaceId: string | null) {
     refresh,
     createResource,
     updateResource,
+    deleteResource,
+    restoreResource,
     requestOperation,
     loadOperation,
   };

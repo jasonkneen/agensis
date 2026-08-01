@@ -712,6 +712,7 @@ function buildTools() {
    properties: {
     status: { type: 'string', enum: ['active', 'archived', 'all'], description: 'Lifecycle filter (default active).' },
     limit: { type: 'integer', description: 'Maximum resources (default 100, max 200).' },
+    include_deleted: { type: 'boolean', description: 'Manager-only recovery view including soft-deleted resources.' },
    },
    additionalProperties: false,
   },
@@ -726,6 +727,7 @@ function buildTools() {
       actor: workspaceResourceActor(identity),
       status: args?.status,
       limit: args?.limit,
+      includeDeleted: args?.include_deleted === true,
      },
     }),
    };
@@ -739,7 +741,10 @@ function buildTools() {
   description: 'Read one shared resource metadata record by id. Use request_resource_operation to ask its steward to read or change the actual resource.',
   inputSchema: {
    type: 'object',
-   properties: { resource_id: { type: 'string', description: 'Workspace resource id.' } },
+   properties: {
+    resource_id: { type: 'string', description: 'Workspace resource id.' },
+    include_deleted: { type: 'boolean', description: 'Manager-only recovery view for a soft-deleted resource.' },
+   },
    required: ['resource_id'],
    additionalProperties: false,
   },
@@ -753,6 +758,7 @@ function buildTools() {
       workspaceId: identity.workspaceId,
       resourceId: requireString(args, 'resource_id'),
       actor: workspaceResourceActor(identity),
+      includeDeleted: args?.include_deleted === true,
      },
     }),
    };
@@ -851,16 +857,71 @@ function buildTools() {
  });
 
  add({
+  name: 'delete_workspace_resource',
+  kinds: ['user', 'workspace', 'controller'],
+  controllerScope: 'resources:manage_own',
+  description: 'Soft-delete a shared resource. Its operation history remains retained, but it is removed from normal agent visibility and cannot accept new work until restored.',
+  inputSchema: {
+   type: 'object',
+   properties: { resource_id: { type: 'string' } },
+   required: ['resource_id'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   return {
+    resource: await runWorkspaceResourceService({
+     deps,
+     identity,
+     method: 'deleteResource',
+     input: {
+      workspaceId: identity.workspaceId,
+      resourceId: requireString(args, 'resource_id'),
+      actor: workspaceResourceActor(identity),
+     },
+    }),
+   };
+  },
+ });
+
+ add({
+  name: 'restore_workspace_resource',
+  kinds: ['user', 'workspace', 'controller'],
+  controllerScope: 'resources:manage_own',
+  description: 'Restore a soft-deleted shared resource after verifying that its steward is still available and supports the resource facet.',
+  inputSchema: {
+   type: 'object',
+   properties: { resource_id: { type: 'string' } },
+   required: ['resource_id'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   return {
+    resource: await runWorkspaceResourceService({
+     deps,
+     identity,
+     method: 'restoreResource',
+     input: {
+      workspaceId: identity.workspaceId,
+      resourceId: requireString(args, 'resource_id'),
+      actor: workspaceResourceActor(identity),
+     },
+    }),
+   };
+  },
+ });
+
+ add({
   name: 'request_resource_operation',
   kinds: ['agent', 'user', 'workspace', 'controller'],
   controllerScope: 'resources:manage_own',
-  description: 'Ask a resource steward to read, propose, apply, or publish. This queues deterministic work and returns an operation id; poll it with get_resource_operation. Reuse the same idempotency_key when retrying the same request.',
+  description: 'Ask a resource steward to read, propose, apply, or publish. The request is relayed to the steward, which uses its normal built-in tools or connected agent CLI; no invented per-resource tool name is required. This queues work and returns an operation id; poll it with get_resource_operation. Reuse the same idempotency_key when retrying the same request.',
   inputSchema: {
    type: 'object',
    properties: {
     resource_id: { type: 'string' },
     operation: { type: 'string', enum: ['read', 'propose', 'apply', 'publish'] },
     input_artifact: { type: 'object', description: 'Bounded, credential-free JSON input for the steward.' },
+    request_text: { type: 'string', description: 'Plain-language request for the steward; use this instead of input_artifact for chat-style work.' },
     idempotency_key: { type: 'string', description: 'Stable key for safe retry of this exact request.' },
    },
    required: ['resource_id', 'operation', 'idempotency_key'],
@@ -879,6 +940,7 @@ function buildTools() {
       request: {
        operation: args?.operation,
        inputArtifact: args?.input_artifact,
+       requestText: args?.request_text,
        idempotencyKey: args?.idempotency_key,
       },
      },
@@ -899,6 +961,7 @@ function buildTools() {
     status: { type: 'string', enum: ['pending', 'claimed', 'completed', 'rejected', 'failed', 'cancelled', 'all'] },
     limit: { type: 'integer', description: 'Maximum operations (default 50, max 100).' },
     include_artifacts: { type: 'boolean', description: 'Include bounded request/result artifacts (default false).' },
+    include_deleted: { type: 'boolean', description: 'Manager-only recovery view including operations for soft-deleted resources.' },
    },
    additionalProperties: false,
   },
@@ -915,6 +978,7 @@ function buildTools() {
       status: args?.status,
       limit: args?.limit,
       includeArtifacts: args?.include_artifacts === true,
+      includeDeleted: args?.include_deleted === true,
      },
     }),
    };
@@ -931,6 +995,7 @@ function buildTools() {
    properties: {
     operation_id: { type: 'string' },
     include_artifacts: { type: 'boolean', description: 'Include artifacts (default true).' },
+    include_deleted: { type: 'boolean', description: 'Manager-only recovery view for an operation on a soft-deleted resource.' },
    },
    required: ['operation_id'],
    additionalProperties: false,
@@ -946,6 +1011,7 @@ function buildTools() {
       operationId: requireString(args, 'operation_id'),
       actor: workspaceResourceActor(identity),
       includeArtifacts: args?.include_artifacts !== false,
+      includeDeleted: args?.include_deleted === true,
      },
     }),
    };

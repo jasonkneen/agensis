@@ -2457,10 +2457,14 @@ async function ensureRuntimeSchema() {
       version integer NOT NULL DEFAULT 1 CHECK (version > 0),
       visibility text NOT NULL DEFAULT 'workspace' CHECK (visibility IN ('workspace', 'restricted')),
       status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+      deleted_at timestamptz,
       created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+    ALTER TABLE workspace_resources ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+    CREATE INDEX IF NOT EXISTS idx_workspace_resources_deleted
+      ON workspace_resources(workspace_id, deleted_at, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_workspace_resources_workspace
       ON workspace_resources(workspace_id, status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_workspace_resources_steward
@@ -5494,6 +5498,7 @@ async function dispatchResourceOperation({
   const label = resourceName ? `"${resourceName}"` : `resource ${resourceId}`;
   const content =
    `@${slugHandle(steward.handle || steward.name)} — ${requesterName} requested a \`${operation}\` operation on ${label}, and you are its steward.\n\n` +
+   `Use your normal connected tool surface (your built-in tools or the agent CLI) to do the work; there are no resource-specific tool names to call.\n\n` +
    `Claim it with \`claim_resource_operation\` (operation id \`${operationId}\`), do the work, then finish with \`settle_resource_operation\`.\n\n` +
    `Source: agensis://resource/${resourceId}`;
 

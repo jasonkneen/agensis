@@ -66,6 +66,7 @@ function controllerRow(overrides = {}) {
   name: 'Build controller',
   scopes: ['agents:register', 'resources:create', 'resources:manage_own'],
   status: 'active',
+  deleted_at: null,
   expires_at: '2099-01-01T00:00:00.000Z',
   ...overrides,
  };
@@ -316,11 +317,54 @@ test('list and get are tenant-scoped, explicitly projected, and controller lists
  assert.equal('api_key_cipher' in listed[0], false);
  const selected = db.queries.find(query => query.normalized.includes('from workspace_resources'));
  assert.doesNotMatch(selected.normalized, /select \*/);
+ assert.match(selected.normalized, /deleted_at is null/);
 
  await assert.rejects(
   service.getResource({ workspaceId: WORKSPACE, resourceId: 'resource-1', actor: agentActor({ workspaceId: OTHER_WORKSPACE }) }),
   error => error.status === 403 && /workspace/i.test(error.message),
  );
+});
+
+test('soft-delete retains the row, cancels queued work, blocks live claims, and audits the transition', async () => {
+ const db = makeDb(async ({ normalized, params }) => {
+  if (normalized.includes('from workspace_resources') && normalized.includes('for update')) return [resourceRow()];
+  if (normalized.startsWith('select id') && normalized.includes('from resource_operations')) return [];
+  if (normalized.startsWith('update resource_operations')) {
+   return [operationRow({ status: 'cancelled', error: params[3] || '' })];
+  }
+  if (normalized.startsWith('update workspace_resources')) return [resourceRow({ status: 'archived', deleted_at: '2026-08-01T10:00:00.000Z' })];
+  return [];
+ });
+ const { service, audits } = build(db);
+ const deleted = await service.deleteResource({ workspaceId: WORKSPACE, resourceId: 'resource-1', actor: userActor() });
+ assert.equal(deleted.deleted_at, '2026-08-01T10:00:00.000Z');
+ assert.equal(audits[0].action, 'resource.deleted');
+ assert.equal(audits[0].after, 'deleted');
+ assert.match(db.queries.find(query => query.normalized.startsWith('update workspace_resources')).normalized, /deleted_at = now\(\)/);
+
+ const liveDb = makeDb(async ({ normalized }) => {
+  if (normalized.includes('from workspace_resources') && normalized.includes('for update')) return [resourceRow()];
+  if (normalized.startsWith('select id') && normalized.includes('from resource_operations')) return [{ id: 'live-op' }];
+  return [];
+ });
+ await assert.rejects(
+  build(liveDb).service.deleteResource({ workspaceId: WORKSPACE, resourceId: 'resource-1', actor: userActor() }),
+  error => error.status === 409 && /live claimed operation/i.test(error.message),
+ );
+});
+
+test('restore clears the tombstone only after the steward is still valid', async () => {
+ const db = makeDb(async ({ normalized }) => {
+  if (normalized.includes('from workspace_resources') && normalized.includes('for update')) return [resourceRow({ status: 'archived', deleted_at: '2026-08-01T10:00:00.000Z' })];
+  if (normalized.includes('from workspace_agents') && normalized.includes('for share')) return [stewardRow()];
+  if (normalized.startsWith('update workspace_resources')) return [resourceRow({ status: 'active', deleted_at: null })];
+  return [];
+ });
+ const { service, audits } = build(db);
+ const restored = await service.restoreResource({ workspaceId: WORKSPACE, resourceId: 'resource-1', actor: userActor() });
+ assert.equal(restored.deleted_at, null);
+ assert.equal(restored.status, 'active');
+ assert.equal(audits[0].action, 'resource.restored');
 });
 
 test('listOperations gives workspace readers bounded status rows without selecting artifacts or server-only keys', async () => {
@@ -353,6 +397,36 @@ test('listOperations gives workspace readers bounded status rows without selecti
  assert.match(query.normalized, /join workspace_resources resource/);
  assert.doesNotMatch(query.normalized, /requester_key|idempotency_key|lease_version|input_artifact|output_artifact/);
  assert.equal(query.params.at(-1), 100, 'operation lists are capped independently of resource lists');
+});
+
+test('deleted operation history is manager-only recovery data', async () => {
+ const db = makeDb(async ({ normalized }) => {
+  if (normalized.includes('from workspace_agents')) {
+   return [stewardRow({ id: REQUESTER_AGENT, purpose: 'collaborator', resource_facets: [] })];
+  }
+  if (normalized.includes('from resource_operations operation')) return [operationRow({ status: 'cancelled' })];
+  return [];
+ });
+ const { service, roleChecks } = build(db);
+ const rows = await service.listOperations({
+  workspaceId: WORKSPACE,
+  actor: userActor(),
+  includeDeleted: true,
+ });
+ assert.equal(rows.length, 1);
+ assert.doesNotMatch(
+  db.queries.find(query => query.normalized.includes('from resource_operations operation')).normalized,
+  /resource\.deleted_at is null/,
+ );
+ assert.deepEqual(roleChecks, [
+  { userId: USER, workspaceId: WORKSPACE, capability: 'read' },
+  { userId: USER, workspaceId: WORKSPACE, capability: 'manage' },
+ ]);
+
+ await assert.rejects(
+  service.listOperations({ workspaceId: WORKSPACE, actor: agentActor(), includeDeleted: true }),
+  error => error.status === 403 && /manager/i.test(error.message),
+ );
 });
 
 test('requesting agents can poll their own operation with artifacts, but cannot enumerate unrelated work', async () => {

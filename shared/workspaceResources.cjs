@@ -136,7 +136,16 @@ function normalizeResourceOperationRequest(raw) {
  if (!RESOURCE_OPERATIONS.includes(operation)) {
   errors.push(`operation must be one of ${RESOURCE_OPERATIONS.join(', ')}`);
  }
- const inputArtifact = normalizeBoundedObject(input.inputArtifact ?? input.input_artifact, {
+ const hasRequestText = input.requestText !== undefined || input.request_text !== undefined;
+ const hasInputArtifact = input.inputArtifact !== undefined || input.input_artifact !== undefined;
+ const requestText = input.requestText ?? input.request_text;
+ if (hasRequestText && typeof requestText !== 'string') errors.push('requestText must be a string');
+ if (typeof requestText === 'string' && !requestText.trim()) errors.push('requestText must not be empty');
+ if (hasRequestText && hasInputArtifact) errors.push('requestText cannot be combined with inputArtifact');
+ const rawInputArtifact = !hasRequestText
+  ? (input.inputArtifact ?? input.input_artifact)
+  : { request: typeof requestText === 'string' ? requestText.trim() : '' };
+ const inputArtifact = normalizeBoundedObject(rawInputArtifact, {
   label: 'inputArtifact',
   maxBytes: RESOURCE_ARTIFACT_MAX_BYTES,
  });
@@ -208,6 +217,7 @@ function publicResource(row) {
   version: Number(row.version) || 1,
   visibility: RESOURCE_VISIBILITIES.includes(row.visibility) ? row.visibility : 'restricted',
   status: RESOURCE_STATUSES.includes(row.status) ? row.status : 'archived',
+  deleted_at: row.deleted_at || null,
   created_by: row.created_by || null,
   created_at: row.created_at || null,
   updated_at: row.updated_at || null,

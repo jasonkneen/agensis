@@ -29,6 +29,7 @@ export interface WorkspaceResource {
   version: number;
   visibility: WorkspaceResourceVisibility;
   status: WorkspaceResourceStatus;
+  deleted_at: string | null;
   created_by: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -67,6 +68,7 @@ export interface CreateWorkspaceResourceInput {
 
 export interface RequestWorkspaceResourceOperationInput {
   operation: WorkspaceResourceOperationKind;
+  requestText?: string;
   inputArtifact?: Record<string, unknown>;
   idempotencyKey: string;
 }
@@ -99,31 +101,13 @@ export const RESOURCE_OPERATION_KINDS: WorkspaceResourceOperationKind[] = [
 ];
 
 /**
- * Tool-name slug for a resource: lowercase, non-alphanumeric runs collapsed to
- * a single underscore, leading/trailing underscores trimmed. Falls back to
- * "resource" so a name of only punctuation still produces a usable tool name.
+ * Resource access is carried by the steward's normal tool surface. These are
+ * capability families for the UI, not invented per-resource tool identifiers.
+ * The actual call is relayed to the steward agent (or its connected CLI), so
+ * its ordinary read/write/list/shell tools remain the authority.
  */
-export function resourceToolSlug(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-  return slug || 'resource';
-}
-
-/**
- * The tool name a `{verb}` operation on this resource would surface as, e.g.
- * "repository_index_read". Purely derived from the naming convention agreed
- * for per-resource tools — no server-side tool actually exists at this name
- * yet, so this is discovery/preview only.
- */
-export function resourceOperationToolName(
-  resourceName: string,
-  operation: WorkspaceResourceOperationKind,
-): string {
-  return `${resourceToolSlug(resourceName)}_${operation}`;
-}
+export const RESOURCE_STEWARD_CAPABILITIES = ['read', 'write', 'list', 'bash', 'grep'] as const;
+export type ResourceStewardCapability = typeof RESOURCE_STEWARD_CAPABILITIES[number];
 
 export function resourceStewardCandidates(
   agents: WorkspaceAgent[],

@@ -18,6 +18,7 @@ function mountedRoutes(workspaceResources = {}) {
   get(path, ...handlers) { routes.set(`GET ${path}`, handlers.at(-1)); },
   post(path, ...handlers) { routes.set(`POST ${path}`, handlers.at(-1)); },
   patch(path, ...handlers) { routes.set(`PATCH ${path}`, handlers.at(-1)); },
+  delete(path, ...handlers) { routes.set(`DELETE ${path}`, handlers.at(-1)); },
  };
  mountWorkspaceResourceRoutes(app, {
   requireAuth: (_req, _res, next) => next(),
@@ -129,6 +130,25 @@ test('human create and request routes pass only authenticated identity to the se
  });
 });
 
+test('delete and restore routes use the authenticated workspace manager identity', async () => {
+ const calls = [];
+ const routes = mountedRoutes({
+  async deleteResource(input) { calls.push(['delete', input]); return { id: 'r1', deleted_at: 'now' }; },
+  async restoreResource(input) { calls.push(['restore', input]); return { id: 'r1', deleted_at: null }; },
+ });
+ const req = { userId: 'signed-in', params: { id: 'w1', resourceId: 'r1' }, body: {}, headers: {} };
+ const deleted = response();
+ await routes.get('DELETE /backend/workspaces/:id/resources/:resourceId')(req, deleted);
+ const restored = response();
+ await routes.get('POST /backend/workspaces/:id/resources/:resourceId/restore')(req, restored);
+ assert.equal(deleted.statusCode, 200);
+ assert.equal(restored.statusCode, 200);
+ assert.deepEqual(calls.map(([, input]) => input.actor), [
+  { kind: 'user', userId: 'signed-in', workspaceId: 'w1' },
+  { kind: 'user', userId: 'signed-in', workspaceId: 'w1' },
+ ]);
+});
+
 test('operation read routes keep artifacts opt-in for lists and on for detail', async () => {
  const calls = [];
  const routes = mountedRoutes({
@@ -167,6 +187,7 @@ test('the Netlify HTTP mirror delegates every resource route to the shared servi
  for (const method of [
   'listResources', 'getResource', 'createResource', 'updateResource',
   'requestOperation', 'listOperations', 'getOperation',
+  'deleteResource', 'restoreResource',
  ]) {
   assert.match(source, new RegExp(`workspaceResources\\.${method}\\(`), `Netlify missing ${method}`);
  }

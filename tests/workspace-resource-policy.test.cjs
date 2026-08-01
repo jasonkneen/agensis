@@ -90,6 +90,22 @@ test('resource operation requests require a stable idempotency key', () => {
  assert.equal(valid.request.operation, 'propose');
  assert.equal(valid.request.idempotencyKey, 'proposal:commit-123');
 
+ const chatRequest = normalizeResourceOperationRequest({
+  operation: 'read',
+  requestText: 'List the files that define the current API boundaries.',
+  idempotencyKey: 'read:api-boundaries',
+ });
+ assert.equal(chatRequest.ok, true);
+ assert.deepEqual(chatRequest.request.inputArtifact, {
+  request: 'List the files that define the current API boundaries.',
+ });
+ assert.equal(normalizeResourceOperationRequest({
+  operation: 'read',
+  requestText: 'Describe the entrypoint.',
+  inputArtifact: { request: 'ignored' },
+  idempotencyKey: 'read:ambiguous',
+ }).ok, false);
+
  assert.equal(normalizeResourceOperationRequest({ operation: 'propose' }).ok, false);
  assert.equal(
   normalizeResourceOperationRequest({
@@ -165,11 +181,13 @@ test('public resource projections contain no controller or vault credential mate
   version: 3,
   visibility: 'workspace',
   status: 'active',
+  deleted_at: '2026-08-01T10:00:00.000Z',
   created_by: null,
   token_hash: 'never',
   vault_cipher: 'never',
  });
  assert.equal(resource.controller_id, 'c1');
+ assert.equal(resource.deleted_at, '2026-08-01T10:00:00.000Z');
  assert.deepEqual(resource.descriptor, { repository: 'agensis' });
  assert.equal('token_hash' in resource, false);
  assert.equal('vault_cipher' in resource, false);

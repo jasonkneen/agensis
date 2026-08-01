@@ -3065,6 +3065,8 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  // the steward applied, published, rejected, or failed the request.
  'resource.created',
  'resource.updated',
+ 'resource.deleted',
+ 'resource.restored',
  'resource.operation_requested',
  'resource.operation_settled',
  // A human's ORDINARY SESSION TOKEN was used to authenticate at /backend/mcp

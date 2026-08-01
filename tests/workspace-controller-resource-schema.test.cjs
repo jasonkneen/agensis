@@ -13,6 +13,10 @@ const migration = fs.readFileSync(
  path.join(root, 'supabase/migrations/20260731210000_workspace_controllers_resources.sql'),
  'utf8',
 );
+const softDeleteMigration = fs.readFileSync(
+ path.join(root, 'supabase/migrations/20260801090000_workspace_resources_soft_delete.sql'),
+ 'utf8',
+);
 const netlify = fs.readFileSync(path.join(root, 'netlify/functions/backend.mjs'), 'utf8');
 
 test('controller/resource schema exists in runtime, canonical, and migration owners', () => {
@@ -36,6 +40,11 @@ test('controller/resource schema exists in runtime, canonical, and migration own
   assert.match(source, /workspace_controllers_parent_workspace_fkey/i);
   assert.match(source, /UNIQUE \(workspace_id, requester_key, idempotency_key\)/i);
  }
+ assert.match(runtime, /deleted_at timestamptz/i, 'runtime: soft delete marker');
+ assert.match(canonical, /deleted_at timestamptz/i, 'canonical: soft delete marker');
+ assert.match(canonical, /idx_workspace_resources_deleted/i, 'canonical: soft delete index');
+ assert.match(softDeleteMigration, /ALTER TABLE workspace_resources[\s\S]*ADD COLUMN IF NOT EXISTS deleted_at timestamptz/i);
+ assert.match(softDeleteMigration, /idx_workspace_resources_deleted/i);
 });
 
 test('controller scope shape cannot express owner, private-read, vault, role, or escalation authority', () => {
@@ -89,6 +98,8 @@ test('credential and resource lifecycle actions are in the closed audit vocabula
   'controller.revoked',
   'resource.created',
   'resource.updated',
+  'resource.deleted',
+  'resource.restored',
   'resource.operation_requested',
   'resource.operation_settled',
  ]) {

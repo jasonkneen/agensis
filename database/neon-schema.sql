@@ -1062,6 +1062,7 @@ CREATE TABLE IF NOT EXISTS workspace_resources (
   version integer NOT NULL DEFAULT 1 CHECK (version > 0),
   visibility text NOT NULL DEFAULT 'workspace' CHECK (visibility IN ('workspace', 'restricted')),
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+  deleted_at timestamptz,
   created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -1069,6 +1070,8 @@ CREATE TABLE IF NOT EXISTS workspace_resources (
 
 CREATE INDEX IF NOT EXISTS idx_workspace_resources_workspace
   ON workspace_resources(workspace_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_resources_deleted
+  ON workspace_resources(workspace_id, deleted_at, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workspace_resources_steward
   ON workspace_resources(steward_agent_id, status);
 CREATE INDEX IF NOT EXISTS idx_workspace_resources_controller

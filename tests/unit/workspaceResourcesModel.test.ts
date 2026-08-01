@@ -5,9 +5,8 @@ import {
   mergeResourceOperationDetails,
   operationsForResource,
   parseResourceJsonObject,
-  resourceOperationToolName,
   resourceStewardCandidates,
-  resourceToolSlug,
+  RESOURCE_STEWARD_CAPABILITIES,
   type WorkspaceResourceOperation,
 } from '../../src/features/workspace-resources';
 
@@ -71,16 +70,8 @@ describe('workspace resource view model', () => {
     expect(operationsForResource(rows, null)).toEqual([]);
   });
 
-  it('slugifies a resource name into a tool-name-safe token', () => {
-    expect(resourceToolSlug('Repository index')).toBe('repository_index');
-    expect(resourceToolSlug('  test  ')).toBe('test');
-    expect(resourceToolSlug('acme/product-v2')).toBe('acme_product_v2');
-    expect(resourceToolSlug('!!!')).toBe('resource');
-  });
-
-  it('derives the per-verb tool name from a resource name', () => {
-    expect(resourceOperationToolName('test', 'read')).toBe('test_read');
-    expect(resourceOperationToolName('Repository index', 'apply')).toBe('repository_index_apply');
+  it('uses the steward normal tool families instead of invented resource names', () => {
+    expect(RESOURCE_STEWARD_CAPABILITIES).toEqual(['read', 'write', 'list', 'bash', 'grep']);
   });
 
   it('polls only genuinely live operations', () => {

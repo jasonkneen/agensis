@@ -357,7 +357,7 @@ test('resource tools are visible only to identities with the matching authority'
   for (const name of [
     'list_workspace_resources', 'get_workspace_resource', 'create_workspace_resource',
     'update_workspace_resource', 'request_resource_operation', 'list_resource_operations',
-    'get_resource_operation',
+    'get_resource_operation', 'delete_workspace_resource', 'restore_workspace_resource',
   ]) assert.ok(userNames.includes(name), `user missing ${name}`);
   assert.ok(!userNames.includes('claim_resource_operation'));
   assert.ok(!userNames.includes('settle_resource_operation'));
@@ -367,9 +367,9 @@ test('resource tools are visible only to identities with the matching authority'
     body: rpc('tools/list'),
   })).body.result.tools.map(tool => tool.name).sort();
   assert.deepEqual(controllerNames, [
-    'create_workspace_resource', 'get_resource_operation', 'get_workspace_resource',
+    'create_workspace_resource', 'delete_workspace_resource', 'get_resource_operation', 'get_workspace_resource',
     'list_resource_operations', 'list_workspace_resources', 'request_resource_operation',
-    'update_workspace_resource', 'whoami',
+    'restore_workspace_resource', 'update_workspace_resource', 'whoami',
   ].sort());
   assert.ok(!controllerNames.includes('list_channels'));
   assert.ok(!controllerNames.includes('claim_resource_operation'));

@@ -2,6 +2,29 @@
 
 Snapshot: 2026-08-01. The working tree is **not committed or deployed**. Do not reset, clean, rebase, or discard it.
 
+## Resource relay follow-up (2026-08-01 12:15)
+
+The live checkout is now `main` at `1ff006e` (the earlier `pre-main` handoff
+below is historical). The follow-up is intentionally uncommitted and has not
+been pushed. Resource requests now use the steward/agensis proxy boundary:
+the UI accepts plain-language work, the server stores a bounded request
+artifact, and the steward runs it with its ordinary built-in tools or connected
+agent CLI. Per-resource names such as `infinity_read` are no longer presented.
+
+Shared resources now have manager-only soft delete and restore. Deleted rows
+are excluded from normal reads, queued work is cancelled, live claims block the
+delete, operation history remains retained and is visible in the recovery view,
+and delete/restore are audited. Runtime DDL, canonical schema, and the new
+forward migration all carry `deleted_at` and its index; Fly, Netlify, HTTP, MCP,
+and the resource window use the same service.
+
+Focused verification: **163 passing, 1 optional PostgreSQL lock test skipped**
+across the MCP/resource/schema/route/dispatch matrix; typecheck, production
+build, focused ESLint, Vitest model/smoke, and `git diff --check` pass. The
+full Node suite remains **2,472 passing / 24 failing** on unrelated existing
+listener/session/message/schedule/source-hygiene tests; no resource/MCP test is
+in that failure set. No deployment or push was performed.
+
 The enterprise overhaul is merged on `main` at `4235d6a`. This review is on
 the local `pre-main` branch at `eb55dbe`, with the forwarding and
 conflict-resolution follow-ups applied. No remote push has been performed; the
@@ -56,7 +79,7 @@ candidates and never use `--force` on a dirty worktree.
   stale-closure warnings in the touched app surfaces were fixed in this
   continuation. The remaining warnings are primarily Fast Refresh export
   boundaries plus one unused server/test suppression.
-- `npm run test:unit`: **2,824/2,824 passing (202 files)** after the latest
+- `npm run test:unit`: **2,827/2,827 passing (202 files)** after the latest
   thread-pagination, sidebar upload, document-control, desktop-chooser,
   icon-only accessibility, and participant-menu keyboard tests.
 - Netlify parity/auth suite: **56/56 passing**.
@@ -78,7 +101,7 @@ candidates and never use `--force` on a dirty worktree.
 
 Latest continuation verification (2026-08-01):
 
-- Re-ran `npm run typecheck`, `npm run build`, `npm run test:unit` (**2,824/2,824 across 202 files**), `npm run smoke` (**19/19**), `npm run lint` (0 errors, 27 warnings), and `git diff --check`; all passed. The build still emits only the existing Vite `__dirname`/large-chunk warnings.
+- Re-ran `npm run typecheck`, `npm run build`, `npm run test:unit` (**2,827/2,827 across 202 files**), `npm run smoke` (**19/19**), focused ESLint (0 errors), and `git diff --check`; all passed. The build still emits only the existing Vite `__dirname`/large-chunk warnings.
 - Re-ran the focused session-lineage/security tests with Node's module-mock flag: **16/17 passed**. The only failure is the generic-route test blocked at `listen(127.0.0.1)` `EPERM`; the six Netlify lineage tests and all pure session-scope tests pass.
 - Re-ran the combined no-listener security/parity/resource matrix with the required Node module-mock flag: **165 passing, 1 environment-blocked listener test, 2 optional PostgreSQL skips**. No application assertion failed.
 - Added Fly and Netlify pre-transaction `sessionLineageKind` validation so a malformed request containing both parent forms is rejected before `BEGIN`, and updated the Netlify contract tests to the current query shape.

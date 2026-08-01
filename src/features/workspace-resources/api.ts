@@ -39,13 +39,40 @@ async function requestData<T>(path: string, init: RequestInit, fallback: string)
   return payload.data;
 }
 
-export async function listWorkspaceResources(workspaceId: string): Promise<WorkspaceResource[]> {
+export async function listWorkspaceResources(
+  workspaceId: string,
+  options: { includeDeleted?: boolean } = {},
+): Promise<WorkspaceResource[]> {
+  const query = new URLSearchParams({ status: 'all', limit: '200' });
+  if (options.includeDeleted) query.set('includeDeleted', 'true');
   const data = await requestData<WorkspaceResource[]>(
-    workspacePath(workspaceId, '/resources?status=all&limit=200'),
+    workspacePath(workspaceId, `/resources?${query.toString()}`),
     { headers: apiAuthHeaders() },
     'Could not load workspace resources.',
   );
   return Array.isArray(data) ? data : [];
+}
+
+export async function deleteWorkspaceResource(
+  workspaceId: string,
+  resourceId: string,
+): Promise<WorkspaceResource> {
+  return requestData<WorkspaceResource>(
+    workspacePath(workspaceId, `/resources/${encodeURIComponent(resourceId)}`),
+    { method: 'DELETE', headers: apiAuthHeaders() },
+    'Could not delete the workspace resource.',
+  );
+}
+
+export async function restoreWorkspaceResource(
+  workspaceId: string,
+  resourceId: string,
+): Promise<WorkspaceResource> {
+  return requestData<WorkspaceResource>(
+    workspacePath(workspaceId, `/resources/${encodeURIComponent(resourceId)}/restore`),
+    { method: 'POST', headers: apiAuthHeaders() },
+    'Could not restore the workspace resource.',
+  );
 }
 
 export async function createWorkspaceResource(
@@ -90,9 +117,12 @@ export async function updateWorkspaceResource(
 
 export async function listWorkspaceResourceOperations(
   workspaceId: string,
+  options: { includeDeleted?: boolean } = {},
 ): Promise<WorkspaceResourceOperation[]> {
+  const query = new URLSearchParams({ status: 'all', limit: '100' });
+  if (options.includeDeleted) query.set('includeDeleted', 'true');
   const data = await requestData<WorkspaceResourceOperation[]>(
-    workspacePath(workspaceId, '/resource-operations?status=all&limit=100'),
+    workspacePath(workspaceId, `/resource-operations?${query.toString()}`),
     { headers: apiAuthHeaders() },
     'Could not load resource operations.',
   );
@@ -102,11 +132,14 @@ export async function listWorkspaceResourceOperations(
 export async function getWorkspaceResourceOperation(
   workspaceId: string,
   operationId: string,
+  options: { includeDeleted?: boolean } = {},
 ): Promise<WorkspaceResourceOperation> {
+  const query = new URLSearchParams({ includeArtifacts: 'true' });
+  if (options.includeDeleted) query.set('includeDeleted', 'true');
   return requestData<WorkspaceResourceOperation>(
     workspacePath(
       workspaceId,
-      `/resource-operations/${encodeURIComponent(operationId)}?includeArtifacts=true`,
+      `/resource-operations/${encodeURIComponent(operationId)}?${query.toString()}`,
     ),
     { headers: apiAuthHeaders() },
     'Could not load the resource operation.',
@@ -129,7 +162,9 @@ export async function requestWorkspaceResourceOperation(
       },
       body: JSON.stringify({
         operation: input.operation,
-        inputArtifact: input.inputArtifact || {},
+        ...(input.requestText !== undefined
+          ? { requestText: input.requestText }
+          : { inputArtifact: input.inputArtifact || {} }),
       }),
     },
     'Could not request the resource operation.',

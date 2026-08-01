@@ -2,6 +2,12 @@
 
 Snapshot: 2026-08-01
 
+Current follow-up: the root checkout is now `main` at `1ff006e`; the earlier
+`pre-main` details below describe the reboot handoff before the merge. The
+resource steward/agensis relay and soft-delete follow-up is uncommitted and
+has not been pushed. See the resource section in `status.md` for the current
+verification counts.
+
 The enterprise overhaul is merged on `main` at `4235d6a`. This review is now
 on the local `pre-main` branch at `eb55dbe`, which contains the forwarding and
 conflict-resolution follow-ups. The source tree is clean with no unmerged

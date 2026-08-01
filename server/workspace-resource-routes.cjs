@@ -74,6 +74,7 @@ function mountWorkspaceResourceRoutes(app, deps = {}) {
     actor: userActor(req, workspaceId),
     status: req.query?.status,
     limit: req.query?.limit,
+    includeDeleted: queryBoolean(req.query?.includeDeleted ?? req.query?.include_deleted, false),
    });
    res.json({ data, error: null });
   } catch (error) {
@@ -110,6 +111,7 @@ function mountWorkspaceResourceRoutes(app, deps = {}) {
     status: req.query?.status,
     limit: req.query?.limit,
     includeArtifacts: queryBoolean(req.query?.includeArtifacts ?? req.query?.include_artifacts, false),
+    includeDeleted: queryBoolean(req.query?.includeDeleted ?? req.query?.include_deleted, false),
    });
    res.json({ data, error: null });
   } catch (error) {
@@ -125,6 +127,7 @@ function mountWorkspaceResourceRoutes(app, deps = {}) {
     operationId: req.params.operationId,
     actor: userActor(req, workspaceId),
     includeArtifacts: queryBoolean(req.query?.includeArtifacts ?? req.query?.include_artifacts, true),
+    includeDeleted: queryBoolean(req.query?.includeDeleted ?? req.query?.include_deleted, false),
    });
    res.json({ data, error: null });
   } catch (error) {
@@ -139,6 +142,7 @@ function mountWorkspaceResourceRoutes(app, deps = {}) {
     workspaceId,
     resourceId: req.params.resourceId,
     actor: userActor(req, workspaceId),
+    includeDeleted: queryBoolean(req.query?.includeDeleted ?? req.query?.include_deleted, false),
    });
    res.json({ data, error: null });
   } catch (error) {
@@ -162,6 +166,36 @@ function mountWorkspaceResourceRoutes(app, deps = {}) {
   }
  });
 
+ app.delete('/backend/workspaces/:id/resources/:resourceId', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (limitMutation(req, res, workspaceId)) return;
+   const data = await workspaceResources.deleteResource({
+    workspaceId,
+    resourceId: req.params.resourceId,
+    actor: userActor(req, workspaceId),
+   });
+   res.json({ data, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/workspaces/:id/resources/:resourceId/restore', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   if (limitMutation(req, res, workspaceId)) return;
+   const data = await workspaceResources.restoreResource({
+    workspaceId,
+    resourceId: req.params.resourceId,
+    actor: userActor(req, workspaceId),
+   });
+   res.json({ data, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  app.get('/backend/workspaces/:id/resources/:resourceId/operations', requireAuth, async (req, res) => {
   try {
    const workspaceId = String(req.params.id || '').trim();
@@ -172,6 +206,7 @@ function mountWorkspaceResourceRoutes(app, deps = {}) {
     status: req.query?.status,
     limit: req.query?.limit,
     includeArtifacts: queryBoolean(req.query?.includeArtifacts ?? req.query?.include_artifacts, false),
+    includeDeleted: queryBoolean(req.query?.includeDeleted ?? req.query?.include_deleted, false),
    });
    res.json({ data, error: null });
   } catch (error) {

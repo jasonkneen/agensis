@@ -9,6 +9,7 @@ import {
   Plus,
   RefreshCw,
   Send,
+  Trash2,
   Wrench,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -22,7 +23,6 @@ import { cn } from '@/lib/utils';
 import type { WorkspaceAgent } from '@/types';
 import {
   RESOURCE_FACETS,
-  RESOURCE_OPERATION_KINDS,
   RESOURCE_OPERATION_LABELS,
   RESOURCE_OPERATION_STATUS_LABELS,
   isLiveResourceOperation,
@@ -31,7 +31,7 @@ import {
   parseResourceJsonObject,
   resourceAgentFacetSummary,
   resourceFacetLabel,
-  resourceOperationToolName,
+  RESOURCE_STEWARD_CAPABILITIES,
   resourceStewardCandidates,
   useWorkspaceResources,
   type ResourceFacet,
@@ -57,6 +57,13 @@ function timestampLabel(value: string | null): string {
 function jsonPreview(value: Record<string, unknown> | undefined): string {
   if (!value || Object.keys(value).length === 0) return 'No artifact returned.';
   return JSON.stringify(value, null, 2);
+}
+
+function requestPreview(value: Record<string, unknown> | undefined): string {
+  if (value && Object.keys(value).length === 1 && typeof value.request === 'string') {
+    return value.request;
+  }
+  return jsonPreview(value);
 }
 
 function OperationRow({
@@ -96,6 +103,7 @@ function OperationRow({
 }
 
 export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowContentProps) {
+  const [showDeleted, setShowDeleted] = useState(false);
   const {
     resources,
     operations,
@@ -105,9 +113,11 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
     refresh,
     createResource,
     updateResource,
+    deleteResource,
+    restoreResource,
     requestOperation,
     loadOperation,
-  } = useWorkspaceResources(workspaceId || null);
+  } = useWorkspaceResources(workspaceId || null, { includeDeleted: showDeleted });
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -118,7 +128,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
   const [visibility, setVisibility] = useState<'workspace' | 'restricted'>('workspace');
   const [descriptorJson, setDescriptorJson] = useState('');
   const [operationKind, setOperationKind] = useState<WorkspaceResourceOperationKind>('read');
-  const [operationJson, setOperationJson] = useState('');
+  const [operationRequest, setOperationRequest] = useState('');
   const [activeOperationId, setActiveOperationId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -198,7 +208,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
   };
 
   const handleArchiveToggle = async () => {
-    if (!selected) return;
+    if (!selected || selected.deleted_at) return;
     setBusy(true);
     setFormError(null);
     const failure = await updateResource(selected.id, {
@@ -208,20 +218,44 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
     if (failure) setFormError(failure);
   };
 
+  const handleDelete = async () => {
+    if (!selected || selected.deleted_at) return;
+    if (!window.confirm(`Soft-delete “${selected.name}”? It will disappear from normal resource lists and can be restored by a workspace manager.`)) return;
+    setBusy(true);
+    setFormError(null);
+    const failure = await deleteResource(selected.id);
+    setBusy(false);
+    if (failure) {
+      setFormError(failure);
+    } else {
+      setSelectedId(null);
+      setActiveOperationId(null);
+    }
+  };
+
+  const handleRestore = async () => {
+    if (!selected || !selected.deleted_at) return;
+    setBusy(true);
+    setFormError(null);
+    const failure = await restoreResource(selected.id);
+    setBusy(false);
+    if (failure) setFormError(failure);
+  };
+
   const handleRequest = async () => {
     if (!selected) return;
     setFormError(null);
-    let inputArtifact: Record<string, unknown>;
     try {
-      inputArtifact = parseResourceJsonObject(operationJson);
+      const request = operationRequest.trim();
+      if (!request) throw new Error('Describe what you want the steward to do.');
     } catch (cause) {
-      setFormError(cause instanceof Error ? cause.message : 'Operation input must be valid JSON.');
+      setFormError(cause instanceof Error ? cause.message : 'Add a request for the steward.');
       return;
     }
     setBusy(true);
     const result = await requestOperation(selected.id, {
       operation: operationKind,
-      inputArtifact,
+      requestText: operationRequest.trim(),
       idempotencyKey: newResourceOperationKey(selected.id),
     });
     setBusy(false);
@@ -229,7 +263,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
       setFormError(result.error || 'Could not request the operation.');
       return;
     }
-    setOperationJson('');
+    setOperationRequest('');
     setActiveOperationId(result.operation.id);
   };
 
@@ -249,10 +283,14 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
           <div className="text-sm font-semibold">Shared resources</div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             A resource agent is the gatekeeper for each context, knowledge, tooling, or code resource.
-            People and collaborator agents request work; only its steward reads or changes the underlying resource.
+            Workspace-visible resources are reached through the steward agent (or its connected CLI), so normal
+            agent tools remain the execution surface while the resource stays protected.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <Button type="button" variant="ghost" size="sm" onClick={() => setShowDeleted(value => !value)}>
+            {showDeleted ? 'Hide deleted' : 'Show deleted'}
+          </Button>
           <Button type="button" variant="ghost" size="sm" onClick={() => { void refresh(); }} disabled={loading}>
             <RefreshCw data-icon="inline-start" />
             Refresh
@@ -368,6 +406,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                         ? 'border-primary/60 bg-primary/8'
                         : 'border-border/70 bg-card/45 hover:bg-muted/50',
                       resource.status === 'archived' && 'opacity-65',
+                      resource.deleted_at && 'opacity-55',
                     )}
                   >
                     <span className="flex items-start justify-between gap-2">
@@ -402,18 +441,33 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="truncate text-lg font-semibold">{selected.name}</h2>
-                      <Badge variant={selected.status === 'active' ? 'default' : 'outline'}>{selected.status}</Badge>
+                      <Badge variant={selected.deleted_at ? 'destructive' : selected.status === 'active' ? 'default' : 'outline'}>
+                        {selected.deleted_at ? 'deleted' : selected.status}
+                      </Badge>
                       <Badge variant="outline">{resourceFacetLabel(selected.facet)}</Badge>
                     </div>
                     <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                       {selected.description || 'No description has been added.'}
                     </p>
                   </div>
-                  <Button type="button" variant="outline" size="sm" onClick={() => { void handleArchiveToggle(); }} disabled={busy}>
-                    {selected.status === 'active'
-                      ? <><Archive data-icon="inline-start" />Archive</>
-                      : <><ArchiveRestore data-icon="inline-start" />Restore</>}
-                  </Button>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    {selected.deleted_at ? (
+                      <Button type="button" variant="outline" size="sm" onClick={() => { void handleRestore(); }} disabled={busy}>
+                        <ArchiveRestore data-icon="inline-start" />Restore
+                      </Button>
+                    ) : (
+                      <>
+                        <Button type="button" variant="outline" size="sm" onClick={() => { void handleArchiveToggle(); }} disabled={busy}>
+                          {selected.status === 'active'
+                            ? <><Archive data-icon="inline-start" />Archive</>
+                            : <><ArchiveRestore data-icon="inline-start" />Restore</>}
+                        </Button>
+                        <Button type="button" variant="destructive" size="sm" onClick={() => { void handleDelete(); }} disabled={busy}>
+                          <Trash2 data-icon="inline-start" />Delete
+                        </Button>
+                      </>
+                    )}
+                  </div>
                 </div>
                 <dl className="mt-4 grid gap-3 rounded-xl border border-border bg-muted/15 p-3 text-xs sm:grid-cols-2">
                   <div>
@@ -438,16 +492,16 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
               <section className="rounded-xl border border-border bg-card/35 p-4">
                 <div className="flex items-center gap-2">
                   <Wrench size={15} />
-                  <h3 className="text-sm font-semibold">Operation tool names</h3>
+                  <h3 className="text-sm font-semibold">Steward tool access</h3>
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  Every agent's calls to this resource still route through the steward below — direct-call
-                  permissions aren't wired up yet, so these are the names a future grant would unlock.
+                  Workspace-visible requests are relayed to the steward agent or its connected CLI. The steward
+                  uses its normal tool surface; these are capability families, not invented per-resource tool names.
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {RESOURCE_OPERATION_KINDS.map(kind => (
-                    <Badge key={kind} variant="outline" className="font-mono text-[11px] font-normal">
-                      {resourceOperationToolName(selected.name, kind)}
+                  {RESOURCE_STEWARD_CAPABILITIES.map(capability => (
+                    <Badge key={capability} variant="outline" className="font-mono text-[11px] font-normal">
+                      {capability}
                     </Badge>
                   ))}
                 </div>
@@ -456,10 +510,11 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
               <section className="rounded-xl border border-border bg-card/35 p-4">
                 <div className="flex items-center gap-2">
                   <Send size={15} />
-                  <h3 className="text-sm font-semibold">Request steward work</h3>
+                  <h3 className="text-sm font-semibold">Ask the steward</h3>
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  This queues a request. It does not mutate the resource directly and cannot bypass the steward agent.
+                  Describe the work in plain language. The request is relayed to the steward agent (or its CLI),
+                  which performs the tool call and returns the result; it cannot bypass that execution boundary.
                 </p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)]">
                   <label className="grid content-start gap-1 text-xs font-medium">
@@ -471,18 +526,17 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                     </NativeSelect>
                   </label>
                   <label className="grid gap-1 text-xs font-medium">
-                    Input artifact JSON <span className="font-normal text-muted-foreground">Optional instructions or proposed data</span>
+                    Request <span className="font-normal text-muted-foreground">Tell the steward what to read, change, list, grep, or run</span>
                     <Textarea
-                      value={operationJson}
-                      onChange={event => setOperationJson(event.target.value)}
-                      placeholder={'{\n  "request": "Summarise the current API boundaries"\n}'}
+                      value={operationRequest}
+                      onChange={event => setOperationRequest(event.target.value)}
+                      placeholder="Summarise the current API boundaries and list the relevant files."
                       rows={4}
-                      className="font-mono text-xs"
                     />
                   </label>
                 </div>
                 <div className="mt-3 flex justify-end">
-                  <Button type="button" size="sm" onClick={() => { void handleRequest(); }} disabled={busy || selected.status !== 'active'}>
+                  <Button type="button" size="sm" onClick={() => { void handleRequest(); }} disabled={busy || selected.status !== 'active' || Boolean(selected.deleted_at)}>
                     {busy && <Spinner />}
                     Queue request
                   </Button>
@@ -531,7 +585,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                           <div>
                             <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Input</div>
                             <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-background/70 p-2 text-[11px] leading-relaxed">
-                              {jsonPreview(activeOperation.input_artifact)}
+                              {requestPreview(activeOperation.input_artifact)}
                             </pre>
                           </div>
                           <div>
