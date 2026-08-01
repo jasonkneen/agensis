@@ -412,7 +412,7 @@ test('an excluded tool is refused even if it is named directly', async () => {
   for (const name of BUILTIN_TOOL_EXCLUSIONS) {
     const outcome = await toolset.call({ name, args: {}, identity: agentIdentity(), db: null });
     assert.equal(outcome.ok, false);
-    assert.match(outcome.error, /not available to a built-in agent turn/);
+    assert.match(outcome.error, /not available to a Direct agent turn/);
   }
 });
 

@@ -150,7 +150,7 @@ export const BRIDGE_PROVIDERS: Record<BridgeProvider, BridgeProviderSpec> = {
     externalIdPlaceholder: 'telegram:-100123…',
     externalIdHelp: 'Which OpenClaw chat to mirror. Leave blank to pick one after connecting.',
     steps: [
-      'Make sure the gateway is running and your agensis daemon is connected.',
+      'Make sure the gateway is running and a Relay host (agensis CLI or desktop) is connected.',
       'Pick the chat to mirror once the gateway reports in.',
     ],
   },

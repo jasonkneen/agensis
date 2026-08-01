@@ -4,8 +4,9 @@
 // has, which skill/agent/command libraries exist on disk, and the TTL cache that
 // stops /system/capabilities re-probing all of it on every request.
 //
-// Moved verbatim out of server/index.cjs (Wave 1 of the index.cjs reduction).
-// A leaf: fs, os, path, child_process. No database, no request objects.
+// Moved out of server/index.cjs (Wave 1 of the index.cjs reduction).
+// CLI path probing is shared with the Electron desktop shell via
+// shared/local-agent-discovery.cjs so desktop and server cannot drift.
 //
 // It DOES own one piece of module state — `capabilitiesCache`, the TTL cache
 // instance — but that state is entirely internal, has no reset seam in
@@ -17,63 +18,21 @@
 // through the skill-content surface — ~/.gemini/settings.json holds API keys.
 // That gate lives with the reader in server/skill-content.cjs, not here.
 
-const { execFile } = require('child_process');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const { promisify } = require('util');
 
-const execFileAsync = promisify(execFile);
-
-function resolveCommandPath(command) {
- const pathEnv = process.env.PATH || '';
- const home = os.homedir();
- const nvmBinDirs = [];
- try {
-  const nvmVersions = path.join(home, '.nvm', 'versions', 'node');
-  fs.readdirSync(nvmVersions, { withFileTypes: true })
-   .filter(entry => entry.isDirectory())
-   .forEach(entry => nvmBinDirs.push(path.join(nvmVersions, entry.name, 'bin')));
- } catch {
-  // optional
- }
- const candidates = [
-  ...pathEnv.split(path.delimiter).filter(Boolean),
-  '/opt/homebrew/bin',
-  '/usr/local/bin',
-  path.join(home, '.local', 'bin'),
-  path.join(home, 'bin'),
-  path.join(home, '.bun', 'bin'),
-  path.join(home, '.cargo', 'bin'),
-  ...nvmBinDirs,
- ];
- const seen = new Set();
- for (const dir of candidates) {
-  if (seen.has(dir)) continue;
-  seen.add(dir);
-  const candidate = path.join(dir, command);
-  try {
-   fs.accessSync(candidate, fs.constants.X_OK);
-   return candidate;
-  } catch {
-   // keep looking
-  }
- }
- return null;
-}
-
-async function probeCommand(command, args = ['--version']) {
- const resolvedPath = resolveCommandPath(command);
- if (!resolvedPath) return { command, available: false, path: null, version: null };
- let version = null;
- try {
-  const { stdout, stderr } = await execFileAsync(resolvedPath, args, { timeout: 5000, maxBuffer: 1024 * 128 });
-  version = String(stdout || stderr || '').trim().split('\n')[0] || null;
- } catch (error) {
-  version = String(error.stdout || error.stderr || '').trim().split('\n')[0] || null;
- }
- return { command, available: true, path: resolvedPath, version };
-}
+// CLI path resolution + skill-library scan live in the shared discovery module
+// so the Electron desktop shell and this server path cannot drift. Desktop IPC
+// calls the shared module on the user's machine; this file still owns packages
+// + the TTL cache for /system/capabilities.
+const {
+ resolveCommandPath,
+ probeCommand,
+ probeAgentDefinition,
+ detectSkillLibraries,
+ countDirectoryEntries,
+ LOCAL_AGENT_CLI_DEFINITIONS,
+} = require('../../shared/local-agent-discovery.cjs');
 
 function packageStatus(name) {
  try {
@@ -83,41 +42,6 @@ function packageStatus(name) {
  } catch {
   return { name, available: false, version: null, path: null };
  }
-}
-
-function countDirectoryEntries(dir, predicate = () => true) {
- try {
-  return fs.readdirSync(dir, { withFileTypes: true }).filter(predicate).length;
- } catch {
-  return 0;
- }
-}
-
-function detectSkillLibraries(workspacePath = '') {
- const home = os.homedir();
- const repoPath = workspacePath && path.isAbsolute(workspacePath) ? workspacePath : process.cwd();
- const candidates = [
-  { id: 'codex-user-skills', label: 'Codex user skills', type: 'skills', path: path.join(home, '.codex', 'skills') },
-  { id: 'agents-user-skills', label: 'Local agent skills', type: 'skills', path: path.join(home, '.agents', 'skills') },
-  { id: 'workspace-codex-skills', label: 'Workspace Codex skills', type: 'skills', path: path.join(repoPath, '.codex', 'skills') },
-  { id: 'claude-agents', label: 'Claude agents', type: 'agents', path: path.join(home, '.claude', 'agents') },
-  { id: 'workspace-claude-agents', label: 'Workspace Claude agents', type: 'agents', path: path.join(repoPath, '.claude', 'agents') },
-  { id: 'claude-commands', label: 'Claude commands', type: 'commands', path: path.join(home, '.claude', 'commands') },
-  { id: 'codex-config', label: 'Codex config', type: 'config', path: path.join(home, '.codex', 'config.toml') },
-  { id: 'gemini-config', label: 'Gemini settings', type: 'config', path: path.join(home, '.gemini', 'settings.json') },
-  { id: 'qwen-config', label: 'Qwen settings', type: 'config', path: path.join(home, '.qwen', 'settings.json') },
-  { id: 'opencode-config', label: 'OpenCode config', type: 'config', path: path.join(home, '.config', 'opencode', 'opencode.json') },
- ];
-
- return candidates.map(candidate => {
-  const exists = fs.existsSync(candidate.path);
-  const isDirectory = exists && fs.statSync(candidate.path).isDirectory();
-  return {
-   ...candidate,
-   available: exists,
-   count: isDirectory ? countDirectoryEntries(candidate.path, entry => !entry.name.startsWith('.')) : exists ? 1 : 0,
-  };
- });
 }
 
 // Merge the slash commands/skills that connected daemons pushed (each in its
@@ -199,32 +123,27 @@ function detectCapabilities(workspacePath = '') {
 }
 
 async function detectCapabilitiesUncached(workspacePath = '') {
- const cliDefinitions = [
-  { id: 'claude', label: 'Claude Code', command: 'claude' },
-  { id: 'codex', label: 'Codex', command: 'codex' },
-  { id: 'opencode', label: 'OpenCode', command: 'opencode' },
-  { id: 'gemini', label: 'Gemini CLI', command: 'gemini' },
-  { id: 'qwen', label: 'Qwen Code', command: 'qwen' },
-  { id: 'goose', label: 'Goose', command: 'goose' },
-  { id: 'cursor', label: 'Cursor Agent', command: 'cursor-agent' },
-  { id: 'amp', label: 'Amp', command: 'amp' },
-  { id: 'crush', label: 'Charm Crush', command: 'crush' },
-  { id: 'grok', label: 'Grok', command: 'grok' },
-  { id: 'aider', label: 'Aider', command: 'aider' },
-  { id: 'kimi', label: 'Kimi', command: 'kimi' },
- ];
-
  // Global timeout for all CLI probes combined (they run in parallel via Promise.all).
- const CLIPROBE_TIMEOUT_MS = 10000;
- const cliProbePromise = Promise.all(cliDefinitions.map(async definition => ({
-  ...definition,
-  ...(await probeCommand(definition.command)),
- })));
+ const CLIPROBE_TIMEOUT_MS = 15000;
+ const cliProbePromise = Promise.all(
+  LOCAL_AGENT_CLI_DEFINITIONS.map(definition => probeAgentDefinition(definition)),
+ );
 
  const clis = await Promise.race([
   cliProbePromise,
   new Promise(resolve => setTimeout(() => {
-   resolve(cliDefinitions.map(def => ({ ...def, command: def.command, available: false, path: null, version: null })));
+   resolve(LOCAL_AGENT_CLI_DEFINITIONS.map(def => ({
+    id: def.id,
+    label: def.label,
+    command: (def.commands && def.commands[0]) || def.id,
+    available: false,
+    path: null,
+    version: null,
+    install_hint: def.install_hint || null,
+    skill_dir: def.skill_dir || null,
+    adapter: null,
+    underlying: null,
+   })));
   }, CLIPROBE_TIMEOUT_MS)),
  ]);
 

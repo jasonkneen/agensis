@@ -441,14 +441,14 @@ test('a wedged turn broadcasts its stopped-responding notice', async () => {
   assert.equal(notice.broadcast_to_channel, true, 'silence in the channel would read as "still thinking" forever');
 });
 
-test('a turn with no daemon connected broadcasts the "no daemon" notice', async () => {
+test('a turn with no Relay host online broadcasts the offline notice', async () => {
   const db = installDb();
 
   const result = await __test.runAgentTurn(AGENT, { workspaceId: WORKSPACE_ID, sessionId: SESSION_ID });
   assert.deepEqual(result, { ok: false, pending: false });
 
   const notice = [...db.store.values()].find((row) => row.sender_kind === 'agent');
-  assert.match(notice.content, /no daemon is connected/);
+  assert.match(notice.content, /set to Relay, but no host is online/);
   assert.equal(notice.thread_parent_id, 'msg-human', 'it is still written in the work thread');
   assert.equal(notice.broadcast_to_channel, true, 'but the human has to see it');
 });

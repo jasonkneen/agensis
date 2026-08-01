@@ -25,7 +25,7 @@
     },
     {
       "label": "Explain agents",
-      "task": "Explain how to open Agents from the sidebar, create or edit an agent, and copy a connection command. Mention that live daemon connections depend on backend configuration."
+      "task": "Explain how to open Agents from the sidebar, create or edit an agent, set Direct vs Relay vs Connector, and copy a Relay connection command or Start ACP. Mention that live Relay hosts must share the same backend as the UI."
     },
     {
       "label": "Explain the canvas",

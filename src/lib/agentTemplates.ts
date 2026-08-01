@@ -53,32 +53,118 @@ export interface AgentTemplate {
   avatar?: string;
 }
 
-export type AgentExecutionRuntime = 'claude' | 'codex' | 'amp';
+/**
+ * Product labels for `run_mode`. Wire values stay `builtin` | `daemon` |
+ * `external` | `sandbox` — only the human-facing names change.
+ *
+ * - **Direct** (`builtin`) — turn runs on agensis (hosted model / workspace key).
+ * - **Relay** (`daemon`) — job is pushed to a linked host (desktop ACP or CLI).
+ * - **Connector** (`external`) — an MCP client (etc.) acts as this agent.
+ */
+export function agentRunModeLabel(runMode?: string | null): string {
+  if (runMode === 'daemon' || runMode === 'sandbox') return 'Relay';
+  if (runMode === 'external') return 'Connector';
+  return 'Direct';
+}
+
+/** One-line help under the run-mode control. */
+export function agentRunModeHelp(runMode?: string | null): string {
+  if (runMode === 'sandbox') {
+    return 'Retired sandbox path — work was relayed through a host.';
+  }
+  if (runMode === 'daemon') {
+    return 'Linked host — desktop ACP or agensis CLI. Web and desktop both see it when online.';
+  }
+  if (runMode === 'external') {
+    return 'An external MCP client registers and answers as this agent.';
+  }
+  return 'Runs on agensis with workspace / hosted model access. No linked host required.';
+}
+
+/**
+ * Server pin for classic daemons: claude | codex | amp.
+ * `desktop` = no pin — any local ACP harness (Hermes, Grok, Goose, Claude ACP, …).
+ * The server only enforces the classic three; desktop is a UI/form value that
+ * clears `metadata.runtime` so Hermes is not falsely labeled Claude.
+ *
+ * Preferred local harness is stored separately as `metadata.acp_harness`
+ * (e.g. `hermes`, `grok`) so the form can say "Hermes" instead of "Claude".
+ */
+export type AgentExecutionRuntime = 'claude' | 'codex' | 'amp' | 'desktop';
+
+/**
+ * Form `<select>` value:
+ * - classic pin: `claude` | `codex` | `amp`
+ * - unpinned generic: `desktop`
+ * - concrete ACP harness: `acp:<harnessId>` (e.g. `acp:hermes`)
+ */
+export type AgentFormRuntimeValue = string;
 
 export interface AgentRuntimeChoice {
-  id: AgentExecutionRuntime;
+  id: AgentFormRuntimeValue;
   label: string;
   available: boolean | null;
   reason: string | null;
 }
 
+const CLASSIC_RUNTIMES: AgentExecutionRuntime[] = ['claude', 'codex', 'amp'];
+
 const EXECUTION_RUNTIME_LABELS: Record<AgentExecutionRuntime, string> = {
   claude: 'Claude',
   codex: 'Codex',
   amp: 'Amp',
+  desktop: 'Desktop ACP',
 };
+
+/** Labels for known desktop ACP harnesses (mirrors electron/acp/harnesses.cjs). */
+export const ACP_HARNESS_LABELS: Record<string, string> = {
+  grok: 'Grok Build',
+  claude: 'Claude Code',
+  codex: 'Codex',
+  amp: 'Amp',
+  hermes: 'Hermes Agent',
+  goose: 'Goose',
+  cursor: 'Cursor',
+  opencode: 'OpenCode',
+  kimi: 'Kimi Code',
+  openclaw: 'OpenClaw',
+};
+
+const ACP_HARNESS_ID_RE = /^[a-z][a-z0-9_-]{0,63}$/;
+
+export function normalizeAcpHarnessId(value: unknown): string {
+  const id = String(value || '').trim().toLowerCase();
+  return ACP_HARNESS_ID_RE.test(id) ? id : '';
+}
+
+export function acpHarnessLabel(harnessId: string): string {
+  const id = normalizeAcpHarnessId(harnessId);
+  if (!id) return 'Desktop ACP';
+  return ACP_HARNESS_LABELS[id] || id.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+export function acpFormRuntimeValue(harnessId: string): AgentFormRuntimeValue {
+  const id = normalizeAcpHarnessId(harnessId);
+  return id ? `acp:${id}` : 'desktop';
+}
+
+export function agentAcpHarnessFromMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): string {
+  return normalizeAcpHarnessId(metadata?.acp_harness);
+}
 
 export function runtimeChoicesFromConnections(connections: Array<{
   status?: string;
   capabilities?: {
-    runtimes?: Partial<Record<AgentExecutionRuntime, { id?: string; available?: boolean; reason?: string | null }>>;
+    runtimes?: Partial<Record<'claude' | 'codex' | 'amp', { id?: string; available?: boolean; reason?: string | null }>>;
     clis?: string[];
   };
 }>): AgentRuntimeChoice[] {
-  return (Object.keys(EXECUTION_RUNTIME_LABELS) as AgentExecutionRuntime[]).map(id => {
+  const classic = CLASSIC_RUNTIMES.map(id => {
     const reports = connections
       .filter(connection => connection.status !== 'offline')
-      .map(connection => connection.capabilities?.runtimes?.[id])
+      .map(connection => connection.capabilities?.runtimes?.[id as 'claude' | 'codex' | 'amp'])
       .filter((runtime): runtime is NonNullable<typeof runtime> => runtime?.id === id);
     if (reports.length === 0) {
       return { id, label: EXECUTION_RUNTIME_LABELS[id], available: null, reason: 'not_reported' };
@@ -91,17 +177,230 @@ export function runtimeChoicesFromConnections(connections: Array<{
       reason: available ? null : reports.find(runtime => runtime.reason)?.reason || `${id}_not_available`,
     };
   });
+  // Unpinned desktop ACP first — Hermes/Grok/Goose must not look like "Claude".
+  // Classic pins stay available for real server-enforced runtimes.
+  return [
+    {
+      id: 'desktop',
+      label: EXECUTION_RUNTIME_LABELS.desktop,
+      available: true,
+      reason: null,
+    },
+    ...classic,
+  ];
+}
+
+/** Electron: one choice per local ACP harness so the form names Grok/Hermes/… */
+export function runtimeChoicesFromAcpHarnesses(harnesses: Array<{
+  id: string;
+  label: string;
+  available: boolean;
+}>): AgentRuntimeChoice[] {
+  return harnesses
+    .map(h => {
+      const id = normalizeAcpHarnessId(h.id);
+      if (!id) return null;
+      return {
+        id: acpFormRuntimeValue(id),
+        label: String(h.label || '').trim() || acpHarnessLabel(id),
+        available: h.available === true,
+        reason: h.available === true ? null : `${id}_not_available`,
+      } satisfies AgentRuntimeChoice;
+    })
+    .filter((choice): choice is AgentRuntimeChoice => Boolean(choice));
 }
 
 export function agentMetadataWithRuntime(
   metadata: Record<string, unknown> | null | undefined,
   runtime: AgentExecutionRuntime,
   runMode: AgentTemplate['runMode'],
+  acpHarness?: string | null,
 ): Record<string, unknown> {
   const next = { ...(metadata || {}) };
-  if (runMode === 'daemon') next.runtime = runtime;
-  else delete next.runtime;
+  if (runMode !== 'daemon') {
+    delete next.runtime;
+    delete next.acp_harness;
+    return next;
+  }
+  const harness = normalizeAcpHarnessId(acpHarness);
+  if (runtime === 'desktop' || harness) {
+    // Desktop ACP path: never leave a classic pin that would re-label Hermes as Claude.
+    delete next.runtime;
+    if (harness) next.acp_harness = harness;
+    else delete next.acp_harness;
+    return next;
+  }
+  next.runtime = runtime;
+  delete next.acp_harness;
   return next;
+}
+
+/** Read pin from agent row: empty/missing → desktop (no classic pin). */
+export function agentExecutionRuntimeFromMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): AgentExecutionRuntime {
+  // Preferred harness means desktop ACP even if a stale classic pin remains.
+  if (agentAcpHarnessFromMetadata(metadata)) return 'desktop';
+  const runtime = String(metadata?.runtime || '').trim().toLowerCase();
+  if (runtime === 'codex' || runtime === 'amp' || runtime === 'claude') return runtime;
+  return 'desktop';
+}
+
+/** Value for the agent form runtime `<select>`. */
+export function agentFormRuntimeValueFromMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): AgentFormRuntimeValue {
+  const harness = agentAcpHarnessFromMetadata(metadata);
+  if (harness) return acpFormRuntimeValue(harness);
+  return agentExecutionRuntimeFromMetadata(metadata);
+}
+
+/**
+ * Prefer the real ACP harness over a stale classic pin.
+ * Order: metadata.acp_harness → live session → connection metadata/clis → name/handle.
+ */
+export function resolveAgentAcpHarness(input: {
+  metadata?: Record<string, unknown> | null;
+  agentId?: string | null;
+  name?: string | null;
+  handle?: string | null;
+  liveHarness?: string | null;
+  connections?: Array<{
+    agent_id?: string | null;
+    status?: string | null;
+    metadata?: Record<string, unknown> | null;
+    capabilities?: { clis?: string[] | null } | null;
+  }>;
+}): string {
+  const fromMeta = agentAcpHarnessFromMetadata(input.metadata);
+  if (fromMeta) return fromMeta;
+
+  const live = normalizeAcpHarnessId(input.liveHarness);
+  if (live) return live;
+
+  const agentId = String(input.agentId || '').trim();
+  if (agentId && input.connections?.length) {
+    for (const connection of input.connections) {
+      if (connection.status === 'offline') continue;
+      if (String(connection.agent_id || '') !== agentId) continue;
+      const meta = connection.metadata || {};
+      const fromConn = normalizeAcpHarnessId(meta.harnessId);
+      if (fromConn) return fromConn;
+      // desktop ACP registers with runtime=agensis-desktop-acp + clis:[harnessId]
+      if (String(meta.runtime || '') === 'agensis-desktop-acp') {
+        const fromCli = normalizeAcpHarnessId(connection.capabilities?.clis?.[0]);
+        if (fromCli) return fromCli;
+      }
+      const fromCli = normalizeAcpHarnessId(connection.capabilities?.clis?.[0]);
+      if (fromCli && ACP_HARNESS_LABELS[fromCli]) return fromCli;
+    }
+  }
+
+  return inferAcpHarnessFromIdentity(input.name, input.handle);
+}
+
+/** Match "Hermes", "@grok-coder", etc. to a known harness id. */
+export function inferAcpHarnessFromIdentity(
+  ...parts: Array<string | null | undefined>
+): string {
+  const blob = parts.filter(Boolean).join(' ').toLowerCase();
+  if (!blob) return '';
+  const ids = Object.keys(ACP_HARNESS_LABELS).sort((a, b) => b.length - a.length);
+  for (const id of ids) {
+    if (blob.includes(id)) return id;
+  }
+  for (const [id, label] of Object.entries(ACP_HARNESS_LABELS)) {
+    if (blob.includes(label.toLowerCase())) return id;
+  }
+  return '';
+}
+
+/**
+ * Form select value for an agent row, preferring live ACP identity over a
+ * leftover classic `metadata.runtime = claude` pin.
+ */
+export function agentFormRuntimeValueForAgent(input: {
+  metadata?: Record<string, unknown> | null;
+  agentId?: string | null;
+  name?: string | null;
+  handle?: string | null;
+  liveHarness?: string | null;
+  connections?: Array<{
+    agent_id?: string | null;
+    status?: string | null;
+    metadata?: Record<string, unknown> | null;
+    capabilities?: { clis?: string[] | null } | null;
+  }>;
+  /** When true (Electron), never surface a bare classic pin if we can name a harness. */
+  preferAcp?: boolean;
+}): AgentFormRuntimeValue {
+  const harness = resolveAgentAcpHarness(input);
+  if (harness) return acpFormRuntimeValue(harness);
+  if (input.preferAcp) {
+    // Desktop shell: a classic pin without a concrete harness is almost always
+    // stale for ACP agents — never leave the select on bare "claude" (Claude — ready).
+    return 'desktop';
+  }
+  return agentFormRuntimeValueFromMetadata(input.metadata);
+}
+
+/** Parse a form select value into the classic pin + optional preferred harness. */
+export function resolveFormRuntimeSelection(value: AgentFormRuntimeValue | null | undefined): {
+  runtime: AgentExecutionRuntime;
+  acpHarness: string | null;
+} {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw.startsWith('acp:')) {
+    const harness = normalizeAcpHarnessId(raw.slice(4));
+    return { runtime: 'desktop', acpHarness: harness || null };
+  }
+  if (raw === 'desktop' || !raw) return { runtime: 'desktop', acpHarness: null };
+  if (raw === 'claude' || raw === 'codex' || raw === 'amp') {
+    return { runtime: raw, acpHarness: null };
+  }
+  // Bare harness id (e.g. from an older UI path).
+  const harness = normalizeAcpHarnessId(raw);
+  if (harness) return { runtime: 'desktop', acpHarness: harness };
+  return { runtime: 'desktop', acpHarness: null };
+}
+
+export function executionRuntimeDisplayLabel(
+  runtime: AgentExecutionRuntime,
+  acpHarness?: string | null,
+): string {
+  const harness = normalizeAcpHarnessId(acpHarness);
+  if (harness) return acpHarnessLabel(harness);
+  if (runtime === 'amp') return 'Amp (managed orb)';
+  if (runtime === 'desktop') return 'Desktop ACP';
+  if (runtime === 'codex') return 'Codex';
+  return 'Claude';
+}
+
+/** Badge/detail label: real harness name when known, never a lying Claude pin. */
+export function agentRuntimeLabel(input: {
+  metadata?: Record<string, unknown> | null;
+  agentId?: string | null;
+  name?: string | null;
+  handle?: string | null;
+  liveHarness?: string | null;
+  connections?: Array<{
+    agent_id?: string | null;
+    status?: string | null;
+    metadata?: Record<string, unknown> | null;
+    capabilities?: { clis?: string[] | null } | null;
+  }>;
+  preferAcp?: boolean;
+}): string {
+  const harness = resolveAgentAcpHarness(input);
+  if (harness) return acpHarnessLabel(harness);
+  if (input.preferAcp) {
+    // No harness yet — never fall through to a stale classic Claude pin.
+    return 'Desktop ACP';
+  }
+  return executionRuntimeDisplayLabel(
+    agentExecutionRuntimeFromMetadata(input.metadata),
+    agentAcpHarnessFromMetadata(input.metadata),
+  );
 }
 
 // Starter templates shown in the create gallery. Picking one prefills the form —

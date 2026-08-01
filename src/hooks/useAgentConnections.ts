@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { AgentConnection } from '../types';
@@ -32,16 +32,30 @@ export function useAgentConnections(workspaceId: string | null, seed?: AgentConn
   const [loading, setLoading] = useState(false);
   const [realtimeWorkspaceId, setRealtimeWorkspaceId] = useState<string | null>(null);
   const workspaceKey = normalizeWorkspaceId(workspaceId);
+  // Bootstrap seed is a one-shot cold paint. Once the dedicated connections
+  // endpoint has answered for this workspace, it is authoritative (it reconciles
+  // against live sockets). Letting seed re-apply after that fetch was the
+  // "green for ~10s then offline" flash: bootstrap painted DB-online rows, then
+  // the poll/reconcile corrected them — or worse, a late seed stomped a correct
+  // offline fetch back to green until the next poll.
+  const fetchedForWorkspaceRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (seed) setConnections(seed);
-  }, [seed]);
+    fetchedForWorkspaceRef.current = null;
+  }, [workspaceKey]);
+
+  useEffect(() => {
+    if (!seed) return;
+    if (fetchedForWorkspaceRef.current === workspaceKey) return;
+    setConnections(seed);
+  }, [seed, workspaceKey]);
 
   const fetchConnections = useCallback(async () => {
     if (!workspaceKey) {
       setConnections([]);
       setRealtimeWorkspaceId(null);
       setLoading(false);
+      fetchedForWorkspaceRef.current = null;
       return;
     }
     setRealtimeWorkspaceId(prev => prev === workspaceKey ? prev : null);
@@ -52,14 +66,17 @@ export function useAgentConnections(workspaceId: string | null, seed?: AgentConn
       });
       const payload = await response.json().catch(() => null);
       if (response.ok && Array.isArray(payload?.data)) {
+        fetchedForWorkspaceRef.current = workspaceKey;
         setConnections(payload.data);
         setRealtimeWorkspaceId(workspaceKey);
         return;
       }
+      fetchedForWorkspaceRef.current = workspaceKey;
       setConnections([]);
       setRealtimeWorkspaceId(null);
     } catch {
-      setConnections([]);
+      // Keep seed / last good paint on transient network errors — do not mark
+      // fetched, so a later seed can still apply if we never got a 2xx.
       setRealtimeWorkspaceId(null);
     } finally {
       setLoading(false);

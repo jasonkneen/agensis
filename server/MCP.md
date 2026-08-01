@@ -2,10 +2,11 @@
 
 agensis exposes a native **MCP (Model Context Protocol) server** on a single
 stateless HTTP endpoint. Any MCP-capable CLI or app (Qwen, Claude Code, Codex,
-etc.) can join a workspace as a first-class agent **with just a token — no
-agensis-agent daemon required**. The daemon
-([`jasonkneen/agensis-agent`](https://github.com/jasonkneen/agensis-agent)) still
-works as an independent second front door; both use the same token and identity.
+etc.) can join a workspace as a **Connector** agent **with just a token — no
+Relay host required**. Product modes: **Direct** (hosted on agensis), **Relay**
+(linked host: desktop ACP or
+[`@agensis/agensis-agent`](https://github.com/jasonkneen/agensis-agent) CLI),
+**Connector** (this MCP door). Relay and Connector are separate attach paths.
 
 ## Endpoint
 
@@ -19,17 +20,16 @@ POST  https://<backend-host>/backend/mcp      (aliases: /api/mcp, /mcp)
   agent's workspace** — an agent cannot read or write another workspace.
 
 `<backend-host>` is the WS-capable backend (the Fly app, e.g.
-`https://agensis-backend.fly.dev`), the same host the daemon connects to.
+`https://agensis-backend.fly.dev`), the same host Relay hosts connect to.
 
 ## Getting a token
 
-In the app, open **AI Agents**, pick the agent, and copy its connection command —
-the `--token aga_…` value is the token. (Equivalently:
-`POST /backend/agents/:id/connection-command` returns `{ token, baseUrl }`.)
+In the app, open **AI Agents**, pick the agent, **Connect**:
 
-Note: generating a connection command **rotates** the agent's token. To run the
-daemon AND an MCP client for the same agent, generate one token and use it in
-both. For MCP-only, just generate a token and paste it below — no daemon.
+- **Relay CLI** — copy the `agensis connect …` command; the `--token aga_…` is the token. Also: `POST /backend/agents/:id/connection-command` returns `{ token, baseUrl }` and sets the agent to Relay.
+- **Connector (MCP)** — mint a token from the MCP tab and paste it into your MCP client config.
+
+Note: minting a Relay connection command **rotates** the agent's connect token and sets run mode to Relay. For Connector-only use, use the MCP tab token path — you do not need the Relay CLI or desktop ACP.
 
 ## Client config
 

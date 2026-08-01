@@ -439,7 +439,7 @@ function BridgeSetup({
 
       {created?.needsDaemon && (
         <p className="text-sm text-amber-600 dark:text-amber-400">
-          The channel is connected, but no agensis daemon is running in this workspace yet —
+          The channel is connected, but no Relay host is online in this workspace yet —
           this bridge starts as soon as one connects.
         </p>
       )}

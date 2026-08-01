@@ -3,8 +3,8 @@ import type { WorkspaceAgent, AgentConnection } from '../../types';
 export type ConnKind = 'builtin' | 'remote' | 'sandbox';
 
 export const KIND_META: Record<ConnKind, { label: string; color: string }> = {
-  builtin: { label: 'Built-in', color: '#00a95c' },
-  remote: { label: 'Remote', color: '#38bdf8' },
+  builtin: { label: 'Direct', color: '#00a95c' },
+  remote: { label: 'Relay', color: '#38bdf8' },
   sandbox: { label: 'Sandbox', color: '#a78bfa' },
 };
 
@@ -75,8 +75,8 @@ export function agentKind(agent: WorkspaceAgent): ConnKind {
 
 // Mirror of AgentsWindowContent.agentPresenceStatus so the diagram matches the
 // top status bar exactly. `inactive` = disabled; else keyed on live connections.
-// Built-in agents have no daemon socket but are always reachable via the platform
-// runner, so they read as idle (available), never disconnected.
+// Direct (hosted) agents have no daemon socket but are always reachable via the
+// platform runner, so they read as idle (available), never disconnected.
 export function agentStatus(agent: WorkspaceAgent, connections: AgentConnection[]): NodeStatus {
   if (agent.enabled === false) return 'inactive';
   const mine = connections.filter(c => c.agent_id === agent.id && c.status !== 'offline');
@@ -88,8 +88,8 @@ export function agentStatus(agent: WorkspaceAgent, connections: AgentConnection[
 export function providerLabel(agent: WorkspaceAgent): string {
   const kind = agentKind(agent);
   if (kind === 'sandbox') return (agent.sandbox_provider || 'e2b').toUpperCase();
-  if (kind === 'remote') return 'Remote daemon';
-  return 'Built-in Claude';
+  if (kind === 'remote') return 'Relay host';
+  return 'Direct (agensis)';
 }
 
 export function initials(name: string): string {

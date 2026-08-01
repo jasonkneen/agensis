@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage } = require('electron');
 const path = require('path');
 const { fileURLToPath } = require('url');
 
@@ -222,7 +222,257 @@ ipcMain.handle('pick-folder', async (event) => {
   return result.canceled ? null : result.filePaths[0];
 });
 
-app.whenReady().then(() => {
+// ── Local agent discovery (Claude / Codex / Amp / Grok / …) ─────────────────
+// Runs in the main process on THIS machine. The hosted backend would probe
+// Fly's PATH, which is useless for a desktop user who has `claude` under
+// ~/.local/bin. Same discovery module the local backend uses; refresh=true
+// invalidates the login-shell PATH cache so Rescan picks up mid-session installs.
+const {
+  detectLocalAgentCapabilities,
+  refreshLoginShellPath,
+} = require('../shared/local-agent-discovery.cjs');
+
+const acpHost = require('./acp/host.cjs');
+const acpBridge = require('./acp/agentBridge.cjs');
+const { createAutostartStore } = require('./acp/autostart.cjs');
+const { restoreAutostartAgents } = require('./acp/restore.cjs');
+
+/** @type {ReturnType<typeof createAutostartStore> | null} */
+let acpAutostart = null;
+
+function getAcpAutostart() {
+  if (acpAutostart) return acpAutostart;
+  acpAutostart = createAutostartStore({
+    userDataDir: app.getPath('userData'),
+    encrypt: (plain) => {
+      try {
+        if (!safeStorage?.isEncryptionAvailable?.()) return null;
+        return safeStorage.encryptString(plain);
+      } catch {
+        return null;
+      }
+    },
+    decrypt: (buf) => {
+      try {
+        if (!safeStorage?.isEncryptionAvailable?.()) return null;
+        return safeStorage.decryptString(buf);
+      } catch {
+        return null;
+      }
+    },
+  });
+  return acpAutostart;
+}
+
+function syncLoginItemFromAutostart() {
+  try {
+    const store = getAcpAutostart();
+    const want = store.shouldOpenAtLogin();
+    app.setLoginItemSettings({
+      openAtLogin: want,
+      openAsHidden: want,
+    });
+  } catch (error) {
+    console.warn('[desktop-acp] login item update failed:', error?.message || error);
+  }
+}
+
+ipcMain.handle('local-agents:discover', async (event, options = {}) => {
+  if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
+  try {
+    if (options?.refresh) refreshLoginShellPath();
+    const data = await detectLocalAgentCapabilities({
+      workspacePath: typeof options?.workspacePath === 'string' ? options.workspacePath : '',
+      refresh: Boolean(options?.refresh),
+    });
+    return { ok: true, data };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
+// ── Desktop ACP host ────────────────────────────────────────────────────────
+// Spawn Claude/Codex/Amp/Grok/… as ACP children on THIS machine, optionally
+// register as a daemon-shaped WS agent so channel jobs stream through ACP.
+
+ipcMain.handle('acp:list-harnesses', async (event) => {
+  if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
+  try {
+    refreshLoginShellPath();
+    return { ok: true, data: acpHost.listHarnesses() };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('acp:status', async (event, agentId) => {
+  if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
+  const store = getAcpAutostart();
+  return {
+    ok: true,
+    data: {
+      session: acpHost.status(agentId),
+      bridge: acpBridge.bridgeStatus(agentId),
+      running: acpHost.listRunning(),
+      autostart: store.list().map((a) => ({
+        agentId: a.agentId,
+        harnessId: a.harnessId,
+        autoStart: a.autoStart !== false,
+        savedAt: a.savedAt,
+      })),
+      openAtLogin: store.shouldOpenAtLogin(),
+    },
+  };
+});
+
+ipcMain.handle('acp:start', async (event, options = {}) => {
+  if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
+  try {
+    const session = await acpHost.start({
+      agentId: options.agentId,
+      harnessId: options.harnessId,
+      cwd: options.cwd,
+      model: options.model,
+      autoApprove: options.autoApprove !== false,
+      onUpdate: (params) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send(`acp:update:${options.agentId}`, params);
+        }
+      },
+      onLog: (line) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send(`acp:log:${options.agentId}`, line);
+        }
+      },
+      onExit: ({ agentId }) => {
+        // Harness died — drop the online connection so the UI shows offline,
+        // then leave autostart in place so the next launch/restore brings it back.
+        try {
+          acpBridge.stopBridge(agentId);
+        } catch {
+          // ignore
+        }
+        if (!event.sender.isDestroyed()) {
+          event.sender.send('acp:harness-exit', { agentId });
+        }
+      },
+    });
+
+    // Optional: connect to backend as this agent so @mentions land here.
+    let bridge = null;
+    let autostart = null;
+    let bridgeStatus = null;
+    if (options.token && options.baseUrl && options.workspaceId) {
+      // Persist BEFORE bridge so a crash mid-register still restores next launch.
+      if (options.autoStart !== false) {
+        try {
+          autostart = getAcpAutostart().remember({
+            agentId: options.agentId,
+            harnessId: options.harnessId,
+            workspaceId: options.workspaceId,
+            handle: options.handle,
+            name: options.name,
+            model: options.model,
+            cwd: options.cwd,
+            baseUrl: options.baseUrl,
+            requiredRuntime: options.requiredRuntime,
+            autoStart: true,
+          }, options.token);
+          syncLoginItemFromAutostart();
+          console.log('[desktop-acp] autostart saved', autostart, getAcpAutostart().manifestPath());
+        } catch (persistError) {
+          console.warn('[desktop-acp] autostart persist failed:', persistError?.message || persistError);
+          autostart = { saved: false, error: persistError?.message || String(persistError) };
+        }
+      }
+
+      bridge = acpBridge.startBridge({
+        agentId: options.agentId,
+        workspaceId: options.workspaceId,
+        token: options.token,
+        baseUrl: options.baseUrl,
+        handle: options.handle,
+        name: options.name,
+        harnessId: options.harnessId,
+        cwd: options.cwd,
+        model: options.model,
+        // Must match agent.metadata.runtime when that pin is set (server kicks otherwise).
+        requiredRuntime: options.requiredRuntime,
+      });
+
+      // Block until the server accepts us so the UI does not claim "Running"
+      // for a socket that will die in one second.
+      try {
+        const { waitForRegistration } = require('./acp/restore.cjs');
+        bridgeStatus = await waitForRegistration(options.agentId, 20_000);
+      } catch (regError) {
+        // Host is up; bridge failed. Still return session so user can see error.
+        bridgeStatus = acpBridge.bridgeStatus(options.agentId);
+        return {
+          ok: false,
+          error: regError?.message || 'ACP registered process but backend rejected the agent connection',
+          data: { session, bridge, bridgeStatus, autostart },
+        };
+      }
+    }
+
+    return {
+      ok: true,
+      data: {
+        session,
+        bridge,
+        bridgeStatus: bridgeStatus || acpBridge.bridgeStatus(options.agentId),
+        autostart,
+      },
+    };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('acp:stop', async (event, agentId) => {
+  if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
+  try {
+    acpBridge.stopBridge(agentId);
+    const result = await acpHost.stop(agentId);
+    // Explicit Stop removes reboot restore (user chose offline).
+    const forgotten = getAcpAutostart().forget(agentId);
+    syncLoginItemFromAutostart();
+    return { ok: true, data: { ...result, autostart: forgotten } };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle('acp:list-autostart', async (event) => {
+  if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
+  const store = getAcpAutostart();
+  return {
+    ok: true,
+    data: {
+      agents: store.list(),
+      openAtLogin: store.shouldOpenAtLogin(),
+    },
+  };
+});
+
+ipcMain.handle('acp:prompt', async (event, { agentId, text } = {}) => {
+  if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
+  try {
+    const result = await acpHost.prompt(agentId, text, {
+      onChunk: (chunk) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send(`acp:chunk:${agentId}`, chunk);
+        }
+      },
+    });
+    return { ok: true, data: result };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
+app.whenReady().then(async () => {
   // Opt-in only. Default packaged behaviour talks to the hosted backend baked
   // into the renderer; AGENSIS_BACKEND_EXTERNAL (set by electron:dev) is still
   // honoured as a hard "never start local" so dev's own `npm run backend`
@@ -231,6 +481,37 @@ app.whenReady().then(() => {
     backendServer = startLocalBackend();
   }
   createWindow();
+
+  // Reboot / relaunch: restore ACP agents that were started with autostart.
+  // First attempt after a short delay; restore itself retries while the
+  // backend (local 3142 or Fly) is still coming up.
+  const runRestore = async (reason) => {
+    try {
+      syncLoginItemFromAutostart();
+      const store = getAcpAutostart();
+      const pending = store.list();
+      console.log(`[desktop-acp] restore (${reason}) pending=${pending.length} path=${store.manifestPath()}`);
+      if (pending.length === 0) return;
+      const report = await restoreAutostartAgents(store, {
+        maxAttempts: 6,
+        attemptDelayMs: 3000,
+      });
+      console.log(
+        `[desktop-acp] restore complete attempted=${report.attempted} ok=${report.ok} failed=${report.failed}`,
+        JSON.stringify(report.results),
+      );
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send('acp:restore-complete', report);
+        }
+      }
+    } catch (error) {
+      console.error('[desktop-acp] restore failed:', error?.message || error);
+    }
+  };
+
+  // Don't unref: we want restore to keep the event loop active until done.
+  setTimeout(() => { void runRestore('launch'); }, 2000);
 });
 
 app.on('window-all-closed', () => {
@@ -238,6 +519,14 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  // Tear down live processes on quit (clean). Disk autostart list is preserved
+  // so the next launch / reboot restore brings them back.
+  try {
+    acpBridge.stopAllBridges();
+    acpHost.stopAll();
+  } catch {
+    // ignore teardown races
+  }
   if (backendServer) {
     backendServer.close();
     backendServer = null;

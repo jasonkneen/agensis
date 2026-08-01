@@ -1103,7 +1103,20 @@ export function apiAuthHeaders(): Record<string, string> {
 export interface SystemCapabilities {
   checkedAt: string;
   workspacePath: string;
-  clis: Array<{ id: string; label: string; command: string; available: boolean; path: string | null; version: string | null }>;
+  /** Present when the desktop shell probed THIS machine (not the remote backend). */
+  source?: string;
+  clis: Array<{
+    id: string;
+    label: string;
+    command: string;
+    available: boolean;
+    path: string | null;
+    version: string | null;
+    install_hint?: string | null;
+    skill_dir?: string | null;
+    adapter?: { command: string; path: string | null; version?: string | null } | null;
+    underlying?: { command: string; available: boolean; path: string | null; version?: string | null } | null;
+  }>;
   packages: Array<{ name: string; available: boolean; version: string | null; path: string | null }>;
   skills: Array<{ id: string; label: string; type: string; path: string; available: boolean; count: number }>;
   codexAppServer: { available: boolean; command: string; transports: string[] };
@@ -1127,7 +1140,33 @@ export async function getSlashCommands(workspaceId?: string): Promise<import('./
   }
 }
 
-export async function getSystemCapabilities(workspacePath?: string): Promise<SystemCapabilities | null> {
+/**
+ * System tool/CLI capabilities.
+ *
+ * In the Electron desktop shell this probes the USER'S machine via main-process
+ * IPC (login-shell PATH, Homebrew, nvm, ~/.local/bin, ~/.grok/bin, …). Hitting
+ * the remote backend would only report what is installed on Fly — useless for
+ * local Claude/Codex/Amp/Grok. Browser tabs still use `/backend/system/capabilities`.
+ */
+export async function getSystemCapabilities(
+  workspacePath?: string,
+  options?: { refresh?: boolean },
+): Promise<SystemCapabilities | null> {
+  if (typeof window !== 'undefined') {
+    const discover = window.electronAPI?.discoverLocalAgents;
+    if (typeof discover === 'function') {
+      try {
+        const result = await discover({
+          workspacePath: workspacePath || '',
+          refresh: Boolean(options?.refresh),
+        });
+        if (result?.ok && result.data) return result.data as SystemCapabilities;
+      } catch {
+        // fall through to backend so a broken IPC bridge still degrades
+      }
+    }
+  }
+
   const query = workspacePath ? `?workspacePath=${encodeURIComponent(workspacePath)}` : '';
   const path = `/backend/system/capabilities${query}`;
   const headers = apiAuthHeaders();

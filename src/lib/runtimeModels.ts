@@ -23,7 +23,7 @@ export const CODEX_MODEL_LIST_ID = 'agent-codex-model-options';
 /** The models offered for a runtime. Empty for Amp — it takes no `--model`. */
 export function runtimeModelCatalog(runtime: AgentExecutionRuntime): AIModel[] {
   if (runtime === 'codex') return CODEX_MODELS;
-  if (runtime === 'amp') return [];
+  if (runtime === 'amp' || runtime === 'desktop') return [];
   return AI_MODELS.filter(model => model.id !== 'auto');
 }
 
@@ -40,6 +40,8 @@ export function modelSurvivesRuntimeChange(model: string, next: AgentExecutionRu
   if (!model || model === 'auto') return true;
   // Amp takes no model at all, so nothing survives the switch.
   if (next === 'amp') return false;
+  // Desktop ACP / Hermes etc. accept freeform ids — keep whatever was set.
+  if (next === 'desktop') return true;
   const foreign = next === 'codex'
     ? AI_MODELS.some(entry => entry.id === model)
     : CODEX_MODELS.some(entry => entry.id === model);
@@ -58,6 +60,19 @@ export function modelOptionsForRuntime(
   runMode: 'builtin' | 'daemon' | 'sandbox',
   runtime: AgentExecutionRuntime,
 ): AIModel[] {
+  if (runMode === 'daemon' && runtime === 'desktop') {
+    const fallback: AIModel = {
+      id: 'auto',
+      label: 'Harness default',
+      description: 'Whatever Hermes / Grok / Goose / … uses locally',
+    };
+    const offered = [fallback, ...AI_MODELS.filter(m => m.id !== 'auto'), ...CODEX_MODELS];
+    const isKnown = current === 'auto'
+      || offered.some(entry => entry.id === current);
+    return current && !isKnown
+      ? [{ id: current, label: current, description: 'Saved on this agent' }, ...offered]
+      : offered;
+  }
   if (runMode === 'daemon' && runtime !== 'claude') {
     const fallback: AIModel = {
       id: 'auto',

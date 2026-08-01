@@ -49,7 +49,7 @@ test('AgentsWindowContent drops the Sandbox runtime option but still round-trips
   assert.match(src, /Advanced/);
   // Nothing selectable. The one sandbox option left is disabled and rendered
   // only for a row that already is one — without it the select would fall back
-  // to its first option and report a sandbox agent as "Built-in".
+  // to its first option and report a sandbox agent as "Direct".
   assert.doesNotMatch(src, /<NativeSelectOption value="sandbox">/);
   assert.match(src, /<NativeSelectOption value="sandbox" disabled>/);
 });

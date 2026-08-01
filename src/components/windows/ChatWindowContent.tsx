@@ -1980,7 +1980,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                     <div key={participant.id} className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm">
                       <span className="relative flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-semibold">
                         {participant.kind === 'agent' ? <Bot className="size-3.5" /> : participant.name.slice(0, 2).toUpperCase()}
-                        {participant.connected && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-card bg-emerald-500" />}
+                        {participant.connected && <span className="absolute right-0 bottom-0 size-2 rounded-full border border-card bg-emerald-500" />}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm">{participant.name}</span>
@@ -2845,7 +2845,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                         >
                           <span className="relative flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold text-muted-foreground">
                             {participant.kind === 'agent' ? <Bot className="size-4" /> : participant.name.slice(0, 2).toUpperCase()}
-                            {participant.connected && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-card bg-emerald-500" />}
+                            {participant.connected && <span className="absolute right-0 bottom-0 size-2 rounded-full border border-card bg-emerald-500" />}
                           </span>
                           <span className="min-w-0 flex-1">
                             <span className="block truncate font-medium text-foreground">{participant.name}</span>
@@ -4114,7 +4114,7 @@ function AgentProfileSidePanel({
 
         <div className="mt-5 space-y-3 text-sm">
           <div className="grid grid-cols-2 gap-2">
-            <AgentProfileStat label="Runtime" value={agent?.run_mode === 'daemon' || activeConnection ? 'Connected' : 'Built in'} />
+            <AgentProfileStat label="Runtime" value={agent?.run_mode === 'daemon' || activeConnection ? 'Relay online' : formatRunMode(agent?.run_mode)} />
             <AgentProfileStat label="Model" value={agent?.model || 'Auto'} />
             <AgentProfileStat label="Mode" value={formatRunMode(agent?.run_mode)} />
             <AgentProfileStat label="Access" value={formatPermissionMode(agent?.permission_mode)} />
@@ -4323,7 +4323,9 @@ function AgentProfileField({ label, value, title }: { label: string; value: stri
 }
 
 function formatRunMode(value?: WorkspaceAgent['run_mode']) {
-  return value === 'daemon' ? 'Daemon' : 'Built-in';
+  if (value === 'daemon' || value === 'sandbox') return 'Relay';
+  if (value === 'external') return 'Connector';
+  return 'Direct';
 }
 
 function formatPermissionMode(value?: WorkspaceAgent['permission_mode']) {
@@ -4727,7 +4729,7 @@ function buildParticipantCandidates(
     const handle = connection.handle || normalizeAgentLookupKey(connection.name);
     map.set(id, {
       id,
-      name: connection.name || handle || 'Remote agent',
+      name: connection.name || handle || 'Relay agent',
       kind: 'agent',
       agent_id: connection.agent_id || null,
       user_id: null,

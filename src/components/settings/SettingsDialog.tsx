@@ -378,7 +378,7 @@ function NotificationsPanel() {
       <div className="settings-toggle-list">
         <SettingsToggleRow title="Play a sound" description="A soft chime when a notification arrives." checked={sound} onCheckedChange={checked => toggle('notifications_sound', checked)} />
         <SettingsToggleRow title="Desktop notifications" description="Show OS notifications when agensis is in the background." checked={desktop} onCheckedChange={checked => toggle('notifications_desktop', checked)} />
-        <SettingsToggleRow title="Agent events" description="Notify when remote agents connect, finish, or need attention." checked={agentEvents} onCheckedChange={checked => toggle('notifications_agent_events', checked)} />
+        <SettingsToggleRow title="Agent events" description="Notify when Relay or Connector agents connect, finish, or need attention." checked={agentEvents} onCheckedChange={checked => toggle('notifications_agent_events', checked)} />
         <SettingsToggleRow title="Task reminders" description="Notify when assigned tasks are due soon." checked={taskReminders} onCheckedChange={checked => toggle('notifications_task_reminders', checked)} />
       </div>
     </div>
@@ -1041,15 +1041,19 @@ function AIPanel({ workspaceId }: { workspaceId: string | null }) {
 function ToolsPanel({ workspace }: { workspace: Workspace | null }) {
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
   const [loading, setLoading] = useState(true);
+  const isDesktopLocal = Boolean(window.electronAPI?.discoverLocalAgents);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (refresh = false) => {
     setLoading(true);
-    const next = await getSystemCapabilities(workspace?.local_path || workspace?.git_root || '');
+    const next = await getSystemCapabilities(
+      workspace?.local_path || workspace?.git_root || '',
+      { refresh },
+    );
     setCapabilities(next);
     setLoading(false);
   }, [workspace?.local_path, workspace?.git_root]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(false); }, [load]);
 
   if (loading) {
     return (
@@ -1067,7 +1071,9 @@ function ToolsPanel({ workspace }: { workspace: Workspace | null }) {
   return (
     <FieldGroup>
       <FieldDescription>
-        Detected from PATH, local packages, and known agent config/skill folders.
+        {isDesktopLocal || capabilities.source === 'local-desktop'
+          ? 'Detected on this machine from PATH, Homebrew, nvm, and known install folders — Claude, Codex, Amp, Grok, Hermes, Goose, Cursor, OpenCode, OpenClaw, and other local agent CLIs.'
+          : 'Detected from PATH, local packages, and known agent config/skill folders.'}
       </FieldDescription>
       <Item variant="outline">
         <ItemContent>
@@ -1082,15 +1088,25 @@ function ToolsPanel({ workspace }: { workspace: Workspace | null }) {
       <Field>
         <FieldLabel>CLIs</FieldLabel>
         <div className="grid gap-1">
-          {capabilities.clis.map(cli => (
-            <Item key={cli.id} variant="outline" size="sm">
-              <ItemContent>
-                <ItemTitle>{cli.label}</ItemTitle>
-                <ItemDescription>{cli.available ? `${cli.command}${cli.version ? ` - ${cli.version}` : ''}` : cli.command}</ItemDescription>
-              </ItemContent>
-              <Badge variant={cli.available ? 'default' : 'secondary'}>{cli.available ? 'Found' : 'Missing'}</Badge>
-            </Item>
-          ))}
+          {capabilities.clis.map(cli => {
+            const detail = (() => {
+              if (!cli.available) return cli.command;
+              const bits = [`${cli.command}${cli.version ? ` · ${cli.version}` : ''}`];
+              if (cli.adapter?.path) bits.push(`adapter ${cli.adapter.command}`);
+              else if (cli.adapter && !cli.adapter.path && cli.underlying?.available) bits.push(`adapter missing (${cli.adapter.command})`);
+              if (cli.path) bits.push(cli.path);
+              return bits.join(' · ');
+            })();
+            return (
+              <Item key={cli.id} variant="outline" size="sm">
+                <ItemContent>
+                  <ItemTitle>{cli.label}</ItemTitle>
+                  <ItemDescription className="truncate" title={detail}>{detail}</ItemDescription>
+                </ItemContent>
+                <Badge variant={cli.available ? 'default' : 'secondary'}>{cli.available ? 'Found' : 'Missing'}</Badge>
+              </Item>
+            );
+          })}
         </div>
       </Field>
 
@@ -1124,7 +1140,7 @@ function ToolsPanel({ workspace }: { workspace: Workspace | null }) {
         </div>
       </Field>
 
-      <Button type="button" variant="outline" size="sm" onClick={load}>
+      <Button type="button" variant="outline" size="sm" onClick={() => void load(true)}>
         <Wrench data-icon="inline-start" />
         Rescan
       </Button>

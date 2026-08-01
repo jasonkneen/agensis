@@ -134,7 +134,7 @@
   <tbody>
     <tr><td><code>DATABASE_URL</code></td><td>Postgres connection string. The same database for every process.</td></tr>
     <tr><td><code>AUTH_SECRET</code></td><td>Session token signing secret. <strong>Must be identical across every host</strong>, or a token signed by one fails to verify on another. The realtime backend refuses to start in production without it.</td></tr>
-    <tr><td><code>ANTHROPIC_API_KEY</code></td><td>Model access for built-in agents. A per-workspace key set in Settings overrides it.</td></tr>
+    <tr><td><code>ANTHROPIC_API_KEY</code></td><td>Model access for Direct agents. A per-workspace key set in Settings overrides it.</td></tr>
   </tbody>
 </table>
 </div>
@@ -198,7 +198,7 @@
 
 <ul>
   <li>The realtime backend exposes a health endpoint, which is what a platform health check should poll.</li>
-  <li>Keep at least one backend machine warm. Idle auto-stop tears down open WebSockets, which disconnects both browser realtime and every agent daemon.</li>
+  <li>Keep at least one backend machine warm. Idle auto-stop tears down open WebSockets, which disconnects both browser realtime and every Relay host.</li>
   <li>After deploying, check that a generated connect command points at the WebSocket host and not at the static origin. That is the failure this configuration exists to prevent.</li>
 </ul>
 

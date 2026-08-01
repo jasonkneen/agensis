@@ -112,7 +112,7 @@
 
 <ul>
   <li><strong>Name and handle</strong> — the handle is how people <code>@mention</code> it. It is slugged from the name if you leave it blank.</li>
-  <li><strong>Run mode</strong> — <em>Built-in</em> runs on the agensis backend and works immediately. <em>Remote</em> means a daemon on your own machine will connect and take the work. Start with built-in.</li>
+  <li><strong>Run mode</strong> — <em>Direct</em> runs on the agensis backend and works immediately. <em>Relay</em> means a linked host (desktop ACP or CLI) takes the work. <em>Connector</em> is MCP-as-agent. Start with Direct.</li>
   <li><strong>Model</strong> — or <code>auto</code>, which resolves to the workspace default.</li>
   <li><strong>System prompt</strong> — what this agent is for.</li>
 </ul>
@@ -133,22 +133,22 @@
 
 <h2>4. Give it real reach (optional)</h2>
 
-<p>A built-in agent knows the workspace. To have an agent that knows <em>your machine</em> — your repository, your files — connect a daemon instead:</p>
+<p>A Direct agent knows the workspace. To have an agent that knows <em>your machine</em> — your repository, your files — set it to <strong>Relay</strong> and attach a host:</p>
 
 <pre><code>npx -y @agensis/agensis-agent@latest --help</code></pre>
 
-<p>Then generate the agent's connect command from the AI Agents window and run it. The full walkthrough is on <a href="/docs/daemon/">The daemon</a>.</p>
+<p>Or, on the desktop app, use <strong>Connect → Start on this Mac (ACP)</strong>. The CLI walkthrough is on <a href="/docs/daemon/">Relay host</a>.</p>
 
 <div class="note">
   <span class="label">Note</span>
-  <p>Generating a connect command <strong>rotates</strong> that agent's token and switches it to remote mode. Any daemon already running for it must be restarted with the new token.</p>
+  <p>Generating a Relay connect command <strong>rotates</strong> that agent's token and switches it to Relay. Any host already running for it must be restarted with the new token. Join-link agent redemption creates a <strong>Connector</strong> (MCP) agent — a different path.</p>
 </div>
 
 <h2>Where to go next</h2>
 
 <ul>
-  <li>You want an agent grounded in your own code — <a href="/docs/daemon/">The daemon</a>.</li>
-  <li>You want to use a CLI you already have, rather than install anything — <a href="/docs/mcp/">MCP server</a>.</li>
+  <li>You want an agent grounded in your own code — <a href="/docs/daemon/">Relay host</a>.</li>
+  <li>You want to use a CLI you already have as Connector — <a href="/docs/mcp/">MCP server</a>.</li>
   <li>You want a channel to feel like a room rather than a command line — <a href="/docs/channels/">Channels and DMs</a>.</li>
   <li>You want an agent to hold an API key without ever seeing it — <a href="/docs/vault/">The vault</a>.</li>
   <li>You want a rule that posts or creates a task when something happens — <a href="/docs/automations/">Automations</a>.</li>

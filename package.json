@@ -1,7 +1,7 @@
 {
   "name": "agensis",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Realtime collaborative workspace for chat, documents, memory, files, and shared canvas.",
   "author": {
     "name": "Jason Kneen",
@@ -39,12 +39,22 @@
     "dev:full": "node scripts/dev-full.mjs",
     "db:neon:push": "bash scripts/neon-push.sh",
     "reset:test-account": "node --env-file=.env scripts/reset-test-account.cjs",
-    "desktop:dev": "node scripts/desktop-dev.mjs",
-    "desktop:build": "node scripts/desktop-build.mjs",
-    "desktop:dist": "node scripts/desktop-build.mjs --publish never",
-    "electron:dev": "node scripts/desktop-dev.mjs",
-    "electron:build": "node scripts/desktop-build.mjs",
-    "electron:dist": "node scripts/desktop-build.mjs --publish never"
+    "desktop:dev": "node scripts/desktop-dev.mjs --local",
+    "desktop:dev:local": "node scripts/desktop-dev.mjs --local",
+    "desktop:dev:prod": "node scripts/desktop-dev.mjs --prod",
+    "desktop:dev:live": "node scripts/desktop-dev.mjs --prod",
+    "desktop:build": "node scripts/desktop-build.mjs --prod",
+    "desktop:build:local": "node scripts/desktop-build.mjs --local",
+    "desktop:build:prod": "node scripts/desktop-build.mjs --prod",
+    "desktop:dist": "node scripts/desktop-build.mjs --prod --publish never",
+    "desktop:dist:local": "node scripts/desktop-build.mjs --local --publish never",
+    "desktop:dist:prod": "node scripts/desktop-build.mjs --prod --publish never",
+    "desktop:verify-sign": "node scripts/desktop-verify-sign.mjs",
+    "desktop:ship": "scripts/ship-signed.sh",
+    "desktop:setup-signing-secrets": "scripts/setup-signing-secrets.sh",
+    "electron:dev": "node scripts/desktop-dev.mjs --local",
+    "electron:build": "node scripts/desktop-build.mjs --prod",
+    "electron:dist": "node scripts/desktop-build.mjs --prod --publish never"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -144,8 +154,11 @@
     "mac": {
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
+      "gatekeeperAssess": false,
       "entitlements": "electron/entitlements.mac.plist",
       "entitlementsInherit": "electron/entitlements.mac.plist",
+      "identity": "Jason Kneen (SW75ZJJ5R6)",
+      "notarize": true,
       "extendInfo": {
         "NSMicrophoneUsageDescription": "agensis uses your microphone for voice huddles.",
         "NSCameraUsageDescription": "agensis uses your camera for video in huddles."
@@ -154,14 +167,12 @@
         {
           "target": "dmg",
           "arch": [
-            "x64",
             "arm64"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "x64",
             "arm64"
           ]
         }

@@ -41,6 +41,7 @@ import {
 import { AI_MODELS, type AgentConnection, type AgentPermissionMode, type AgentWebhook, type ChatSession, type Task, type WorkspaceAgent } from '../../types';
 import { apiAuthHeaders, apiBaseUrl, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { CODEX_MODEL_LIST_ID, modelOptionsForRuntime, modelSurvivesRuntimeChange } from '../../lib/runtimeModels';
+import { AgentModelPicker } from '@/components/agents/AgentModelPicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { AgentNetworkDiagram } from './AgentNetworkDiagram';
@@ -101,8 +102,21 @@ import {
   type GalleryTemplate,
   type StoredAgentTemplate,
   agentMetadataWithRuntime,
+  agentExecutionRuntimeFromMetadata,
+  agentFormRuntimeValueForAgent,
+  agentAcpHarnessFromMetadata,
+  agentRuntimeLabel,
+  agentRunModeHelp,
+  agentRunModeLabel,
+  acpFormRuntimeValue,
+  acpHarnessLabel,
+  executionRuntimeDisplayLabel,
+  resolveAgentAcpHarness,
+  resolveFormRuntimeSelection,
+  runtimeChoicesFromAcpHarnesses,
   runtimeChoicesFromConnections,
   type AgentExecutionRuntime,
+  type AgentFormRuntimeValue,
   type AgentRuntimeChoice,
   type AgentTemplate,
 } from '../../lib/agentTemplates';
@@ -230,8 +244,9 @@ interface AgentEditForm {
   purpose: AgentPurpose;
   resourceFacets: ResourceFacet[];
   model: string;
-  runMode: 'builtin' | 'daemon' | 'sandbox';
-  runtime: AgentExecutionRuntime;
+  runMode: 'builtin' | 'daemon' | 'sandbox' | 'external';
+  /** Form select value: classic pin, `desktop`, or `acp:<harnessId>`. */
+  runtime: AgentFormRuntimeValue;
   metadata: Record<string, unknown>;
   sandboxProvider: string;
   sandboxConfig: string;
@@ -241,6 +256,7 @@ interface AgentEditForm {
 // the form was seeded — handleSave diffs the two field-by-field, and they only
 // stay comparable if they went through the same trims and fallbacks.
 function agentFormUpdates(form: AgentEditForm): Partial<WorkspaceAgent> {
+  const { runtime, acpHarness } = resolveFormRuntimeSelection(form.runtime);
   return {
     name: form.name.trim(),
     avatar: form.avatar.trim() || DEFAULT_AGENT_AVATAR,
@@ -257,7 +273,7 @@ function agentFormUpdates(form: AgentEditForm): Partial<WorkspaceAgent> {
     resource_facets: form.purpose === 'resource' ? normalizeResourceFacets(form.resourceFacets) : [],
     model: form.model,
     run_mode: form.runMode,
-    metadata: agentMetadataWithRuntime(form.metadata, form.runtime, form.runMode),
+    metadata: agentMetadataWithRuntime(form.metadata, runtime, form.runMode, acpHarness),
     ...(form.runMode === 'sandbox' ? { sandbox_provider: form.sandboxProvider, sandbox_config: safeParseSandboxConfig(form.sandboxConfig) } : {}),
   };
 }
@@ -278,14 +294,11 @@ const AGENT_ICON_CHOICES: Array<{ value: string; label: string; icon: LucideIcon
   { value: 'icon:monitor', label: 'Monitor', icon: Monitor },
 ];
 
-// How an agent's turns are actually served. 'external' means an MCP client
-// registered itself and works AS this agent (register_agent + claim_job) — it is
-// remote like a daemon, but there is no daemon CLI to connect, so offering the
-// daemon Connect flow for one is a wrong door.
+// How an agent's turns are actually served. Product labels: Direct / Relay /
+// Connector (wire: builtin / daemon / external). 'external' means an MCP client
+// works AS this agent — Relay-like for work, but no daemon CLI connect flow.
 function agentTransportLabel(runMode?: string | null): string {
-  if (runMode === 'daemon' || runMode === 'sandbox') return 'Remote';
-  if (runMode === 'external') return 'MCP client';
-  return 'Built-in';
+  return agentRunModeLabel(runMode);
 }
 
 function isAmpAgent(agent: WorkspaceAgent): boolean {
@@ -293,11 +306,46 @@ function isAmpAgent(agent: WorkspaceAgent): boolean {
 }
 
 function agentExecutionRuntime(agent: WorkspaceAgent): AgentExecutionRuntime {
-  const runtime = String(agent.metadata?.runtime || '').trim().toLowerCase();
-  return runtime === 'codex' || runtime === 'amp' ? runtime : 'claude';
+  return agentExecutionRuntimeFromMetadata(agent.metadata as Record<string, unknown> | undefined);
+}
+
+function agentRuntimeDisplayLabel(
+  agent: WorkspaceAgent,
+  connections: AgentConnection[] = [],
+): string {
+  const preferAcp = typeof window !== 'undefined' && Boolean(window.electronAPI?.acp);
+  return agentRuntimeLabel({
+    metadata: agent.metadata as Record<string, unknown> | undefined,
+    agentId: agent.id,
+    name: agent.name,
+    handle: agent.handle,
+    connections,
+    preferAcp,
+  });
+}
+
+function agentFormRuntimeValue(
+  agent: WorkspaceAgent,
+  connections: AgentConnection[] = [],
+): AgentFormRuntimeValue {
+  const preferAcp = typeof window !== 'undefined' && Boolean(window.electronAPI?.acp);
+  return agentFormRuntimeValueForAgent({
+    metadata: agent.metadata as Record<string, unknown> | undefined,
+    agentId: agent.id,
+    name: agent.name,
+    handle: agent.handle,
+    connections,
+    preferAcp,
+  });
 }
 
 function runtimeChoiceNote(choice: AgentRuntimeChoice): string {
+  if (choice.id === 'desktop') return 'no pin · any local harness';
+  if (String(choice.id).startsWith('acp:')) {
+    if (choice.available === true) return 'ready';
+    if (choice.available === false) return 'not installed on this Mac';
+    return 'scan local CLIs';
+  }
   if (choice.available === true) return 'ready';
   if (choice.available === null) return 'not reported by a connected daemon';
   switch (choice.reason) {
@@ -367,11 +415,34 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [newResourceFacets, setNewResourceFacets] = useState<ResourceFacet[]>([]);
   const [newModel, setNewModel] = useState('auto');
   const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
-  const [newRuntime, setNewRuntime] = useState<AgentExecutionRuntime>('claude');
+  const hasDesktopAcpShell = typeof window !== 'undefined' && Boolean(window.electronAPI?.acp);
+  const [acpHarnessCatalog, setAcpHarnessCatalog] = useState<Array<{
+    id: string;
+    label: string;
+    available: boolean;
+  }>>([]);
+  // Prefer a concrete local harness on Electron so the form never defaults to a
+  // Claude pin that mislabels Hermes/Grok.
+  const defaultDaemonRuntime: AgentFormRuntimeValue = hasDesktopAcpShell ? 'desktop' : 'claude';
+  const [newRuntime, setNewRuntime] = useState<AgentFormRuntimeValue>(defaultDaemonRuntime);
   const [newMetadata, setNewMetadata] = useState<Record<string, unknown>>({});
   const [newSandboxProvider, setNewSandboxProvider] = useState('e2b');
   const [newSandboxConfig, setNewSandboxConfig] = useState('{}');
   const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    if (!hasDesktopAcpShell || !window.electronAPI?.acp) return;
+    let cancelled = false;
+    void window.electronAPI.acp.listHarnesses().then((res) => {
+      if (cancelled || !res.ok) return;
+      setAcpHarnessCatalog(res.data.map(h => ({
+        id: h.id,
+        label: h.label,
+        available: h.available,
+      })));
+    });
+    return () => { cancelled = true; };
+  }, [hasDesktopAcpShell]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
@@ -533,7 +604,31 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     () => buildSkillSuggestions(skillEntries, capabilities),
     [skillEntries, capabilities],
   );
-  const runtimeChoices = useMemo(() => runtimeChoicesFromConnections(connections), [connections]);
+  const runtimeChoices = useMemo(() => {
+    // Desktop shell: list real ACP harnesses (Grok, Hermes, …) so the bar never
+    // pretends every remote agent is "Claude — ready".
+    if (acpHarnessCatalog.length > 0) {
+      const harnessChoices = runtimeChoicesFromAcpHarnesses(acpHarnessCatalog);
+      // Keep a generic Desktop ACP option so a form value of `desktop` (stale
+      // classic pin cleared, harness not yet chosen) is selectable and labeled.
+      return [
+        ...harnessChoices,
+        { id: 'desktop', label: 'Desktop ACP', available: true, reason: null },
+      ];
+    }
+    return runtimeChoicesFromConnections(connections);
+  }, [acpHarnessCatalog, connections]);
+
+  // Once harnesses load, prefer the first available as the create-form default
+  // when still on the generic desktop placeholder.
+  useEffect(() => {
+    if (acpHarnessCatalog.length === 0) return;
+    const preferred = acpHarnessCatalog.find(h => h.available) || acpHarnessCatalog[0];
+    if (!preferred) return;
+    setNewRuntime(current => (
+      current === 'desktop' ? acpFormRuntimeValue(preferred.id) : current
+    ));
+  }, [acpHarnessCatalog]);
 
   const resetNewAgentFields = () => {
     setNewName('');
@@ -551,7 +646,12 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     setNewResourceFacets([]);
     setNewModel('auto');
     setNewRunMode('builtin');
-    setNewRuntime('claude');
+    const preferredHarness = acpHarnessCatalog.find(h => h.available) || acpHarnessCatalog[0];
+    setNewRuntime(
+      preferredHarness
+        ? acpFormRuntimeValue(preferredHarness.id)
+        : defaultDaemonRuntime,
+    );
     setNewMetadata({});
   };
   // Awaits the write before resetting the form and going back to the list.
@@ -623,7 +723,16 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     const stored = 'stored' in tpl ? tpl.stored : undefined;
     setNewModel(stored?.model || 'auto');
     setNewRunMode(tpl.runMode);
-    setNewRuntime(tpl.runtime || 'claude');
+    if (tpl.runtime && tpl.runtime !== 'desktop') {
+      setNewRuntime(tpl.runtime);
+    } else {
+      const preferredHarness = acpHarnessCatalog.find(h => h.available) || acpHarnessCatalog[0];
+      setNewRuntime(
+        preferredHarness
+          ? acpFormRuntimeValue(preferredHarness.id)
+          : (tpl.runtime || defaultDaemonRuntime),
+      );
+    }
     // An authored template has no metadata to carry — the table has no column
     // for it, deliberately (see shared/agentTemplates.cjs). Only a bundled
     // template, which is reviewed code, can set it.
@@ -745,6 +854,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         webhooks={connectAgent ? webhooks.filter(webhook => webhook.agent_id === connectAgent.id) : []}
         onCreateWebhook={() => connectAgent ? onCreateWebhook({ agent_id: connectAgent.id, name: `${connectAgent.name} webhook` }) : Promise.resolve(null)}
         onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
+        onUpdateAgent={onUpdateAgent}
       />
 
       <div className="agents-window-body min-h-0 flex-1 overflow-hidden p-3">
@@ -870,7 +980,9 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                                 ? `Shared resource · ${resourceFacetSummary(tpl.resourceFacets)}`
                                 : 'Collaborator'}
                               {' · '}
-                              {tpl.runMode === 'daemon' ? `Remote · ${runtimeChoices.find(choice => choice.id === tpl.runtime)?.label || 'Claude'}` : 'Built-in'}
+                              {tpl.runMode === 'daemon'
+                                ? `Relay · ${runtimeChoices.find(choice => choice.id === tpl.runtime)?.label || 'host'}`
+                                : agentRunModeLabel(tpl.runMode)}
                             </span>
                           </button>
                           {stored && (
@@ -941,7 +1053,14 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 onPurposeChange={setNewPurpose}
                 onResourceFacetsChange={setNewResourceFacets}
                 onModelChange={setNewModel}
-                onRunModeChange={setNewRunMode}
+                onRunModeChange={(value) => {
+                  setNewRunMode(value);
+                  // Desktop app: Relay defaults to a local ACP harness, not a Claude pin.
+                  if (value === 'daemon' && hasDesktopAcpShell) {
+                    const preferred = acpHarnessCatalog.find(h => h.available) || acpHarnessCatalog[0];
+                    setNewRuntime(preferred ? acpFormRuntimeValue(preferred.id) : 'desktop');
+                  }
+                }}
                 onRuntimeChange={setNewRuntime}
                 sandboxProvider={newSandboxProvider}
                 sandboxConfig={newSandboxConfig}
@@ -1063,7 +1182,9 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                     <Bot />
                   </EmptyMedia>
                   <EmptyTitle>No agents yet</EmptyTitle>
-                  <EmptyDescription>Create an agent, copy its connection command, and run it where the daemon should execute.</EmptyDescription>
+                  <EmptyDescription>
+                    Create an agent as Direct (hosted), Relay (desktop ACP or CLI), or Connector (MCP).
+                  </EmptyDescription>
                 </EmptyHeader>
               </Empty>
             ) : visibleAgents.length === 0 ? (
@@ -1129,11 +1250,15 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                           !active && 'opacity-60',
                         )}
                       >
-                        <span className="relative grid size-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-muted text-2xl ring-1 ring-inset ring-black/5 dark:ring-white/10">
-                          <AgentAvatarPreview value={agent.avatar || DEFAULT_AGENT_AVATAR} className="size-full" />
+                        {/* Outer relative has no overflow — live badge must sit outside the
+                            rounded clip or the corner radius crops it to a crescent. */}
+                        <span className="relative grid size-16 shrink-0 place-items-center">
+                          <span className="grid size-full place-items-center overflow-hidden rounded-2xl bg-muted text-2xl ring-1 ring-inset ring-black/5 dark:ring-white/10">
+                            <AgentAvatarPreview value={agent.avatar || DEFAULT_AGENT_AVATAR} className="size-full" />
+                          </span>
                           {live && (
                             <span
-                              className="absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full bg-emerald-500 ring-2 ring-card"
+                              className="absolute -bottom-0.5 -right-0.5 z-10 size-3.5 rounded-full border-2 border-card bg-emerald-500"
                               title="Connected"
                               aria-hidden
                             />
@@ -1312,8 +1437,8 @@ function AgentFormActionBar({
   placement: 'top' | 'bottom';
   /** Initial state only — after mount the pane toggles `invisible` on the ref. */
   dormant?: boolean;
-  runMode: 'builtin' | 'daemon' | 'sandbox';
-  runtime: AgentExecutionRuntime;
+  runMode: 'builtin' | 'daemon' | 'sandbox' | 'external';
+  runtime: AgentFormRuntimeValue;
   runtimeChoices: AgentRuntimeChoice[];
   model: string;
   modelChoices: { id: string; label: string }[];
@@ -1321,12 +1446,30 @@ function AgentFormActionBar({
   submitting: boolean;
   submitLabel: string;
   submitIcon: React.ReactNode;
-  onRunModeChange: (value: 'builtin' | 'daemon' | 'sandbox') => void;
-  onRuntimeChange: (value: AgentExecutionRuntime) => void;
+  onRunModeChange: (value: 'builtin' | 'daemon' | 'sandbox' | 'external') => void;
+  onRuntimeChange: (value: AgentFormRuntimeValue) => void;
   onModelChange: (value: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
 }) {
+  const resolvedRuntime = resolveFormRuntimeSelection(runtime).runtime;
+  const freeformModel = runMode === 'daemon' && (resolvedRuntime === 'codex' || resolvedRuntime === 'desktop');
+  // Ensure the select has a matching option — a stale classic pin should still
+  // render when Electron is listing only ACP harnesses.
+  const runtimeSelectChoices = useMemo(() => {
+    if (runtimeChoices.some(choice => choice.id === runtime)) return runtimeChoices;
+    if (!runtime) return runtimeChoices;
+    const { runtime: pin, acpHarness } = resolveFormRuntimeSelection(runtime);
+    return [
+      ...runtimeChoices,
+      {
+        id: runtime,
+        label: executionRuntimeDisplayLabel(pin, acpHarness),
+        available: null,
+        reason: 'saved',
+      },
+    ];
+  }, [runtime, runtimeChoices]);
   return (
     <div
       ref={barRef}
@@ -1347,29 +1490,30 @@ function AgentFormActionBar({
         onChange={e => onRunModeChange(e.target.value === 'daemon' ? 'daemon' : 'builtin')}
         size="sm"
         className="max-w-48"
-        aria-label="Agent execution location"
+        aria-label="How this agent runs"
+        title={agentRunModeHelp(runMode)}
       >
-        <NativeSelectOption value="builtin">Built-in</NativeSelectOption>
-        <NativeSelectOption value="daemon">Remote</NativeSelectOption>
-        {/* Not an offer — it is disabled, and only exists for a row that is
-            already one. Sandbox was withdrawn as a runtime you can choose, but
-            a <select> whose value matches no option silently falls back to the
-            FIRST one, so without this a sandbox agent would read as "Built-in"
-            while its sandbox settings sat open right below. Measured, not
-            assumed: selectedIndex came back 0. */}
+        <NativeSelectOption value="builtin">Direct</NativeSelectOption>
+        <NativeSelectOption value="daemon">Relay</NativeSelectOption>
+        {/* Not an offer — disabled, and only for a row that already is one.
+            Without it a sandbox agent would fall back to the first option and
+            read as "Direct". Same for Connector (external / MCP). */}
         {runMode === 'sandbox' && (
           <NativeSelectOption value="sandbox" disabled>Sandbox (retired)</NativeSelectOption>
+        )}
+        {runMode === 'external' && (
+          <NativeSelectOption value="external" disabled>Connector</NativeSelectOption>
         )}
       </NativeSelect>
       {runMode === 'daemon' && (
         <NativeSelect
           value={runtime}
-          onChange={event => onRuntimeChange(event.target.value as AgentExecutionRuntime)}
+          onChange={event => onRuntimeChange(event.target.value)}
           size="sm"
           className="max-w-72"
           aria-label="Agent execution runtime"
         >
-          {runtimeChoices.map(choice => (
+          {runtimeSelectChoices.map(choice => (
             <NativeSelectOption key={choice.id} value={choice.id}>
               {choice.label} — {runtimeChoiceNote(choice)}
             </NativeSelectOption>
@@ -1384,18 +1528,20 @@ function AgentFormActionBar({
           honest shape: everything the daemon accepts is reachable, and the ids
           we do know about are one keystroke away. Blank means "Codex default",
           which is the 'auto' the rest of the form already speaks. */}
-      {runMode === 'daemon' && runtime === 'codex' ? (
+      {/* Codex + desktop ACP harnesses (Hermes/Grok/…) take freeform model ids.
+          Classic Claude uses the fixed list; Amp is "auto" only via the list. */}
+      {freeformModel ? (
         <>
           <Input
             value={model === 'auto' ? '' : model}
             onChange={e => onModelChange(e.target.value.trim() || 'auto')}
-            list={CODEX_MODEL_LIST_ID}
+            list={resolvedRuntime === 'codex' ? CODEX_MODEL_LIST_ID : 'agent-desktop-model-options'}
             className="h-8 max-w-56 text-sm"
-            placeholder="Codex default"
+            placeholder={resolvedRuntime === 'desktop' ? 'Harness default' : 'Codex default'}
             aria-label="Agent model"
             spellCheck={false}
           />
-          <datalist id={CODEX_MODEL_LIST_ID}>
+          <datalist id={resolvedRuntime === 'codex' ? CODEX_MODEL_LIST_ID : 'agent-desktop-model-options'}>
             {modelChoices
               .filter(option => option.id !== 'auto')
               .map(option => <option key={option.id} value={option.id} />)}
@@ -1491,8 +1637,8 @@ function AgentForm({
   purpose: AgentPurpose;
   resourceFacets: ResourceFacet[];
   model: string;
-  runMode: 'builtin' | 'daemon' | 'sandbox';
-  runtime: AgentExecutionRuntime;
+  runMode: 'builtin' | 'daemon' | 'sandbox' | 'external';
+  runtime: AgentFormRuntimeValue;
   runtimeChoices: AgentRuntimeChoice[];
   sandboxProvider: string;
   sandboxConfig: string;
@@ -1515,8 +1661,8 @@ function AgentForm({
   onPurposeChange: (value: AgentPurpose) => void;
   onResourceFacetsChange: (value: ResourceFacet[]) => void;
   onModelChange: (value: string) => void;
-  onRunModeChange: (value: 'builtin' | 'daemon' | 'sandbox') => void;
-  onRuntimeChange: (value: AgentExecutionRuntime) => void;
+  onRunModeChange: (value: 'builtin' | 'daemon' | 'sandbox' | 'external') => void;
+  onRuntimeChange: (value: AgentFormRuntimeValue) => void;
   onSandboxProviderChange: (value: string) => void;
   onSandboxConfigChange: (value: string) => void;
   onCancel: () => void;
@@ -1532,7 +1678,8 @@ function AgentForm({
    */
   extraSections?: React.ReactNode;
 }) {
-  const options = modelOptionsForRuntime(model, runMode, runtime);
+  const executionRuntime = resolveFormRuntimeSelection(runtime).runtime;
+  const options = modelOptionsForRuntime(model, runMode, executionRuntime);
   const canSubmit = Boolean(
     name.trim() && (purpose === 'collaborator' || resourceFacets.length > 0),
   );
@@ -1594,14 +1741,15 @@ function AgentForm({
     submitLabel,
     submitIcon,
     onRunModeChange,
-    onRuntimeChange: (value: AgentExecutionRuntime) => {
+    onRuntimeChange: (value: AgentFormRuntimeValue) => {
       onRuntimeChange(value);
       // Was one-directional: it cleared the model on the way OUT of Claude but
       // not on the way back IN, so Codex -> Claude left a `gpt-…` id selected
       // and the Claude picker re-offered it as "gpt-5.6-sol (saved)". The rule
       // is narrow on purpose — it only drops an id that belongs to a different
       // runtime, so a shared/custom model the user set is left alone.
-      if (!modelSurvivesRuntimeChange(model, value)) onModelChange('auto');
+      const nextRuntime = resolveFormRuntimeSelection(value).runtime;
+      if (!modelSurvivesRuntimeChange(model, nextRuntime)) onModelChange('auto');
     },
     onModelChange,
     onCancel,
@@ -1868,8 +2016,8 @@ function AgentForm({
 
       {extraSections}
 
-      {/* Unreachable from the runtime picker, which now offers Built-in and
-          Remote only — kept because an agent row saved as `sandbox` before the
+      {/* Unreachable from the run-mode picker (Direct / Relay only) — kept
+          because an agent row saved as `sandbox` before the
           option was removed must still show and round-trip its settings. */}
       {runMode === 'sandbox' && (
         <details className="rounded-lg border bg-card/40 px-3 py-2 text-sm">
@@ -1977,8 +2125,8 @@ function AgentDetailPane({
   const [editPurpose, setEditPurpose] = useState<AgentPurpose>('collaborator');
   const [editResourceFacets, setEditResourceFacets] = useState<ResourceFacet[]>([]);
   const [editModel, setEditModel] = useState('auto');
-  const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
-  const [editRuntime, setEditRuntime] = useState<AgentExecutionRuntime>('claude');
+  const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon' | 'sandbox' | 'external'>('builtin');
+  const [editRuntime, setEditRuntime] = useState<AgentFormRuntimeValue>('claude');
   const [editRuntimeSelectionDirty, setEditRuntimeSelectionDirty] = useState(false);
   const [editSandboxProvider, setEditSandboxProvider] = useState('e2b');
   const [editSandboxConfig, setEditSandboxConfig] = useState('{}');
@@ -1987,6 +2135,53 @@ function AgentDetailPane({
   // while editing, and this draft is committed by Save like any other field.
   const [editVoice, setEditVoice] = useState<AgentVoicePreference>({});
   const [disconnecting, setDisconnecting] = useState(false);
+  // Desktop ACP session for this agent (Electron only) — drives model picker "restart to apply".
+  const hasDesktopAcpApi = Boolean(typeof window !== 'undefined' && window.electronAPI?.acp);
+  const [acpSessionRunning, setAcpSessionRunning] = useState(false);
+  useEffect(() => {
+    if (!agent?.id || !hasDesktopAcpApi) {
+      setAcpSessionRunning(false);
+      return;
+    }
+    let cancelled = false;
+    const syncStatus = async () => {
+      try {
+        const st = await window.electronAPI!.acp!.status(agent.id);
+        if (cancelled || !st.ok) return;
+        setAcpSessionRunning(Boolean(st.data.session?.running));
+        // Persist preferred harness once it is knowable (live session, online
+        // connection, or name like "Hermes") so the form never sticks on Claude.
+        const saved = agentAcpHarnessFromMetadata(agent.metadata as Record<string, unknown> | undefined);
+        const harness = resolveAgentAcpHarness({
+          metadata: agent.metadata as Record<string, unknown> | undefined,
+          agentId: agent.id,
+          name: agent.name,
+          handle: agent.handle,
+          liveHarness: st.data.session?.harnessId,
+          connections,
+        });
+        if (harness && !saved) {
+          onUpdateAgent(agent.id, {
+            metadata: agentMetadataWithRuntime(
+              agent.metadata as Record<string, unknown> | undefined,
+              'desktop',
+              'daemon',
+              harness,
+            ),
+          });
+        }
+      } catch {
+        if (!cancelled) setAcpSessionRunning(false);
+      }
+    };
+    void syncStatus();
+    const t = window.setInterval(() => { void syncStatus(); }, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [agent?.id, agent?.model, agent?.metadata, agent?.name, agent?.handle, connections, hasDesktopAcpApi, onUpdateAgent]);
+
   // What the form was seeded from, normalized exactly like a save. handleSave
   // diffs against this so it submits ONLY the fields the human changed in THIS
   // edit session: an untouched identity field sent along for the ride would be
@@ -2014,8 +2209,14 @@ function AgentDetailPane({
         ? normalizeResourceFacets(agent.resource_facets)
         : [],
       model: agent.model || 'auto',
-      runMode: (agent.run_mode === 'daemon' ? 'daemon' : agent.run_mode === 'sandbox' ? 'sandbox' : 'builtin') as 'builtin' | 'daemon' | 'sandbox',
-      runtime: agentExecutionRuntime(agent),
+      runMode: (agent.run_mode === 'daemon'
+        ? 'daemon'
+        : agent.run_mode === 'sandbox'
+          ? 'sandbox'
+          : agent.run_mode === 'external'
+            ? 'external'
+            : 'builtin') as 'builtin' | 'daemon' | 'sandbox' | 'external',
+      runtime: agentFormRuntimeValue(agent, connections),
       metadata: { ...(agent.metadata || {}) },
       sandboxProvider: agent.sandbox_provider || 'e2b',
       sandboxConfig: JSON.stringify(agent.sandbox_config || {}, null, 2),
@@ -2191,6 +2392,14 @@ function AgentDetailPane({
             onRunModeChange={(value) => {
               setEditRunMode(value);
               setEditRuntimeSelectionDirty(true);
+              // Switching to Relay in the desktop shell: prefer a real ACP
+              // harness (Hermes/Grok/…), never a classic Claude pin.
+              if (value === 'daemon' && typeof window !== 'undefined' && window.electronAPI?.acp) {
+                const preferred = runtimeChoices.find(c => String(c.id).startsWith('acp:') && c.available === true)
+                  || runtimeChoices.find(c => String(c.id).startsWith('acp:'))
+                  || null;
+                setEditRuntime(preferred?.id || 'desktop');
+              }
             }}
             onRuntimeChange={(value) => {
               setEditRuntime(value);
@@ -2253,10 +2462,26 @@ function AgentDetailPane({
               <Badge variant={agent.purpose === 'resource' ? 'default' : 'outline'}>
                 {agent.purpose === 'resource' ? 'Shared resource' : 'Collaborator'}
               </Badge>
-              {agent.run_mode === 'daemon' && <Badge variant="outline">{agentExecutionRuntime(agent)}</Badge>}
-              <Badge variant="outline">{displayModel(agent.model)}</Badge>
+              {agent.run_mode === 'daemon' && (
+                <Badge variant="outline">{agentRuntimeDisplayLabel(agent, connections)}</Badge>
+              )}
               <ConnectionDot count={activeConnections.length} busy={activeConnections.some(c => c.status === 'busy')} />
               {!agentActive && <Badge variant="secondary">deactivated</Badge>}
+            </div>
+            <div className="mt-2">
+              <AgentModelPicker
+                agent={agent}
+                acpRunning={isConnected || acpSessionRunning}
+                onChangeModel={async (modelId) => {
+                  onUpdateAgent(agent.id, { model: modelId });
+                }}
+                onRestartAcp={hasDesktopAcpApi && acpSessionRunning
+                  ? async (modelId) => {
+                    await restartDesktopAcpForAgent(agent, modelId);
+                    setAcpSessionRunning(true);
+                  }
+                  : undefined}
+              />
             </div>
           </div>
         </div>
@@ -2341,8 +2566,10 @@ function AgentDetailPane({
           </AgentDetailSection>
 
           <AgentDetailSection title="Runtime">
-            <AgentDetailField label="Location" value={agentTransportLabel(agent.run_mode)} />
-            {agent.run_mode === 'daemon' && <AgentDetailField label="Runtime" value={agentExecutionRuntime(agent) === 'amp' ? 'Amp (managed orb)' : agentExecutionRuntime(agent)} />}
+            <AgentDetailField label="Run mode" value={agentTransportLabel(agent.run_mode)} />
+            {agent.run_mode === 'daemon' && (
+              <AgentDetailField label="Runtime" value={agentRuntimeDisplayLabel(agent, connections)} />
+            )}
             <AgentDetailField label="Model" value={displayModel(agent.model)} />
             <AgentDetailField label="Updated" value={formatAgentDate(agent.updated_at)} />
             {ampAgent && !isConnected && <div className="text-xs text-muted-foreground">Connect this agent to a machine running agensis-agent and Amp.</div>}
@@ -2545,10 +2772,83 @@ function ConnectExplainer({ benefit, note }: { benefit: string; note: string }) 
   );
 }
 
-// One unified per-agent Connect dialog: CLI (local daemon), MCP client, or Webhook.
-// Every tab is auto-scoped to `agent`, so there is no picker — you open it from the
-// agent you want to connect. Replaces the old scattered Connect / Configure MCP /
-// Webhook buttons and the workspace ConfigureMcpDialog.
+/**
+ * Re-mint + re-Start desktop ACP so a model (or backend) change takes effect.
+ * Prefers: live session harness → saved metadata.acp_harness → first available.
+ */
+async function restartDesktopAcpForAgent(
+  agent: WorkspaceAgent,
+  modelOverride?: string,
+): Promise<void> {
+  const acp = window.electronAPI?.acp;
+  if (!acp) throw new Error('Desktop ACP is not available');
+  const handle = agent.handle || agentHandle(agent.name);
+  const status = await acp.status(agent.id);
+  const savedHarness = agentAcpHarnessFromMetadata(agent.metadata as Record<string, unknown> | undefined);
+  let harnessId = status.ok && status.data.session?.harnessId
+    ? status.data.session.harnessId
+    : savedHarness;
+  if (!harnessId) {
+    const list = await acp.listHarnesses();
+    harnessId = list.ok
+      ? (list.data.find(h => h.available)?.id || list.data[0]?.id || 'claude')
+      : 'claude';
+  }
+
+  const response = await fetch(apiUrl(`/backend/agents/${agent.id}/connection-command`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+    body: JSON.stringify({ handle, baseUrl: apiBaseUrl() }),
+  });
+  const payload = await response.json().catch(() => null);
+  const token = payload?.data?.token || '';
+  if (!response.ok || !token) {
+    throw new Error(payload?.error?.message || 'Could not mint a token to restart ACP');
+  }
+  const mintBase = typeof payload?.data?.baseUrl === 'string' ? payload.data.baseUrl : '';
+  const backendBase = mintBase || apiBaseUrl() || 'http://127.0.0.1:3142';
+  const cwd = typeof payload?.data?.cwd === 'string' ? payload.data.cwd : undefined;
+  // Only classic pins are enforced by the server; preferred harness clears them.
+  const pinnedRuntime = agentExecutionRuntimeFromMetadata(agent.metadata as Record<string, unknown> | undefined);
+  const requiredRuntime = pinnedRuntime === 'desktop' ? undefined : pinnedRuntime;
+  const model = modelOverride || agent.model || 'auto';
+  const result = await acp.start({
+    agentId: agent.id,
+    harnessId,
+    cwd,
+    autoApprove: true,
+    token,
+    baseUrl: backendBase,
+    workspaceId: agent.workspace_id,
+    handle,
+    name: agent.name,
+    model,
+    requiredRuntime,
+  });
+  if (!result.ok) throw new Error(result.error || 'Failed to restart ACP');
+}
+
+/** Human label for which backend this UI will mint tokens / register against. */
+function connectBackendLabel(): string {
+  const base = apiBaseUrl() || '';
+  try {
+    const u = new URL(base);
+    const host = u.hostname.toLowerCase();
+    if (host === '127.0.0.1' || host === 'localhost' || host === '0.0.0.0') {
+      return `local backend (${u.host || '127.0.0.1:3142'})`;
+    }
+    if (host.includes('fly.dev') || host === 'agensis.io' || host.endsWith('.agensis.io')) {
+      return 'hosted backend (Fly / live web)';
+    }
+    return u.host;
+  } catch {
+    return base || 'backend';
+  }
+}
+
+// One unified per-agent Connect dialog: machine (ACP / CLI daemon), MCP, webhook.
+// Scoped to the agent you opened it from. Desktop puts ACP first; browser only
+// has the terminal daemon command on the Machine tab.
 function AgentConnectDialog({
   agent,
   open,
@@ -2556,6 +2856,7 @@ function AgentConnectDialog({
   webhooks,
   onCreateWebhook,
   onToggleWebhook,
+  onUpdateAgent,
 }: {
   agent: WorkspaceAgent | null;
   open: boolean;
@@ -2563,13 +2864,31 @@ function AgentConnectDialog({
   webhooks: AgentWebhook[];
   onCreateWebhook: () => Promise<AgentWebhook | null>;
   onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
+  onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
 }) {
   const [tab, setTab] = useState<ConnectTab>('cli');
 
-  // CLI (local daemon)
+  // Terminal daemon (agensis-agent CLI)
   const [cliCommand, setCliCommand] = useState('');
   const [cliError, setCliError] = useState('');
   const [cliBusy, setCliBusy] = useState(false);
+
+  // Desktop ACP host (Electron only)
+  const hasDesktopAcp = Boolean(typeof window !== 'undefined' && window.electronAPI?.acp);
+  const [acpHarnesses, setAcpHarnesses] = useState<Array<{
+    id: string;
+    label: string;
+    available: boolean;
+    path: string | null;
+    command: string | null;
+    installHint: string | null;
+  }>>([]);
+  const [acpHarnessId, setAcpHarnessId] = useState('grok');
+  const [acpBusy, setAcpBusy] = useState(false);
+  const [acpError, setAcpError] = useState('');
+  const [acpRunning, setAcpRunning] = useState(false);
+  const [acpStatusLabel, setAcpStatusLabel] = useState('');
+  const [acpWsUrl, setAcpWsUrl] = useState('');
 
   // MCP client
   const [manifest, setManifest] = useState<SkillManifest | null>(null);
@@ -2582,6 +2901,8 @@ function AgentConnectDialog({
   const [creatingWebhook, setCreatingWebhook] = useState(false);
 
   const handle = agent ? (agent.handle || agentHandle(agent.name)) : '';
+  const backendLabel = connectBackendLabel();
+  const agentModelLabel = displayModel(agent?.model);
 
   // Reset everything per-open: never carry a command/token across opens.
   useEffect(() => {
@@ -2589,11 +2910,42 @@ function AgentConnectDialog({
     setTab('cli');
     setCliCommand('');
     setCliError('');
+    setAcpError('');
+    setAcpRunning(false);
+    setAcpStatusLabel('');
+    setAcpWsUrl('');
     setManifest(null);
     setLoadError('');
     setToken('');
     setTokenError('');
   }, [open, agent?.id]);
+
+  // Load ACP harness catalog + running status when the dialog opens in Electron.
+  useEffect(() => {
+    if (!open || !hasDesktopAcp || !agent?.id) return;
+    let cancelled = false;
+    void (async () => {
+      const list = await window.electronAPI!.acp!.listHarnesses();
+      if (cancelled || !list.ok) return;
+      setAcpHarnesses(list.data);
+      // Prefer: saved acp_harness → classic pin name match → first available.
+      const saved = agentAcpHarnessFromMetadata(agent.metadata as Record<string, unknown> | undefined);
+      const pinned = String((agent.metadata as { runtime?: string } | undefined)?.runtime || '').trim().toLowerCase();
+      const preferred = (saved && list.data.find(h => h.id === saved))
+        || (pinned && list.data.find(h => h.available && h.id === pinned))
+        || list.data.find(h => h.available)
+        || list.data[0];
+      if (preferred) setAcpHarnessId(preferred.id);
+      const st = await window.electronAPI!.acp!.status(agent.id);
+      if (cancelled || !st.ok) return;
+      setAcpRunning(Boolean(st.data.session?.running));
+      if (st.data.session?.running) {
+        setAcpStatusLabel(`${st.data.session.label} · pid ${st.data.session.pid}`);
+        setAcpHarnessId(st.data.session.harnessId);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open, hasDesktopAcp, agent?.id, agent?.metadata]);
 
   // Load the MCP skill manifest once the dialog is open for an agent.
   const agentId = agent?.id ?? '';
@@ -2646,9 +2998,104 @@ function AgentConnectDialog({
       setCliCommand(command);
       void navigator.clipboard?.writeText(command);
     } catch {
-      setCliError('Could not create a daemon connection command.');
+      setCliError('Could not create a Relay connection command.');
     } finally {
       setCliBusy(false);
+    }
+  };
+
+  const handleStartDesktopAcp = async () => {
+    if (!hasDesktopAcp || !agent) return;
+    setAcpBusy(true);
+    setAcpError('');
+    try {
+      // Mint a connect token so the desktop host can register as this agent.
+      const response = await fetch(apiUrl(`/backend/agents/${agent.id}/connection-command`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+        body: JSON.stringify({ handle, baseUrl: apiBaseUrl() }),
+      });
+      const payload = await response.json().catch(() => null);
+      const newToken = payload?.data?.token || '';
+      if (!response.ok || !newToken) {
+        setAcpError(payload?.error?.message || 'Could not mint an agent token for desktop ACP.');
+        return;
+      }
+      const cwd = typeof payload?.data?.cwd === 'string' ? payload.data.cwd : undefined;
+      // Prefer the backend URL from the mint response (daemon base). Falling back
+      // to window origin on Vite (:5173) made the ACP bridge use the flaky proxy
+      // and appear online for a second then drop.
+      const mintBase = typeof payload?.data?.baseUrl === 'string' ? payload.data.baseUrl : '';
+      const backendBase = mintBase || apiBaseUrl() || 'http://127.0.0.1:3142';
+      // Starting an ACP harness clears the classic pin so the agent form labels
+      // this agent as Hermes/Grok/… instead of "Claude — ready".
+      const result = await window.electronAPI!.acp!.start({
+        agentId: agent.id,
+        harnessId: acpHarnessId,
+        cwd,
+        autoApprove: true,
+        token: newToken,
+        baseUrl: backendBase,
+        workspaceId: agent.workspace_id,
+        handle,
+        name: agent.name,
+        model: agent.model || 'auto',
+        requiredRuntime: undefined,
+      });
+      if (!result.ok) {
+        setAcpError(result.error || 'Failed to start local ACP agent.');
+        return;
+      }
+      setAcpRunning(true);
+      const harness = acpHarnesses.find(h => h.id === acpHarnessId);
+      // Persist preferred harness so the form/badge show the correct ACP agent.
+      onUpdateAgent(agent.id, {
+        metadata: agentMetadataWithRuntime(
+          agent.metadata as Record<string, unknown> | undefined,
+          'desktop',
+          'daemon',
+          acpHarnessId,
+        ),
+      });
+      const data = result.data as {
+        bridge?: { wsUrl?: string };
+        autostart?: { saved?: boolean; tokenStored?: boolean; openAtLogin?: boolean };
+      };
+      const auto = data.autostart;
+      const ws = data.bridge?.wsUrl || '';
+      setAcpWsUrl(ws);
+      const rebootHint = auto?.tokenStored === false
+        ? 'Restore after reboot needs OS keychain encryption for the token.'
+        : auto?.openAtLogin
+          ? 'Saved for restore when the desktop app opens (including after reboot).'
+          : auto?.saved
+            ? 'Saved for restore when the desktop app opens.'
+            : 'Not saved for autostart.';
+      setAcpStatusLabel(
+        harness
+          ? `${harness.label} · model ${agentModelLabel} · ${rebootHint}`
+          : `${acpHarnessLabel(acpHarnessId)} · model ${agentModelLabel} · ${rebootHint}`,
+      );
+    } catch (err) {
+      setAcpError(err instanceof Error ? err.message : 'Failed to start local ACP agent.');
+    } finally {
+      setAcpBusy(false);
+    }
+  };
+
+  const handleStopDesktopAcp = async () => {
+    if (!hasDesktopAcp || !agent) return;
+    setAcpBusy(true);
+    setAcpError('');
+    try {
+      await window.electronAPI!.acp!.stop(agent.id);
+      setAcpRunning(false);
+      setAcpStatusLabel('');
+      setAcpWsUrl('');
+    } catch (err) {
+      setAcpError(err instanceof Error ? err.message : 'Failed to stop local ACP agent.');
+    } finally {
+      setAcpBusy(false);
     }
   };
 
@@ -2693,29 +3140,130 @@ function AgentConnectDialog({
             Connect {agent.name}
           </DialogTitle>
           <DialogDescription className="text-xs">
-            Choose how something connects to @{handle} — a local CLI daemon, an MCP client, or an HTTP webhook.
+            {hasDesktopAcp
+              ? `Relay: Start @${handle} on this Mac (ACP). Connector: MCP. Or add a webhook trigger. Registers against ${backendLabel}.`
+              : `Relay: agensis CLI on a host. Connector: MCP. Or an HTTP webhook trigger.`}
           </DialogDescription>
         </DialogHeader>
 
         <Tabs value={tab} onValueChange={(value) => setTab(value as ConnectTab)} className="flex min-h-0 flex-1 flex-col">
           <div className="border-b px-4 pt-3">
             <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="cli" className="gap-1.5"><Terminal className="size-3.5" />CLI</TabsTrigger>
+              <TabsTrigger value="cli" className="gap-1.5">
+                {hasDesktopAcp ? <Monitor className="size-3.5" /> : <Terminal className="size-3.5" />}
+                {hasDesktopAcp ? 'This Mac' : 'CLI'}
+              </TabsTrigger>
               <TabsTrigger value="mcp" className="gap-1.5"><Plug className="size-3.5" />MCP</TabsTrigger>
               <TabsTrigger value="webhook" className="gap-1.5"><Link2 className="size-3.5" />Webhook</TabsTrigger>
             </TabsList>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            {/* CLI — local daemon */}
+            {/* Machine: desktop ACP and/or terminal daemon */}
             <TabsContent value="cli" className="mt-0 space-y-4">
               <ConnectExplainer
-                benefit={`Full power. Runs @${handle} on your machine with real tools — edit files, run shells, local MCP. Best for coding agents.`}
-                note="Needs the agensis CLI installed. Run it in this shell, or install its saved profile as an OS-supervised service so it survives closing the desktop app."
+                benefit={hasDesktopAcp
+                  ? `Relay path: Start @${handle} on this Mac with a local ACP harness (Claude, Codex, Grok, Hermes, …). No terminal. Registers on ${backendLabel} so web and desktop both see it online.`
+                  : `Relay path: run the agensis-agent CLI on a host that should execute work for @${handle} (files, shells, local tools).`}
+                note={hasDesktopAcp
+                  ? `Agent must be Relay (not Direct) for this host to receive jobs. Model is ${agentModelLabel} — edit the agent to change it, then Start again. After switching local vs hosted backend, re-Start.`
+                  : 'Agent must be Relay (not Direct). Install @agensis/agensis-agent, generate a connect command below, then optionally install it as an OS service so it survives logout.'}
               />
-              <McpDialogSection icon={Terminal} title="Daemon connect command">
+
+              {hasDesktopAcp && (
+                <McpDialogSection icon={Monitor} title="Start on this Mac (ACP)">
+                  <p className="text-xs text-muted-foreground">
+                    Spawns the harness inside the desktop app and opens a WebSocket to{' '}
+                    <span className="font-medium text-foreground">{backendLabel}</span>.
+                    Harness = local runtime. Model is set on the agent (change below anytime).
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <select
+                      className="h-8 max-w-56 rounded-md border bg-background px-2 text-sm"
+                      value={acpHarnessId}
+                      onChange={e => setAcpHarnessId(e.target.value)}
+                      disabled={acpBusy || acpRunning}
+                      aria-label="ACP harness"
+                    >
+                      {acpHarnesses.map(h => (
+                        <option key={h.id} value={h.id} disabled={!h.available}>
+                          {h.label}{h.available ? '' : ' (not installed)'}
+                        </option>
+                      ))}
+                    </select>
+                    <AgentModelPicker
+                      agent={agent}
+                      acpRunning={acpRunning}
+                      disabled={acpBusy}
+                      onChangeModel={async (modelId) => {
+                        onUpdateAgent(agent.id, { model: modelId });
+                      }}
+                      onRestartAcp={acpRunning
+                        ? async (modelId) => {
+                          setAcpBusy(true);
+                          setAcpError('');
+                          try {
+                            await restartDesktopAcpForAgent(agent, modelId);
+                            setAcpRunning(true);
+                            setAcpStatusLabel(`Restarted · model ${displayModel(modelId)}`);
+                          } catch (err) {
+                            setAcpError(err instanceof Error ? err.message : 'Restart failed');
+                          } finally {
+                            setAcpBusy(false);
+                          }
+                        }
+                        : undefined}
+                    />
+                    {!acpRunning ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => void handleStartDesktopAcp()}
+                        disabled={acpBusy || !acpHarnesses.some(h => h.id === acpHarnessId && h.available)}
+                      >
+                        <Power data-icon="inline-start" className={acpBusy ? 'animate-pulse' : undefined} />
+                        {acpBusy ? 'Starting…' : 'Start on this Mac'}
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void handleStopDesktopAcp()}
+                        disabled={acpBusy}
+                      >
+                        <Unplug data-icon="inline-start" />
+                        Stop
+                      </Button>
+                    )}
+                  </div>
+                  {acpRunning && acpStatusLabel && (
+                    <div className="mt-2 space-y-1 text-xs text-emerald-600 dark:text-emerald-400">
+                      <p>Running · {acpStatusLabel}</p>
+                      {acpWsUrl && (
+                        <p className="break-all font-mono text-[11px] text-muted-foreground">
+                          Bridge {acpWsUrl}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {acpError && <div className="mt-2 text-xs text-destructive">{acpError}</div>}
+                  {!acpHarnesses.some(h => h.available) && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      No ACP harness found on PATH. Install Claude Code / Codex / Grok (or their ACP adapters), then reopen this dialog.
+                    </p>
+                  )}
+                </McpDialogSection>
+              )}
+
+              <McpDialogSection
+                icon={Terminal}
+                title={hasDesktopAcp ? 'Optional: terminal daemon (agensis-agent CLI)' : 'Daemon connect command'}
+              >
                 <p className="text-xs text-muted-foreground">
-                  Generate a one-line command, then run it where the daemon should execute. It&apos;s copied to your clipboard.
+                  {hasDesktopAcp
+                    ? 'Only if you want a separate OS process instead of desktop ACP. Generates a one-line connect command for @agensis/agensis-agent (copied to the clipboard). Same backend target as above.'
+                    : 'Generate a one-line command, then run it where the daemon should execute. Copied to the clipboard.'}
                 </p>
                 <Button type="button" size="sm" className="mt-2" onClick={handleGenerateCli} disabled={cliBusy}>
                   <RefreshCw data-icon="inline-start" className={cliBusy ? 'animate-spin' : undefined} />
@@ -2725,11 +3273,11 @@ function AgentConnectDialog({
                 {cliCommand && (
                   <div className="mt-3 space-y-2 rounded-md border bg-muted/30 p-3">
                     <p className="text-xs text-muted-foreground">
-                      After the connect command has saved this profile, keep it running at login and restart it after a crash:
+                      Optional: keep that CLI profile running at login (not the same as desktop ACP autostart):
                     </p>
                     <CopyBlock value={`agensis service install --profile ${handle}`} />
                     <p className="text-[11px] text-muted-foreground">
-                      macOS uses a per-user LaunchAgent; Linux uses a systemd user service. The service definition names only the profile — it never contains the token.
+                      macOS LaunchAgent / Linux systemd user service. Profile name only — no token in the unit file.
                     </p>
                   </div>
                 )}
@@ -2740,8 +3288,8 @@ function AgentConnectDialog({
             {/* MCP client */}
             <TabsContent value="mcp" className="mt-0 space-y-4">
               <ConnectExplainer
-                benefit={`Plug any MCP client (Claude Code, Cursor, Codex) into @${handle} with one token — no daemon required.`}
-                note="The token authenticates as this agent; generating a new one replaces the old token."
+                benefit={`Connector path: plug an MCP client (Claude Code, Cursor, Codex, …) into @${handle} with an agent token. Different from Relay (desktop ACP / CLI) — no local coding harness is required.`}
+                note="The token authenticates as this agent. Generating a new one invalidates the previous token for CLI daemons and desktop ACP until they re-Start / reconnect."
               />
               {loadError && (
                 <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -2757,8 +3305,8 @@ function AgentConnectDialog({
                 </p>
                 <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-400">
                   <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-                  <span>Generating a token replaces the agent&apos;s previous one. If a daemon is
-                    running for this agent, update it with the new token too.</span>
+                  <span>Generating a token replaces the agent&apos;s previous one. Re-Start desktop ACP
+                    or update any CLI daemon that was using the old token.</span>
                 </div>
                 {token ? (
                   <CopyField value={token} label="Agent token" mono />

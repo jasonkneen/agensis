@@ -119,7 +119,7 @@ describe('split merge provenance', () => {
     expect(isDurableMergeSynthesis({
       ...reply,
       message_kind: '',
-      content: '@ada is configured, but no daemon is connected.',
+      content: '@ada is set to Relay, but no host is online.',
     }, seedId)).toBe(false);
     expect(isDurableMergeSynthesis({
       ...reply,

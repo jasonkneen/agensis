@@ -3985,12 +3985,12 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
  return { localCommand: portableCommand, portableCommand };
 }
 
-// Mint a daemon connect token for an agent and return the full connect payload
+// Mint a Relay connect token for an agent and return the full connect payload
 // (command + one-time token + resolved settings). Shared by the HTTP
 // connection-command route and the MCP `get_connect_command` tool so the two can
-// never drift. Side effects: ROTATES the agent's connect token (any running daemon
-// must be restarted with the new one) and flips run_mode to 'daemon' so a connected
-// daemon takes over from the builtin server runner. Authorization is the caller's
+// never drift. Side effects: ROTATES the agent's connect token (any running Relay
+// host must be restarted with the new one) and flips run_mode to 'daemon' (Relay)
+// so a linked host takes over from Direct (builtin). Authorization is the caller's
 // responsibility (HTTP route enforces manage role; MCP scopes by workspace token).
 // `actorUserId` is threaded in by every caller that has a verified session, for
 // the audit row at the end. It is recorded HERE rather than at the four call
@@ -4489,6 +4489,24 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
   ),
  ]);
 
+ // Same live-socket reconcile as GET /backend/agents/connections. The DB column
+ // alone lies after a process restart or when the daemon is registered on a
+ // different backend instance than the one serving this bootstrap: status stays
+ // 'online' in Neon while no socket exists here. Painting that as green, then
+ // flipping offline when the connections poll reconciles, is the "refresh → green
+ // for ~10s → offline" flash. Fail closed: no live socket ⇒ offline in the
+ // snapshot too.
+ const connections = connectionRows.map((row) => {
+  const connection = publicAgentConnection(row);
+  if (
+   (connection.status === 'online' || connection.status === 'busy')
+   && !isConnectionSocketLive(connection.id)
+  ) {
+   return { ...connection, status: 'offline' };
+  }
+  return connection;
+ });
+
  return {
   workspace: workspaceRows[0] ? publicWorkspace(workspaceRows[0]) : null,
   agents: agentRows.map(agentRuntimePayload),
@@ -4496,7 +4514,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
   documents: documentRows,
   tasks: taskRows,
   files: fileRows,
-  connections: connectionRows.map(publicAgentConnection),
+  connections,
   memoryFacts: memoryRows,
   limits: BOOTSTRAP_LIMITS,
  };

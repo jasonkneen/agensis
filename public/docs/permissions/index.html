@@ -96,7 +96,7 @@
 <main id="content">
 <span class="eyebrow">Agents</span>
 <h1>Tool approvals</h1>
-<p class="lede">When a remote agent hits a tool it is not cleared for, it asks in the conversation instead of failing silently. Approvals live in the workspace, not in a file on the daemon host.</p>
+<p class="lede">When a Relay agent hits a tool it is not cleared for, it asks in the conversation instead of failing silently. Approvals live in the workspace, not in a file on the host.</p>
 
 <h2>How a request appears</h2>
 
@@ -116,7 +116,7 @@
 
 <h2>Delivery</h2>
 
-<p>A decision is delivered to the exact daemon connection that raised the request, before it is recorded. A reconnected process has no memory of old request ids, so approving into a different socket would show "Approved" over a tool that never ran.</p>
+<p>A decision is delivered to the exact Relay host connection that raised the request, before it is recorded. A reconnected process has no memory of old request ids, so approving into a different socket would show "Approved" over a tool that never ran.</p>
 
 <div class="note">
   <span class="label">Codex</span>

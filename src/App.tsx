@@ -1024,7 +1024,7 @@ function AppContent() {
   const capabilityWorkspacePath = activeLayer?.local_path || activeLayer?.git_root || activeWorkspace?.local_path || activeWorkspace?.git_root || '';
   useEffect(() => {
     let cancelled = false;
-    getSystemCapabilities(capabilityWorkspacePath)
+    getSystemCapabilities(capabilityWorkspacePath, { refresh: false })
       .then(capabilities => {
         if (!cancelled) setSystemCapabilities(capabilities);
       })

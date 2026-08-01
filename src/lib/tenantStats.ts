@@ -243,7 +243,7 @@ export function buildActivityStats(stats: TenantActivityStats): TenantStatItem[]
       value: formatCount(stats.agent_count),
       detail: stats.live_daemon_count > 0
         ? `${formatCount(stats.live_daemon_count)} daemon${stats.live_daemon_count === 1 ? '' : 's'} connected`
-        : 'No daemon connected',
+        : 'No Relay host online',
     },
     {
       label: 'Documents',

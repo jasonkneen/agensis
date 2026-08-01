@@ -87,8 +87,8 @@ function createBuiltinTurn(deps = {}) {
  // an unrelated concurrent turn.
  const builtinAbortControllers = new Map();
 
- function builtinCancellationError(reason = 'Built-in agent turn cancelled') {
-  const error = new Error(String(reason || 'Built-in agent turn cancelled'));
+ function builtinCancellationError(reason = 'Direct agent turn cancelled') {
+  const error = new Error(String(reason || 'Direct agent turn cancelled'));
   error.name = 'AbortError';
   error.code = 'builtin_job_cancelled';
   return error;
@@ -108,7 +108,7 @@ function createBuiltinTurn(deps = {}) {
   * id. That order makes cancellation durable across a process crash and makes
   * the running-only terminal updates below discard the resulting AbortError.
   */
- function cancelBuiltinJob(jobId, reason = 'Built-in agent turn cancelled') {
+ function cancelBuiltinJob(jobId, reason = 'Direct agent turn cancelled') {
   const id = String(jobId || '').trim();
   if (!id) return false;
   const controller = builtinAbortControllers.get(id);
@@ -591,7 +591,7 @@ function createBuiltinTurn(deps = {}) {
         returning *`,
     [
      sessionId,
-     `_@${handle} is an MCP client and is not attached right now, so nobody has answered this yet._\n\nYour message is queued — it will be picked up when that client next connects. This notice is from agensis, not from @${handle}.`,
+     `_@${handle} is a Connector (MCP) agent and is not attached right now, so nobody has answered this yet._\n\nYour message is queued — it will be picked up when that MCP client next connects. This notice is from agensis, not from @${handle}.`,
      workThreadParentId,
      String(agent.id),
      agent.name,
@@ -953,7 +953,7 @@ function createBuiltinTurn(deps = {}) {
     // and stop any further one from being started behind it.
     finished = true;
     await writeChain.catch(() => { });
-    const errorText = error?.message || 'Built-in agent failed';
+    const errorText = error?.message || 'Direct agent failed';
     const updatedRows = await getDb().unsafe(
      `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now()
          where id = $1 and status = 'running' returning *`,
@@ -1001,7 +1001,7 @@ function createBuiltinTurn(deps = {}) {
         returning *`,
     [
      sessionId,
-     `@${handle} is configured, but no daemon is connected. Open AI Agents, copy its connection command, and run it where the agent should execute.`,
+     `@${handle} is set to Relay, but no host is online. Open AI Agents → Connect: Start on this Mac (desktop ACP) or run the CLI connection command (\`agensis connect …\`) on the machine that should execute work.`,
      workThreadParentId,
      String(agent.id),
      agent.name,

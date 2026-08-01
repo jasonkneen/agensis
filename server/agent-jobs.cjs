@@ -1060,9 +1060,9 @@ function createAgentJobs(deps = {}) {
    [String(agentId), String(workspaceId)],
   );
   const agent = agentRows[0];
-  if (!agent || !isAgentEnabled(agent) || agent.run_mode !== 'daemon') throw badRequest('Farm jobs require an enabled daemon agent');
+  if (!agent || !isAgentEnabled(agent) || agent.run_mode !== 'daemon') throw badRequest('Farm jobs require an enabled Relay agent');
   const target = connection || findConnectedAgent(String(workspaceId), String(agentId), agent.handle || agent.name);
-  if (!target) throw Object.assign(new Error('The selected agent daemon is offline'), { status: 503, code: 'agent_offline' });
+  if (!target) throw Object.assign(new Error('The selected Relay host is offline'), { status: 503, code: 'agent_offline' });
   if (target.capabilities?.codingRoute === false) {
    throw Object.assign(new Error('The selected agent does not advertise coding support'), { status: 409, code: 'coding_route_unavailable' });
   }
@@ -1163,7 +1163,15 @@ function createAgentJobs(deps = {}) {
   }
   await withCurrentDaemonJob(ws, jobId, ({ tx, job, publishAfterCommit, afterCommit }) => (
    finalizeAgentJobResult(job, {
-    responseText: textFromValue(message.response).trim(),
+    // Classic daemon sends `response`. Desktop ACP v0.1 mistakenly sent only
+    // `content` (which deltas use); accept both so a final frame cannot wipe a
+    // live stream with "finished without output". Prefer the frame body; if both
+    // are empty, keep whatever the last delta wrote on the job row.
+    responseText: (
+     textFromValue(message.response).trim()
+     || textFromValue(message.content).trim()
+     || textFromValue(job.response).trim()
+    ),
     errorText: textFromValue(message.error).trim(),
     fallbackName: auth.name,
     fallbackHandle: auth.handle,

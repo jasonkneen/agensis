@@ -1536,7 +1536,9 @@ function DirectAgentRow({
        </>
       )}
      </Avatar>
-     <span className={`absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-background ${statusColor}`} />
+     {/* Inside the avatar bounds — parent .sidebar-agent-primary is overflow:hidden,
+         so negative offsets + ring (box-shadow) only showed a clipped crescent. */}
+     <span className={`absolute right-0 bottom-0 size-2.5 rounded-full border-2 border-background ${statusColor}`} />
     </span>
     <span className="min-w-0 flex-1">
      {/* ONE line: name and handle side by side, not stacked. Two block spans

@@ -248,7 +248,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating' }: { works
               {badgeCount === 0 && (
                 <span
                   aria-hidden
-                  className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-background bg-emerald-500"
+                  className="absolute bottom-0 right-0 size-2.5 rounded-full border-2 border-background bg-emerald-500"
                 />
               )}
             </>

@@ -186,19 +186,19 @@ export const PAGE_TIPS: readonly PageTip[] = [
     id: 'agents-run-mode',
     surface: 'agents',
     title: 'How an agent runs is the choice that matters',
-    body: "Built-in agents run on the server with the workspace's API key. A remote agent runs on your own machine through your logged-in Claude Code or Codex CLI, with your files and your account.",
+    body: 'Direct agents run on agensis with workspace / hosted model access. Relay agents run on a linked host — desktop ACP or the agensis CLI — so web and desktop both see them when that host is online. Connector agents are external MCP clients that answer as the agent.',
   },
   {
     id: 'agents-host-folders',
     surface: 'agents',
-    title: 'A remote agent only sees the folders you list',
-    body: 'Host folders, on a daemon agent, is the set of directories the daemon opens for it when a turn starts. Nothing outside that list is visible to it.',
+    title: 'A Relay agent only sees the folders you list',
+    body: 'Host folders on a Relay agent are the directories the host opens when a turn starts. Nothing outside that list is visible to it.',
   },
   {
     id: 'agents-webhook',
     surface: 'agents',
     title: 'An agent can be woken by a webhook',
-    body: "Connect gives an agent its own URL. Add the provider's signing secret and a delivery that fails to verify is refused, while a retry of one already handled is ignored rather than run twice.",
+    body: "Connect gives an agent its own URL (a trigger, not a run mode). Add the provider's signing secret and a delivery that fails to verify is refused, while a retry of one already handled is ignored rather than run twice.",
   },
   {
     id: 'agents-voice',

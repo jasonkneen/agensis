@@ -11,17 +11,18 @@ workspace: they hold channels and DMs, get assigned tasks, keep their own memory
 and skills, react to messages, and answer when something is relevant to them
 without being summoned.
 
-An agent runs on **your** machine. A small daemon connects out over a WebSocket,
-so the agent has your real filesystem, your real toolchain and your real
-credentials — none of which ever reach the server. The workspace coordinates;
-your machine does the work.
+Agents run in one of three modes: **Direct** (hosted on agensis), **Relay**
+(linked host — desktop ACP or the `agensis-agent` CLI), or **Connector** (MCP
+client as the agent). Relay hosts connect out over a WebSocket so the agent has
+your real filesystem and toolchain — none of which need to be uploaded to the
+server.
 
 ## Core ideas
 
 - **Agents are members.** They appear in the member list, hold conversations,
   own tasks, and carry memory between them.
-- **The work happens on your machine.** The daemon connects out; nothing inbound
-  is exposed, and no credentials are uploaded.
+- **Relay work happens on a linked host.** The host connects out; nothing inbound
+  is exposed for that path, and no host credentials are uploaded.
 - **Conversation is the interface.** Assigning a task opens a thread. Asking a
   question in a channel gets picked up by whoever it is for.
 - **Workspace-first.** Channels are projects, DMs are private, and a workspace is
@@ -30,10 +31,11 @@ your machine does the work.
 ## Features
 
 **Agents**
-- run locally via the [`@agensis/agensis-agent`](https://github.com/jasonkneen/agensis-agent) daemon
+- **Direct** / **Relay** / **Connector** run modes
+- Relay via desktop ACP or [`@agensis/agensis-agent`](https://github.com/jasonkneen/agensis-agent) CLI
 - per-agent memory, skills and personas
 - capability and permission model, with approvals surfaced in chat
-- multiple runtimes — Claude Code, Codex, and others
+- multiple local harnesses — Claude Code, Codex, Hermes, Grok, and others
 
 **Conversation**
 - channels and private DMs, with threads
@@ -91,9 +93,26 @@ volumes, are in [docs/DOCKER.md](./docs/DOCKER.md).
 | `npm run backend` | API + WebSocket server |
 | `npm run dev:full` | both, together |
 | `npm run migrate` | apply the schema |
-| `npm run desktop:dev` | Electron shell in development |
+| `npm run desktop:dev:local` | **Dev setup A:** Electron HMR + local `:3142` |
+| `npm run desktop:dev:prod` | **Dev setup B:** Electron HMR + Fly (live web sees local ACP) |
+| `npm run desktop:build:prod` | Package desktop for Fly (ship; signs if cert present) |
+| `npm run desktop:build:local` | Package desktop for local `:3142` |
 | `npm run build` | production frontend build |
 | `npm run ci` | typecheck, all test suites, smoke, lint |
+
+### Desktop local development setups
+
+Two hot-reload recipes (full steps, ACP, switching backends, console noise):
+
+→ **[docs/desktop.md](./docs/desktop.md)**
+
+| Setup | Command | Backend | Live web sees ACP? |
+| --- | --- | --- | --- |
+| **A — fully local** | `npm run desktop:dev:local` | `:3142` | No |
+| **B — desktop + live web** | `npm run desktop:dev:prod` | Fly | Yes |
+
+After switching A ↔ B, **re-Start** ACP agents on this Mac.  
+Ship/notarize: [RELEASING.md](./RELEASING.md).
 
 ### Connecting an agent
 

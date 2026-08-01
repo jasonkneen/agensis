@@ -78,16 +78,16 @@ const STEPS: StepMeta[] = [
     icon: Bot,
     accent: 'from-sky-500/25 to-sky-500/5 text-sky-500 ring-sky-500/20',
     eyebrow: 'Step 1',
-    title: 'Add a built-in agent.',
-    body: 'One click adds a ready-made agent to your workspace — no setup, no prompts to write. Add as many as you like.',
+    title: 'Add a Direct agent.',
+    body: 'One click adds a ready-made agent that runs on agensis — no host to link, no prompts to write. Add as many as you like.',
   },
   {
     id: 'connect',
     icon: Terminal,
     accent: 'from-violet-500/25 to-violet-500/5 text-violet-500 ring-violet-500/20',
     eyebrow: 'Step 2',
-    title: 'Connect your own agent.',
-    body: 'Run an agent on this machine with the Claude Code or Codex CLI — it uses the account you are already logged in with. Optional, but this is where the real power is.',
+    title: 'Link a Relay host.',
+    body: 'Run work on this machine via desktop ACP or the agensis CLI (Claude Code, Codex, Hermes, Grok, …). Optional, but this is where local files and tools live.',
   },
   {
     id: 'invite',
@@ -333,7 +333,7 @@ export function OnboardingTour({
       setCommandCopied(false);
       void navigator.clipboard?.writeText(command).then(() => setCommandCopied(true)).catch(() => {});
     } catch (e) {
-      setConnectError(e instanceof Error ? e.message : 'Could not create a daemon connection command.');
+      setConnectError(e instanceof Error ? e.message : 'Could not create a Relay connection command.');
     } finally {
       setConnectBusy(null);
     }
@@ -443,7 +443,7 @@ export function OnboardingTour({
                 <div className="mt-3 rounded-lg border border-border bg-muted/30 p-3 text-left">
                   <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
                     <KeyRound className="size-3.5 text-muted-foreground" />
-                    Built-in agents need an Anthropic API key
+                    Direct agents need an Anthropic API key
                   </div>
                   <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
                     No key is configured for this workspace yet. Paste one now, or skip and add it later in Settings → Secret keys.

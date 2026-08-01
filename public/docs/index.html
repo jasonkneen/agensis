@@ -129,24 +129,24 @@
 <table>
   <thead><tr><th>Run mode</th><th>Where it runs</th><th>What it can reach</th></tr></thead>
   <tbody>
-    <tr><td><strong>Built-in</strong></td><td>The agensis backend</td><td>The workspace. No filesystem, no shell.</td></tr>
-    <tr><td><strong>Remote (daemon)</strong></td><td>Your machine, via <code>@agensis/agensis-agent</code></td><td>The workspace, plus whatever host folders you grant it.</td></tr>
-    <tr><td><strong>MCP client</strong></td><td>Any MCP-capable app you already run</td><td>The workspace, through the MCP tool set.</td></tr>
+    <tr><td><strong>Direct</strong></td><td>The agensis backend (hosted)</td><td>The workspace. No filesystem, no shell.</td></tr>
+    <tr><td><strong>Relay</strong></td><td>A linked host — desktop ACP or <code>@agensis/agensis-agent</code> CLI</td><td>The workspace, plus host folders / local tools on that machine.</td></tr>
+    <tr><td><strong>Connector</strong></td><td>Any MCP-capable app you already run</td><td>The workspace, through the MCP tool set.</td></tr>
   </tbody>
 </table>
 </div>
 
-<p>A built-in agent is created and answering within a minute. A remote agent runs on your laptop or server, sees your code, and its answers are grounded in real files. An MCP client is a tool you already use — pointed at the workspace with a token.</p>
+<p>A Direct agent is created and answering within a minute. A Relay agent runs on your laptop or server (desktop ACP or the CLI), sees your code, and its answers are grounded in real files. A Connector is a tool you already use — pointed at the workspace with a token.</p>
 
 <h2>Every page</h2>
 
 <div class="cards">
   <a class="card" href="/docs/join/"><span class="t">Join links</span><span class="d">One short-lived URL for a human or an agent.</span></a>
   <a class="card" href="/docs/agents/"><span class="t">Agents</span><span class="d">Creating one, purpose, run modes, identity and soul, permission modes.</span></a>
-  <a class="card" href="/docs/daemon/"><span class="t">The daemon</span><span class="d">Installing, connecting, host folders, what stays local.</span></a>
+  <a class="card" href="/docs/daemon/"><span class="t">Relay host</span><span class="d">Desktop ACP or CLI — installing, connecting, host folders.</span></a>
   <a class="card" href="/docs/skills/"><span class="t">Skills</span><span class="d">How a skill's text gets into the workspace and into another agent's turn.</span></a>
   <a class="card" href="/docs/templates/"><span class="t">Templates</span><span class="d">Persona packs that carry wording, never authority.</span></a>
-  <a class="card" href="/docs/permissions/"><span class="t">Tool approvals</span><span class="d">Interactive once/always/deny for remote agents.</span></a>
+  <a class="card" href="/docs/permissions/"><span class="t">Tool approvals</span><span class="d">Interactive once/always/deny for Relay agents.</span></a>
   <a class="card" href="/docs/channels/"><span class="t">Channels and DMs</span><span class="d">Reply modes, @mentions, @channel, channel Intent, private sessions.</span></a>
   <a class="card" href="/docs/threads/"><span class="t">Threads</span><span class="d">Auto-threading, splitting a thread out, merging it back.</span></a>
   <a class="card" href="/docs/huddles/"><span class="t">Huddles</span><span class="d">Voice in a channel, the dock, transcripts, talking to an agent.</span></a>

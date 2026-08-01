@@ -971,6 +971,27 @@ bundle live at `../agensis-agent` locally and
 The npm package is `@agensis/agensis-agent`; changes to the server/daemon
 wire contract must be coordinated across both repositories.
 
+## Desktop ACP (Electron) — local dev setups
+
+Desktop can run local ACP harnesses (“Start on this Mac”) and bridge them as
+daemon-shaped WebSocket agents. **Operator guide for local dev:**
+**[docs/desktop.md](./docs/desktop.md)** (setup A fully local, setup B + live web).
+
+| Setup | Command | Backend |
+| --- | --- | --- |
+| A — fully local | `npm run desktop:dev:local` | `:3142` |
+| B — desktop + live web | `npm run desktop:dev:prod` | Fly |
+
+Rules agents must not break:
+
+- **Same backend as the UI** for bridges. Live web never stays green for agents
+  registered only on local `:3142`.
+- **“Online” = live socket on this server process**, not “ACP child is running”.
+- **Job result wire:** `agent_job_result` uses **`response`** (and `error`);
+  deltas use `content`. Wrong field → `@handle finished without output`.
+- Switching A ↔ B requires **re-Start** ACP (token + autostart `baseUrl`).
+  Code: `electron/acp/*`, `scripts/desktop-dev.mjs` / `desktop-build.mjs`.
+
 ## Conventions
 
 - Match the surrounding file's style: 2-space indent, its semicolon convention,

@@ -24,6 +24,10 @@ describe('runtimeModelCatalog', () => {
     expect(runtimeModelCatalog('amp')).toEqual([]);
   });
 
+  it('offers nothing fixed for desktop ACP (Hermes/Grok freeform)', () => {
+    expect(runtimeModelCatalog('desktop')).toEqual([]);
+  });
+
   it('offers the Claude models for Claude, minus the auto pseudo-entry', () => {
     const claude = runtimeModelCatalog('claude');
     expect(claude.map(m => m.id)).toContain('claude-fable-5');
@@ -90,5 +94,11 @@ describe('modelOptionsForRuntime', () => {
 
   it('a builtin agent gets the Claude list regardless of the runtime field', () => {
     expect(modelOptionsForRuntime('auto', 'builtin', 'codex')).toEqual(AI_MODELS);
+  });
+
+  it('desktop ACP offers harness default plus freeform-friendly catalogs', () => {
+    const options = modelOptionsForRuntime('auto', 'daemon', 'desktop');
+    expect(options[0]).toMatchObject({ id: 'auto', label: 'Harness default' });
+    expect(options.map(o => o.id)).toContain('claude-sonnet-5');
   });
 });

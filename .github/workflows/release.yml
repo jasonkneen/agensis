@@ -1,14 +1,19 @@
 name: Release Desktop App
 
-# Build and publish desktop installers whenever a version tag is pushed.
-# Push a tag like `v0.1.2` to trigger a release:
+# CI backup for desktop installers. Primary signed+notarized path is local
+# (same model as infinitty / titerm):
 #
-#     git tag v0.1.2
-#     git push origin v0.1.2
+#     npm run desktop:ship              # keychain Developer ID + notarytool
+#     npm run desktop:ship -- --upload  # attach DMG/zip to the v* GitHub release
 #
-# The workflow can also be kicked off manually from the Actions tab.
+# See RELEASING.md. Load CI secrets once with:
+#     scripts/setup-signing-secrets.sh ~/Desktop/cert.p12
+#
+# Tag-triggered builds:
+#     git tag v0.1.2 && git push origin v0.1.2
 # Manual runs build installers as artifacts only (no GitHub Release) unless
-# you also push a matching version tag.
+# you also push a matching version tag. Without CSC_LINK the mac job is
+# UNSIGNED — do not ship those artifacts.
 on:
   push:
     tags:
@@ -49,13 +54,38 @@ jobs:
 
       # Icon + desktop vite bundle (relative base + backend URL) + electron-builder.
       # desktop-build.mjs is the single path that matches a local `npm run desktop:dist`.
+      #
+      # macOS signing: import a Developer ID .p12 as secrets CSC_LINK (base64) +
+      # CSC_KEY_PASSWORD. Notarize with APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD +
+      # APPLE_TEAM_ID (SW75ZJJ5R6), or API key env vars (see electron-builder docs).
+      # Without CSC_LINK the mac job stays unsigned — do not ship that to users.
       - name: Build desktop installers
         run: node scripts/desktop-build.mjs --publish ${{ startsWith(github.ref, 'refs/tags/') && 'always' || 'never' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Skip code signing when no certificates are configured.
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_NAME: ${{ secrets.CSC_NAME }}
+          # Windows Authenticode (optional)
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          # Notarization (mac only; skipped when unset)
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          # Runners have no keychain cert unless CSC_LINK is set; disable auto
+          # discovery only when we have no imported identity (avoids ad-hoc noise).
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' && 'true' || 'false' }}
+          # CI without certs must not fail the whole matrix on verify-sign.
+          SKIP_DESKTOP_SIGN_VERIFY: ${{ secrets.CSC_LINK != '' && '0' || '1' }}
+
+      - name: Verify macOS Developer ID signature
+        if: runner.os == 'macOS' && secrets.CSC_LINK != ''
+        run: node scripts/desktop-verify-sign.mjs
 
       - name: Upload build artifacts
         if: always()

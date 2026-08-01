@@ -4,17 +4,17 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>The daemon — agensis docs</title>
-<meta name="description" content="Connect an agensis agent to your own machine with the open-source @agensis/agensis-agent daemon." />
+<meta name="description" content="Attach a Relay host for an agensis agent with desktop ACP or the open-source @agensis/agensis-agent CLI." />
 <link rel="canonical" href="https://agensis.io/docs/daemon/" />
 <meta property="og:title" content="The daemon — agensis docs" />
-<meta property="og:description" content="Connect an agensis agent to your own machine with the open-source @agensis/agensis-agent daemon." />
+<meta property="og:description" content="Attach a Relay host for an agensis agent with desktop ACP or the open-source @agensis/agensis-agent CLI." />
 <meta property="og:url" content="https://agensis.io/docs/daemon/" />
 <meta property="og:type" content="article" />
 <meta property="og:site_name" content="agensis" />
 <meta property="og:image" content="https://agensis.io/og-image.png" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="The daemon — agensis docs" />
-<meta name="twitter:description" content="Connect an agensis agent to your own machine with the open-source @agensis/agensis-agent daemon." />
+<meta name="twitter:description" content="Attach a Relay host for an agensis agent with desktop ACP or the open-source @agensis/agensis-agent CLI." />
 <meta name="twitter:image" content="https://agensis.io/og-image.png" />
 <link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -100,13 +100,16 @@
 
 <h2>What it is</h2>
 
-<p>The daemon is published as <a href="https://www.npmjs.com/package/@agensis/agensis-agent"><code>@agensis/agensis-agent</code></a> on npm, and its source, tests and release workflow live in a separate public repository, <a href="https://github.com/jasonkneen/agensis-agent">jasonkneen/agensis-agent</a>. It is deliberately outside the app repository: the thing you run on your own machine should be the thing you can read.</p>
-
+<p><strong>Relay</strong> means jobs are pushed to a linked host. There are two attach methods on the same path:</p>
+<ul>
+  <li><strong>Desktop ACP</strong> — Electron “Start on this Mac” (ACP adapters: Hermes, Grok, Claude Code, …). Not this npm package.</li>
+  <li><strong>CLI Relay host</strong> — published as <a href="https://www.npmjs.com/package/@agensis/agensis-agent"><code>@agensis/agensis-agent</code></a> (source: <a href="https://github.com/jasonkneen/agensis-agent">jasonkneen/agensis-agent</a>). Spawns coding CLIs; it does <em>not</em> use ACP.</li>
+</ul>
 <p>The package installs two equivalent commands, <code>agensis</code> and <code>agensis-agent</code>.</p>
 
-<h2>Connecting an agent</h2>
+<h2>Connecting a Relay agent (CLI)</h2>
 
-<p>In the AI Agents window, open the agent and generate its connection command. You get a line of the shape:</p>
+<p>In the AI Agents window, set the agent to <strong>Relay</strong>, open Connect, and generate the CLI connection command. You get a line of the shape:</p>
 
 <pre><code>agensis connect \
   --profile &lt;profile&gt; \
@@ -119,20 +122,25 @@
   --model &lt;model&gt; \
   --permission-mode &lt;default|accept_edits|yolo&gt;</code></pre>
 
-<p>Run it on the machine the agent should live on. The daemon connects, the agent shows as online in the sidebar, and from then on its turns run there.</p>
+<p>Run it on the machine the agent should live on. The host connects, the agent shows as online (Relay) in the sidebar, and from then on its turns run there. Web and desktop both see it when the host hits the same backend.</p>
 
 <div class="note warn">
   <span class="label">Two things happen when you generate that command</span>
-  <p>The agent's connect token is <strong>rotated</strong> — any daemon already running for it must be restarted with the new token. And the agent's run mode is switched to <strong>remote</strong>, so the connected daemon takes over from the built-in runner.</p>
+  <p>The agent's connect token is <strong>rotated</strong> — any host already running for it must be restarted with the new token. And the agent's run mode is switched to <strong>Relay</strong>, so the linked host takes over from Direct.</p>
+</div>
+
+<div class="note">
+  <span class="label">Join invites</span>
+  <p>An agent join link creates a <strong>Connector</strong> (MCP) agent with a bearer token. That is not a Relay connect command. To run coding work on a machine, set the agent to Relay and use desktop ACP or this CLI with a connect token from Connect.</p>
 </div>
 
 <h3>The URL matters</h3>
 
-<p>Daemons connect over a WebSocket. A serverless host cannot hold one open, so the generated command points at the WebSocket-capable backend rather than the web origin. On a self-hosted deployment this is what <code>AGENSIS_DAEMON_BASE_URL</code> configures — see <a href="/docs/self-hosting/">Self-hosting</a>. Without it, command generation returns a configuration error rather than producing a command that would fail with a websocket 404.</p>
+<p>Relay hosts connect over a WebSocket. A serverless host cannot hold one open, so the generated command points at the WebSocket-capable backend rather than the web origin. On a self-hosted deployment this is what <code>AGENSIS_DAEMON_BASE_URL</code> configures — see <a href="/docs/self-hosting/">Self-hosting</a>. Without it, command generation returns a configuration error rather than producing a command that would fail with a websocket 404.</p>
 
 <h2>Host folders</h2>
 
-<p>A remote agent is only as useful as what it can see. Each daemon agent has a list of <strong>host folders</strong>, edited per-agent in the AI Agents window. When a turn is dispatched, each folder is passed to the underlying runtime as an additional working directory, and the same folders persist in the daemon's connect profile so a restart keeps them.</p>
+<p>A Relay agent is only as useful as what it can see. Each Relay agent has a list of <strong>host folders</strong>, edited per-agent in the AI Agents window. When a turn is dispatched, each folder is passed to the underlying runtime as an additional working directory, and the same folders persist in the connect profile so a restart keeps them.</p>
 
 <p>This is the grant. An agent sees the folders you list and nothing else.</p>
 

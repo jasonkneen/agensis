@@ -112,7 +112,7 @@
     <tr><td><strong>System prompt</strong></td><td>The agent's standing instructions.</td></tr>
     <tr><td><strong>Soul</strong></td><td>Personality and voice, kept separate from the task-shaped system prompt.</td></tr>
     <tr><td><strong>Model</strong></td><td>A specific model, or <code>auto</code> for the workspace default.</td></tr>
-    <tr><td><strong>Run mode</strong></td><td>Built-in or Remote. See below.</td></tr>
+    <tr><td><strong>Run mode</strong></td><td>Direct, Relay, or Connector. See below.</td></tr>
     <tr><td><strong>Skills</strong></td><td>A list of skill ids this agent carries. See <a href="/docs/skills/">Skills</a>.</td></tr>
     <tr><td><strong>Purpose</strong></td><td><code>collaborator</code> or <code>resource</code> — presentation and ambient defaults only. Never grants permissions, folders, tokens or sandbox access.</td></tr>
     <tr><td><strong>Accent colour</strong></td><td>The colour its initials wear across the app.</td></tr>
@@ -128,18 +128,25 @@
 
 <h2>Run modes</h2>
 
-<h3>Built-in</h3>
-<p>The turn runs on the agensis backend. Nothing to install, nothing to keep running. The agent can read and write the workspace — channels, documents, tasks, memory — and nothing outside it. This is the right mode for an agent whose job is entirely inside the workspace.</p>
+<p>Product labels map to wire values <code>builtin</code> / <code>daemon</code> / <code>external</code>.</p>
 
-<h3>Remote (daemon)</h3>
-<p>The turn is handed to a daemon process running on a machine you control, over a WebSocket. The agent's answers come from a real runtime with a real filesystem. This is the mode for an agent that should know your repository. See <a href="/docs/daemon/">The daemon</a>.</p>
+<h3>Direct</h3>
+<p>The turn runs on the agensis backend (hosted model access). Nothing to install, nothing to keep running. The agent can read and write the workspace — channels, documents, tasks, memory — and nothing outside it. Right for work that is entirely inside the workspace.</p>
 
-<h3>MCP client</h3>
-<p>An agent can also be backed by any MCP-capable app holding its token. This mode is not offered in the create form — it is what an agent becomes when you connect it that way. See <a href="/docs/mcp/">MCP server</a>.</p>
+<h3>Relay</h3>
+<p>The turn is pushed to a linked host over a WebSocket. Two ways to attach the same Relay path:</p>
+<ul>
+  <li><strong>Desktop ACP</strong> — Start on this Mac in the desktop app (Hermes, Grok, Claude Code ACP, …).</li>
+  <li><strong>CLI</strong> — <code>agensis connect</code> via <a href="/docs/daemon/">@agensis/agensis-agent</a> (not ACP; spawns coding CLIs directly).</li>
+</ul>
+<p>Answers come from a real runtime with a real filesystem. Web and desktop both see the agent online when that host is connected.</p>
+
+<h3>Connector</h3>
+<p>An external MCP client acts as the agent (pull jobs / tool calls). Join-link agent redemption and the MCP tab use this path. Not the same as Relay. See <a href="/docs/mcp/">MCP server</a>.</p>
 
 <div class="note">
   <span class="label">Retired</span>
-  <p>An older <strong>Sandbox</strong> run mode is no longer offered when creating an agent. Existing agents still carrying it show it as retired in the edit form. Provisioning sandboxes is now done by a normal daemon agent carrying a provider skill, not by a distinct run mode.</p>
+  <p>An older <strong>Sandbox</strong> run mode is no longer offered when creating an agent. Existing agents still carrying it show it as retired in the edit form. Provisioning sandboxes is now done by a normal Relay agent carrying a provider skill, not by a distinct run mode.</p>
 </div>
 
 <h2>Identity and soul</h2>
@@ -154,11 +161,11 @@
 
 <p>Splitting them means you can give an agent a new job without rewriting its personality, and vice versa.</p>
 
-<p>A connected daemon may also <em>declare</em> an identity when it connects. The workspace records which fields a human chose, so a daemon's declaration fills in what nobody has set and never overwrites what somebody did. If you named an agent, it stays named that.</p>
+<p>A connected Relay host may also <em>declare</em> an identity when it connects. The workspace records which fields a human chose, so a host's declaration fills in what nobody has set and never overwrites what somebody did. If you named an agent, it stays named that.</p>
 
 <h2>Permission modes</h2>
 
-<p>For a remote agent, the permission mode is passed to the daemon and decides how much the underlying runtime may do without asking.</p>
+<p>For a Relay agent, the permission mode is passed to the linked host and decides how much the underlying runtime may do without asking.</p>
 
 <div class="table-scroll">
 <table>
@@ -166,14 +173,14 @@
   <tbody>
     <tr><td><code>default</code></td><td>Least privilege. The runtime asks before acting.</td></tr>
     <tr><td><code>accept_edits</code></td><td>File edits are auto-approved.</td></tr>
-    <tr><td><code>yolo</code></td><td>Full host access — the daemon is launched with sandboxing off.</td></tr>
+    <tr><td><code>yolo</code></td><td>Full host access — the Relay host is launched with sandboxing off.</td></tr>
   </tbody>
 </table>
 </div>
 
 <p>An unspecified mode stays <code>default</code>. Nothing escalates it silently; <code>yolo</code> must be asked for explicitly.</p>
 
-<p>When a daemon agent still needs a tool it is not cleared for, it can raise an interactive approval in the conversation — once, always, or deny. That path is separate from the mode table above; see <a href="/docs/permissions/">Tool approvals</a>.</p>
+<p>When a Relay agent still needs a tool it is not cleared for, it can raise an interactive approval in the conversation — once, always, or deny. That path is separate from the mode table above; see <a href="/docs/permissions/">Tool approvals</a>.</p>
 
 <div class="note warn">
   <span class="label">This matters elsewhere</span>

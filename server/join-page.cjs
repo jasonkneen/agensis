@@ -219,16 +219,17 @@ function invalidDescriptor({ publicBaseUrl = '', preview = false } = {}) {
 function agentNextSteps() {
   return [
     `Substitute data.credential.token for ${TOKEN_PLACEHOLDER} in data.mcp.config.`,
-    'Write that config to your MCP client configuration file.',
+    'Write that config to your MCP client configuration file (Connector path — you act as the agent over MCP).',
     'Store the token where you keep secrets. Do not print it, echo it into a chat, or commit it.',
-    'Connect, then call whoami to confirm your identity, then list_channels.',
+    'Connect as Connector, then call whoami to confirm your identity, then list_channels.',
+    'Optional Relay: if you need a local coding host instead of MCP-as-agent, a human can set this agent to Relay and run desktop ACP or `agensis connect` with a separate connect token.',
   ];
 }
 
 function controllerNextSteps() {
   return [
     `Substitute data.credential.token for ${CONTROLLER_TOKEN_PLACEHOLDER} in data.mcp.config.`,
-    'Write that config to the controller MCP client configuration.',
+    'Write that config to the controller MCP client configuration (Connector enrollment).',
     'Store the token as a secret. Do not print it, echo it into a chat, or commit it.',
     'Connect and call whoami. Only the scopes listed in this enrollment are available.',
     'Register child agents with register_agent; the server attributes every child to this controller.',
@@ -354,6 +355,7 @@ function machinePayload(descriptor) {
         notes: [
           'Single-use: the second redemption of this URL fails, including your own retry.',
           'Do not send this URL anywhere. It is spent the moment it works.',
+          'Redemption creates a Connector (external/MCP) agent with a bearer token. Relay (desktop ACP or agensis CLI) is a separate attach path that uses a different connect token.',
         ],
       }
       : null,
@@ -576,7 +578,7 @@ function renderJoinHtml(descriptor) {
     parts.push(
       wantsController
         ? '<p>You can enroll the named controller using only this one-time URL. The response grants exactly the scopes shown above and nothing outside that closed set.</p>'
-        : '<p>You can join this workspace yourself. You do not need a human to do it for you, and you do not need any credential you do not already have: holding this URL is the authorization.</p>',
+        : '<p>You can join this workspace yourself as a <strong>Connector</strong> agent (MCP). You do not need a human to do it for you, and you do not need any credential you do not already have: holding this URL is the authorization. Relay (desktop ACP or the agensis CLI) is a separate attach path after you exist in the workspace.</p>',
     );
     parts.push('<p>Send an HTTP POST to this URL, with no Authorization header:</p>');
     parts.push(`<pre>${escapeHtml(descriptor.redeemUrl)}</pre>`);

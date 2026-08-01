@@ -1,10 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import {
   AGENT_TEMPLATES,
+  agentExecutionRuntimeFromMetadata,
+  agentFormRuntimeValueForAgent,
+  agentFormRuntimeValueFromMetadata,
   agentMetadataWithRuntime,
+  agentRuntimeLabel,
+  agentRunModeHelp,
+  agentRunModeLabel,
   dedupeHandle,
+  executionRuntimeDisplayLabel,
+  resolveAgentAcpHarness,
+  resolveFormRuntimeSelection,
+  runtimeChoicesFromAcpHarnesses,
   runtimeChoicesFromConnections,
 } from '../../src/lib/agentTemplates';
+
+describe('agentRunModeLabel', () => {
+  it('maps wire run_mode to Direct / Relay / Connector', () => {
+    expect(agentRunModeLabel('builtin')).toBe('Direct');
+    expect(agentRunModeLabel('daemon')).toBe('Relay');
+    expect(agentRunModeLabel('sandbox')).toBe('Relay');
+    expect(agentRunModeLabel('external')).toBe('Connector');
+    expect(agentRunModeLabel(null)).toBe('Direct');
+  });
+
+  it('offers short help for each mode', () => {
+    expect(agentRunModeHelp('builtin')).toMatch(/agensis/i);
+    expect(agentRunModeHelp('daemon')).toMatch(/desktop ACP|CLI/i);
+    expect(agentRunModeHelp('external')).toMatch(/MCP/i);
+  });
+});
 
 describe('dedupeHandle', () => {
   it('returns the base handle when it is free', () => {
@@ -84,6 +110,94 @@ describe('agentMetadataWithRuntime', () => {
   it('removes only the runtime when an agent becomes built-in', () => {
     expect(agentMetadataWithRuntime({ runtime: 'codex', custom: true }, 'claude', 'builtin')).toEqual({ custom: true });
   });
+
+  it('clears the pin for desktop ACP so Hermes/Grok are not forced to Claude', () => {
+    expect(agentMetadataWithRuntime({ runtime: 'claude', custom: true }, 'desktop', 'daemon')).toEqual({
+      custom: true,
+    });
+  });
+
+  it('stores preferred ACP harness and clears classic pin', () => {
+    expect(agentMetadataWithRuntime({ runtime: 'claude' }, 'desktop', 'daemon', 'hermes')).toEqual({
+      acp_harness: 'hermes',
+    });
+  });
+
+  it('clears harness when saving a classic pin', () => {
+    expect(agentMetadataWithRuntime({ acp_harness: 'grok' }, 'codex', 'daemon')).toEqual({
+      runtime: 'codex',
+    });
+  });
+});
+
+describe('ACP harness form values', () => {
+  it('reads form value from acp_harness over a stale classic pin', () => {
+    expect(agentFormRuntimeValueFromMetadata({ runtime: 'claude', acp_harness: 'hermes' })).toBe('acp:hermes');
+    expect(agentExecutionRuntimeFromMetadata({ runtime: 'claude', acp_harness: 'hermes' })).toBe('desktop');
+  });
+
+  it('round-trips harness select values', () => {
+    expect(resolveFormRuntimeSelection('acp:grok')).toEqual({ runtime: 'desktop', acpHarness: 'grok' });
+    expect(resolveFormRuntimeSelection('claude')).toEqual({ runtime: 'claude', acpHarness: null });
+    expect(resolveFormRuntimeSelection('desktop')).toEqual({ runtime: 'desktop', acpHarness: null });
+  });
+
+  it('labels harnesses for the UI', () => {
+    expect(executionRuntimeDisplayLabel('desktop', 'hermes')).toBe('Hermes Agent');
+    expect(executionRuntimeDisplayLabel('desktop', 'grok')).toBe('Grok Build');
+    expect(executionRuntimeDisplayLabel('claude')).toBe('Claude');
+  });
+
+  it('prefers live connection harnessId over a stale Claude pin', () => {
+    const harness = resolveAgentAcpHarness({
+      metadata: { runtime: 'claude' },
+      agentId: 'a1',
+      name: 'Worker',
+      connections: [{
+        agent_id: 'a1',
+        status: 'online',
+        metadata: { runtime: 'agensis-desktop-acp', harnessId: 'hermes' },
+      }],
+    });
+    expect(harness).toBe('hermes');
+    expect(agentRuntimeLabel({
+      metadata: { runtime: 'claude' },
+      agentId: 'a1',
+      name: 'Worker',
+      connections: [{
+        agent_id: 'a1',
+        status: 'online',
+        metadata: { runtime: 'agensis-desktop-acp', harnessId: 'hermes' },
+      }],
+      preferAcp: true,
+    })).toBe('Hermes Agent');
+  });
+
+  it('infers harness from agent name when pin is stale', () => {
+    expect(resolveAgentAcpHarness({
+      metadata: { runtime: 'claude' },
+      name: 'Hermes',
+      handle: 'hermes',
+    })).toBe('hermes');
+    expect(agentFormRuntimeValueForAgent({
+      metadata: { runtime: 'claude' },
+      name: 'Grok coder',
+      preferAcp: true,
+    })).toBe('acp:grok');
+  });
+
+  it('does not claim Claude on desktop when harness is unknown', () => {
+    expect(agentRuntimeLabel({
+      metadata: { runtime: 'claude' },
+      name: 'Helper',
+      preferAcp: true,
+    })).toBe('Desktop ACP');
+    expect(agentFormRuntimeValueForAgent({
+      metadata: { runtime: 'claude' },
+      name: 'Helper',
+      preferAcp: true,
+    })).toBe('desktop');
+  });
 });
 
 describe('runtimeChoicesFromConnections', () => {
@@ -102,16 +216,29 @@ describe('runtimeChoicesFromConnections', () => {
       },
     ]);
 
-    expect(choices.map(choice => choice.id)).toEqual(['claude', 'codex', 'amp']);
+    expect(choices.map(choice => choice.id)).toEqual(['desktop', 'claude', 'codex', 'amp']);
     expect(choices.find(choice => choice.id === 'claude')?.available).toBe(true);
     expect(choices.find(choice => choice.id === 'amp')?.reason).toBe('amp_project_unmatched');
+    expect(choices.find(choice => choice.id === 'desktop')?.available).toBe(true);
   });
 
   it('keeps supported runtimes selectable when no daemon has reported yet', () => {
     expect(runtimeChoicesFromConnections([])).toEqual([
+      { id: 'desktop', label: 'Desktop ACP', available: true, reason: null },
       { id: 'claude', label: 'Claude', available: null, reason: 'not_reported' },
       { id: 'codex', label: 'Codex', available: null, reason: 'not_reported' },
       { id: 'amp', label: 'Amp', available: null, reason: 'not_reported' },
     ]);
+  });
+
+  it('builds harness choices with acp: ids so Claude Code ≠ Claude pin', () => {
+    const choices = runtimeChoicesFromAcpHarnesses([
+      { id: 'grok', label: 'Grok Build', available: true },
+      { id: 'hermes', label: 'Hermes Agent', available: true },
+      { id: 'claude', label: 'Claude Code', available: false },
+    ]);
+    expect(choices.map(c => c.id)).toEqual(['acp:grok', 'acp:hermes', 'acp:claude']);
+    expect(choices.find(c => c.id === 'acp:hermes')?.label).toBe('Hermes Agent');
+    expect(choices.find(c => c.id === 'acp:claude')?.available).toBe(false);
   });
 });
