@@ -1563,7 +1563,7 @@ function buildTools() {
    const scope = mcpSessionScopeSql(identity, 'thread_item_session_scope', params, { lockMembership: true });
    const rows = await db.unsafe(
     `insert into thread_items (workspace_id, session_id, kind, content, status, order_index, message_id, created_by_agent)
-       select $1, thread_item_session_scope.id, $3, $4, 'open', $5, $6, $7
+       select $1, thread_item_session_scope.id, $3, $4, 'open', $5, nullif($6::text, '')::uuid, $7
          from chat_sessions thread_item_session_scope
         where thread_item_session_scope.id = $2
           and thread_item_session_scope.workspace_id = $1
