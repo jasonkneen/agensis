@@ -5406,6 +5406,130 @@ async function dispatchCommentMentions({ table, row, authorUserId, run = continu
  }
 }
 
+// How a non-human requester is described in the steward's DM. A resource
+// operation can be requested by an agent, a controller, or the workspace itself,
+// none of which have a display name to look up.
+const RESOURCE_REQUESTER_LABELS = {
+ agent: 'Another agent',
+ controller: 'A workspace controller',
+ workspace: 'The workspace',
+};
+
+// Enqueueing a resource operation wakes its steward in a DM.
+//
+// claim_resource_operation is pull-only: before this, an enqueued operation sat
+// 'pending' with nothing telling the steward it existed, so it waited for a human
+// to @mention the daemon into life — measured at 85s of dead air on a 91s demo
+// operation, with RESOURCE_OPERATION_LEASE_MS (60s, workspace-resources.cjs:23)
+// already counting down against a steward that had not been asked yet.
+//
+// Deliberately mirrors the plain-DM branch of dispatchCommentMentions rather
+// than the task branch: an operation is not a task, so there is no assignee,
+// status or provenance to write — and therefore nothing to roll back if the turn
+// is refused. The row stays 'pending' and remains claimable by the old pull path
+// on every non-dispatched path below, so this is strictly an accelerator.
+// `run` is a test seam; production always uses continueConversation.
+async function dispatchResourceOperation({
+ workspaceId, operationId, resourceId, stewardAgentId, operation,
+ resourceName = '', requesterKind = '', requesterUserId = null,
+ run = continueConversation,
+} = {}) {
+ // Released on every path that does NOT end in a running turn.
+ let claim = null;
+ try {
+  if (!workspaceId || !operationId || !stewardAgentId) return { dispatched: false, reason: 'missing_input' };
+
+  const agentRows = await getDb().unsafe(
+   'select * from workspace_agents where id = $1 and workspace_id = $2 limit 1',
+   [String(stewardAgentId), String(workspaceId)],
+  );
+  const steward = agentRows[0];
+  if (!steward) return { dispatched: false, reason: 'not_an_agent' };
+  // Mirrors the @mention path, which resolves through enabled agents only.
+  if (!isAgentEnabled(steward)) return { dispatched: false, reason: 'agent_disabled' };
+
+  // Running an agent is an agent-dispatch action, so a human-requested operation
+  // carries the same capability + throttle as every other dispatch path: a
+  // commenter/viewer who may request an operation still cannot spend tokens
+  // running an agent with it. Non-human requesters were already authorized
+  // against the resource itself inside requestOperation.
+  if (requesterUserId) {
+   const role = await getWorkspaceRole(requesterUserId, workspaceId);
+   if (!roleHasWorkspaceCapability(role, 'run_agents')) return { dispatched: false, reason: 'not_permitted' };
+   if (!dispatchRateLimiter.check(String(requesterUserId)).allowed) return { dispatched: false, reason: 'rate_limited' };
+  }
+
+  // Keyed on the operation, not the resource: two different operations on the
+  // same resource are two real pieces of work and must both wake the steward.
+  if (!claimTaskDispatch(String(operationId), String(steward.id), TASK_MENTION_CLAIM_MS)) {
+   return { dispatched: false, reason: 'duplicate' };
+  }
+  claim = [String(operationId), String(steward.id)];
+
+  const session = await findOrCreateDirectSession(workspaceId, steward, requesterUserId);
+  if (!session) return { dispatched: false, reason: 'no_session' };
+
+  // agent_jobs carries a partial unique index (one active job per session+agent),
+  // so a turn started while the steward is mid-turn cannot create a job. Find
+  // that out BEFORE posting, so a busy steward does not collect a pile of seed
+  // messages it will never answer individually.
+  //
+  // NOTE: unlike tasks, resource operations have no queue drain — nothing
+  // re-dispatches this operation when the steward frees up. It stays 'pending'
+  // and claimable, which is exactly the pre-change behaviour, so this is not a
+  // regression; it is the remaining gap, and it is logged rather than hidden.
+  if (await agentHasActiveJob(session.id, steward.id)) {
+   console.log(`[resource-op] not dispatched operation=${operationId}: steward @${slugHandle(steward.handle || steward.name)} is mid-turn; operation stays pending and claimable`);
+   return { dispatched: false, reason: 'busy' };
+  }
+
+  let requesterName = RESOURCE_REQUESTER_LABELS[requesterKind] || 'A teammate';
+  if (requesterUserId) {
+   const u = await getDb()
+    .unsafe('select display_name, email from app_users where id = $1 limit 1', [String(requesterUserId)])
+    .catch(() => []);
+   requesterName = u[0]?.display_name || u[0]?.email || 'A teammate';
+  }
+
+  const label = resourceName ? `"${resourceName}"` : `resource ${resourceId}`;
+  const content =
+   `@${slugHandle(steward.handle || steward.name)} — ${requesterName} requested a \`${operation}\` operation on ${label}, and you are its steward.\n\n` +
+   `Claim it with \`claim_resource_operation\` (operation id \`${operationId}\`), do the work, then finish with \`settle_resource_operation\`.\n\n` +
+   `Source: agensis://resource/${resourceId}`;
+
+  const messageRows = await getDb().unsafe(
+   `insert into messages (session_id, role, content, sender_kind, sender_id, sender_name)
+         values ($1, 'user', $2, 'user', $3, $4)
+         returning *`,
+   [session.id, content, String(requesterUserId || ''), requesterName],
+  );
+  notifyDbSubscribers('messages', 'INSERT', messageRows);
+
+  // AWAITED so the caller's log line reports what actually happened; every
+  // call site is `void`-ed, so this costs no request latency.
+  let outcome = null;
+  try {
+   outcome = await run({ workspaceId, sessionId: session.id });
+  } catch (error) {
+   console.error('continueConversation (resource operation) failed', error);
+   outcome = { started: false, reason: 'error' };
+  }
+  if (outcome && outcome.started === false) {
+   console.log(`[resource-op] could not start operation=${operationId} for steward: run=${outcome.reason || 'unknown'}; operation stays pending and claimable`);
+   return { dispatched: false, reason: 'not_started', runReason: String(outcome.reason || '') };
+  }
+
+  claim = null; // a real turn is running; keep the claim so a retry cannot double-run it
+  console.log(`[resource-op] dispatched operation=${operationId} (${operation}) to steward @${slugHandle(steward.handle || steward.name)} (session=${session.id})`);
+  return { dispatched: true, reason: 'dispatched', sessionId: session.id };
+ } catch (error) {
+  console.error('dispatchResourceOperation failed', error);
+  return { dispatched: false, reason: 'error' };
+ } finally {
+  if (claim) releaseTaskDispatch(claim[0], claim[1]);
+ }
+}
+
 
 
 
@@ -8342,6 +8466,9 @@ const workspaceResources = createWorkspaceResourceService({
  enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
  assertWorkspaceRoleLocked: sharedAssertWorkspaceRoleLocked,
  recordAudit: (...a) => recordAudit(...a),
+ // Enqueueing an operation wakes its steward, instead of leaving the row for
+ // whenever someone next pulls. Thunked, like every other dep here.
+ dispatchResourceOperation: (...a) => dispatchResourceOperation(...a),
 });
 
 // The builtin turn: the tool-use loop and the Anthropic stream. Last of Wave 4.
@@ -10190,6 +10317,7 @@ module.exports = {
   postTaskSubthreadMention,
   mirrorAgentReplyToTaskComment,
   dispatchCommentMentions,
+  dispatchResourceOperation,
   dispatchTaskAssignment,
   findOrCreateDirectSession,
   drainAgentTaskQueue,
