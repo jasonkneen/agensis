@@ -6,8 +6,8 @@ Snapshot: 2026-08-01. The release is committed on `main` and deployed. Do not re
 
 The checkout is clean on the current pushed `main` handoff commit (the
 documentation-only commits sit on top of runtime commit `642f857`). The
-stewarded-resource workflow runtime is deployed to Fly as release **v157**,
-running image `deployment-01KYYPSPHNQCAZHGT0SSBCVF45`; the Fly health check is
+stewarded-resource workflow runtime is deployed to Fly as release **v158**,
+running image `deployment-01KYYQ5ECGEEYTDQT1GN31WDBD`; the Fly health check is
 passing at `https://agensis-backend.fly.dev/backend/health`. The pre-existing
 `deno.lock` edit is preserved unchanged. This follow-up adds:
 

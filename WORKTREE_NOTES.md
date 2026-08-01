@@ -7,7 +7,7 @@ Snapshot: 2026-08-01
 Root is clean on the current pushed `main` handoff commit; the
 documentation-only handoff commits sit on top of runtime commit `642f857`, all
 pushed to `origin/main`. The runtime
-is deployed to Fly release **v157** (`deployment-01KYYPSPHNQCAZHGT0SSBCVF45`)
+is deployed to Fly release **v158** (`deployment-01KYYQ5ECGEEYTDQT1GN31WDBD`)
 and its health check is passing. Keep the existing `deno.lock` change; it
 predates this follow-up and is preserved in the deployed runtime commit.
 
