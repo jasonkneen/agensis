@@ -104,6 +104,40 @@
   }
   .btn.block { width: 100%; justify-content: center; padding: 14px 20px; font-size: 13.5px; }
 
+  .gh-star {
+    display: inline-flex; align-items: stretch;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+    text-decoration: none !important;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text);
+    transition: border-color 0.2s, background 0.2s;
+    line-height: 1;
+  }
+  .gh-star:hover {
+    border-color: rgba(79,156,249,0.5);
+    background: var(--accent-soft);
+    color: var(--text);
+  }
+  .gh-star .gh-left {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 11px;
+  }
+  .gh-star .gh-count {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 8px 11px;
+    border-left: 1px solid var(--line);
+    color: var(--muted);
+    min-width: 2.6em;
+    justify-content: center;
+    background: rgba(255,255,255,0.02);
+  }
+  .gh-star .gh-count svg { color: #e3b341; }
+  .gh-star .gh-count[data-loading="1"] { opacity: 0.55; }
+
   header.hero { padding: 72px 0 40px; text-align: center; }
   .kicker {
     display: inline-flex; align-items: center; gap: 10px;
@@ -268,6 +302,26 @@
     <div class="nav-links">
       <a href="/" class="hide-m">Home</a>
       <a href="/docs/" class="hide-m">Docs</a>
+      <a
+        class="gh-star"
+        href="https://github.com/jasonkneen/agensis"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Star jasonkneen/agensis on GitHub"
+      >
+        <span class="gh-left">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          GitHub
+        </span>
+        <span class="gh-count" data-gh-stars data-loading="1">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/>
+          </svg>
+          <span data-gh-stars-n>—</span>
+        </span>
+      </a>
       <a href="/app" class="btn primary">Open in browser</a>
     </div>
   </div>
@@ -355,6 +409,7 @@
       <a href="/">Home</a>
       <a href="/docs/">Docs</a>
       <a href="/app">Open the app</a>
+      <a href="https://github.com/jasonkneen/agensis" rel="noopener noreferrer">GitHub</a>
       <a href="https://github.com/jasonkneen/agensis/releases">All releases</a>
       <span class="spacer"></span>
       <span>Mac · Windows · Linux</span>
@@ -367,6 +422,39 @@
   var REPO = 'jasonkneen/agensis';
   var API = 'https://api.github.com/repos/' + REPO + '/releases/latest';
   var ALL = 'https://github.com/' + REPO + '/releases';
+
+  /* GitHub star count */
+  (function loadStars() {
+    function formatCount(n) {
+      if (n >= 1000) {
+        var k = n / 1000;
+        return (k >= 10 ? Math.round(k) : Math.round(k * 10) / 10) + 'k';
+      }
+      return String(n);
+    }
+    function apply(n) {
+      document.querySelectorAll('[data-gh-stars]').forEach(function (el) {
+        el.removeAttribute('data-loading');
+        var num = el.querySelector('[data-gh-stars-n]');
+        if (num) num.textContent = formatCount(n);
+        el.title = n + ' GitHub stars';
+      });
+    }
+    try {
+      var cached = sessionStorage.getItem('gh-stars:' + REPO);
+      if (cached != null && cached !== '') apply(parseInt(cached, 10));
+    } catch (_) {}
+    fetch('https://api.github.com/repos/' + REPO, {
+      headers: { Accept: 'application/vnd.github+json' },
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (!data || typeof data.stargazers_count !== 'number') return;
+        apply(data.stargazers_count);
+        try { sessionStorage.setItem('gh-stars:' + REPO, String(data.stargazers_count)); } catch (_) {}
+      })
+      .catch(function () {});
+  })();
 
   var primaryBtn = document.getElementById('primary-btn');
   var primaryHint = document.getElementById('primary-hint');
