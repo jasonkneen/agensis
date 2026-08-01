@@ -318,6 +318,8 @@ test('the seed message tells the steward exactly what to claim', async () => {
  assert.ok(content.includes('apply'), 'it names the operation');
  assert.ok(content.includes('Repository handler'), 'it names the resource');
  assert.ok(content.includes('claim_resource_operation'), 'it says how to pick the work up');
+ assert.ok(content.includes('get_resource_operation'), 'it tells the steward where to read the bounded request plan');
+ assert.ok(content.includes('report_resource_operation_progress'), 'it tells the steward how to stream checkpoints');
  assert.ok(content.includes('normal connected tool surface'), 'it routes work through ordinary steward tools');
  assert.ok(content.includes('no resource-specific tool names'), 'it does not invent per-resource tool names');
  assert.ok(content.includes('agensis://resource/resource-1'), 'it links back to the resource');

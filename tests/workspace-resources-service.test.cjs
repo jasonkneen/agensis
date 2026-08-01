@@ -1115,6 +1115,63 @@ test('renew rejects a stale or expired fence before mutation', async () => {
  }
 });
 
+test('progress reporting requires the live lease, persists a checkpoint, and emits it without exposing lease state', async () => {
+ const claimed = operationRow({
+  status: 'claimed',
+  claimed_by_agent_id: STEWARD,
+  attempt: 1,
+  lease_version: '12',
+  lease_expires_at: '2099-01-01T00:00:00.000Z',
+  lease_is_live: true,
+  input_artifact: {
+   request: 'Patch and test the handler.',
+   steps: [{ id: 'patch', instruction: 'Patch the handler.', dependsOn: [] }],
+  },
+ });
+ const progressEvents = [];
+ const db = makeDb(async ({ normalized, params }) => {
+  if (normalized.includes('from workspace_agents')) return [stewardRow()];
+  if (normalized.startsWith('select resource_id from resource_operations')) return [{ resource_id: 'resource-1' }];
+  if (normalized.includes('from workspace_resources') && normalized.includes('for update')) return [resourceRow()];
+  if (normalized.includes('from resource_operations') && normalized.includes('for update')) return [claimed];
+  if (normalized.startsWith('update resource_operations')) {
+   return [operationRow({
+    ...claimed,
+    progress: params[3],
+    progress_seq: 4,
+    progress_updated_at: '2099-01-01T00:00:00.000Z',
+    lease_expires_at: '2099-01-01T00:05:00.000Z',
+   })];
+  }
+  return [];
+ });
+ const { service } = build(db, {
+  notifyResourceOperationProgress: async event => progressEvents.push(event),
+ });
+ const result = await service.reportOperationProgress({
+  workspaceId: WORKSPACE,
+  operationId: 'operation-1',
+  actor: stewardActor(),
+  leaseVersion: '12',
+  progress: {
+   phase: 'executing',
+   message: 'Patching the handler.',
+   stepId: 'patch',
+   stepStatus: 'running',
+   percent: 35,
+  },
+ });
+ assert.equal(result.progress.phase, 'executing');
+ assert.equal(result.progress_seq, 4);
+ assert.equal(result.lease_version, '12', 'the steward receives the unchanged lease fence for the next checkpoint');
+ assert.equal(progressEvents.length, 1);
+ assert.equal(progressEvents[0].operationId, 'operation-1');
+ assert.equal(progressEvents[0].progress.message, 'Patching the handler.');
+ const update = db.queries.find(query => query.normalized.startsWith('update resource_operations'));
+ assert.match(update.normalized, /progress_seq = resource_operations\.progress_seq \+ 1/);
+ assert.match(update.normalized, /lease_version = \$6::bigint/);
+});
+
 test('successful apply settlement advances the resource version once behind the lease fence', async () => {
  const claimed = operationRow({
   status: 'claimed', claimed_by_agent_id: STEWARD, attempt: 1, lease_version: '7',
@@ -1141,7 +1198,10 @@ test('successful apply settlement advances the resource version once behind the 
   }
   return [];
  });
- const { service, audits } = build(db);
+ const progressEvents = [];
+ const { service, audits } = build(db, {
+  notifyResourceOperationProgress: async event => progressEvents.push(event),
+ });
  const settled = await service.settleOperation({
  workspaceId: WORKSPACE,
  operationId: 'operation-1',
@@ -1163,6 +1223,8 @@ test('successful apply settlement advances the resource version once behind the 
  assert.equal(audits.length, 1);
  assert.equal(audits[0].action, 'resource.operation_settled');
  assert.equal(audits[0].actor.agentId, STEWARD);
+ assert.equal(progressEvents.length, 1);
+ assert.equal(progressEvents[0].status, 'completed');
  const resourceLockIndex = db.queries.findIndex(query => (
   query.normalized.includes('from workspace_resources') && query.normalized.includes('for update')
  ));
@@ -1486,6 +1548,9 @@ test('PostgreSQL serializes claim, structural update, and settlement on the reso
     lease_version bigint not null default 0,
     lease_expires_at timestamptz,
     error text not null default '',
+    progress jsonb not null default '{}'::jsonb,
+    progress_seq bigint not null default 0,
+    progress_updated_at timestamptz,
     audit_reference text,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),

@@ -10,6 +10,7 @@ const {
  RESOURCE_OPERATION_STATUSES,
  normalizeResourceDefinition,
  normalizeResourceOperationRequest,
+ normalizeResourceOperationProgress,
  normalizeResourceOperationResult,
  publicResource,
  publicResourceOperation,
@@ -70,6 +71,9 @@ const OPERATION_COLUMN_NAMES = Object.freeze([
  'lease_version',
  'lease_expires_at',
  'error',
+ 'progress',
+ 'progress_seq',
+ 'progress_updated_at',
  'audit_reference',
  'created_at',
  'updated_at',
@@ -94,6 +98,9 @@ const OPERATION_PUBLIC_COLUMN_NAMES = Object.freeze([
  'status',
  'resource_version',
  'error',
+ 'progress',
+ 'progress_seq',
+ 'progress_updated_at',
  'audit_reference',
  'created_at',
  'updated_at',
@@ -117,6 +124,7 @@ const RESOURCE_UPDATE_FIELDS = new Set([
 ]);
 const RESOURCE_OPERATION_REQUEST_FIELDS = new Set([
  'operation', 'inputArtifact', 'input_artifact', 'requestText', 'request_text',
+ 'steps', 'stopOnError', 'stop_on_error',
  'idempotencyKey', 'idempotency_key',
 ]);
 const RESOURCE_OPERATION_RESULT_FIELDS = new Set([
@@ -176,6 +184,17 @@ function parseArray(value) {
   return Array.isArray(parsed) ? parsed : [];
  } catch {
   return [];
+ }
+}
+
+function parseObject(value) {
+ if (plainObject(value)) return value;
+ if (typeof value !== 'string') return {};
+ try {
+  const parsed = JSON.parse(value);
+  return plainObject(parsed) ? parsed : {};
+ } catch {
+  return {};
  }
 }
 
@@ -309,6 +328,7 @@ function createWorkspaceResourceService(deps = {}) {
   // a missing dispatcher degrades to the old pull-only behaviour rather than
   // failing a request that is already committed.
   dispatchResourceOperation = async () => null,
+  notifyResourceOperationProgress = async () => null,
   controllerHasScope = defaultControllerHasScope,
   operationLeaseMs = RESOURCE_OPERATION_LEASE_MS,
   maxOperationAttempts = RESOURCE_OPERATION_MAX_ATTEMPTS,
@@ -322,6 +342,17 @@ function createWorkspaceResourceService(deps = {}) {
  }
  if (!Number.isSafeInteger(maxOperationAttempts) || maxOperationAttempts < 1 || maxOperationAttempts > 100) {
   throw new TypeError('maxOperationAttempts must be an integer between 1 and 100');
+ }
+
+ function progressPayload(row) {
+  return {
+   workspaceId: String(row.workspace_id || ''),
+   operationId: String(row.id || ''),
+   status: String(row.status || ''),
+   progress: parseObject(row.progress),
+   progressSeq: String(row.progress_seq ?? '0'),
+   updatedAt: row.progress_updated_at || row.updated_at || null,
+  };
  }
 
  function database() {
@@ -1686,6 +1717,103 @@ function createWorkspaceResourceService(deps = {}) {
   return publicClaimedOperation(renewed);
  }
 
+ async function reportOperationProgress({
+  workspaceId: rawWorkspaceId,
+  operationId: rawOperationId,
+  actor,
+  leaseVersion: rawLeaseVersion,
+  progress,
+ }) {
+  const workspaceId = requiredId(rawWorkspaceId, 'workspaceId');
+  const operationId = requiredId(rawOperationId, 'operationId');
+  const identity = normalizeIdentity(actor, workspaceId, 'steward');
+  if (identity.kind !== 'agent') {
+   throw forbidden('Only an authenticated steward agent can report resource-operation progress');
+  }
+  const stewardAgentId = identity.id;
+  const leaseVersion = normalizeLeaseVersion(rawLeaseVersion);
+  const normalized = normalizeResourceOperationProgress(progress);
+  if (!normalized.ok) throw badRequest(normalized.errors.join('; '));
+
+  const reported = await inTransaction(async tx => {
+   const steward = await requireAgent(tx, stewardAgentId, workspaceId, { lock: true });
+   assertResourceSteward(steward);
+   const preflight = await tx.unsafe(
+    `select resource_id
+       from resource_operations
+      where id = $1 and workspace_id = $2
+      limit 1`,
+    [operationId, workspaceId],
+   );
+   if (!preflight[0]) throw notFound('Resource operation was not found');
+   const resources = await tx.unsafe(
+    `select ${RESOURCE_PROJECTION}
+       from workspace_resources
+      where id = $1 and workspace_id = $2 and deleted_at is null
+      limit 1
+      for update`,
+    [String(preflight[0].resource_id), workspaceId],
+   );
+   if (!resources[0]) throw notFound('Workspace resource was not found');
+   const operations = await tx.unsafe(
+    `select ${OPERATION_PROJECTION},
+            (lease_expires_at is not null and lease_expires_at > now()) as lease_is_live
+       from resource_operations
+      where id = $1 and workspace_id = $2
+      limit 1
+      for update`,
+    [operationId, workspaceId],
+   );
+   const operation = operations[0];
+   if (!operation) throw notFound('Resource operation was not found');
+   if (String(operation.steward_agent_id || '') !== stewardAgentId
+    || String(operation.claimed_by_agent_id || '') !== stewardAgentId) {
+    throw forbidden('Only the resource steward holding the lease can report progress');
+   }
+   if (String(operation.lease_version ?? '') !== leaseVersion) {
+    throw conflict('The resource operation lease fence is stale', 'stale_lease_fence');
+   }
+   if (String(operation.status || '') !== 'claimed') {
+    throw conflict('The resource operation is not currently claimed');
+   }
+   if (operation.lease_is_live !== true) {
+    throw conflict('The resource operation lease expired before progress was reported', 'expired_lease');
+   }
+   if (normalized.progress.stepId) {
+    const artifact = parseObject(operation.input_artifact);
+    const steps = Array.isArray(artifact.steps) ? artifact.steps : [];
+    if (steps.length > 0 && !steps.some(step => String(step?.id || '') === normalized.progress.stepId)) {
+     throw badRequest(`Progress references unknown step: ${normalized.progress.stepId}`);
+    }
+   }
+   const rows = await tx.unsafe(
+    `update resource_operations
+        set progress = $4::jsonb,
+            progress_seq = resource_operations.progress_seq + 1,
+            progress_updated_at = now(),
+            lease_expires_at = now() + ($5 || ' milliseconds')::interval,
+            updated_at = now()
+      where id = $1
+        and workspace_id = $2
+        and claimed_by_agent_id = $3
+        and lease_version = $6::bigint
+        and status = 'claimed'
+        and lease_expires_at > now()
+      returning ${OPERATION_PROJECTION}`,
+    [operationId, workspaceId, stewardAgentId, normalized.progress, String(operationLeaseMs), leaseVersion],
+   );
+   if (!rows[0]) throw conflict('The resource operation lease changed during progress reporting', 'stale_lease_fence');
+   return rows[0];
+  });
+  try {
+   await notifyResourceOperationProgress(progressPayload(reported));
+  } catch {
+   // Progress delivery is best-effort. The latest checkpoint remains durable in
+   // the operation row and is returned by the normal GET/poll path.
+  }
+  return publicClaimedOperation(reported);
+ }
+
  async function settleOperation({
   workspaceId: rawWorkspaceId,
   operationId: rawOperationId,
@@ -1858,6 +1986,11 @@ function createWorkspaceResourceService(deps = {}) {
      attempt: Math.max(0, Number(settled.row.attempt) || 0),
     },
    });
+   try {
+    await notifyResourceOperationProgress(progressPayload(settled.row));
+   } catch {
+    // Settlement remains durable even if the live viewer has disconnected.
+   }
   }
   return publicResourceOperation(settled.row);
  }
@@ -1874,6 +2007,7 @@ function createWorkspaceResourceService(deps = {}) {
   requestOperation,
   claimOperation,
   renewOperation,
+  reportOperationProgress,
   settleOperation,
  });
 }

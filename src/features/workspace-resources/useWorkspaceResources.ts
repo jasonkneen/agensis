@@ -7,6 +7,7 @@ import {
   listWorkspaceResources,
   requestWorkspaceResourceOperation,
   restoreWorkspaceResource,
+  subscribeWorkspaceResourceOperation,
   updateWorkspaceResource,
 } from './api';
 import {
@@ -17,6 +18,7 @@ import {
   type WorkspaceResourceOperation,
   mergeResourceOperationDetails,
 } from './model';
+import type { WorkspaceResourceOperationProgressEvent } from './api';
 
 const ACTIVE_OPERATION_POLL_MS = 4_000;
 
@@ -159,6 +161,45 @@ export function useWorkspaceResources(
     }
   }, [includeDeleted, workspaceId]);
 
+  const subscribeOperationProgress = useCallback((operationId: string): (() => void) => {
+    if (!workspaceId) return () => {};
+    return subscribeWorkspaceResourceOperation(workspaceId, operationId, (event: WorkspaceResourceOperationProgressEvent) => {
+      setOperations(previous => previous.map(operation => {
+        if (operation.id !== event.operationId) return operation;
+        const currentSeq = Number(operation.progress_seq) || 0;
+        const nextSeq = Number(event.progressSeq) || 0;
+        return nextSeq >= currentSeq
+          ? {
+            ...operation,
+            status: event.status,
+            progress: event.progress,
+            progress_seq: nextSeq,
+            progress_updated_at: event.updatedAt,
+            updated_at: event.updatedAt || operation.updated_at,
+          }
+          : operation;
+      }));
+      setOperationDetails(previous => {
+        const existing = previous[event.operationId];
+        if (!existing) return previous;
+        const currentSeq = Number(existing.progress_seq) || 0;
+        const nextSeq = Number(event.progressSeq) || 0;
+        if (nextSeq < currentSeq) return previous;
+        return {
+          ...previous,
+          [event.operationId]: {
+            ...existing,
+            status: event.status,
+            progress: event.progress,
+            progress_seq: nextSeq,
+            progress_updated_at: event.updatedAt,
+            updated_at: event.updatedAt || existing.updated_at,
+          },
+        };
+      });
+    });
+  }, [workspaceId]);
+
   return {
     resources,
     operations,
@@ -172,5 +213,6 @@ export function useWorkspaceResources(
     restoreResource,
     requestOperation,
     loadOperation,
+    subscribeOperationProgress,
   };
 }

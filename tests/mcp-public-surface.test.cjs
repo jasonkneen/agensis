@@ -75,6 +75,7 @@ const PUBLIC_TOOL_SURFACE = {
   read_skill: ['skill'],
   register_agent: [],
   registration_status: ['registration_id'],
+  report_resource_operation_progress: ['operation_id', 'lease_version', 'phase', 'message'],
   renew_resource_operation: ['operation_id', 'lease_version'],
   request_resource_operation: ['resource_id', 'operation', 'idempotency_key'],
   restore_workspace_resource: ['resource_id'],

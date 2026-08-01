@@ -1,9 +1,10 @@
-import { apiAuthHeaders, apiUrl } from '@/lib/backendClient';
+import { apiAuthHeaders, apiUrl, backendClient } from '@/lib/backendClient';
 import type {
   CreateWorkspaceResourceInput,
   RequestWorkspaceResourceOperationInput,
   WorkspaceResource,
   WorkspaceResourceOperation,
+  WorkspaceResourceOperationProgress,
 } from './model';
 
 type ApiEnvelope<T> = {
@@ -151,6 +152,11 @@ export async function requestWorkspaceResourceOperation(
   resourceId: string,
   input: RequestWorkspaceResourceOperationInput,
 ): Promise<WorkspaceResourceOperation> {
+  const artifact = {
+    ...(input.inputArtifact || {}),
+    ...(input.steps ? { steps: input.steps } : {}),
+    ...(input.stopOnError !== undefined ? { stopOnError: input.stopOnError } : {}),
+  };
   return requestData<WorkspaceResourceOperation>(
     workspacePath(workspaceId, `/resources/${encodeURIComponent(resourceId)}/operations`),
     {
@@ -163,10 +169,51 @@ export async function requestWorkspaceResourceOperation(
       body: JSON.stringify({
         operation: input.operation,
         ...(input.requestText !== undefined
-          ? { requestText: input.requestText }
-          : { inputArtifact: input.inputArtifact || {} }),
+          ? {
+            requestText: input.requestText,
+            ...(input.steps ? { steps: input.steps } : {}),
+            ...(input.stopOnError !== undefined ? { stopOnError: input.stopOnError } : {}),
+          }
+          : { inputArtifact: artifact }),
       }),
     },
     'Could not request the resource operation.',
   );
+}
+
+export interface WorkspaceResourceOperationProgressEvent {
+  operationId: string;
+  status: WorkspaceResourceOperation['status'];
+  progress: WorkspaceResourceOperationProgress | Record<string, unknown>;
+  progressSeq: string;
+  updatedAt: string | null;
+}
+
+/**
+ * Progress is a dedicated, operation-scoped broadcast lane. The server
+ * authorizes the channel against the operation audience before accepting the
+ * subscription; it is not a generic resource table subscription.
+ */
+export function subscribeWorkspaceResourceOperation(
+  workspaceId: string,
+  operationId: string,
+  onProgress: (event: WorkspaceResourceOperationProgressEvent) => void,
+): () => void {
+  const channel = backendClient
+    .channel(`resource-operation:${workspaceId}:${operationId}`)
+    .on('broadcast', { event: 'progress' }, ({ payload }) => {
+      if (!payload || typeof payload !== 'object') return;
+      const value = payload as Partial<WorkspaceResourceOperationProgressEvent>;
+      if (typeof value.operationId !== 'string' || value.operationId !== operationId) return;
+      if (typeof value.status !== 'string' || typeof value.progressSeq !== 'string') return;
+      onProgress({
+        operationId: value.operationId,
+        status: value.status as WorkspaceResourceOperation['status'],
+        progress: (value.progress && typeof value.progress === 'object') ? value.progress : {},
+        progressSeq: value.progressSeq,
+        updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : null,
+      });
+    })
+    .subscribe();
+  return () => { void channel.unsubscribe(); };
 }

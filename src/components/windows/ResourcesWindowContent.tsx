@@ -27,6 +27,7 @@ import {
   RESOURCE_OPERATION_STATUS_LABELS,
   isLiveResourceOperation,
   newResourceOperationKey,
+  operationProgress,
   operationsForResource,
   parseResourceJsonObject,
   resourceAgentFacetSummary,
@@ -117,6 +118,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
     restoreResource,
     requestOperation,
     loadOperation,
+    subscribeOperationProgress,
   } = useWorkspaceResources(workspaceId || null, { includeDeleted: showDeleted });
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -146,6 +148,8 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
       ?? operations.find(operation => operation.id === activeOperationId)
       ?? null
     : null;
+  const activeOperationLive = activeOperation ? isLiveResourceOperation(activeOperation) : false;
+  const activeProgress = operationProgress(activeOperation);
   const allResourceAgents = useMemo(() => resourceStewardCandidates(agents), [agents]);
   const eligibleStewards = useMemo(
     () => resourceStewardCandidates(agents, facet),
@@ -164,6 +168,11 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
     if (eligibleStewards.some(agent => agent.id === stewardAgentId)) return;
     setStewardAgentId(eligibleStewards[0]?.id ?? '');
   }, [eligibleStewards, stewardAgentId]);
+
+  useEffect(() => {
+    if (!activeOperationLive || !activeOperationId) return undefined;
+    return subscribeOperationProgress(activeOperationId);
+  }, [activeOperationId, activeOperationLive, subscribeOperationProgress]);
 
   const resetCreate = () => {
     setName('');
@@ -513,8 +522,9 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                   <h3 className="text-sm font-semibold">Ask the steward</h3>
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  Describe the work in plain language. The request is relayed to the steward agent (or its CLI),
-                  which performs the tool call and returns the result; it cannot bypass that execution boundary.
+                  Describe the work in plain language. You can include several instructions in one request; the
+                  steward (or its connected CLI) performs them through its normal tools and reports checkpoints here.
+                  It cannot bypass that execution boundary.
                 </p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)]">
                   <label className="grid content-start gap-1 text-xs font-medium">
@@ -530,7 +540,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                     <Textarea
                       value={operationRequest}
                       onChange={event => setOperationRequest(event.target.value)}
-                      placeholder="Summarise the current API boundaries and list the relevant files."
+                      placeholder="Patch the handler, update the tests, run the checks, and report any failures."
                       rows={4}
                     />
                   </label>
@@ -580,6 +590,24 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                           {activeOperation.error && (
                             <div className="rounded-lg border border-destructive/30 bg-destructive/8 p-2 text-xs text-destructive">
                               {activeOperation.error}
+                            </div>
+                          )}
+                          {activeProgress && (
+                            <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="text-[11px] font-semibold uppercase tracking-wide text-primary">
+                                  {isLiveResourceOperation(activeOperation) ? 'Live progress' : 'Last checkpoint'} · {activeProgress.phase}
+                                </div>
+                                {activeProgress.percent !== null && (
+                                  <span className="text-[11px] text-muted-foreground">{activeProgress.percent}%</span>
+                                )}
+                              </div>
+                              <p className="mt-1 text-xs leading-relaxed">{activeProgress.message}</p>
+                              {activeProgress.stepId && (
+                                <p className="mt-1 text-[11px] text-muted-foreground">
+                                  Step {activeProgress.stepId}{activeProgress.stepStatus ? ` · ${activeProgress.stepStatus}` : ''}
+                                </p>
+                              )}
                             </div>
                           )}
                           <div>

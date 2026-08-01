@@ -17,6 +17,23 @@ const RESOURCE_OPERATION_STATUSES = Object.freeze([
  'failed',
  'cancelled',
 ]);
+const RESOURCE_OPERATION_PROGRESS_PHASES = Object.freeze([
+ 'queued',
+ 'planning',
+ 'executing',
+ 'verifying',
+ 'waiting',
+ 'completed',
+ 'rejected',
+ 'failed',
+]);
+const RESOURCE_OPERATION_STEP_STATUSES = Object.freeze([
+ 'pending',
+ 'running',
+ 'completed',
+ 'failed',
+ 'skipped',
+]);
 
 const RESOURCE_NAME_MAX = 120;
 const RESOURCE_DESCRIPTION_MAX = 2_000;
@@ -24,8 +41,13 @@ const RESOURCE_DESCRIPTOR_MAX_BYTES = 32 * 1024;
 const RESOURCE_ARTIFACT_MAX_BYTES = 256 * 1024;
 const RESOURCE_IDEMPOTENCY_KEY_MAX = 160;
 const RESOURCE_ERROR_MAX = 1_000;
+const RESOURCE_OPERATION_STEP_ID_MAX = 64;
+const RESOURCE_OPERATION_STEP_INSTRUCTION_MAX = 4_000;
+const RESOURCE_OPERATION_MAX_STEPS = 32;
+const RESOURCE_OPERATION_PROGRESS_MESSAGE_MAX = 2_000;
 
 const SENSITIVE_KEY_RE = /(?:^|[_-])(?:token|secret|password|passwd|pwd|authorization|cookie|credential|api[_-]?key|private[_-]?key|ciphertext|connect[_-]?token|access[_-]?token|refresh[_-]?token|client[_-]?secret|session[_-]?(?:token|secret)|bearer|oauth[_-]?token|ssh[_-]?(?:private[_-]?)?key)(?:$|[_-])/i;
+const SENSITIVE_MESSAGE_RE = /\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|authorization|password|private[_ -]?key|client[_ -]?secret|bearer)\s*[:=]/i;
 
 function plainObject(value) {
  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -129,6 +151,131 @@ function normalizeResourceDefinition(raw) {
  };
 }
 
+function normalizeResourceOperationSteps(raw) {
+ if (raw === undefined || raw === null) return { ok: true, steps: [], errors: [] };
+ if (!Array.isArray(raw)) {
+  return { ok: false, steps: [], errors: ['steps must be an array'] };
+ }
+ const errors = [];
+ if (raw.length > RESOURCE_OPERATION_MAX_STEPS) {
+  errors.push(`steps must contain at most ${RESOURCE_OPERATION_MAX_STEPS} items`);
+ }
+ const steps = [];
+ const ids = new Set();
+ for (let index = 0; index < Math.min(raw.length, RESOURCE_OPERATION_MAX_STEPS); index += 1) {
+  const input = plainObject(raw[index]) ? raw[index] : {};
+  const rawId = input.id;
+  const rawInstruction = input.instruction ?? input.request;
+  const id = typeof rawId === 'string' ? rawId.trim() : '';
+  const instruction = typeof rawInstruction === 'string' ? rawInstruction.trim() : '';
+  const dependsOn = input.dependsOn ?? input.depends_on ?? [];
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id) || id.length > RESOURCE_OPERATION_STEP_ID_MAX) {
+   errors.push(`steps[${index}].id must start with a letter or number and contain only letters, numbers, _ or -`);
+  } else if (ids.has(id)) {
+   errors.push(`steps contains duplicate id: ${id}`);
+  } else {
+   ids.add(id);
+  }
+  if (!instruction) errors.push(`steps[${index}].instruction is required`);
+  if (instruction.length > RESOURCE_OPERATION_STEP_INSTRUCTION_MAX) {
+   errors.push(`steps[${index}].instruction must be at most ${RESOURCE_OPERATION_STEP_INSTRUCTION_MAX} characters`);
+  }
+  if (!Array.isArray(dependsOn)) {
+   errors.push(`steps[${index}].dependsOn must be an array`);
+  }
+  if (Array.isArray(dependsOn)) {
+   for (const dependency of dependsOn) {
+    if (typeof dependency !== 'string' || !dependency.trim()) {
+     errors.push(`steps[${index}].dependsOn must contain non-empty strings`);
+    }
+   }
+  }
+  const normalizedDependencies = Array.isArray(dependsOn)
+   ? [...new Set(dependsOn.map(value => (typeof value === 'string' ? value.trim() : '')).filter(Boolean))]
+   : [];
+  for (const dependency of normalizedDependencies) {
+   if (dependency === id) errors.push(`steps[${index}] cannot depend on itself`);
+   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(dependency)) {
+    errors.push(`steps[${index}].dependsOn contains an invalid step id: ${dependency}`);
+   }
+  }
+  steps.push({ id, instruction, dependsOn: normalizedDependencies });
+ }
+ // Dependencies must refer to declared steps and form a DAG. This keeps a
+ // steward from receiving an execution plan that can never make progress.
+ for (const step of steps) {
+  for (const dependency of step.dependsOn) {
+   if (!ids.has(dependency)) errors.push(`step ${step.id} depends on unknown step: ${dependency}`);
+  }
+ }
+ const byId = new Map(steps.map(step => [step.id, step]));
+ const visiting = new Set();
+ const visited = new Set();
+ const visit = (id) => {
+  if (visited.has(id)) return false;
+  if (visiting.has(id)) return true;
+  visiting.add(id);
+  const step = byId.get(id);
+  const cycle = step ? step.dependsOn.some(dependency => byId.has(dependency) && visit(dependency)) : false;
+  visiting.delete(id);
+  visited.add(id);
+  return cycle;
+ };
+ for (const step of steps) {
+  if (visit(step.id)) {
+   errors.push('steps must not contain dependency cycles');
+   break;
+  }
+ }
+ return { ok: errors.length === 0, steps: errors.length === 0 ? steps : [], errors };
+}
+
+function normalizeResourceOperationProgress(raw) {
+ const input = plainObject(raw) ? raw : {};
+ const errors = [];
+ const phase = String(input.phase || '').trim();
+ if (!RESOURCE_OPERATION_PROGRESS_PHASES.includes(phase)) {
+  errors.push(`phase must be one of ${RESOURCE_OPERATION_PROGRESS_PHASES.join(', ')}`);
+ }
+ const message = String(input.message || '').trim();
+ if (!message) errors.push('message is required');
+ if (message.length > RESOURCE_OPERATION_PROGRESS_MESSAGE_MAX) {
+  errors.push(`message must be at most ${RESOURCE_OPERATION_PROGRESS_MESSAGE_MAX} characters`);
+ }
+ if (message && (SENSITIVE_KEY_RE.test(message) || SENSITIVE_MESSAGE_RE.test(message))) {
+  errors.push('message must not include credential-like field names');
+ }
+ const stepId = input.stepId ?? input.step_id;
+ if (stepId !== undefined && stepId !== null && stepId !== '') {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(String(stepId).trim())) {
+   errors.push('stepId must be a valid operation step id');
+  }
+ }
+ const stepStatus = input.stepStatus ?? input.step_status;
+ if (stepStatus !== undefined && stepStatus !== null && stepStatus !== ''
+  && !RESOURCE_OPERATION_STEP_STATUSES.includes(String(stepStatus).trim())) {
+  errors.push(`stepStatus must be one of ${RESOURCE_OPERATION_STEP_STATUSES.join(', ')}`);
+ }
+ let percent = null;
+ if (input.percent !== undefined && input.percent !== null && input.percent !== '') {
+  percent = Number(input.percent);
+  if (!Number.isInteger(percent) || percent < 0 || percent > 100) {
+   errors.push('percent must be an integer between 0 and 100');
+  }
+ }
+ return {
+  ok: errors.length === 0,
+  errors,
+  progress: errors.length === 0 ? {
+   phase,
+   message,
+   stepId: stepId === undefined || stepId === null || stepId === '' ? null : String(stepId).trim(),
+   stepStatus: stepStatus === undefined || stepStatus === null || stepStatus === '' ? null : String(stepStatus).trim(),
+   percent,
+  } : null,
+ };
+}
+
 function normalizeResourceOperationRequest(raw) {
  const input = plainObject(raw) ? raw : {};
  const errors = [];
@@ -138,18 +285,38 @@ function normalizeResourceOperationRequest(raw) {
  }
  const hasRequestText = input.requestText !== undefined || input.request_text !== undefined;
  const hasInputArtifact = input.inputArtifact !== undefined || input.input_artifact !== undefined;
+ const hasSteps = input.steps !== undefined;
+ const hasStopOnError = input.stopOnError !== undefined || input.stop_on_error !== undefined;
  const requestText = input.requestText ?? input.request_text;
  if (hasRequestText && typeof requestText !== 'string') errors.push('requestText must be a string');
  if (typeof requestText === 'string' && !requestText.trim()) errors.push('requestText must not be empty');
  if (hasRequestText && hasInputArtifact) errors.push('requestText cannot be combined with inputArtifact');
+ if (hasSteps && hasInputArtifact) errors.push('steps cannot be combined with inputArtifact; put steps inside inputArtifact instead');
+ if (hasStopOnError && hasInputArtifact) errors.push('stopOnError cannot be combined with inputArtifact; put stopOnError inside inputArtifact instead');
  const rawInputArtifact = !hasRequestText
   ? (input.inputArtifact ?? input.input_artifact)
-  : { request: typeof requestText === 'string' ? requestText.trim() : '' };
+  : {
+   request: typeof requestText === 'string' ? requestText.trim() : '',
+   ...(hasSteps ? { steps: input.steps } : {}),
+   ...(hasStopOnError ? { stopOnError: input.stopOnError ?? input.stop_on_error } : {}),
+  };
  const inputArtifact = normalizeBoundedObject(rawInputArtifact, {
   label: 'inputArtifact',
   maxBytes: RESOURCE_ARTIFACT_MAX_BYTES,
  });
  errors.push(...inputArtifact.errors);
+ let normalizedArtifact = inputArtifact.value;
+ if (inputArtifact.ok) {
+  const stepResult = normalizeResourceOperationSteps(normalizedArtifact.steps);
+  errors.push(...stepResult.errors);
+  if (stepResult.steps.length > 0) normalizedArtifact = { ...normalizedArtifact, steps: stepResult.steps };
+  else if (Object.prototype.hasOwnProperty.call(normalizedArtifact, 'steps')) {
+   normalizedArtifact = { ...normalizedArtifact, steps: [] };
+  }
+  if (Object.prototype.hasOwnProperty.call(normalizedArtifact, 'stopOnError')) {
+   if (typeof normalizedArtifact.stopOnError !== 'boolean') errors.push('stopOnError must be true or false');
+  }
+ }
  const idempotencyKey = String(input.idempotencyKey ?? input.idempotency_key ?? '').trim();
  if (!idempotencyKey) errors.push('idempotencyKey is required');
  if (idempotencyKey.length > RESOURCE_IDEMPOTENCY_KEY_MAX) {
@@ -160,7 +327,7 @@ function normalizeResourceOperationRequest(raw) {
   errors,
   request: errors.length === 0 ? {
    operation,
-   inputArtifact: inputArtifact.value,
+   inputArtifact: normalizedArtifact,
    idempotencyKey,
   } : null,
  };
@@ -240,6 +407,9 @@ function publicResourceOperation(row, { includeArtifacts = true } = {}) {
   status: RESOURCE_OPERATION_STATUSES.includes(row.status) ? row.status : 'failed',
   resource_version: Number(row.resource_version) || 1,
   error: String(row.error || ''),
+  progress: parseJsonObject(row.progress),
+  progress_seq: Number(row.progress_seq) || 0,
+  progress_updated_at: row.progress_updated_at || null,
   audit_reference: row.audit_reference || null,
   created_at: row.created_at || null,
   updated_at: row.updated_at || null,
@@ -259,12 +429,18 @@ module.exports = {
  RESOURCE_VISIBILITIES,
  RESOURCE_STATUSES,
  RESOURCE_OPERATION_STATUSES,
+ RESOURCE_OPERATION_PROGRESS_PHASES,
+ RESOURCE_OPERATION_STEP_STATUSES,
  RESOURCE_NAME_MAX,
  RESOURCE_DESCRIPTION_MAX,
  RESOURCE_DESCRIPTOR_MAX_BYTES,
  RESOURCE_ARTIFACT_MAX_BYTES,
  RESOURCE_IDEMPOTENCY_KEY_MAX,
  RESOURCE_ERROR_MAX,
+ RESOURCE_OPERATION_STEP_ID_MAX,
+ RESOURCE_OPERATION_STEP_INSTRUCTION_MAX,
+ RESOURCE_OPERATION_MAX_STEPS,
+ RESOURCE_OPERATION_PROGRESS_MESSAGE_MAX,
  SENSITIVE_KEY_RE,
  plainObject,
  jsonBytes,
@@ -272,6 +448,8 @@ module.exports = {
  sensitivePaths,
  normalizeBoundedObject,
  normalizeResourceDefinition,
+ normalizeResourceOperationSteps,
+ normalizeResourceOperationProgress,
  normalizeResourceOperationRequest,
  normalizeResourceOperationResult,
  publicResource,

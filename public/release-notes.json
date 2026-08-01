@@ -1,5 +1,18 @@
 [
   {
+    "version": "stewarded-resource-workflows",
+    "date": "2026-08-01",
+    "title": "Agents can hand work to protected resources",
+    "summary": "A resource request can now carry a short, dependency-checked plan instead of one opaque JSON blob. The resource steward remains the only execution boundary: it works through its normal agent tools, reports plain-language checkpoints as it goes, and settles the operation only after the lease and resource version still match. Concurrent writers cannot silently overwrite one another; a stale operation is rejected before it advances the resource. Live progress appears in the resource panel and polling remains as the reconnect fallback.",
+    "highlights": [
+      "Send several ordered instructions in one resource operation",
+      "Stewards report queued, executing, verifying, and completed checkpoints",
+      "Lease and version fencing prevent concurrent apply or publish operations from overwriting each other",
+      "Progress is visible in the resource panel without exposing operation credentials",
+      "The steward still uses its ordinary read, write, list, bash, and grep tool surface"
+    ]
+  },
+  {
     "version": "workspace-connections-and-agent-resources",
     "date": "2026-07-31",
     "title": "One invitation link and clearer agent roles",

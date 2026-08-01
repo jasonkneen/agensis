@@ -112,6 +112,15 @@ test('agent-status channel resolves to its workspace id', () => {
  assert.equal(__test.workspaceIdFromRealtimeChannel('bogus:ws-1'), null);
 });
 
+test('resource operation progress channels carry exactly one workspace and operation id', () => {
+ assert.deepEqual(__test.resourceOperationFromRealtimeChannel('resource-operation:ws-1:op-1'), {
+  workspaceId: 'ws-1',
+  operationId: 'op-1',
+ });
+ assert.equal(__test.resourceOperationFromRealtimeChannel('resource-operation:ws-1'), null);
+ assert.equal(__test.resourceOperationFromRealtimeChannel('resource-operation:ws-1:op-1:extra'), null);
+});
+
 // THE TEST THAT WOULD HAVE CAUGHT F3. Restore the `!row.workspace_id` guard —
 // the behaviour that actually shipped — and this must go red.
 test('a row with only REAL message columns still broadcasts', async () => {

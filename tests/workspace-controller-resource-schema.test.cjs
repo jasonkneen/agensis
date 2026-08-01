@@ -17,6 +17,10 @@ const softDeleteMigration = fs.readFileSync(
  path.join(root, 'supabase/migrations/20260801090000_workspace_resources_soft_delete.sql'),
  'utf8',
 );
+const progressMigration = fs.readFileSync(
+ path.join(root, 'supabase/migrations/20260801120000_resource_operation_progress.sql'),
+ 'utf8',
+);
 const netlify = fs.readFileSync(path.join(root, 'netlify/functions/backend.mjs'), 'utf8');
 
 test('controller/resource schema exists in runtime, canonical, and migration owners', () => {
@@ -39,12 +43,21 @@ test('controller/resource schema exists in runtime, canonical, and migration own
   assert.match(source, /workspace_resources_controller_workspace_fkey/i);
   assert.match(source, /workspace_controllers_parent_workspace_fkey/i);
   assert.match(source, /UNIQUE \(workspace_id, requester_key, idempotency_key\)/i);
+  assert.match(source, /progress jsonb/i, `${where}: operation progress`);
+  assert.match(source, /progress_seq bigint/i, `${where}: operation progress sequence`);
  }
  assert.match(runtime, /deleted_at timestamptz/i, 'runtime: soft delete marker');
  assert.match(canonical, /deleted_at timestamptz/i, 'canonical: soft delete marker');
  assert.match(canonical, /idx_workspace_resources_deleted/i, 'canonical: soft delete index');
  assert.match(softDeleteMigration, /ALTER TABLE workspace_resources[\s\S]*ADD COLUMN IF NOT EXISTS deleted_at timestamptz/i);
  assert.match(softDeleteMigration, /idx_workspace_resources_deleted/i);
+});
+
+test('resource-operation progress migration is forward-only and constrained', () => {
+ assert.match(progressMigration, /ADD COLUMN IF NOT EXISTS progress jsonb/i);
+ assert.match(progressMigration, /ADD COLUMN IF NOT EXISTS progress_seq bigint/i);
+ assert.match(progressMigration, /resource_operations_progress_object_check/i);
+ assert.match(progressMigration, /resource_operations_progress_seq_check/i);
 });
 
 test('controller scope shape cannot express owner, private-read, vault, role, or escalation authority', () => {

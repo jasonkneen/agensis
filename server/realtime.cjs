@@ -58,6 +58,9 @@ function createRealtime(deps = {}) {
   // audience. Null means the session could not be proven: fail closed.
   sessionRealtimeAudience = async () => null,
   sessionRealtimeAudiences = async () => new Map(),
+  authorizeResourceOperationRealtime = async () => {
+   throw forbidden('Resource operation realtime is unavailable');
+  },
   // Receipt reciprocity is recipient-specific and mutable. Resolve it at bind
   // time and again at delivery time so an already-open raw socket cannot keep
   // receiving after the account opts out.
@@ -702,10 +705,27 @@ function createRealtime(deps = {}) {
   return workspaceId;
  }
 
+ function resourceOperationFromRealtimeChannel(channel) {
+  if (typeof channel !== 'string') return null;
+  const [prefix, workspaceId, operationId, ...rest] = channel.split(':');
+  if (prefix !== 'resource-operation' || rest.length > 0 || !workspaceId || !operationId) return null;
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(operationId)) return null;
+  return { workspaceId, operationId };
+ }
+
  async function authorizeRealtimeBinding(userId, channel, binding) {
   if (!binding || typeof binding !== 'object') throw forbidden('Invalid realtime subscription');
 
   if (binding.type === 'broadcast') {
+   const resourceOperation = resourceOperationFromRealtimeChannel(channel);
+   if (resourceOperation) {
+    await authorizeResourceOperationRealtime(
+     userId,
+     resourceOperation.workspaceId,
+     resourceOperation.operationId,
+    );
+    return;
+   }
    const workspaceId = workspaceIdFromRealtimeChannel(channel);
    if (!workspaceId) throw forbidden('Broadcast channel is not allowed');
    await enforceWorkspaceRole(userId, workspaceId, 'read');
@@ -744,6 +764,9 @@ function createRealtime(deps = {}) {
  }
 
  async function authorizeRealtimeBroadcast(userId, channel) {
+  if (resourceOperationFromRealtimeChannel(channel)) {
+   throw forbidden('Resource operation progress is server-only');
+  }
   const workspaceId = workspaceIdFromRealtimeChannel(channel);
   if (!workspaceId) throw forbidden('Broadcast channel is not allowed');
   await enforceWorkspaceRole(userId, workspaceId, 'read');
@@ -1086,6 +1109,7 @@ function createRealtime(deps = {}) {
   // Exported for __test in index.cjs: the channel-name parser the realtime
   // authorization tests assert directly.
   workspaceIdFromRealtimeChannel,
+  resourceOperationFromRealtimeChannel,
   reset,
  };
 }

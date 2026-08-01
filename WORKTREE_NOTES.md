@@ -2,6 +2,27 @@
 
 Snapshot: 2026-08-01
 
+## Current follow-up: stewarded resource workflows (2026-08-01 13:45 BST)
+
+Root is currently on `main` at `054b9d1`. The resource-workflow follow-up is
+uncommitted by design and has not been pushed. Keep the existing `deno.lock`
+change; it predates this follow-up and is not part of the resource work.
+
+The implementation is in the root checkout, not the historical controller or
+message-integrity worktrees. It adds dependency-checked operation plans,
+lease-bound steward progress reports, an authorized
+`resource-operation:<workspace>:<operation>` broadcast lane, UI checkpoint
+rendering, schema parity/migration coverage, and focused tests. The resource
+row lock plus captured version and lease fences remain the overwrite boundary:
+the second stale `apply`/`publish` cannot advance the resource.
+
+Checks completed: typecheck, production build, 2,828 frontend unit tests,
+19 smoke tests, focused resource/MCP/dispatch/realtime/schema tests, and
+`git diff --check`. The repository-wide Node suite remains at 2,481 passing /
+24 pre-existing failures; `npm run ci` stops there, and full lint still has
+the known generated Netlify edge-function `no-var` errors. Do not deploy or
+push this follow-up until the owner reviews the diff.
+
 Current application release: `c096ebd` is pushed on `main`/`origin/main`, with
 the final handoff snapshot at `96bee3d` and Neon current through the resource
 soft-delete migration.

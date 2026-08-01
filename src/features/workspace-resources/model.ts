@@ -16,6 +16,29 @@ export type WorkspaceResourceOperationStatus =
   | 'rejected'
   | 'failed'
   | 'cancelled';
+export type WorkspaceResourceOperationProgressPhase =
+  | 'queued'
+  | 'planning'
+  | 'executing'
+  | 'verifying'
+  | 'waiting'
+  | 'completed'
+  | 'rejected'
+  | 'failed';
+export type WorkspaceResourceOperationStepStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'skipped';
+
+export interface WorkspaceResourceOperationProgress {
+  phase: WorkspaceResourceOperationProgressPhase;
+  message: string;
+  stepId: string | null;
+  stepStatus: WorkspaceResourceOperationStepStatus | null;
+  percent: number | null;
+}
 
 export interface WorkspaceResource {
   id: string;
@@ -48,6 +71,9 @@ export interface WorkspaceResourceOperation {
   status: WorkspaceResourceOperationStatus;
   resource_version: number;
   error: string;
+  progress: WorkspaceResourceOperationProgress | Record<string, unknown>;
+  progress_seq: number;
+  progress_updated_at: string | null;
   audit_reference: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -70,6 +96,12 @@ export interface RequestWorkspaceResourceOperationInput {
   operation: WorkspaceResourceOperationKind;
   requestText?: string;
   inputArtifact?: Record<string, unknown>;
+  steps?: Array<{
+    id: string;
+    instruction: string;
+    dependsOn?: string[];
+  }>;
+  stopOnError?: boolean;
   idempotencyKey: string;
 }
 
@@ -127,6 +159,23 @@ export function resourceAgentFacetSummary(agent: WorkspaceAgent): string {
 
 export function isLiveResourceOperation(operation: WorkspaceResourceOperation): boolean {
   return operation.status === 'pending' || operation.status === 'claimed';
+}
+
+export function operationProgress(
+  operation: WorkspaceResourceOperation | null,
+): WorkspaceResourceOperationProgress | null {
+  const value = operation?.progress;
+  if (!value || typeof value !== 'object') return null;
+  const phase = value.phase;
+  const message = value.message;
+  if (typeof phase !== 'string' || typeof message !== 'string' || !message.trim()) return null;
+  return {
+    phase: phase as WorkspaceResourceOperationProgressPhase,
+    message,
+    stepId: typeof value.stepId === 'string' ? value.stepId : null,
+    stepStatus: typeof value.stepStatus === 'string' ? value.stepStatus as WorkspaceResourceOperationStepStatus : null,
+    percent: typeof value.percent === 'number' ? value.percent : null,
+  };
 }
 
 export function operationsForResource(

@@ -922,6 +922,22 @@ function buildTools() {
     operation: { type: 'string', enum: ['read', 'propose', 'apply', 'publish'] },
     input_artifact: { type: 'object', description: 'Bounded, credential-free JSON input for the steward.' },
     request_text: { type: 'string', description: 'Plain-language request for the steward; use this instead of input_artifact for chat-style work.' },
+    steps: {
+     type: 'array',
+     description: 'Optional ordered execution plan. Each step is bounded and may depend on earlier step ids.',
+     maxItems: 32,
+     items: {
+      type: 'object',
+      properties: {
+       id: { type: 'string' },
+       instruction: { type: 'string' },
+       depends_on: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['id', 'instruction'],
+      additionalProperties: false,
+     },
+    },
+    stop_on_error: { type: 'boolean', description: 'Stop the plan after the first failed step (default true).' },
     idempotency_key: { type: 'string', description: 'Stable key for safe retry of this exact request.' },
    },
    required: ['resource_id', 'operation', 'idempotency_key'],
@@ -941,6 +957,8 @@ function buildTools() {
        operation: args?.operation,
        inputArtifact: args?.input_artifact,
        requestText: args?.request_text,
+       steps: args?.steps,
+       stopOnError: args?.stop_on_error,
        idempotencyKey: args?.idempotency_key,
       },
      },
@@ -1059,6 +1077,48 @@ function buildTools() {
       operationId: requireString(args, 'operation_id'),
       actor: workspaceResourceActor(identity),
       leaseVersion: requireString(args, 'lease_version'),
+     },
+    }),
+   };
+  },
+ });
+
+ add({
+  name: 'report_resource_operation_progress',
+  kinds: ['agent'],
+  description: 'For the resource-purpose steward holding a live lease: publish a bounded plain-language checkpoint and keep the lease alive. Progress is delivered to authorized operation viewers in realtime and remains available through get_resource_operation.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    operation_id: { type: 'string' },
+    lease_version: { type: 'string', description: 'Exact decimal lease fence returned by claim_resource_operation.' },
+    phase: { type: 'string', enum: ['queued', 'planning', 'executing', 'verifying', 'waiting', 'completed', 'rejected', 'failed'] },
+    message: { type: 'string', description: 'Safe human-readable progress checkpoint; do not include credentials or raw secrets.' },
+    step_id: { type: 'string' },
+    step_status: { type: 'string', enum: ['pending', 'running', 'completed', 'failed', 'skipped'] },
+    percent: { type: 'integer', minimum: 0, maximum: 100 },
+   },
+   required: ['operation_id', 'lease_version', 'phase', 'message'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   return {
+    operation: await runWorkspaceResourceService({
+     deps,
+     identity,
+     method: 'reportOperationProgress',
+     input: {
+      workspaceId: identity.workspaceId,
+      operationId: requireString(args, 'operation_id'),
+      actor: workspaceResourceActor(identity),
+      leaseVersion: requireString(args, 'lease_version'),
+      progress: {
+       phase: args?.phase,
+       message: args?.message,
+       stepId: args?.step_id,
+       stepStatus: args?.step_status,
+       percent: args?.percent,
+      },
      },
     }),
    };

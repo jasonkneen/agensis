@@ -2,6 +2,45 @@
 
 Snapshot: 2026-08-01. The release is committed on `main` and deployed. Do not reset, clean, rebase, or discard the historical worktrees below.
 
+## Current uncommitted follow-up (2026-08-01 13:45 BST)
+
+The checkout is on `main` at `054b9d1`, with the stewarded-resource workflow
+implementation intentionally uncommitted and not pushed. The pre-existing
+`deno.lock` edit is preserved unchanged. This follow-up adds:
+
+- bounded dependency-ordered operation steps (`steps`, `dependsOn`, `stopOnError`)
+  to the shared resource-operation contract and MCP request tool;
+- a lease-bound `report_resource_operation_progress` MCP tool that persists
+  sequence-numbered, credential-free checkpoints and renews the active lease;
+- an operation-scoped realtime channel authorized through the existing resource
+  viewer policy, with polling retained as the reconnect fallback;
+- live/last-checkpoint rendering in the Resources window and a steward seed
+  message that explicitly reads the operation plan before using normal tools;
+- runtime, canonical, and forward migration schema parity for progress fields;
+- focused contract, service, dispatch, realtime, MCP, and schema tests plus a
+  release note/gallery slide.
+
+Guarantee: concurrent `apply`/`publish` operations are still fenced by the
+resource row lock, captured resource version, lease version, and compare-and-set
+settlement. A stale operation becomes terminally failed before it advances the
+resource; no server-authoritative version can be silently overwritten.
+
+Verification for this follow-up:
+
+- `npm run typecheck` passed;
+- `npm run build` passed (existing Vite `__dirname` and large-chunk warnings);
+- `npm run test:unit` passed: 2,828 tests across 202 files;
+- `npm run smoke` passed: 19 tests across 2 files;
+- focused resource/MCP/realtime/dispatch/schema tests passed (with only the
+  optional PostgreSQL lock test skipped when no test database is configured);
+- `git diff --check` passed.
+
+`npm run ci` is not green because the existing Node suite still reports 24
+unrelated session/huddle/message/schedule/source-hygiene failures; it reaches
+2,481 passing and 24 failing tests before lint. Full lint also retains the
+pre-existing generated Netlify edge-function `no-var` errors. No deployment or
+push was performed for this follow-up.
+
 ## Current release (2026-08-01 12:52)
 
 The application release is `c096ebd` (`Pin Nostr runtime to

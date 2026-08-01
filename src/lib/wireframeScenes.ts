@@ -314,6 +314,22 @@ const connectionResources: WireframeScene = {
   ],
 };
 
+/** A protected plan moving through a steward's checkpoints — resource work. */
+const stewardedResourceWork: WireframeScene = {
+  id: 'stewarded-resource-work',
+  alt: 'A request with ordered steps moves through a steward, which reports checkpoints before the protected resource is updated.',
+  shapes: [
+    { kind: 'panel', x: 6, y: 10, w: 46, h: 80, tone: 'muted', motion: 'none' },
+    { kind: 'row', x: 14, y: 22, w: 30, h: 8, tone: 'base', motion: 'fade', delay: 0.15 },
+    { kind: 'row', x: 14, y: 38, w: 34, h: 8, tone: 'base', motion: 'fade', delay: 0.3 },
+    { kind: 'row', x: 14, y: 54, w: 26, h: 8, tone: 'base', motion: 'fade', delay: 0.45 },
+    { kind: 'panel', x: 66, y: 10, w: 88, h: 80, tone: 'muted', motion: 'slide-left', delay: 0.6 },
+    { kind: 'chip', x: 76, y: 22, w: 26, h: 12, tone: 'accent', motion: 'pulse', delay: 0.95 },
+    { kind: 'row', x: 76, y: 44, w: 64, h: 10, tone: 'base', motion: 'fade', delay: 1.15 },
+    { kind: 'button', x: 76, y: 66, w: 44, h: 12, tone: 'accent', motion: 'pop', delay: 1.4 },
+  ],
+};
+
 /** Lines appended to a ledger, each naming who — the audit log. */
 const auditLog: WireframeScene = {
   id: 'audit-log',
@@ -390,7 +406,7 @@ const codexRuntime: WireframeScene = {
 
 export const WIREFRAME_SCENES = {
   // In the gallery today.
-  socialSignInGuard, dmPrivacy, automationRule, codexRuntime, savedTemplate, connectionResources, auditLog, typingDots, stopReason,
+  socialSignInGuard, dmPrivacy, automationRule, codexRuntime, savedTemplate, connectionResources, stewardedResourceWork, auditLog, typingDots, stopReason,
   // Retired from the gallery when their feature stopped being news. Kept as
   // authored vocabulary — a scene costs nothing and is the reference for how
   // this format is meant to read.
@@ -412,6 +428,12 @@ export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
  * its scene stays in WIREFRAME_SCENES.
  */
 export const GALLERY_SLIDES: GallerySlide[] = [
+  {
+    note: 'stewarded-resource-workflows',
+    title: 'Protected work, visible progress',
+    body: 'Send ordered instructions to a steward; its lease and the resource version keep concurrent changes from overwriting each other.',
+    scene: stewardedResourceWork,
+  },
   {
     note: 'workspace-connections-and-agent-resources',
     title: 'One link, clear roles',
@@ -441,12 +463,6 @@ export const GALLERY_SLIDES: GallerySlide[] = [
     title: 'Save an agent as a template',
     body: 'Tune an agent once, save it, and start the next one from it. Your own templates sit alongside the built-in ones.',
     scene: savedTemplate,
-  },
-  {
-    note: 'audit-log',
-    title: 'A record of who changed what',
-    body: 'Sensitive changes are written to a log you can read back: who did it, what changed, and when.',
-    scene: auditLog,
   },
 ];
 

@@ -2494,6 +2494,9 @@ async function ensureRuntimeSchema() {
       lease_version bigint NOT NULL DEFAULT 0 CHECK (lease_version >= 0),
       lease_expires_at timestamptz,
       error text NOT NULL DEFAULT '',
+      progress jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(progress) = 'object'),
+      progress_seq bigint NOT NULL DEFAULT 0 CHECK (progress_seq >= 0),
+      progress_updated_at timestamptz,
       audit_reference uuid REFERENCES audit_log(id) ON DELETE SET NULL,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
@@ -2510,6 +2513,13 @@ async function ensureRuntimeSchema() {
       ON resource_operations(steward_agent_id, status, created_at);
 
 ALTER TABLE resource_operations ADD COLUMN IF NOT EXISTS requested_by_workspace_id uuid;
+ALTER TABLE resource_operations ADD COLUMN IF NOT EXISTS progress jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE resource_operations ADD COLUMN IF NOT EXISTS progress_seq bigint NOT NULL DEFAULT 0;
+ALTER TABLE resource_operations ADD COLUMN IF NOT EXISTS progress_updated_at timestamptz;
+ALTER TABLE resource_operations DROP CONSTRAINT IF EXISTS resource_operations_progress_object_check;
+ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_progress_object_check CHECK (jsonb_typeof(progress) = 'object');
+ALTER TABLE resource_operations DROP CONSTRAINT IF EXISTS resource_operations_progress_seq_check;
+ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_progress_seq_check CHECK (progress_seq >= 0);
 ALTER TABLE resource_operations DROP CONSTRAINT IF EXISTS resource_operations_one_requester_check;
 ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_one_requester_check CHECK (
   num_nonnulls(requested_by_user_id, requested_by_agent_id, requested_by_controller_id, requested_by_workspace_id) = 1
@@ -5499,7 +5509,7 @@ async function dispatchResourceOperation({
   const content =
    `@${slugHandle(steward.handle || steward.name)} — ${requesterName} requested a \`${operation}\` operation on ${label}, and you are its steward.\n\n` +
    `Use your normal connected tool surface (your built-in tools or the agent CLI) to do the work; there are no resource-specific tool names to call.\n\n` +
-   `Claim it with \`claim_resource_operation\` (operation id \`${operationId}\`), do the work, then finish with \`settle_resource_operation\`.\n\n` +
+   `Claim it with \`claim_resource_operation\`, then read \`${operationId}\` with \`get_resource_operation\` (including its bounded artifacts). If the request contains steps, execute them in dependency order. Report plain-language checkpoints with \`report_resource_operation_progress\` before and after meaningful work, then finish with \`settle_resource_operation\`.\n\n` +
    `Source: agensis://resource/${resourceId}`;
 
   const messageRows = await getDb().unsafe(
@@ -8466,6 +8476,11 @@ async function seedDefaultAgents(workspaceId, ownerUserId) {
 
 
 
+// Resource-operation progress is delivered through an operation-scoped
+// broadcast channel. The service is constructed before realtime, so keep the
+// relay as a late-bound function rather than giving the service a socket set or
+// weakening the dedicated resource authorization boundary.
+let resourceProgressRelay = () => {};
 const workspaceResources = createWorkspaceResourceService({
  getDb: () => getDb(),
  enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
@@ -8474,6 +8489,7 @@ const workspaceResources = createWorkspaceResourceService({
  // Enqueueing an operation wakes its steward, instead of leaving the row for
  // whenever someone next pulls. Thunked, like every other dep here.
  dispatchResourceOperation: (...a) => dispatchResourceOperation(...a),
+ notifyResourceOperationProgress: (...a) => resourceProgressRelay(...a),
 });
 
 // The builtin turn: the tool-use loop and the Anthropic stream. Last of Wave 4.
@@ -8762,6 +8778,14 @@ const realtime = createRealtime({
  handleAgentPermissionPrepared, handleAgentPermissionRequest,
  handleBridgeMessage: (...args) => channelBridges.handleBridgeMessage(...args),
  handlePeerListRequest, handlePeerTicketRequest, inferenceBroker,
+ authorizeResourceOperationRealtime: async (userId, workspaceId, operationId) => {
+  await workspaceResources.getOperation({
+   workspaceId,
+   operationId,
+   actor: { kind: 'user', userId, workspaceId },
+   includeArtifacts: false,
+  });
+ },
  isPrivateSessionRow, sessionMemberUserIds, sessionRealtimeAudience,
  sessionRealtimeAudiences,
  readReceiptOptedInUserIds,
@@ -8778,8 +8802,23 @@ const {
  broadcastGlobal, attachRealtime, authorizeRealtimeBinding,
  authorizeRealtimeBroadcast, revokeRealtimeAccessForMember,
  notifyReadReceiptPreference,
- registerTestWebsocketClient, workspaceIdFromRealtimeChannel,
+ registerTestWebsocketClient, workspaceIdFromRealtimeChannel, resourceOperationFromRealtimeChannel,
 } = realtime;
+
+resourceProgressRelay = ({ workspaceId, operationId, status, progress, progressSeq, updatedAt } = {}) => {
+ if (!workspaceId || !operationId) return;
+ relayBroadcast(
+  `resource-operation:${String(workspaceId)}:${String(operationId)}`,
+  'progress',
+  {
+   operationId: String(operationId),
+   status: String(status || ''),
+   progress: progress && typeof progress === 'object' ? progress : {},
+   progressSeq: String(progressSeq ?? '0'),
+   updatedAt: updatedAt || null,
+  },
+ );
+};
 
 
 // --- Link preview cache rows ------------------------------------------------
@@ -10270,6 +10309,7 @@ module.exports = {
   TOKEN_VERSION_CACHE_TTL_MS,
   getCachedTokenVersion,
   workspaceIdFromRealtimeChannel,
+  resourceOperationFromRealtimeChannel,
   // Socket liveness — a daemon must survive a single missed pong.
   sweepLiveness: (...args) => realtime.sweepLiveness(...args),
   LIVENESS_MAX_MISSED_PONGS: realtime.LIVENESS_MAX_MISSED_PONGS,
