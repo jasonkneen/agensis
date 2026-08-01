@@ -4,8 +4,9 @@ Snapshot: 2026-08-01
 
 ## Current follow-up: stewarded resource workflows (2026-08-01 14:05 BST)
 
-Root is clean on `main` at `a7aafec`, a documentation-only handoff commit on
-top of runtime commit `642f857`; both are pushed to `origin/main`. The runtime
+Root is clean on the current pushed `main` handoff commit; the
+documentation-only handoff commits sit on top of runtime commit `642f857`, all
+pushed to `origin/main`. The runtime
 is deployed to Fly release **v157** (`deployment-01KYYPSPHNQCAZHGT0SSBCVF45`)
 and its health check is passing. Keep the existing `deno.lock` change; it
 predates this follow-up and is preserved in the deployed runtime commit.

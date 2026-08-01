@@ -4,8 +4,8 @@ Snapshot: 2026-08-01. The release is committed on `main` and deployed. Do not re
 
 ## Current deployed follow-up (2026-08-01 14:05 BST)
 
-The checkout is clean on `main` at `a7aafec` (a documentation-only handoff
-commit on top of runtime commit `642f857`, both pushed to `origin/main`). The
+The checkout is clean on the current pushed `main` handoff commit (the
+documentation-only commits sit on top of runtime commit `642f857`). The
 stewarded-resource workflow runtime is deployed to Fly as release **v157**,
 running image `deployment-01KYYPSPHNQCAZHGT0SSBCVF45`; the Fly health check is
 passing at `https://agensis-backend.fly.dev/backend/health`. The pre-existing
