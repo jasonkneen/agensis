@@ -7,6 +7,7 @@ import {
   noteReceiptSent,
   readersOf,
   receiptAnchorIds,
+  receiptTargetForViewport,
   type ReceiptMessage,
   type SessionReadMarker,
 } from '../../src/lib/readReceipts';
@@ -29,8 +30,23 @@ function message(overrides: Partial<ReceiptMessage> = {}): ReceiptMessage {
   return { id: 'm1', created_at: '2026-07-01T12:00:00.000Z', sender_kind: 'human', sender_id: THEM, ...overrides };
 }
 
-function marker(readerId: string, readAt: string, readerKind = 'human'): SessionReadMarker {
-  return { session_id: 's1', reader_id: readerId, reader_kind: readerKind, read_at: readAt };
+function marker(
+  readerId: string,
+  readAt: string,
+  readerKind = 'human',
+  overrides: Partial<SessionReadMarker> = {},
+): SessionReadMarker {
+  return {
+    marker_id: `marker-${readerId}`,
+    event_version: '1',
+    session_id: 's1',
+    reader_id: readerId,
+    reader_kind: readerKind,
+    thread_parent_id: null,
+    last_seen_message_id: 'm5',
+    read_at: readAt,
+    ...overrides,
+  };
 }
 
 describe('decideReceiptEmit', () => {
@@ -163,6 +179,40 @@ describe('readersOf', () => {
     expect(readersOf(sent, [marker(AGENT, '2026-07-01T12:00:05.000Z', 'agent')])).toEqual([AGENT]);
   });
 
+  it('uses the exact marker target to order messages with the same timestamp', () => {
+    const created_at = '2026-07-01T12:00:00.000Z';
+    const ordered = [
+      message({ id: 'm4', created_at, sender_id: ME }),
+      message({ id: 'm5', created_at, sender_id: ME }),
+      message({ id: 'm6', created_at, sender_id: ME }),
+    ];
+    const exact = marker(THEM, created_at, 'human', { last_seen_message_id: 'm5' });
+
+    expect(readersOf(ordered[0], [exact], null, ordered)).toEqual([THEM]);
+    expect(readersOf(ordered[1], [exact], null, ordered)).toEqual([THEM]);
+    expect(readersOf(ordered[2], [exact], null, ordered)).toEqual([]);
+  });
+
+  it('under-reports an equal-time sibling when the exact target is outside the loaded page', () => {
+    const created_at = '2026-07-01T12:00:00.000Z';
+    const sibling = message({ id: 'm4', created_at, sender_id: ME });
+    const offPage = marker(THEM, created_at, 'human', { last_seen_message_id: 'off-page' });
+    expect(readersOf(sibling, [offPage], null, [sibling])).toEqual([]);
+  });
+
+  it('never lets a marker from another session or thread scope draw an eye', () => {
+    const sentInThread = message({ id: 'm5', session_id: 's1', sender_id: ME });
+    const threadMarker = marker(THEM, '2026-07-01T12:00:05.000Z', 'human', {
+      thread_parent_id: 'root-a',
+    });
+    const otherSession = marker('other', '2026-07-01T12:00:05.000Z', 'human', {
+      session_id: 's2',
+    });
+
+    expect(readersOf(sentInThread, [threadMarker, otherSession], null, [sentInThread])).toEqual([]);
+    expect(readersOf(sentInThread, [threadMarker, otherSession], 'root-a', [sentInThread])).toEqual([THEM]);
+  });
+
   it('excludes an agent that authored the message it read', () => {
     // Agents mark their own replies read; that self-read is not information, so
     // the author (of either kind) is excluded by the shared sender_id equality.
@@ -172,6 +222,24 @@ describe('readersOf', () => {
       marker(AGENT, '2026-07-01T12:00:05.000Z', 'agent'),
       marker(THEM, '2026-07-01T12:00:05.000Z'),
     ])).toEqual([THEM]);
+  });
+});
+
+describe('receiptTargetForViewport', () => {
+  const inbound = message({ id: 'inbound' });
+  const own = message({ id: 'own', sender_id: ME });
+
+  it('returns the newest truthful non-own, non-deleted row at the bottom of the active surface', () => {
+    expect(receiptTargetForViewport(
+      [inbound, message({ id: 'deleted', deleted_at: '2026-07-01T12:01:00.000Z' }), own],
+      ME,
+      { surfaceActive: true, nearBottom: true },
+    )).toEqual(inbound);
+  });
+
+  it('returns nothing for an inactive surface or a reader scrolled away from the bottom', () => {
+    expect(receiptTargetForViewport([inbound], ME, { surfaceActive: false, nearBottom: true })).toBeNull();
+    expect(receiptTargetForViewport([inbound], ME, { surfaceActive: true, nearBottom: false })).toBeNull();
   });
 });
 

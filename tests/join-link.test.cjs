@@ -183,6 +183,36 @@ function makeDb({ link = null, workspaceName = 'Acme', existingAgents = [] } = {
       throw new Error(`Unexpected SQL in join-link test: ${n.slice(0, 140)}`);
     },
   };
+
+  const snapshot = () => ({
+    link: state.link ? { ...state.link } : null,
+    activity: activity.map(row => ({ ...row })),
+    agents: agents.map(row => ({ ...row })),
+  });
+  const restore = saved => {
+    state.link = saved.link;
+    activity.splice(0, activity.length, ...saved.activity);
+    agents.splice(0, agents.length, ...saved.agents);
+  };
+  const transaction = { unsafe: db.unsafe.bind(db) };
+  transaction.savepoint = async callback => {
+    const saved = snapshot();
+    try {
+      return await callback(transaction);
+    } catch (error) {
+      restore(saved);
+      throw error;
+    }
+  };
+  db.begin = async callback => {
+    const saved = snapshot();
+    try {
+      return await callback(transaction);
+    } catch (error) {
+      restore(saved);
+      throw error;
+    }
+  };
   return db;
 }
 

@@ -4,6 +4,7 @@ import {
   joinLinkAudienceLabel,
   joinLinkLifecycleState,
   joinLinkRedeemedAsLabel,
+  isWorkspaceOwner,
   type WorkspaceJoinLink,
   type WorkspaceMember,
 } from '../../src/features/workspace-connections';
@@ -27,12 +28,17 @@ function link(overrides: Partial<WorkspaceJoinLink> = {}): WorkspaceJoinLink {
     workspace_id: 'ws-1',
     label: '',
     role: 'editor',
+    grant_kind: 'individual',
     audience: 'both',
     status: 'pending',
     redeemed_as: null,
     redeemed_by: null,
     redeemed_agent_id: null,
+    redeemed_controller_id: null,
     redeemed_at: null,
+    controller_name: '',
+    controller_scopes: [],
+    controller_expires_at: null,
     expires_at: '2026-07-31T12:10:00.000Z',
     created_by: 'owner',
     created_by_email: 'owner@example.test',
@@ -56,6 +62,8 @@ describe('workspace connection model', () => {
     expect(canManageWorkspace(members, 'viewer')).toBe(false);
     expect(canManageWorkspace(members, 'missing')).toBe(false);
     expect(canManageWorkspace(members)).toBe(false);
+    expect(isWorkspaceOwner(members, 'owner')).toBe(true);
+    expect(isWorkspaceOwner(members, 'admin')).toBe(false);
   });
 
   it('derives pending, expired, redeemed, and revoked without trusting raw pending forever', () => {
@@ -69,9 +77,12 @@ describe('workspace connection model', () => {
     expect(joinLinkAudienceLabel('both')).toBe('person or agent');
     expect(joinLinkAudienceLabel('human')).toBe('person only');
     expect(joinLinkAudienceLabel('agent')).toBe('agent only');
+    expect(joinLinkAudienceLabel('controller')).toBe('workspace controller');
     expect(joinLinkRedeemedAsLabel(link({ status: 'redeemed', redeemed_as: 'human' })))
       .toBe('redeemed as person');
     expect(joinLinkRedeemedAsLabel(link({ status: 'redeemed', redeemed_as: 'agent' })))
       .toBe('redeemed as agent');
+    expect(joinLinkRedeemedAsLabel(link({ status: 'redeemed', redeemed_as: 'controller' })))
+      .toBe('enrolled as controller');
   });
 });

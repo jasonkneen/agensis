@@ -17,6 +17,18 @@
 //      stamped by ONE clock and browser skew cannot make a receipt lie.
 
 const { ADVANCE_READ_MARKER_SQL, SESSION_READ_STATE_SQL, toReadMarker } = require('../shared/read-receipts.cjs');
+const RECEIPT_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function optionalThreadParent(value) {
+ const normalized = String(value || '').trim();
+ if (!normalized) return null;
+ if (!RECEIPT_UUID_RE.test(normalized)) {
+  const error = new Error('threadParentId must be a UUID');
+  error.status = 400;
+  throw error;
+ }
+ return normalized;
+}
 
 function mountReadReceiptsRoutes(app, deps = {}) {
  const {
@@ -28,7 +40,7 @@ function mountReadReceiptsRoutes(app, deps = {}) {
  // check, then the DM gate under it. Returns the row so neither route re-reads.
  async function authorizeSessionRead(req, sessionId) {
   const rows = await getDb().unsafe(
-   'select id, workspace_id, visibility, folder from chat_sessions where id = $1::uuid limit 1',
+   'select id, workspace_id, visibility, folder, deleted_at from chat_sessions where id = $1::uuid limit 1',
    [sessionId],
   );
   const session = rows[0];
@@ -52,15 +64,19 @@ function mountReadReceiptsRoutes(app, deps = {}) {
    if (!sessionId) return jsonError(res, 400, badRequest('A session id is required'));
    const messageId = String(req.body?.lastSeenMessageId || req.body?.last_seen_message_id || '').trim();
    if (!messageId) return jsonError(res, 400, badRequest('lastSeenMessageId is required'));
+   const threadParentId = optionalThreadParent(req.body?.threadParentId || req.body?.thread_parent_id);
 
    // Per (user, session). The emit policy in src/lib/readReceipts.ts already
    // throttles to one write per RECEIPT_REARM_MS, so this is the floor under a
    // client that ignores it, not the product's normal cadence.
-   if (rateLimitBlocked(res, readReceiptRateLimiter, `${req.userId}:${sessionId}`)) return;
+   if (rateLimitBlocked(res, readReceiptRateLimiter, `${req.userId}:${sessionId}:${threadParentId || 'channel'}`)) return;
 
    await authorizeSessionRead(req, sessionId);
 
-   const rows = await getDb().unsafe(ADVANCE_READ_MARKER_SQL, [sessionId, String(req.userId), messageId]);
+   const rows = await getDb().unsafe(
+    ADVANCE_READ_MARKER_SQL,
+    [sessionId, String(req.userId), messageId, threadParentId],
+   );
 
    // Rows come back ONLY when the marker actually moved. A no-op must not
    // broadcast: an idle reader re-confirming the same position would otherwise
@@ -80,8 +96,9 @@ function mountReadReceiptsRoutes(app, deps = {}) {
   try {
    const sessionId = String(req.params.sessionId || '').trim();
    if (!sessionId) return jsonError(res, 400, badRequest('A session id is required'));
+   const threadParentId = optionalThreadParent(req.query?.thread_parent_id || req.query?.threadParentId);
    await authorizeSessionRead(req, sessionId);
-   const rows = await getDb().unsafe(SESSION_READ_STATE_SQL, [sessionId, String(req.userId)]);
+   const rows = await getDb().unsafe(SESSION_READ_STATE_SQL, [sessionId, String(req.userId), threadParentId]);
    res.json({ data: { markers: rows.map(toReadMarker) }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);

@@ -1,5 +1,64 @@
 'use strict';
 
+const { CONTROLLER_TOKEN_PLACEHOLDER } = require('./join-page.cjs');
+
+async function consumeJoinLinkAndProvision({ database, tokenHash, lane, userId, provision }) {
+ if (!database || typeof database.begin !== 'function') {
+  throw new Error('Join redemption requires transactional database support');
+ }
+
+ return database.begin(async (transaction) => {
+  if (!transaction || typeof transaction.unsafe !== 'function' || typeof transaction.savepoint !== 'function') {
+   throw new Error('Join redemption requires savepoint support');
+  }
+
+  // The outer transaction owns the one-time state transition. Provisioning is
+  // isolated in a savepoint so its writes can be rolled back without reviving
+  // the credential. That preserves consume-before-provision while ruling out a
+  // half-created member, agent, or controller.
+  const claimed = await transaction.unsafe(
+   `update workspace_join_links
+       set status = 'redeemed',
+           redeemed_as = $2,
+           redeemed_by = $3,
+           redeemed_at = now(),
+           updated_at = now()
+     where token_hash = $1
+       and status = 'pending'
+       and expires_at > now()
+       and audience in ('both', $2)
+       and grant_kind = case when $2 = 'controller' then 'workspace_control' else 'individual' end
+     returning *`,
+   [tokenHash, lane, userId || null],
+  );
+  const link = claimed[0];
+  if (!link) return { state: 'refused' };
+
+  try {
+   const value = await transaction.savepoint((provisioningDb) => provision({
+    db: provisioningDb,
+    link,
+   }));
+   return { state: 'provisioned', link, value };
+  } catch (error) {
+   // Catch inside the OUTER transaction so it commits the spent link after the
+   // savepoint has rolled back every provisioning write.
+   return { state: 'failed', error };
+  }
+ });
+}
+
+async function runPostCommitEffect(label, effect) {
+ try {
+  return await effect();
+ } catch (error) {
+  // Provisioning has committed at this point. A fanout or audit transport
+  // failure must not suppress the one response containing a new credential.
+  console.error(`[agensis] join link ${label} failed:`, error?.message || error);
+  return undefined;
+ }
+}
+
 // Routes extracted verbatim from server/index.cjs (Wave 2 of the index.cjs
 // reduction). Mounted once by index.cjs; every dependency is INJECTED rather
 // than imported, so the auth, RBAC and rate-limit contract stays single-sourced
@@ -31,12 +90,14 @@ function mountJoinPagesRoutes(app, deps = {}) {
   jsonError, getDb, notifyDbSubscribers, rateLimitBlocked,
   dbRateLimitBlocked, clientIpFromReq, agentNextSteps, bearerToken,
   configBlock, createAgentConnectToken, hashAgentToken, invalidDescriptor,
+  createControllerCredential, controllerNextSteps,
   isJoinLinkToken, joinApiBaseUrl, joinDescriptor, joinLinkRateLimiter,
   joinLinkRefused, joinPublicBaseUrl, joinRedeemDbRateLimiter,
   joinRedeemRateLimiter, joinWantsJson, loadJoinLinkForDisplay,
   logJoinLinkActivity, machinePayload, mcpEndpoint, previewDescriptor,
   publicFarmEnrolledAgent, renderJoinHtml, setJoinJsonHeaders,
-  setJoinPageHeaders, uniqueAgentHandle, verifyToken,
+  setJoinPageHeaders, uniqueAgentHandle, verifyToken, parseJsonArray,
+  recordAudit,
  } = deps;
 
  app.get(['/backend/join/preview', '/join/preview'], (req, res) => {
@@ -77,6 +138,10 @@ function mountJoinPagesRoutes(app, deps = {}) {
      role: row.role,
      label: row.label,
      audience: row.audience,
+     grantKind: row.grant_kind,
+     controllerName: row.controller_name,
+     controllerScopes: parseJsonArray(row.controller_scopes),
+     controllerExpiresAt: row.controller_expires_at,
      expiresAt: row.expires_at,
      status: 'open',
     })
@@ -118,8 +183,8 @@ function mountJoinPagesRoutes(app, deps = {}) {
    if (!isJoinLinkToken(token)) return joinLinkRefused(res);
 
    const lane = String(req.body?.as || '').trim().toLowerCase();
-   if (lane !== 'human' && lane !== 'agent') {
-    return jsonError(res, 400, new Error('as must be human or agent'));
+   if (lane !== 'human' && lane !== 'agent' && lane !== 'controller') {
+    return jsonError(res, 400, new Error('as must be human, agent, or controller'));
    }
 
    // Authentication must agree with the stated subject. Falling a failed human
@@ -132,64 +197,115 @@ function mountJoinPagesRoutes(app, deps = {}) {
    if (lane === 'human' && !userId) {
     return jsonError(res, 401, new Error('Authentication failed'));
    }
-   if (lane === 'agent' && authorization) {
-    return jsonError(res, 400, new Error('Agent redemption must not include Authorization'));
+   if ((lane === 'agent' || lane === 'controller') && authorization) {
+    return jsonError(res, 400, new Error(`${lane === 'controller' ? 'Controller' : 'Agent'} redemption must not include Authorization`));
    }
 
-   // THE guard. Single statement, so the row lock makes it atomic: two
-   // concurrent redemptions of the same link cannot both return a row. The
-   // audience predicate is folded in deliberately — a wrong-lane caller matches
-   // nothing and gets the same refusal as an unknown token, rather than a
-   // distinct error that would confirm the link exists.
-   const claimed = await getDb().unsafe(
-    `update workspace_join_links
-        set status = 'redeemed',
-            redeemed_as = $2,
-            redeemed_by = $3,
-            redeemed_at = now(),
-            updated_at = now()
-      where token_hash = $1
-        and status = 'pending'
-        and expires_at > now()
-        and audience in ('both', $2)
-      returning *`,
-    [hashAgentToken(token), lane, userId || null],
-   );
-   const link = claimed[0];
-   if (!link) return joinLinkRefused(res);
+   const redemption = await consumeJoinLinkAndProvision({
+    database: getDb(),
+    tokenHash: hashAgentToken(token),
+    lane,
+    userId,
+    provision: async ({ db: provisioningDb, link }) => {
+     const wsRows = await provisioningDb.unsafe(
+      'select id, name from workspaces where id = $1 limit 1',
+      [link.workspace_id],
+     );
+     const workspace = wsRows[0] || null;
 
-   // From here the link is SPENT, before any provisioning runs. That ordering is
-   // deliberate: if the work below fails, the link stays dead. A half-completed
-   // redemption that can be replayed is a worse outcome than one that has to be
-   // re-issued, and re-issuing costs the owner one click.
-   const wsRows = await getDb().unsafe('select id, name from workspaces where id = $1 limit 1', [link.workspace_id]);
-   const workspace = wsRows[0] || null;
+     if (lane === 'human') {
+      let memberRows = [];
+      const owns = await provisioningDb.unsafe(
+       'select 1 from workspaces where id = $1 and user_id = $2 limit 1',
+       [link.workspace_id, userId],
+      );
+      if (owns.length === 0) {
+       const existing = await provisioningDb.unsafe(
+        'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
+        [link.workspace_id, userId],
+       );
+       if (existing.length === 0) {
+        memberRows = await provisioningDb.unsafe(
+         `insert into workspace_members (workspace_id, user_id, role, invited_by)
+               values ($1, $2, $3, $4) returning *`,
+         [link.workspace_id, userId, link.role, link.created_by],
+        );
+       }
+      }
+      return { workspace, memberRows };
+     }
 
+     if (lane === 'controller') {
+      const created = await createControllerCredential({
+       db: provisioningDb,
+       workspaceId: link.workspace_id,
+       name: link.controller_name,
+       scopes: parseJsonArray(link.controller_scopes),
+       expiresAt: link.controller_expires_at,
+       createdBy: link.created_by || null,
+      });
+      await provisioningDb.unsafe(
+       'update workspace_join_links set redeemed_controller_id = $2, updated_at = now() where id = $1',
+       [link.id, created.controller.id],
+      );
+      return { workspace, created };
+     }
+
+     const name = String(req.body?.name || '').trim().slice(0, 120) || 'MCP agent';
+     const handle = await uniqueAgentHandle(
+      link.workspace_id,
+      req.body?.handle || name,
+      provisioningDb,
+     );
+     const description = String(req.body?.description || '').trim().slice(0, 500);
+     const agentToken = createAgentConnectToken();
+     const agentRows = await provisioningDb.unsafe(
+      `insert into workspace_agents
+          (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode,
+           enabled, mcp_approved, connect_token_hash, metadata, created_by)
+          values ($1, $2, $3, $4, '', 'auto', 'external', 'default', true, true, $5, $6::jsonb, $7)
+          returning *`,
+      [
+       link.workspace_id,
+       name,
+       handle,
+       description,
+       hashAgentToken(agentToken),
+       // Bind the OBJECT, not a string: porsager turns a stringified ::jsonb
+       // bind into a jsonb STRING SCALAR (tests/jsonb-bind-hygiene.test.cjs).
+       { joinLinkId: String(link.id), joinedVia: 'join_link' },
+       link.created_by || null,
+      ],
+     );
+     const agent = agentRows[0];
+     await provisioningDb.unsafe(
+      'update workspace_join_links set redeemed_agent_id = $2, updated_at = now() where id = $1',
+      [link.id, agent.id],
+     );
+     return { workspace, agentRows, agent, agentToken };
+    },
+   });
+
+   if (redemption.state === 'refused') return joinLinkRefused(res);
+   if (redemption.state === 'failed') throw redemption.error;
+
+   const { link, value } = redemption;
+   const { workspace } = value;
    setJoinJsonHeaders(res);
 
    if (lane === 'human') {
-    const owns = await getDb().unsafe('select 1 from workspaces where id = $1 and user_id = $2 limit 1', [link.workspace_id, userId]);
-    if (owns.length === 0) {
-     const existing = await getDb().unsafe(
-      'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
-      [link.workspace_id, userId],
-     );
-     if (existing.length === 0) {
-      const memberRows = await getDb().unsafe(
-       `insert into workspace_members (workspace_id, user_id, role, invited_by)
-             values ($1, $2, $3, $4) returning *`,
-       [link.workspace_id, userId, link.role, link.created_by],
-      );
-      notifyDbSubscribers('workspace_members', 'INSERT', memberRows);
-     }
+    if (value.memberRows.length > 0) {
+     await runPostCommitEffect('member fanout', async () => {
+      notifyDbSubscribers('workspace_members', 'INSERT', value.memberRows);
+     });
     }
-    await logJoinLinkActivity({
+    await runPostCommitEffect('activity write', () => logJoinLinkActivity({
      workspaceId: link.workspace_id,
      userId,
      eventType: 'join_link_redeemed',
      title: 'A person joined through a join link',
      metadata: { join_link_id: String(link.id), lane: 'human', role: link.role, audience: link.audience },
-    });
+    }));
     // No `credential` key at all — not empty, ABSENT. A human's access is their
     // own session, so there is nothing here for anyone to copy.
     return res.json({
@@ -204,38 +320,71 @@ function mountJoinPagesRoutes(app, deps = {}) {
     });
    }
 
+   if (lane === 'controller') {
+    const { created } = value;
+    await runPostCommitEffect('activity write', () => logJoinLinkActivity({
+     workspaceId: link.workspace_id,
+     userId: null,
+     eventType: 'join_link_redeemed',
+     title: `${created.controller.name} enrolled as a workspace controller`,
+     metadata: {
+      join_link_id: String(link.id),
+      lane: 'controller',
+      controller_id: String(created.controller.id),
+      grant_kind: 'workspace_control',
+     },
+    }));
+    await runPostCommitEffect('audit write', () => recordAudit({
+     workspaceId: link.workspace_id,
+     actor: { label: created.controller.name },
+     action: 'controller.enrolled',
+     target: {
+      type: 'workspace_controller',
+      id: String(created.controller.id),
+      label: created.controller.name,
+     },
+     after: 'active',
+     detail: {
+      joinLinkId: String(link.id),
+      scopes: created.controller.scopes,
+      expiresAt: created.controller.expires_at,
+     },
+     requestIp: clientIpFromReq ? clientIpFromReq(req) : '',
+    }));
+
+    const backendBaseUrl = joinApiBaseUrl(req);
+    return res.json({
+     data: {
+      redeemed: true,
+      as: 'controller',
+      workspace,
+      controller: created.controller,
+      credential: {
+       token: created.token,
+       type: 'bearer',
+       shown_once: true,
+       expires_at: created.controller.expires_at,
+       note: 'Store this now. It is not recoverable and this enrollment link will not work again.',
+      },
+      mcp: {
+       endpoint: mcpEndpoint(backendBaseUrl),
+       transport: 'http',
+       config: configBlock(backendBaseUrl, CONTROLLER_TOKEN_PLACEHOLDER),
+      },
+      next: controllerNextSteps(),
+     },
+     error: null,
+    });
+   }
+
    // --- agent lane ---
-   const name = String(req.body?.name || '').trim().slice(0, 120) || 'MCP agent';
-   const handle = await uniqueAgentHandle(link.workspace_id, req.body?.handle || name);
-   const description = String(req.body?.description || '').trim().slice(0, 500);
-   const agentToken = createAgentConnectToken();
-   const agentRows = await getDb().unsafe(
-    `insert into workspace_agents
-        (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode,
-         enabled, mcp_approved, connect_token_hash, metadata, created_by)
-        values ($1, $2, $3, $4, '', 'auto', 'external', 'default', true, true, $5, $6::jsonb, $7)
-        returning *`,
-    [
-     link.workspace_id,
-     name,
-     handle,
-     description,
-     hashAgentToken(agentToken),
-     // Bind the OBJECT, not a string: porsager turns a stringified ::jsonb bind
-     // into a jsonb STRING SCALAR (tests/jsonb-bind-hygiene.test.cjs).
-     { joinLinkId: String(link.id), joinedVia: 'join_link' },
-     link.created_by || null,
-    ],
-   );
-   const agent = agentRows[0];
+   const { agentRows, agent, agentToken } = value;
    // publicFarmEnrolledAgent strips connect_token_hash before the row goes out
    // over realtime. The plaintext token was never in the row to begin with.
-   notifyDbSubscribers('workspace_agents', 'INSERT', agentRows.map(publicFarmEnrolledAgent));
-   await getDb().unsafe(
-    'update workspace_join_links set redeemed_agent_id = $2, updated_at = now() where id = $1',
-    [link.id, agent.id],
-   );
-   await logJoinLinkActivity({
+   await runPostCommitEffect('agent fanout', async () => {
+    notifyDbSubscribers('workspace_agents', 'INSERT', agentRows.map(publicFarmEnrolledAgent));
+   });
+   await runPostCommitEffect('activity write', () => logJoinLinkActivity({
     workspaceId: link.workspace_id,
     userId: null,
     eventType: 'join_link_redeemed',
@@ -247,7 +396,7 @@ function mountJoinPagesRoutes(app, deps = {}) {
      agent_handle: agent.handle,
      audience: link.audience,
     },
-   });
+   }));
 
    const backendBaseUrl = joinApiBaseUrl(req);
    return res.json({

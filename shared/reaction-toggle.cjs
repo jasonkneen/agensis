@@ -53,6 +53,7 @@
 // ----------------------------------------------------------------------------
 
 const { MAX_REACTION_LENGTH } = require('./reaction-events.cjs');
+const { sessionReadableSql } = require('./backend-core.cjs');
 
 const REACTION_OPS = Object.freeze(['add', 'remove']);
 
@@ -66,6 +67,18 @@ const MAX_DISTINCT_REACTIONS_PER_MESSAGE = 24;
 // Named here rather than at each call site so the two lanes cannot drift into
 // returning different shapes to the same event builder.
 const REACTION_RETURNING_COLUMNS = 'id, session_id, reactions, sender_kind, sender_id, sender_name, thread_parent_id, created_at';
+const REACTION_CURRENT_SQL = `select ${REACTION_RETURNING_COLUMNS}
+  from messages
+ where id = $1::uuid
+   and session_id = $2::uuid
+   and deleted_at is null
+   and exists (
+     select 1
+       from chat_sessions reaction_session_scope
+      where reaction_session_scope.id = messages.session_id
+        and ${sessionReadableSql('reaction_session_scope', '$3')}
+   )
+ limit 1`;
 
 // $1 message id, $2 session id, $3 reaction, $4 user id.
 //
@@ -81,6 +94,14 @@ const REACTION_ADD_SQL = `update messages
        )
  where id = $1::uuid
    and session_id = $2::uuid
+   and deleted_at is null
+   and exists (
+     select 1
+       from chat_sessions reaction_session_scope
+      where reaction_session_scope.id = messages.session_id
+        and ${sessionReadableSql('reaction_session_scope', '$4', { lockMembership: true })}
+      for share
+   )
    and not coalesce(reactions -> $3::text, '[]'::jsonb) @> to_jsonb($4::text)
    and (
      coalesce(reactions, '{}'::jsonb) ? $3::text
@@ -104,6 +125,14 @@ const REACTION_REMOVE_SQL = `update messages
        end
  where id = $1::uuid
    and session_id = $2::uuid
+   and deleted_at is null
+   and exists (
+     select 1
+       from chat_sessions reaction_session_scope
+      where reaction_session_scope.id = messages.session_id
+        and ${sessionReadableSql('reaction_session_scope', '$4', { lockMembership: true })}
+      for share
+   )
    and coalesce(reactions -> $3::text, '[]'::jsonb) @> to_jsonb($4::text)
 returning ${REACTION_RETURNING_COLUMNS}`;
 
@@ -223,6 +252,7 @@ function explainReactionNoop(row, { op, reaction, userId }) {
 module.exports = {
  MAX_DISTINCT_REACTIONS_PER_MESSAGE,
  REACTION_ADD_SQL,
+ REACTION_CURRENT_SQL,
  REACTION_OPS,
  REACTION_REMOVE_SQL,
  REACTION_RETURNING_COLUMNS,

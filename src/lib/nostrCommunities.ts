@@ -71,6 +71,42 @@ export interface NostrConnectResult {
   alreadyConnected: boolean;
 }
 
+export class NostrRequestError extends Error {
+  readonly status: number;
+  readonly path: string;
+
+  constructor(message: string, status: number, path: string) {
+    super(message);
+    this.name = 'NostrRequestError';
+    this.status = status;
+    this.path = path;
+  }
+}
+
+/**
+ * Keep the invite flow actionable when a deploy boundary is stale. A bare
+ * `Request failed (404)` cannot tell an operator whether the Agensis route or
+ * the remote NIP-29 host is missing, which is exactly the distinction needed
+ * when a local UI is pointed at a separately deployed backend.
+ */
+export function nostrErrorMessage(reason: unknown): string {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  if (!(reason instanceof NostrRequestError)) return message;
+
+  const isPreview = reason.path === '/backend/nostr-communities/preview';
+  const isRemoteRelayFailure = /Nostr relay|Nostr join policy|Nostr invite claim/i.test(message);
+  if (reason.status === 404 && isPreview && isRemoteRelayFailure) {
+    return 'The community host returned 404 for its Nostr metadata. Check that this invite URL is current and that the community relay is deployed.';
+  }
+  if (reason.status === 404 && isPreview) {
+    return 'The Agensis backend returned 404 for the Nostr preview route. Start the current local backend or deploy it, then retry against the correct backend URL.';
+  }
+  if (reason.status === 502 && /^(?:Request failed|HTTP 502|Could not reach)/i.test(message)) {
+    return 'The Nostr community could not be reached. Check the host and try again.';
+  }
+  return message;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(apiUrl(path), {
     ...init,
@@ -83,7 +119,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.error) {
     const detail = payload?.error?.message || payload?.error || `Request failed (${response.status})`;
-    throw new Error(String(detail));
+    throw new NostrRequestError(String(detail), response.status, path);
   }
   return payload.data as T;
 }

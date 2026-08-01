@@ -1,5 +1,21 @@
 [
   {
+    "version": "workspace-connections-and-agent-resources",
+    "date": "2026-07-31",
+    "title": "One invitation link and clearer agent roles",
+    "summary": "Inviting somebody no longer starts with choosing a different mechanism for a person and an agent. A workspace now creates one short-lived, one-use link, and the recipient explicitly redeems it as a human or an agent; the link itself cannot guess wrong or silently switch paths. Agents can also be described as collaborators or as resources for context, knowledge, tooling, or code. That description changes how they are presented and whether they join ambient conversation by default, but it never grants permissions, folders, tokens, or sandbox access. The composer no longer asks you to choose a model because the agent owns its model configuration. Local-agent setup now surfaces the operating-system service workflow available in the companion CLI. This release also closes a set of cross-workspace, private-conversation, message-ownership, schema-structure, and credential-projection gaps found during the end-to-end enterprise review.",
+    "highlights": [
+      "Create one invitation URL for a human, an agent, or either; redemption is explicit, short-lived, one-use, and revocable",
+      "Classify an agent as a collaborator or as a context, knowledge, tooling, or code resource without changing its authority",
+      "Resource agents stay out of ambient chat by default unless a manager deliberately enables it",
+      "The chat composer follows the selected agent's model configuration instead of presenting a separate model picker",
+      "Follow the surfaced companion CLI workflow for a macOS LaunchAgent or Linux systemd user service",
+      "Private sessions, derived threads, huddles, schedules, jobs, and permission requests now share the same access rules",
+      "Message edits and removals are checked against the real author and conversation before any write is accepted",
+      "Runtime bootstrap, canonical schema, migrations, Fly, and Netlify now have structural drift checks"
+    ]
+  },
+  {
     "version": "template-export-import",
     "date": "2026-07-30",
     "title": "Move a persona between workspaces",

@@ -13,10 +13,10 @@ const QUEUE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // forever and pin the sync-error banner (M9).
 const MAX_SYNC_ATTEMPTS = 5;
 
-interface SyncEntry {
+export interface SyncEntry {
   id?: number;
   table: string;
-  operation: 'insert' | 'update' | 'delete';
+  operation: 'insert' | 'update' | 'delete' | 'message_send';
   payload: Record<string, unknown>;
   created_at: number;
   attempts?: number;
@@ -202,6 +202,64 @@ export function cacheApplyUpdate(key: string, id: unknown, patch: CachedRow): Pr
 
 export function cacheApplyDelete(key: string, id: unknown): Promise<void> {
   return mutateCachedArray(key, rows => rows.filter(r => r?.id !== id));
+}
+
+/**
+ * Message pages are cached as `{ messages, hasMore }`, not a bare row array.
+ * Keep that durable snapshot in lockstep with an offline queued send so a
+ * reload while still offline cannot make the user's message disappear.
+ */
+export async function cacheApplyMessagePageInsert(
+  key: string,
+  record: CachedRow,
+): Promise<void> {
+  const existing = await cacheGet<unknown>(key);
+  if (!existing || typeof existing !== 'object' || Array.isArray(existing)) return;
+  const page = existing as { messages?: unknown; hasMore?: unknown };
+  if (!Array.isArray(page.messages)) return;
+  const messages = page.messages as CachedRow[];
+  const next = messages.some(row => row?.id === record.id)
+    ? messages.map(row => (row?.id === record.id ? { ...row, ...record } : row))
+    : [...messages, record];
+  next.sort((a, b) => {
+    const byTime = String(a.created_at || '').localeCompare(String(b.created_at || ''));
+    return byTime || String(a.id || '').localeCompare(String(b.id || ''));
+  });
+  await cacheSet(key, { ...page, messages: next });
+}
+
+function queuedEntrySessionId(entry: SyncEntry): string {
+  if (entry.operation === 'message_send') {
+    const message = entry.payload.message;
+    if (message && typeof message === 'object' && !Array.isArray(message)) {
+      return String((message as Record<string, unknown>).session_id || '');
+    }
+  }
+  return String(entry.payload.session_id || '');
+}
+
+/**
+ * Revocation/closure is a privacy boundary. A cached body is not the only copy:
+ * a queued outgoing mutation also contains the message text and would otherwise
+ * retry after the user no longer has access. Remove every queued mutation tied
+ * to the session as part of the same client-side redaction.
+ */
+export async function purgeQueuedSessionMutations(sessionId: string): Promise<void> {
+  const target = String(sessionId || '').trim();
+  if (!target) return;
+  const db = await openDb();
+  try {
+    const items = await req(tx(db, QUEUE_STORE, 'readonly').getAll()) as SyncEntry[];
+    const ids = items
+      .filter(entry => queuedEntrySessionId(entry) === target)
+      .map(entry => entry.id)
+      .filter((id): id is number => typeof id === 'number');
+    if (ids.length === 0) return;
+    const store = tx(db, QUEUE_STORE, 'readwrite');
+    await Promise.all(ids.map(id => req(store.delete(id))));
+  } finally {
+    db.close();
+  }
 }
 
 export async function queueCount(): Promise<number> {

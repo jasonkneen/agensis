@@ -40,6 +40,7 @@ function makeJob(overrides = {}) {
     agent_id: 'agent-1',
     workspace_id: 'ws-1',
     session_id: 'session-1',
+    connection_id: 'conn-1',
     status: 'running',
     agent_name: 'Coder',
     agent_handle: 'coder',
@@ -74,16 +75,34 @@ function installDb({ job = makeJob(), messages = [placeholderRow()] } = {}) {
     calls,
     store,
     job,
+    async begin(callback) {
+      return callback(db);
+    },
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
       calls.push({ n, params });
       if (n.startsWith('select j.*, a.name as agent_name')) {
-        // Mirror the real WHERE clause: a mismatched agent or workspace matches nothing.
-        if (!job || params[0] !== job.id || params[1] !== job.agent_id || params[2] !== job.workspace_id) return [];
+        // Mirror the current-scope proof, including the exact daemon process and
+        // the running-state CAS. Session/agent/roster predicates are asserted
+        // below against the production SQL.
+        if (!job
+          || params[0] !== job.id
+          || params[1] !== job.agent_id
+          || params[2] !== job.workspace_id
+          || params[3] !== job.connection_id
+          || job.status !== 'running') return [];
         return [job];
       }
+      if (n.startsWith('select status from agent_jobs')) {
+        if (!job
+          || params[0] !== job.id
+          || params[1] !== job.agent_id
+          || params[2] !== job.workspace_id
+          || params[3] !== job.connection_id) return [];
+        return [{ status: job.status }];
+      }
       if (n.startsWith('update agent_jobs set updated_at')) {
-        if (!['queued', 'running'].includes(job.status)) return []; // the status guard
+        if (job.status !== 'running' || params.at(-1) !== job.connection_id) return []; // the status/connection guard
         job.metadata = params[1];
         return [{ id: params[0] }];
       }
@@ -98,6 +117,12 @@ function installDb({ job = makeJob(), messages = [placeholderRow()] } = {}) {
         row.sender_kind = 'agent';
         row.sender_id = params[2];
         row.sender_name = params[3];
+        return [{ ...row }];
+      }
+      if (n.startsWith('update messages set message_kind = $3')) {
+        const row = store.get(params[0]);
+        if (!row || row.session_id !== params[1]) return [];
+        row.message_kind = params[2];
         return [{ ...row }];
       }
       if (n.startsWith('insert into messages (id,')) {
@@ -172,8 +197,12 @@ test('a segment for another agent is rejected and writes nothing', async () => {
 
   const lookup = db.calls.find((c) => c.n.startsWith('select j.*, a.name as agent_name'));
   assert.ok(lookup, 'the job is loaded before anything is written');
-  assert.match(lookup.n, /where j\.id = \$1 and j\.agent_id = \$2 and j\.workspace_id = \$3/);
-  assert.deepEqual(lookup.params, ['job-1', 'agent-2', 'ws-1']);
+  assert.match(lookup.n, /where j\.id = \$1 and j\.agent_id = \$2 and j\.workspace_id = \$3 and j\.connection_id = \$4 and j\.status = 'running'/);
+  assert.match(lookup.n, /s\.deleted_at is null/);
+  assert.match(lookup.n, /a\.enabled is true/);
+  assert.match(lookup.n, /jsonb_array_elements/);
+  assert.match(lookup.n, /for update of j, s, a/);
+  assert.deepEqual(lookup.params, ['job-1', 'agent-2', 'ws-1', 'conn-1']);
   assert.ok(!db.calls.some((c) => c.n.startsWith('insert into messages')), 'no message row was inserted');
   assert.ok(!db.calls.some((c) => c.n.startsWith('update messages')), 'the placeholder was not touched');
   assert.ok(!db.calls.some((c) => c.n.startsWith('update agent_jobs')), 'the job was not touched');
@@ -190,7 +219,7 @@ test('a segment for another workspace is rejected and writes nothing', async () 
   );
 
   const lookup = db.calls.find((c) => c.n.startsWith('select j.*, a.name as agent_name'));
-  assert.deepEqual(lookup.params, ['job-1', 'agent-1', 'ws-other']);
+  assert.deepEqual(lookup.params, ['job-1', 'agent-1', 'ws-other', 'conn-1']);
   assert.ok(!db.calls.some((c) => c.n.startsWith('insert into messages')), 'no message row was inserted');
   assert.deepEqual(conversation(db), ['Thinking 0s']);
 });

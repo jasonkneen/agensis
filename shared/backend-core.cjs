@@ -389,18 +389,26 @@ const DB_TABLE_ACCESS = {
  feedback_reports: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  // SELECT is 'read': every member who can read a conversation may see who else
  // has read it, and the session gate below narrows that to members for a DM.
- // Every WRITE is 'manage' — deliberately UNREACHABLE in the product — because
- // the dedicated route is the only place two things happen: `user_id` comes from
+ // Every WRITE is 'manage' as defense in depth, but the explicit refusal in
+ // enforceDbOperationAccess below makes it unreachable even to an owner. The
+ // dedicated route is the only place two things happen: `user_id` comes from
  // req.userId rather than the body, and `read_at` is resolved from the named
- // message's own created_at rather than from a client clock. A generic insert
- // would let a caller claim any user read any conversation at any moment, which
- // is a fabricated social signal about another person.
+ // message's own created_at rather than from a client clock. Generic INSERT or
+ // UPDATE could fabricate a social signal about another person, and generic
+ // DELETE could erase one.
  session_read_state: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
 };
 
 // Columns that must never be set via generic /backend/db/* write by non-dedicated
 // routes (editors could otherwise approve MCP agents, rewrite storage paths, etc.).
 const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
+ chat_sessions: new Set([
+  // Written only by the atomic split command. Letting a browser forge these
+  // values would make merge omit real work or close a fork as "empty".
+  'split_at',
+  'split_baseline_message_id',
+  'split_source_boundary_message_id',
+ ]),
  // `messages.reactions` is a jsonb MAP the browser used to compute and PUT whole.
  // That is a read-modify-write across a network round trip: two people reacting
  // inside the realtime propagation window each built a full map from a stale base
@@ -417,6 +425,25 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
  // saves, it just cannot set it.
  messages: new Set([
   'reactions',
+  // Browser-authenticated writes are HUMAN writes. These fields are assigned
+  // by the generic insert route from the verified session and are never
+  // client-editable afterwards. Server/daemon/automation writers bypass the
+  // generic browser route and keep writing their own trusted attribution.
+  'role',
+  'sender_kind',
+  'sender_id',
+  'sender_name',
+  'message_kind',
+  'tool_name',
+  'tool_detail',
+  'source_task_id',
+  'huddle_id',
+  'permission_request_id',
+  'created_at',
+  // Soft-delete time is stamped only by /backend/db/delete. If a generic
+  // update could set it, the same door could also set it back to null and
+  // undelete a row whose content should remain DB-only.
+  'deleted_at',
  ]),
  // Server-owned routing provenance for queued agent work. `created_by` is
  // stamped from the authenticated principal on generic task creation, and
@@ -433,6 +460,11 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
   'connect_token_hash',
   'connect_token',
   'permission_mode',
+  'controller_id',
+  // This is the optimistic-concurrency boundary used by identity merges and
+  // in-flight AI replies. A browser may never preserve or choose it while
+  // changing the model/persona; every real generic edit advances it in SQL.
+  'version',
  ]),
  // Provenance, written only by the dedicated routes. A generic write that could
  // set source='authored' on an imported template, or rewrite `origin`, would
@@ -488,6 +520,38 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
  ]),
 };
 
+// Columns the browser may provide when CREATING a row but may never move or
+// rewrite afterwards. Kept separate from PRIVILEGED_DB_COLUMNS_BY_TABLE because
+// messages need id/session/thread_parent to address the insert in the first
+// place. Server-owned writers use direct SQL and are unaffected.
+const IMMUTABLE_DB_UPDATE_COLUMNS_BY_TABLE = {
+ chat_sessions: new Set([
+  // Privacy classification is server-owned. Both columns participate in the
+  // canonical predicate (`visibility = private OR folder = Direct messages`),
+  // so moving either through the generic route could change who may read the
+  // session. A public->private transition needs cross-process realtime
+  // invalidation; allowing a generic Netlify write would leave Fly sockets and
+  // already-rendered activity bodies stale. Folder organisation belongs on a
+  // dedicated route that can prove the classification did not change.
+ 'visibility',
+ 'folder',
+  // Derivation is also authority for close: editors may close a sub-thread or
+  // fork they can work in, while a main channel requires manage. If either
+  // edge could be rewritten after creation, an editor could reclassify a main
+  // channel as a derived shell and close the whole conversation graph.
+  'parent_message_id',
+  'split_parent_id',
+  'split_at',
+  'split_baseline_message_id',
+  'split_source_boundary_message_id',
+ ]),
+ messages: new Set([
+  'id',
+  'session_id',
+  'thread_parent_id',
+ ]),
+};
+
 // Columns a generic /backend/db write MAY still set, but only for a caller who
 // has 'manage' on the workspace. Unlike PRIVILEGED_DB_COLUMNS_BY_TABLE (which is
 // stripped outright), these back real product features whose ONLY writer is the
@@ -499,6 +563,12 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
 //   access to `/` or `~/.ssh` (H3, 2026-07 review). sandbox_provider /
 //   sandbox_config likewise choose where and how agent code executes.
 const MANAGE_ONLY_DB_COLUMNS_BY_TABLE = {
+ chat_sessions: new Set([
+  // Closing a session now tears down every participant's retained transcript,
+  // active jobs, permission prompts and linked huddle media. It is the same
+  // authority as the dedicated clear command, never an ordinary editor write.
+  'deleted_at',
+ ]),
  workspace_agents: new Set([
   'metadata',
   'sandbox_provider',
@@ -631,8 +701,24 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
  // entry here. `updated_at` is dropped: it records when a marker last MOVED,
  // which is a finer clock than "read up to this point" and is not a disclosure
  // this feature makes. It stays an operational column, readable only in psql.
- session_read_state: ['session_id', 'user_id', 'agent_id', 'read_at'],
+ session_read_state: [
+  'marker_id', 'event_version', 'session_id', 'user_id', 'agent_id', 'thread_parent_id',
+  'last_seen_message_id', 'read_at',
+ ],
 };
+
+// Some tables must remain in ALLOWED_TABLES so an authenticated realtime
+// binding can be authorized, while their snapshot read must go through a
+// dedicated route with stricter projection/policy. Keep that distinction
+// explicit: removing session_read_state from ALLOWED_TABLES silently breaks the
+// live UI; allowing generic SELECT bypasses reciprocity and human opt-out.
+const DEDICATED_SELECT_ONLY_TABLES = new Set(['session_read_state']);
+
+function assertGenericSelectAllowed(table) {
+ if (DEDICATED_SELECT_ONLY_TABLES.has(table)) {
+  throw forbidden(`Table ${table} is readable only through its dedicated route`);
+ }
+}
 
 /**
  * Project a generic read or mutation RETURNING clause down to what the table
@@ -654,6 +740,58 @@ function safeSelectColumns(table, columns) {
  return requested.join(', ');
 }
 
+const DELETED_MESSAGE_CONTENT = 'This message was deleted.';
+const AI_STREAM_ERROR_MAX_LENGTH = 1_000;
+
+/**
+ * Normalize terminal error frames from Anthropic and OpenAI-compatible SSE
+ * streams. A provider can return HTTP 200, emit partial text, then end with an
+ * error object; that terminal error must win the durable transcript.
+ */
+function aiStreamErrorText(frame) {
+ if (!frame || typeof frame !== 'object') return '';
+ const error = frame.error;
+ const isErrorFrame = String(frame.type || '').toLowerCase() === 'error' || error != null;
+ if (!isErrorFrame) return '';
+ const candidate = typeof error === 'string'
+  ? error
+  : error && typeof error === 'object'
+   ? (error.message || error.type || error.code)
+   : frame.message;
+ const text = String(candidate || 'AI stream failed').trim();
+ return (text || 'AI stream failed').slice(0, AI_STREAM_ERROR_MAX_LENGTH);
+}
+
+/**
+ * Keep a soft-deleted row as a structural thread/sub-thread anchor without
+ * returning the payload its author deleted. Only replace fields that were
+ * actually selected so a narrow generic projection stays narrow.
+ */
+function redactDeletedMessageRow(row) {
+ if (!row || typeof row !== 'object' || !row.deleted_at) return row;
+ const next = { ...row };
+ const replacements = {
+  content: DELETED_MESSAGE_CONTENT,
+  attachments: [],
+  message_kind: '',
+  tool_name: '',
+  tool_detail: '',
+  reactions: {},
+  pinned: false,
+  source_task_id: null,
+  huddle_id: null,
+  permission_request_id: null,
+ };
+ for (const [column, value] of Object.entries(replacements)) {
+  if (Object.prototype.hasOwnProperty.call(next, column)) next[column] = value;
+ }
+ return next;
+}
+
+function redactDeletedMessageRows(rows) {
+ return Array.isArray(rows) ? rows.map(redactDeletedMessageRow) : [];
+}
+
 function stripPrivilegedDbValues(table, values) {
  if (!values || typeof values !== 'object' || Array.isArray(values)) return values;
  const privileged = PRIVILEGED_DB_COLUMNS_BY_TABLE[table];
@@ -663,6 +801,13 @@ function stripPrivilegedDbValues(table, values) {
   if (Object.prototype.hasOwnProperty.call(next, key)) delete next[key];
  }
  return next;
+}
+
+function stripImmutableDbUpdateValues(table, values) {
+ if (!values || typeof values !== 'object' || Array.isArray(values)) return values;
+ const immutable = IMMUTABLE_DB_UPDATE_COLUMNS_BY_TABLE[table];
+ if (!immutable) return { ...values };
+ return Object.fromEntries(Object.entries(values).filter(([key]) => !immutable.has(key)));
 }
 
 /**
@@ -941,6 +1086,134 @@ function operationRows(values) {
  return Array.isArray(values) ? values : [values];
 }
 
+const MESSAGE_AUTHOR_ONLY_UPDATE_COLUMNS = new Set([
+ 'content',
+ 'attachments',
+ 'thread_parent_id',
+ 'broadcast_to_channel',
+]);
+
+function browserMessageSenderName(user) {
+ const displayName = String(user?.display_name || '').trim();
+ if (displayName) return displayName.slice(0, 120);
+ const email = String(user?.email || '').trim();
+ const localPart = email.split('@')[0] || '';
+ return localPart.slice(0, 120) || 'You';
+}
+
+/**
+ * Load the authenticated browser author's identity from the server-owned user
+ * row. A caller may choose message content and its destination, never who said
+ * it or whether it was an assistant/agent/automation message.
+ */
+async function loadBrowserMessageAuthor({ userId, db }) {
+ if (!userId) throw unauthorized();
+ if (typeof db !== 'function') throw new Error('loadBrowserMessageAuthor requires a db function');
+ const rows = await db(
+  'select id, email, display_name from app_users where id = $1 limit 1',
+  [String(userId)],
+ );
+ const user = rows[0];
+ if (!user || String(user.id) !== String(userId)) throw unauthorized();
+ return {
+  role: 'user',
+  sender_kind: 'user',
+  sender_id: String(userId),
+  sender_name: browserMessageSenderName(user),
+ };
+}
+
+function stampBrowserMessageInsert(values, author) {
+ if (!values || typeof values !== 'object' || Array.isArray(values)) return values;
+ const safeValues = { ...values };
+ // A browser may delete its own existing message, but it may not CREATE an
+ // already-deleted payload that bypasses normal activity/output redaction.
+ delete safeValues.deleted_at;
+ return {
+  ...safeValues,
+  role: 'user',
+  sender_kind: 'user',
+  sender_id: String(author?.sender_id || ''),
+  sender_name: String(author?.sender_name || 'You'),
+ };
+}
+
+function messageUpdateNeedsAuthorship(values) {
+ if (!values || typeof values !== 'object' || Array.isArray(values)) return false;
+ return Object.keys(values).some(column => MESSAGE_AUTHOR_ONLY_UPDATE_COLUMNS.has(column));
+}
+
+async function enforceMessageAuthorship({ userId, op, filters, values, db }) {
+ if (op !== 'delete' && !(op === 'update' && messageUpdateNeedsAuthorship(values))) return;
+ const messageId = findFilterValue(filters, 'id');
+ const sessionId = findFilterValue(filters, 'session_id');
+ if (!messageId || !sessionId) {
+  throw badRequest('Editing or deleting a message requires exact message and session filters');
+ }
+ const rows = await db(
+  `select role, sender_kind, sender_id
+     from messages
+    where id = $1 and session_id = $2
+    limit 1`,
+  [messageId, sessionId],
+ );
+ const message = rows[0];
+ const owned = message
+  && String(message.role || '') === 'user'
+  && String(message.sender_kind || '') === 'user'
+  && String(message.sender_id || '') === String(userId);
+ if (!owned) throw forbidden('You can only edit or delete your own messages');
+}
+
+/**
+ * Repeat the preflight authorship decision in the mutating SQL predicate.
+ * Without this, a concurrent trusted writer could change the row's attribution
+ * between the SELECT above and the UPDATE. The preflight remains useful for a
+ * truthful 403; this clause is the race-safe enforcement.
+ */
+function appendMessageAuthorshipFilters({
+ userId, table, op, filters, values,
+}) {
+ const current = Array.isArray(filters) ? filters : [];
+ const needsAuthorship = table === 'messages'
+  && (op === 'delete' || (op === 'update' && messageUpdateNeedsAuthorship(values)));
+ if (!needsAuthorship) return current;
+ return [
+  ...current,
+  { column: 'role', operator: 'eq', value: 'user' },
+  { column: 'sender_kind', operator: 'eq', value: 'user' },
+  { column: 'sender_id', operator: 'eq', value: String(userId || '') },
+ ];
+}
+
+/**
+ * Re-check private-session readability in the SAME statement that mutates a
+ * message. The normal guard gives the caller a useful 403 before building SQL,
+ * but a membership revoke or public -> private transition can race that
+ * preflight. Authorship alone is not enough in the final predicate.
+ *
+ * Workspace-role checks remain the generic DB gate's responsibility, just as
+ * they are for every other workspace-scoped mutation. This helper adds the
+ * session granularity that only message rows need.
+ */
+function appendMessageMutationAccessClause(where, userId, table) {
+ if (table !== 'messages') return where;
+ const params = [...(where?.params || []), String(userId || '')];
+ const userParam = `$${params.length}`;
+ const prefix = where?.clause ? `${where.clause} and` : ' where';
+ return {
+  clause: `${prefix} exists (
+    select 1
+      from chat_sessions message_session_scope
+     where message_session_scope.id = messages.session_id
+       and message_session_scope.deleted_at is null
+       and ${sessionReadableSql('message_session_scope', userParam, { lockMembership: true })}
+     for share
+  ) and messages.deleted_at is null`,
+  params,
+ };
+}
+
 // Resolve the workspace id a db operation targets, looking through parent rows
 // when the table/filter doesn't carry workspace_id directly. Returns
 // { workspaceId } when determinable, or { unscoped: true } when access can't be
@@ -979,6 +1252,46 @@ async function resolveOperationWorkspace(table, { values, filters }, db) {
   if (rows[0]) return { workspaceId: rows[0].workspace_id };
  }
  return { unscoped: true };
+}
+
+const SESSION_BOUND_TABLES = new Set([
+ 'chat_sessions',
+ 'messages',
+ 'thread_items',
+ 'thread_harvests',
+ 'agent_jobs',
+ 'agent_schedules',
+ 'agent_schedule_runs',
+ 'agent_permission_requests',
+ 'huddles',
+ 'huddle_events',
+]);
+
+async function resolveOperationSession(table, { values, filters }, db) {
+ if (values?.session_id) return String(values.session_id);
+ if (table === 'chat_sessions' && values?.id) return String(values.id);
+ const direct = table === 'chat_sessions'
+  ? findFilterValue(filters, 'id')
+  : findFilterValue(filters, 'session_id');
+ if (direct) return String(direct);
+ const id = findFilterValue(filters, 'id');
+ if (!id || !SESSION_BOUND_TABLES.has(table)) return null;
+ if (table === 'agent_schedule_runs') {
+  const rows = await db(
+   `select coalesce(run.session_id, schedule.session_id) as session_id
+      from agent_schedule_runs run
+      join agent_schedules schedule on schedule.id = run.schedule_id
+     where run.id = $1 limit 1`,
+   [id],
+  );
+  return rows[0]?.session_id ? String(rows[0].session_id) : null;
+ }
+ const rows = await db(
+  `select ${table === 'chat_sessions' ? 'id' : 'session_id'} as session_id
+     from ${quoteIdent(table)} where id = $1 limit 1`,
+  [id],
+ );
+ return rows[0]?.session_id ? String(rows[0].session_id) : null;
 }
 
 // True if the user owns the workspace, is a member of it, or holds either in an
@@ -1209,22 +1522,26 @@ function isPrivateSessionRow(row) {
  * The expiry comparison lives HERE, in SQL, so an expired grant cannot be
  * honoured by a row that was read a moment earlier.
  */
-function sessionReadableSql(alias, userParam) {
+function sessionReadableSql(alias, userParam, { lockMembership = false } = {}) {
  if (!/^[a-z_][a-z0-9_]*$/i.test(String(alias))) throw new Error(`Invalid alias: ${alias}`);
  if (!/^\$\d+$/.test(String(userParam))) throw new Error(`Invalid bind: ${userParam}`);
  // Parenthesised explicitly. `and` binds tighter than `or`, so this reads
  // correctly without them — but "correct by precedence" is how a later edit
  // inserts a third condition in the wrong group and quietly opens every DM.
  return `(
-    (
-      coalesce(${alias}.visibility, 'workspace') <> 'private'
-      and coalesce(${alias}.folder, '') <> 'Direct messages'
-    )
-    or exists (
-      select 1 from chat_session_members csm
-       where csm.session_id = ${alias}.id
-         and csm.user_id = ${userParam}::uuid
-         and (csm.expires_at is null or csm.expires_at > now())
+    ${alias}.deleted_at is null
+    and (
+      (
+        coalesce(${alias}.visibility, 'workspace') <> 'private'
+        and coalesce(${alias}.folder, '') <> 'Direct messages'
+      )
+      or exists (
+        select 1 from chat_session_members csm
+         where csm.session_id = ${alias}.id
+           and csm.user_id = ${userParam}::uuid
+           and (csm.expires_at is null or csm.expires_at > now())
+         ${lockMembership ? 'for share' : ''}
+      )
     )
   )`;
 }
@@ -1247,14 +1564,26 @@ function sessionReadableSql(alias, userParam) {
 async function enforceSessionReadAccess({ userId, sessionId, sessionRow = null, db }) {
  if (!sessionId) return;
  let row = sessionRow;
- if (!row) {
-  const rows = await db('select id, visibility, folder from chat_sessions where id = $1 limit 1', [sessionId]);
+ // A caller may supply a row to avoid a second lookup, but it is only a
+ // complete authorization snapshot when it includes every field that decides
+ // liveness or privacy. Re-read older/partial projections rather than treating
+ // an omitted visibility/folder column as proof that the conversation is open.
+ const requiredSessionFields = ['deleted_at', 'visibility', 'folder'];
+ if (
+  !row
+  || requiredSessionFields.some((field) => !Object.prototype.hasOwnProperty.call(row, field))
+ ) {
+  const rows = await db(
+   'select id, visibility, folder, deleted_at from chat_sessions where id = $1 limit 1',
+   [sessionId],
+  );
   row = rows[0] || null;
  }
  // A session that does not exist is not this gate's problem — the caller's own
  // 404 handling owns that, and throwing 403 here would turn every missing id
  // into a misleading permission error.
  if (!row) return;
+ if (row.deleted_at) throw httpError(404, 'Conversation not found');
  if (!isPrivateSessionRow(row)) return;
  if (!userId) throw forbidden('This conversation is private');
  const allowed = await db(
@@ -1594,6 +1923,22 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
  if ((table === 'agent_schedules' || table === 'agent_schedule_runs') && op !== 'select') {
   throw forbidden('Schedules can only be changed through the dedicated schedule routes');
  }
+ // Read markers are server-authored social signals. The dedicated route binds
+ // the authenticated human identity and resolves read_at from a message in the
+ // same live session. No workspace role — including owner — may forge, rewrite,
+ // or erase those signals through the generic database surface.
+ if (table === 'session_read_state' && op !== 'select') {
+  throw forbidden('Read receipts can only be changed through the dedicated read receipt route');
+ }
+ if (table === 'agent_jobs' && op !== 'select') {
+  throw forbidden('Agent jobs can only be changed through the orchestration runtime');
+ }
+ if (table === 'agent_schedules' && op !== 'select') {
+  throw forbidden('Agent schedules can only be changed through the dedicated schedule routes');
+ }
+ if (table === 'agent_schedule_runs' && op !== 'select') {
+  throw forbidden('Schedule runs are server-authored');
+ }
 
  if (!WORKSPACE_SCOPED_TABLES.has(table) && table !== 'messages') return;
 
@@ -1611,6 +1956,17 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
    await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: 'manage', db });
   }
   await assertUpdateKeepsTenancy({ sourceWorkspaceId: resolved.workspaceId, values, db });
+  if (SESSION_BOUND_TABLES.has(table)) {
+   const sessionId = await resolveOperationSession(table, { filters: flt }, db);
+   if (!sessionId) throw badRequest('A session filter is required for this operation');
+   await enforceSessionReadAccess({ userId, sessionId, db });
+   if (values?.session_id && String(values.session_id) !== sessionId) {
+    await enforceSessionReadAccess({ userId, sessionId: values.session_id, db });
+   }
+  }
+  if (table === 'messages') {
+   await enforceMessageAuthorship({ userId, op, filters: flt, values, db });
+  }
   if (table === 'thread_items') {
    await enforceThreadItemSessionMutation({
     userId, op, filters: flt, values, db,
@@ -1624,6 +1980,11 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   const resolved = await resolveOperationWorkspace(table, { values: row }, db);
   if (resolved.unscoped) throw badRequest('A workspace reference is required for this operation');
   await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
+  if (SESSION_BOUND_TABLES.has(table) && table !== 'chat_sessions') {
+   const sessionId = await resolveOperationSession(table, { values: row }, db);
+   if (!sessionId) throw badRequest('A session reference is required for this operation');
+   await enforceSessionReadAccess({ userId, sessionId, db });
+  }
   // H3: same elevation on INSERT — creating an agent that already carries
   // host_folders (or a sandbox target) is the same escalation as setting them.
   if (setsManageOnlyDbColumn(table, row)) {
@@ -1645,25 +2006,23 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   if (resolved.unscoped) throw badRequest('A workspace filter is required for this operation');
   await assertWorkspaceRole({ userId, workspaceId: resolved.workspaceId, capability: mode, db });
 
-  // The session gate, layered UNDER the workspace one. All session-bearing
-  // SELECTs pass it; thread_items DELETE also resolves its stored parent here
-  // because that is a legitimate generic browser write. Other session-derived
-  // server-owned tables refuse generic writes above.
+  // The session gate, layered UNDER the workspace one. Session-derived SELECTs
+  // are narrowed here, and message DELETEs use the same canonical gate before
+  // the authorship check below. A workspace editor is not thereby a member of
+  // somebody else's DM.
   //
   // This is also what closes REALTIME, at no extra cost — realtime subscribe
   // authorizes a binding by calling this same function with op 'select'
   // (server/realtime.cjs authorizeRealtimeBinding), so a client cannot
   // subscribe to `session_id=eq.<someone's DM>` either. Single-sourcing the
   // rule here is the reason there is no second copy to drift.
-  if (op === 'select') {
+  if (op === 'select' || SESSION_BOUND_TABLES.has(table)) {
    // Any table filtered by session_id inherits its session's privacy — not
    // just `messages`. thread_items, agent_jobs and the rest hang off a session
    // and would otherwise be a side channel into a private one.
-   const sessionId = table === 'chat_sessions'
-    ? findFilterValue(flt, 'id')
-    : findFilterValue(flt, 'session_id');
+   const sessionId = await resolveOperationSession(table, { filters: flt }, db);
    if (sessionId) {
-    if (['thread_items', 'agent_jobs', 'agent_schedules'].includes(table)) {
+    if (['thread_items', 'agent_jobs', 'agent_schedules', 'agent_schedule_runs'].includes(table)) {
      await enforceKnownSessionReadAccess({ userId, sessionId, db });
     } else {
      await enforceSessionReadAccess({ userId, sessionId, db });
@@ -1674,6 +2033,9 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
    await enforceThreadItemSessionMutation({
     userId, op, filters: flt, values, db,
    });
+  }
+  if (table === 'messages') {
+   await enforceMessageAuthorship({ userId, op, filters: flt, values, db });
   }
  }
 }
@@ -1698,8 +2060,10 @@ function appendSessionAccessClause(where, userId, table) {
   'huddles',
   'huddle_events',
   'thread_items',
+  'thread_harvests',
   'agent_jobs',
   'agent_schedules',
+  'agent_schedule_runs',
  ].includes(table)) return where;
  const params = where.params || [];
  params.push(userId);
@@ -1751,6 +2115,140 @@ function appendWorkspaceAccessClause(where, userId) {
 // ----------------------------------------------------------------------------
 
 const ACTIVITY_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DELETED_MESSAGE_ACTIVITY_TITLE = 'Message deleted';
+const EDITED_MESSAGE_ACTIVITY_TITLE = 'Message edited';
+
+/**
+ * Replace every user-authored carrier in one message's activity row with a
+ * minimal server-owned envelope. Rebuilding metadata is deliberate: historical
+ * rows include both jsonb objects and jsonb string scalars, and subtracting a
+ * key from the latter is a no-op. The trusted session id preserves navigation;
+ * title and metadata can no longer reconstruct any part of the deleted body.
+ */
+async function scrubMessageActivityByMessageIdState({
+ db,
+ messageId,
+ sessionId,
+ title,
+ state,
+}) {
+ if (typeof db !== 'function' || !messageId || !sessionId) return [];
+ const stateKey = state === 'edited' ? 'edited' : 'deleted';
+ return db(
+  `update activity_events
+      set title = $3,
+          metadata = jsonb_build_object(
+            'session_id', $2::text,
+            '${stateKey}', true
+          )
+    where event_type = 'message_sent'
+      and entity_type = 'message'
+      and entity_id = $1::text
+      and (
+        title is distinct from $3
+        or metadata is distinct from jsonb_build_object(
+          'session_id', $2::text,
+          '${stateKey}', true
+        )
+      )
+  returning *`,
+  [String(messageId), String(sessionId), title],
+ );
+}
+
+async function scrubMessageActivityByMessageId({ db, messageId, sessionId }) {
+ return scrubMessageActivityByMessageIdState({
+  db,
+  messageId,
+  sessionId,
+  title: DELETED_MESSAGE_ACTIVITY_TITLE,
+  state: 'deleted',
+ });
+}
+
+async function scrubEditedMessageActivityByMessageId({ db, messageId, sessionId }) {
+ return scrubMessageActivityByMessageIdState({
+  db,
+  messageId,
+  sessionId,
+  title: EDITED_MESSAGE_ACTIVITY_TITLE,
+  state: 'edited',
+ });
+}
+
+/**
+ * Set-based companion for closing a conversation. The entity index joins the
+ * bounded session message set to its activity rows; no transcript bodies are
+ * returned to JavaScript and legacy metadata encoding is irrelevant.
+ */
+async function scrubMessageActivityBySession({ db, sessionId }) {
+ if (typeof db !== 'function' || !sessionId) return [];
+ return db(
+  `with scrubbed_activity as (
+     update activity_events activity_event
+        set title = $2,
+            metadata = jsonb_build_object(
+              'session_id', $1::text,
+              'deleted', true
+            )
+       from messages activity_message
+      where activity_message.session_id = $1::uuid
+        and activity_message.id::text = activity_event.entity_id
+        and activity_event.event_type = 'message_sent'
+        and activity_event.entity_type = 'message'
+        and (
+          activity_event.title is distinct from $2
+          or activity_event.metadata is distinct from jsonb_build_object(
+            'session_id', $1::text,
+            'deleted', true
+          )
+        )
+     returning 1
+   )
+   select count(*)::integer as scrubbed_activity
+     from scrubbed_activity`,
+  [String(sessionId), DELETED_MESSAGE_ACTIVITY_TITLE],
+ );
+}
+
+/**
+ * Multi-session form used by conversation teardown. A host and every huddle
+ * transcript it owns are one deletion boundary, so scrubbing them in one
+ * statement avoids an unbounded query loop and gives the transaction one
+ * snapshot over the complete message set.
+ */
+async function scrubMessageActivityBySessions({ db, sessionIds }) {
+ const ids = [...new Set((Array.isArray(sessionIds) ? sessionIds : [])
+  .map(value => String(value || '').trim())
+  .filter(Boolean))];
+ if (typeof db !== 'function' || ids.length === 0) return [];
+ return db(
+  `with scrubbed_activity as (
+     update activity_events activity_event
+        set title = $2,
+            metadata = jsonb_build_object(
+              'session_id', activity_message.session_id::text,
+              'deleted', true
+            )
+       from messages activity_message
+      where activity_message.session_id = any($1::uuid[])
+        and activity_message.id::text = activity_event.entity_id
+        and activity_event.event_type = 'message_sent'
+        and activity_event.entity_type = 'message'
+        and (
+          activity_event.title is distinct from $2
+          or activity_event.metadata is distinct from jsonb_build_object(
+            'session_id', activity_message.session_id::text,
+            'deleted', true
+          )
+        )
+     returning 1
+   )
+   select count(*)::integer as scrubbed_activity
+     from scrubbed_activity`,
+  [toPgArrayLiteral(ids), DELETED_MESSAGE_ACTIVITY_TITLE],
+ );
+}
 
 async function logMessageActivityIdempotent(rows, { db }) {
  if (typeof db !== 'function') return;
@@ -1769,12 +2267,12 @@ async function logMessageActivityIdempotent(rows, { db }) {
    // splits chat_sessions. Nothing downstream can tell that a row began life in
    // a members-only conversation, so the check has to happen here, at write.
    const sessionRows = await db(
-    'select workspace_id, visibility, folder from chat_sessions where id = $1 limit 1',
+    'select workspace_id, visibility, folder, deleted_at from chat_sessions where id = $1 limit 1',
     [sessionId],
    );
    const sessionRow = sessionRows[0] || null;
    const workspaceId = sessionRow?.workspace_id || null;
-   if (!workspaceId) continue;
+   if (!workspaceId || sessionRow.deleted_at) continue;
    const isPrivate = isPrivateSessionRow(sessionRow);
 
    const role = message.role || '';
@@ -1796,10 +2294,34 @@ async function logMessageActivityIdempotent(rows, { db }) {
     ...(isPrivate ? {} : { content }),
    };
    await db(
-    `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
-         values ($1, $2, 'message_sent', 'message', $3, $4, $5::jsonb, now())
-         on conflict do nothing`,
-    [workspaceId, userId, messageId, title, JSON.stringify(metadata)],
+    `with live_activity_message as materialized (
+       select activity_message.id
+         from messages activity_message
+         join chat_sessions activity_session
+           on activity_session.id = activity_message.session_id
+        where activity_message.id = $3::uuid
+          and activity_message.session_id = $6::uuid
+          and activity_message.deleted_at is null
+          and activity_session.deleted_at is null
+          and activity_session.workspace_id = $1::uuid
+          and activity_session.visibility is not distinct from $7
+          and activity_session.folder is not distinct from $8
+        for share of activity_message, activity_session
+     )
+     insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
+       select $1, $2, 'message_sent', 'message', $3, $4, $5::jsonb, now()
+         from live_activity_message
+     on conflict do nothing`,
+    [
+     workspaceId,
+     userId,
+     messageId,
+     title,
+     JSON.stringify(metadata),
+     String(sessionId),
+     sessionRow.visibility ?? null,
+     sessionRow.folder ?? null,
+    ],
    );
   } catch (error) {
    console.error('logMessageActivityIdempotent failed', error);
@@ -2524,6 +3046,7 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  'agent.permission_rule_granted',
  'agent.permission_rule_revoked',
  'agent.connect_token_minted',
+ 'chat_session.cleared',
  // The workspace MCP token (agw_) is the control-plane secret for the whole
  // workspace: a bearer reaches all 29 MCP tools, can register_agent, and can
  // mint an agent's daemon connect token via get_connect_command. Minting it
@@ -2532,6 +3055,18 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  // exists to answer. Its sibling agent.connect_token_minted was recorded from
  // the start; this one was not, which is the only reason it is a separate line.
  'workspace.mcp_token_minted',
+ // Named workspace-control credentials. Issuance and redemption are separate
+ // events: the owner may create a five-minute grant that is never redeemed.
+ 'controller.enrollment_created',
+ 'controller.enrolled',
+ 'controller.revoked',
+ // Agent-stewarded resources. Operation requests are intentionally audited
+ // because they cross a host/agent trust boundary; settlement records whether
+ // the steward applied, published, rejected, or failed the request.
+ 'resource.created',
+ 'resource.updated',
+ 'resource.operation_requested',
+ 'resource.operation_settled',
  // A human's ORDINARY SESSION TOKEN was used to authenticate at /backend/mcp
  // (the verifyUserAuthMcpToken tail of verifyMcpToken). Recorded to answer one
  // question with data instead of a guess — "is anyone actually using this
@@ -2836,12 +3371,26 @@ module.exports = {
  MANAGE_ONLY_DB_COLUMNS_BY_TABLE,
  setsManageOnlyDbColumn,
  SELECTABLE_COLUMNS_BY_TABLE,
+ DEDICATED_SELECT_ONLY_TABLES,
+ assertGenericSelectAllowed,
  safeSelectColumns,
+ AI_STREAM_ERROR_MAX_LENGTH,
+ aiStreamErrorText,
+ DELETED_MESSAGE_CONTENT,
+ redactDeletedMessageRow,
+ redactDeletedMessageRows,
  stripPrivilegedDbValues,
  validateUniformInsertRows,
  applyAgentPurposeInsertDefaults,
  stampTaskWriteIdentity,
  taskDispatchRequesterSql,
+ stripImmutableDbUpdateValues,
+ loadBrowserMessageAuthor,
+ stampBrowserMessageInsert,
+ messageUpdateNeedsAuthorship,
+ enforceMessageAuthorship,
+ appendMessageAuthorshipFilters,
+ appendMessageMutationAccessClause,
  encryptVaultSecret,
  decryptVaultSecret,
  getWorkspaceSecretValue,
@@ -2870,7 +3419,13 @@ module.exports = {
  createTokenVersionCache,
  appendWorkspaceAccessClause,
  appendSessionAccessClause,
+ DELETED_MESSAGE_ACTIVITY_TITLE,
+ EDITED_MESSAGE_ACTIVITY_TITLE,
  logMessageActivityIdempotent,
+ scrubEditedMessageActivityByMessageId,
+ scrubMessageActivityByMessageId,
+ scrubMessageActivityBySession,
+ scrubMessageActivityBySessions,
  createRateLimiter,
  createDbRateLimiter,
  evaluatePasswordServerSide,

@@ -442,7 +442,7 @@ test('agent_schedules: members may read scoped rows, generic writes are refused'
     ['delete', { filters: [eq('workspace_id', 'ws-1')] }],
   ]) {
     await onBothBackends(
-      { roles: { 'ws-1:actor': 'editor' } },
+      { roles: { 'ws-1:actor': 'owner' } },
       { table: 'agent_schedules', op, ...payload },
       refusesWith(403, 'Schedules can only be changed through the dedicated schedule routes'),
     );

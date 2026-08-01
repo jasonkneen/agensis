@@ -379,13 +379,11 @@ test('an unresolvable session broadcasts nothing rather than guessing', async ()
 });
 
 // The reachable failure mode: the DB query throws, resolveSessionActivityContext
-// catches it and returns null, and the emitter broadcasts nothing. What matters
-// is that the ORDINARY fanout on the same batch is untouched — the agent-status
-// emitter is a side effect, not a gate.
-test('a resolver failure does not break the rest of the fanout', async () => {
+// catches it and returns null, and the emitter broadcasts nothing. Message
+// fanout now re-resolves the SAME current audience independently: if privacy
+// cannot be proven, both lanes fail closed rather than trusting a stale binding.
+test('a resolver failure fails both message lanes closed without throwing', async () => {
  sessionDb({ 'sess-g': 'ws-1' }, { fail: true });
- // A plain db_changes subscriber on the same batch must still get its row: the
- // agent-status emitter is a side effect, not a gate.
  const client = __test.registerTestWebsocketClient(fakeClient([
   { type: 'broadcast', channel: 'agent-status:ws-1', event: 'agent_status' },
   { type: 'db_changes', table: 'messages', filter: 'session_id=eq.sess-g' },
@@ -399,9 +397,10 @@ test('a resolver failure does not break the rest of the fanout', async () => {
  await settle();
 
  assert.equal(client.sent.some((m) => m.type === 'broadcast'), false, 'no workspace, no broadcast');
- assert.ok(
+ assert.equal(
   client.sent.some((m) => m.table === 'messages' || m.type === 'db_changes'),
-  'the ordinary db_changes fanout is unaffected by the failed lookup',
+  false,
+  'an unproven current session audience receives no transcript row',
  );
 });
 

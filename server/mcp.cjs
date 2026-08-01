@@ -9,6 +9,7 @@ const {
 // '' + value, producing `a,b` instead of `{a,b}`. Single-sourced from
 // backend-core (same helper the generic /backend/db path uses).
 const { toPgArrayLiteral, createFirstUseWindow } = require('../shared/backend-core.cjs');
+const { controllerHasScope } = require('../shared/workspaceControl.cjs');
 
 // Which identity kinds get a "this credential was seen today" audit row. Only
 // the login-token path, because it is the only one with an open question
@@ -20,17 +21,25 @@ const { normalizeTaskTitle, resolveTaskParentByTitle } = require('../shared/task
 const { normalizeConversationMode } = require('../shared/channelMentions.cjs');
 const { ADVANCE_AGENT_READ_MARKER_SQL } = require('../shared/read-receipts.cjs');
 
-// Advance an agent's read marker to the newest inbound message in a session, and
-// broadcast it so a human watching sees the eye fill. Best-effort by design: a
-// read receipt is a courtesy signal, never a reason to fail the tool that was
-// actually asked for, and the marker is monotonic so a dropped write self-heals
-// on the next read. The participation gate on the calling tool
-// (assertChannelInWorkspace) has already proven this agent may see the session,
-// so no extra authorization is needed here.
-async function advanceAgentReadMarker(db, deps, sessionId, agentId) {
- if (!sessionId || !agentId) return;
+// Advance to one exact message returned to the agent, and broadcast it so a
+// human watching sees the eye fill. Resolving "latest" inside the write would
+// race with new traffic and widen a thread-scoped page to the whole session.
+// Best-effort by design: a receipt is a courtesy signal, never a reason to fail
+// the tool that was actually asked for.
+async function advanceAgentReadMarker(
+ db,
+ deps,
+ sessionId,
+ agentId,
+ lastSeenMessageId,
+ threadParentId = null,
+) {
+ if (!sessionId || !agentId || !lastSeenMessageId) return;
  try {
-  const rows = await db.unsafe(ADVANCE_AGENT_READ_MARKER_SQL, [String(sessionId), String(agentId)]);
+  const rows = await db.unsafe(
+   ADVANCE_AGENT_READ_MARKER_SQL,
+   [String(sessionId), String(agentId), String(lastSeenMessageId), threadParentId || null],
+  );
   if (rows.length > 0 && deps && typeof deps.notifyDbSubscribers === 'function') {
    deps.notifyDbSubscribers('session_read_state', 'INSERT', rows);
   }
@@ -115,6 +124,42 @@ function optInt(value, fallback, max) {
  const n = Number(value);
  if (!Number.isFinite(n) || n <= 0) return fallback;
  return max ? Math.min(Math.floor(n), max) : Math.floor(n);
+}
+
+function workspaceResourceActor(identity) {
+ if (identity?.kind === 'user' && identity.userId) {
+  return { kind: 'user', userId: String(identity.userId), workspaceId: String(identity.workspaceId || '') };
+ }
+ if (identity?.kind === 'agent' && identity.agentId) {
+  return { kind: 'agent', agentId: String(identity.agentId), workspaceId: String(identity.workspaceId || '') };
+ }
+ if (identity?.kind === 'workspace' && identity.workspaceId) {
+  return { kind: 'workspace', workspaceId: String(identity.workspaceId) };
+ }
+ if (identity?.kind === 'controller' && identity.controllerId) {
+  return {
+   kind: 'controller',
+   controllerId: String(identity.controllerId),
+   workspaceId: String(identity.workspaceId || ''),
+  };
+ }
+ throw new ToolError('This credential cannot act on workspace resources.');
+}
+
+async function runWorkspaceResourceService({ deps, _identity, method, input }) {
+ const service = deps?.workspaceResources;
+ if (!service || typeof service[method] !== 'function') {
+  throw new ToolError('Workspace resources are not available on this backend.');
+ }
+ try {
+  return await service[method](input);
+ } catch (error) {
+  if (error instanceof ToolError) throw error;
+  if (Number(error?.status) >= 400 && Number(error?.status) < 500) {
+   throw new ToolError(String(error?.message || 'Workspace resource request was refused'));
+  }
+  throw new ToolError('Workspace resource request failed.');
+ }
 }
 
 // ---------------------------------------------------------------------------
@@ -393,9 +438,20 @@ function buildTools() {
 
  add({
   name: 'whoami',
+  kinds: [...CONNECTED, 'controller'],
   description: 'Return the identity this token authenticates as. kind="agent" means you ARE that agent. Otherwise you are connected to a workspace and must call register_agent to become an agent (new or existing), then work as it with claim_job.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   async run(_args, { identity }) {
+   if (identity.kind === 'controller') {
+    return {
+     kind: 'controller',
+     controllerId: identity.controllerId,
+     workspaceId: identity.workspaceId,
+     name: identity.name,
+     scopes: Array.isArray(identity.scopes) ? identity.scopes : [],
+     note: 'This is a scoped workspace controller, not a member or workspace owner. It cannot read private sessions, grant roles, read raw vault values, or post arbitrary messages. Register and operate only its attributed agents/resources.',
+    };
+   }
    if (identity.kind !== 'agent') {
     return {
      kind: identity.kind,
@@ -438,7 +494,8 @@ function buildTools() {
     const rows = await db.unsafe(
      `select id, title, folder, model, conversation_mode, participants, archived_at, updated_at
              from chat_sessions
-            where workspace_id = $1 and id = $2 ${includeArchived ? '' : 'and archived_at is null'}
+            where workspace_id = $1 and id = $2 and deleted_at is null
+              ${includeArchived ? '' : 'and archived_at is null'}
             limit 1`,
      [identity.workspaceId, identity.channelId],
     );
@@ -456,7 +513,7 @@ function buildTools() {
    const rows = await db.unsafe(
     `select id, title, folder, model, conversation_mode, participants, visibility, archived_at, updated_at
            from chat_sessions
-          where workspace_id = $1 ${includeArchived ? '' : 'and archived_at is null'}
+          where workspace_id = $1 and deleted_at is null ${includeArchived ? '' : 'and archived_at is null'}
             and ${scope} ${keyset}
           order by updated_at desc, id desc
           limit $${params.length}`,
@@ -487,34 +544,54 @@ function buildTools() {
    const threadParentId = typeof args?.thread_parent_id === 'string' && args.thread_parent_id.trim()
     ? args.thread_parent_id.trim() : null;
    await assertChannelInWorkspace(db, channelId, identity);
-   // Reading the channel IS the agent seeing it — advance its read marker to the
-   // newest inbound message so a human watching gets the eye. Gated already by
-   // assertChannelInWorkspace above; best-effort so it never fails the read.
-   if (identity?.kind === 'agent' && identity.agentId) {
-    await advanceAgentReadMarker(db, deps, channelId, identity.agentId);
-   }
-   const params = [channelId];
+   const params = [channelId, identity.workspaceId];
    let where;
    if (threadParentId) {
     params.push(threadParentId);
-    where = 'session_id = $1 and (id = $2 or thread_parent_id = $2)';
+    const parentParam = `$${params.length}`;
+    where = `messages.session_id = $1 and (messages.id = ${parentParam} or messages.thread_parent_id = ${parentParam})`;
    } else {
     // Channel scope is "top level OR broadcast to the channel" — the same predicate
     // the UI and loadChannelMessages use. An agent now WORKS in a thread and only
     // broadcasts its answer, so a top-level-only read would show this client the
     // humans' messages and none of the replies.
-    where = 'session_id = $1 and (thread_parent_id is null or broadcast_to_channel)';
+    where = 'messages.session_id = $1 and (messages.thread_parent_id is null or messages.broadcast_to_channel)';
    }
-   const keyset = keysetClause(cursor, 'created_at', params);
+   const scope = mcpSessionScopeSql(identity, 'read_channel_scope', params);
+   const keyset = keysetClause(cursor, 'messages.created_at', params, 'messages.id');
    params.push(limit);
    const rows = await db.unsafe(
-    `select id, role, content, sender_kind, sender_id, sender_name, thread_parent_id, broadcast_to_channel, created_at
-            from messages
-           where ${where} ${keyset}
-           order by created_at desc, id desc
+    `select messages.id, messages.role, messages.content, messages.sender_kind,
+            messages.sender_id, messages.sender_name, messages.thread_parent_id,
+            messages.broadcast_to_channel, messages.created_at
+       from messages
+       join chat_sessions read_channel_scope
+         on read_channel_scope.id = messages.session_id
+        and read_channel_scope.workspace_id = $2
+        and read_channel_scope.deleted_at is null
+        and ${scope}
+      where ${where} and messages.deleted_at is null ${keyset}
+      order by messages.created_at desc, messages.id desc
            limit $${params.length}`,
     params,
    );
+   // Advance only after the body read has repeated current scope. The shared
+   // marker SQL independently carries the same live/session gate, so a revoke
+   // between these two statements can at worst skip the eye, never write past
+   // revoked access.
+   if (rows.length > 0 && identity?.kind === 'agent' && identity.agentId) {
+    const lastSeen = rows.find(row => !(
+     row.sender_kind === 'agent' && String(row.sender_id || '') === String(identity.agentId)
+    ));
+    await advanceAgentReadMarker(
+     db,
+     deps,
+     channelId,
+     identity.agentId,
+     lastSeen?.id,
+     threadParentId,
+    );
+   }
    // Computed BEFORE the reverse, from the DESC page's last row — the OLDEST
    // message returned, which is where the next (older) page starts. Taking it
    // after the reverse would point at the NEWEST message, and every "next page"
@@ -618,6 +695,348 @@ function buildTools() {
   },
  });
 
+ // -- Agent-stewarded workspace resources ---------------------------------
+ //
+ // These tools never touch the tables directly. The dedicated service owns
+ // tenant scope, controller lineage, resource-purpose steward checks,
+ // idempotency, leases and explicit projections. Keeping that boundary here
+ // means HTTP, external MCP and built-in turns all execute the same policy.
+
+ add({
+  name: 'list_workspace_resources',
+  kinds: ['agent', 'user', 'workspace', 'controller'],
+  controllerScope: 'resources:manage_own',
+  description: 'List shared workspace resources visible to you. Resources are stewarded by resource-purpose agents; this returns metadata only, never controller credentials or server lease state.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    status: { type: 'string', enum: ['active', 'archived', 'all'], description: 'Lifecycle filter (default active).' },
+    limit: { type: 'integer', description: 'Maximum resources (default 100, max 200).' },
+   },
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   return {
+    resources: await runWorkspaceResourceService({
+     deps,
+     identity,
+     method: 'listResources',
+     input: {
+      workspaceId: identity.workspaceId,
+      actor: workspaceResourceActor(identity),
+      status: args?.status,
+      limit: args?.limit,
+     },
+    }),
+   };
+  },
+ });
+
+ add({
+  name: 'get_workspace_resource',
+  kinds: ['agent', 'user', 'workspace', 'controller'],
+  controllerScope: 'resources:manage_own',
+  description: 'Read one shared resource metadata record by id. Use request_resource_operation to ask its steward to read or change the actual resource.',
+  inputSchema: {
+   type: 'object',
+   properties: { resource_id: { type: 'string', description: 'Workspace resource id.' } },
+   required: ['resource_id'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   return {
+    resource: await runWorkspaceResourceService({
+     deps,
+     identity,
+     method: 'getResource',
+     input: {
+      workspaceId: identity.workspaceId,
+      resourceId: requireString(args, 'resource_id'),
+      actor: workspaceResourceActor(identity),
+     },
+    }),
+   };
+  },
+ });
+
+ add({
+  name: 'create_workspace_resource',
+  kinds: ['user', 'workspace', 'controller'],
+  controllerScope: 'resources:create',
+  description: 'Create a shared resource stewarded by an existing resource-purpose agent. Human tokens require workspace manage; controllers may use only their own steward agents.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    steward_agent_id: { type: 'string', description: 'Id of a resource-purpose agent that supports this facet.' },
+    name: { type: 'string', description: 'Human-readable resource name.' },
+    description: { type: 'string', description: 'What the resource contains and when to use it.' },
+    facet: { type: 'string', enum: ['context', 'knowledge', 'tooling', 'code'] },
+    visibility: { type: 'string', enum: ['workspace', 'restricted'], description: 'Workspace-visible by default; restricted is steward-only for agents.' },
+    descriptor: { type: 'object', description: 'Bounded, credential-free JSON describing the resource.' },
+   },
+   required: ['steward_agent_id', 'name', 'facet'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   return {
+    resource: await runWorkspaceResourceService({
+     deps,
+     identity,
+     method: 'createResource',
+     input: {
+      workspaceId: identity.workspaceId,
+      stewardAgentId: requireString(args, 'steward_agent_id'),
+      definition: {
+       name: args?.name,
+       description: args?.description,
+       facet: args?.facet,
+       visibility: args?.visibility,
+       descriptor: args?.descriptor,
+      },
+      actor: workspaceResourceActor(identity),
+     },
+    }),
+   };
+  },
+ });
+
+ add({
+  name: 'update_workspace_resource',
+  kinds: ['user', 'workspace', 'controller'],
+  controllerScope: 'resources:manage_own',
+  description: 'Update resource metadata, lifecycle, or steward. Active claimed work blocks policy-boundary changes; queued work is cancelled safely where required.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    resource_id: { type: 'string' },
+    steward_agent_id: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    facet: { type: 'string', enum: ['context', 'knowledge', 'tooling', 'code'] },
+    visibility: { type: 'string', enum: ['workspace', 'restricted'] },
+    status: { type: 'string', enum: ['active', 'archived'] },
+    descriptor: { type: 'object' },
+   },
+   required: ['resource_id'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   const changes = {};
+   for (const [argument, field] of [
+    ['steward_agent_id', 'stewardAgentId'],
+    ['name', 'name'],
+    ['description', 'description'],
+    ['facet', 'facet'],
+    ['visibility', 'visibility'],
+    ['status', 'status'],
+    ['descriptor', 'descriptor'],
+   ]) {
+    if (Object.prototype.hasOwnProperty.call(args || {}, argument)) changes[field] = args[argument];
+   }
+   if (Object.keys(changes).length === 0) throw new ToolError('Pass at least one resource field to update.');
+   return {
+    resource: await runWorkspaceResourceService({
+     deps,
+     identity,
+     method: 'updateResource',
+     input: {
+      workspaceId: identity.workspaceId,
+      resourceId: requireString(args, 'resource_id'),
+      changes,
+      actor: workspaceResourceActor(identity),
+     },
+    }),
+   };
+  },
+ });
+
+ add({
+  name: 'request_resource_operation',
+  kinds: ['agent', 'user', 'workspace', 'controller'],
+  controllerScope: 'resources:manage_own',
+  description: 'Ask a resource steward to read, propose, apply, or publish. This queues deterministic work and returns an operation id; poll it with get_resource_operation. Reuse the same idempotency_key when retrying the same request.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    resource_id: { type: 'string' },
+    operation: { type: 'string', enum: ['read', 'propose', 'apply', 'publish'] },
+    input_artifact: { type: 'object', description: 'Bounded, credential-free JSON input for the steward.' },
+    idempotency_key: { type: 'string', description: 'Stable key for safe retry of this exact request.' },
+   },
+   required: ['resource_id', 'operation', 'idempotency_key'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   return {
+    operation: await runWorkspaceResourceService({
+     deps,
+     identity,
+     method: 'requestOperation',
+     input: {
+      workspaceId: identity.workspaceId,
+      resourceId: requireString(args, 'resource_id'),
+      requester: workspaceResourceActor(identity),
+      request: {
+       operation: args?.operation,
+       inputArtifact: args?.input_artifact,
+       idempotencyKey: args?.idempotency_key,
+      },
+     },
+    }),
+   };
+  },
+ });
+
+ add({
+  name: 'list_resource_operations',
+  kinds: ['agent', 'user', 'workspace', 'controller'],
+  controllerScope: 'resources:manage_own',
+  description: 'List resource-operation status visible to you. Agents see only work they requested or steward; controllers see their requests and owned resources. Artifacts are omitted unless explicitly requested.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    resource_id: { type: 'string' },
+    status: { type: 'string', enum: ['pending', 'claimed', 'completed', 'rejected', 'failed', 'cancelled', 'all'] },
+    limit: { type: 'integer', description: 'Maximum operations (default 50, max 100).' },
+    include_artifacts: { type: 'boolean', description: 'Include bounded request/result artifacts (default false).' },
+   },
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   return {
+    operations: await runWorkspaceResourceService({
+     deps,
+     identity,
+     method: 'listOperations',
+     input: {
+      workspaceId: identity.workspaceId,
+      actor: workspaceResourceActor(identity),
+      resourceId: args?.resource_id,
+      status: args?.status,
+      limit: args?.limit,
+      includeArtifacts: args?.include_artifacts === true,
+     },
+    }),
+   };
+  },
+ });
+
+ add({
+ name: 'get_resource_operation',
+  kinds: ['agent', 'user', 'workspace', 'controller'],
+  controllerScope: 'resources:manage_own',
+  description: 'Get one resource operation and its bounded input/output artifacts when you are its requester, steward, or owning controller.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    operation_id: { type: 'string' },
+    include_artifacts: { type: 'boolean', description: 'Include artifacts (default true).' },
+   },
+   required: ['operation_id'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   return {
+    operation: await runWorkspaceResourceService({
+     deps,
+     identity,
+     method: 'getOperation',
+     input: {
+      workspaceId: identity.workspaceId,
+      operationId: requireString(args, 'operation_id'),
+      actor: workspaceResourceActor(identity),
+      includeArtifacts: args?.include_artifacts !== false,
+     },
+    }),
+   };
+  },
+ });
+
+ add({
+  name: 'claim_resource_operation',
+  kinds: ['agent'],
+  description: 'For a resource-purpose agent: claim the next eligible operation on a resource you steward. Returns null when no work is available. The returned lease_version is a decimal string and must be echoed unchanged when settling.',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  async run(_args, { identity, deps }) {
+   return {
+    operation: await runWorkspaceResourceService({
+     deps,
+     identity,
+     method: 'claimOperation',
+     input: { workspaceId: identity.workspaceId, actor: workspaceResourceActor(identity) },
+    }),
+   };
+  },
+ });
+
+ add({
+  name: 'renew_resource_operation',
+  kinds: ['agent'],
+  description: 'Extend a live resource-operation lease before a long external action completes. The lease fence stays unchanged; an expired lease must be reclaimed instead of renewed.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    operation_id: { type: 'string' },
+    lease_version: { type: 'string', description: 'Exact decimal lease fence returned by claim_resource_operation.' },
+   },
+   required: ['operation_id', 'lease_version'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   return {
+    operation: await runWorkspaceResourceService({
+     deps,
+     identity,
+     method: 'renewOperation',
+     input: {
+      workspaceId: identity.workspaceId,
+      operationId: requireString(args, 'operation_id'),
+      actor: workspaceResourceActor(identity),
+      leaseVersion: requireString(args, 'lease_version'),
+     },
+    }),
+   };
+  },
+ });
+
+ add({
+  name: 'settle_resource_operation',
+  kinds: ['agent'],
+  description: 'For the resource-purpose agent holding a live lease: complete, reject, or fail the operation. The authenticated agent—not an argument—is always the steward identity.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    operation_id: { type: 'string' },
+    lease_version: { type: 'string', description: 'Exact decimal lease fence returned by claim_resource_operation.' },
+    status: { type: 'string', enum: ['completed', 'rejected', 'failed'] },
+    output_artifact: { type: 'object', description: 'Bounded, credential-free JSON result.' },
+    error: { type: 'string', description: 'Required for rejected or failed results.' },
+   },
+   required: ['operation_id', 'lease_version', 'status'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   return {
+    operation: await runWorkspaceResourceService({
+     deps,
+     identity,
+     method: 'settleOperation',
+     input: {
+      workspaceId: identity.workspaceId,
+      operationId: requireString(args, 'operation_id'),
+      actor: workspaceResourceActor(identity),
+      leaseVersion: requireString(args, 'lease_version'),
+      result: {
+       status: args?.status,
+       outputArtifact: args?.output_artifact,
+       error: args?.error,
+      },
+     },
+    }),
+   };
+  },
+ });
+
  // -- Messaging -------------------------------------------------------------
 
  add({
@@ -707,6 +1126,14 @@ function buildTools() {
    const folder = typeof args?.folder === 'string' && args.folder.trim() ? args.folder.trim() : 'General';
    if (RESERVED_CHANNEL_FOLDERS.has(folder.toLowerCase())) {
     throw new ToolError(`The folder "${folder}" is reserved for system-created conversations`);
+   }
+   // `Direct messages` is an authorization class, not an organisational
+   // folder. DMs are created through the human-scoped conversation flow, which
+   // establishes their member rows atomically. Letting a workspace/agent MCP
+   // client mint one here would create a private session with no human
+   // provenance and no safe answer to "whose DM is this?".
+   if (folder === 'Direct messages') {
+    throw new ToolError('Direct messages must be created through an individual invite or conversation');
    }
    // Defaults to 'auto', matching a channel created in the UI. It used to
    // default to 'mention', which was harmless only because the dispatcher was
@@ -1126,12 +1553,34 @@ function buildTools() {
     'select coalesce(max(order_index), 0) as m from thread_items where session_id = $1 and kind = $2',
     [sessionId, kind]);
    const nextOrder = Number(ordRows[0]?.m || 0) + 1;
+   const messageId = typeof args?.message_id === 'string' && args.message_id.trim()
+    ? args.message_id.trim()
+    : null;
+   const params = [
+    identity.workspaceId, sessionId, kind, content, nextOrder,
+    messageId, identity.agentId ? String(identity.agentId) : null,
+   ];
+   const scope = mcpSessionScopeSql(identity, 'thread_item_session_scope', params, { lockMembership: true });
    const rows = await db.unsafe(
     `insert into thread_items (workspace_id, session_id, kind, content, status, order_index, message_id, created_by_agent)
-         values ($1, $2, $3, $4, 'open', $5, $6, $7) returning *`,
-    [identity.workspaceId, sessionId, kind, content, nextOrder,
-    typeof args?.message_id === 'string' && args.message_id.trim() ? args.message_id.trim() : null,
-    identity.agentId ? String(identity.agentId) : null]);
+       select $1, thread_item_session_scope.id, $3, $4, 'open', $5, $6, $7
+         from chat_sessions thread_item_session_scope
+        where thread_item_session_scope.id = $2
+          and thread_item_session_scope.workspace_id = $1
+          and thread_item_session_scope.deleted_at is null
+          and ${scope}
+          and (
+            $6::text is null
+            or exists (
+              select 1 from messages thread_item_anchor
+               where thread_item_anchor.id::text = $6::text
+                 and thread_item_anchor.session_id = thread_item_session_scope.id
+            )
+          )
+        for share
+      returning *`,
+    params);
+   if (!rows[0]) throw new ToolError('Channel or message anchor is no longer available');
    deps.notifyDbSubscribers('thread_items', 'INSERT', rows);
    return { item: rows[0] };
   },
@@ -1168,15 +1617,32 @@ function buildTools() {
    // that names session_id directly.
    await assertChannelInWorkspace(db, existing[0].session_id, identity);
    const status = ['open', 'done', 'answered', 'dismissed'].includes(args?.status) ? args.status : null;
+   const params = [
+    itemId,
+    identity.workspaceId,
+    typeof args?.content === 'string' ? args.content : null,
+    status,
+   ];
+   const scope = mcpSessionScopeSql(identity, 'thread_item_session_scope', params, { lockMembership: true });
    const rows = await db.unsafe(
     `update thread_items set
            content = coalesce($3, content),
            status = coalesce($4, status),
            updated_at = now()
-         where id = $1 and workspace_id = $2 returning *`,
-    [itemId, identity.workspaceId,
-     typeof args?.content === 'string' ? args.content : null,
-     status]);
+         where id = $1
+           and workspace_id = $2
+           and exists (
+             select 1
+               from chat_sessions thread_item_session_scope
+              where thread_item_session_scope.id = thread_items.session_id
+                and thread_item_session_scope.workspace_id = $2
+                and thread_item_session_scope.deleted_at is null
+                and ${scope}
+              for share
+           )
+      returning *`,
+    params);
+   if (!rows[0]) throw new ToolError('Thread item is no longer available in this channel');
    deps.notifyDbSubscribers('thread_items', 'UPDATE', rows);
    return { item: rows[0] };
   },
@@ -1198,13 +1664,33 @@ function buildTools() {
    const sessionId = requireString(args, 'session_id');
    await assertChannelInWorkspace(db, sessionId, identity);
    const kind = ['todo', 'plan', 'blocker'].includes(args?.kind) ? args.kind : null;
+   const params = [sessionId, identity.workspaceId];
+   if (kind) params.push(kind);
+   const scope = mcpSessionScopeSql(identity, 'thread_item_session_scope', params);
    const rows = kind
     ? await db.unsafe(
-     'select * from thread_items where session_id = $1 and kind = $2 order by order_index asc',
-     [sessionId, kind])
+     `select thread_items.*
+        from thread_items
+        join chat_sessions thread_item_session_scope
+          on thread_item_session_scope.id = thread_items.session_id
+         and thread_item_session_scope.workspace_id = $2
+         and thread_item_session_scope.deleted_at is null
+         and ${scope}
+       where thread_items.session_id = $1
+         and thread_items.kind = $3
+       order by thread_items.order_index asc`,
+     params)
     : await db.unsafe(
-     'select * from thread_items where session_id = $1 order by kind, order_index asc',
-     [sessionId]);
+     `select thread_items.*
+        from thread_items
+        join chat_sessions thread_item_session_scope
+          on thread_item_session_scope.id = thread_items.session_id
+         and thread_item_session_scope.workspace_id = $2
+         and thread_item_session_scope.deleted_at is null
+         and ${scope}
+       where thread_items.session_id = $1
+       order by thread_items.kind, thread_items.order_index asc`,
+     params);
    return { items: rows };
   },
  });
@@ -1436,7 +1922,8 @@ function buildTools() {
 
  add({
   name: 'register_agent',
-  kinds: ['workspace', 'user', 'invite'],
+  kinds: ['workspace', 'user', 'invite', 'controller'],
+  controllerScope: 'agents:register',
   description: 'Register this workspace client as an agent — a brand new one (pass `name`/`handle`) or an existing one (pass `as: "<handle>"`). The workspace owner gets an approval popup unless auto-approve is enabled. Returns a registrationId and status — poll registration_status until "approved", then start claim_job. Call this once after connecting.',
   inputSchema: {
    type: 'object',
@@ -1445,6 +1932,12 @@ function buildTools() {
     name: { type: 'string', description: 'Display name for a NEW agent (e.g. "Cursor").' },
     handle: { type: 'string', description: 'Handle for a NEW agent (defaults from name).' },
     label: { type: 'string', description: 'Optional label for this client shown in the approval popup (e.g. "Cursor on laptop").' },
+    purpose: { type: 'string', enum: ['collaborator', 'resource'], description: 'Descriptive purpose for a NEW controller-owned agent. Resource agents can steward shared resources.' },
+    resource_facets: {
+     type: 'array',
+     items: { type: 'string', enum: ['context', 'knowledge', 'tooling', 'code'] },
+     description: 'Facets a NEW resource-purpose controller-owned agent can steward. Requires purpose="resource".',
+    },
     identity: {
      type: 'object',
      description: 'How you present yourself: avatar, profile, persona and how you sound when a huddle reads your replies aloud. Send it on every connect — it is treated as a DEFAULT, so anything a human has explicitly changed in the app is kept and yours is ignored for that field. `name` applies only to a brand new agent.',
@@ -1471,10 +1964,21 @@ function buildTools() {
    additionalProperties: false,
   },
   async run(args, { identity, deps }) {
+   if (identity.kind === 'controller' && !controllerHasScope(identity, 'agents:register')) {
+    throw new ToolError('This controller does not have agents:register');
+   }
    const asHandle = (typeof args?.as === 'string' && args.as.trim()) ? args.as.trim() : null;
    const name = (typeof args?.name === 'string' && args.name.trim()) ? args.name.trim() : null;
    const handle = (typeof args?.handle === 'string' && args.handle.trim()) ? args.handle.trim() : null;
    if (!asHandle && !name && !handle) throw new ToolError('Pass `as: "<handle>"` to work as an existing agent, or `name` to create a new one.');
+   const requestedPurpose = typeof args?.purpose === 'string' && args.purpose.trim()
+    ? args.purpose.trim()
+    : 'collaborator';
+   const requestedFacets = args?.resource_facets === undefined ? [] : args.resource_facets;
+   if (identity.kind !== 'controller'
+    && (requestedPurpose !== 'collaborator' || (Array.isArray(requestedFacets) && requestedFacets.length > 0))) {
+    throw new ToolError('Only a workspace controller may choose resource-agent intent during registration');
+   }
    // A declaration for an agent that is pending approval only lands after a
    // human approves it. But `as` + `identity` against an ALREADY-APPROVED agent
    // is applied immediately — a write — so the retired legacy-invite branch
@@ -1488,7 +1992,10 @@ function buildTools() {
      workspaceId: identity.workspaceId,
      asHandle, name, handle,
      clientLabel: (typeof args?.label === 'string' ? args.label : identity.name) || '',
-     autoApprove: Boolean(identity.autoApprove),
+     autoApprove: identity.kind === 'controller' ? true : Boolean(identity.autoApprove),
+     controllerId: identity.kind === 'controller' ? identity.controllerId : null,
+     purpose: requestedPurpose,
+     resourceFacets: requestedFacets,
      identity: (args?.identity && typeof args.identity === 'object') ? args.identity : null,
     });
    } catch (err) {
@@ -1500,7 +2007,8 @@ function buildTools() {
 
  add({
   name: 'registration_status',
-  kinds: ['workspace', 'user', 'invite'],
+  kinds: ['workspace', 'user', 'invite', 'controller'],
+  controllerScope: 'agents:register',
   description: 'Check whether your register_agent request has been approved. Poll this until status is "approved" (or "denied"), then begin claim_job.',
   inputSchema: {
    type: 'object',
@@ -1509,9 +2017,16 @@ function buildTools() {
    additionalProperties: false,
   },
   async run(args, { identity, deps }) {
+   if (identity.kind === 'controller' && !controllerHasScope(identity, 'agents:register')) {
+    throw new ToolError('This controller does not have agents:register');
+   }
    const registrationId = requireString(args, 'registration_id');
    try {
-    return await deps.getRegistrationStatus({ workspaceId: identity.workspaceId, registrationId });
+    return await deps.getRegistrationStatus({
+     workspaceId: identity.workspaceId,
+     registrationId,
+     controllerId: identity.kind === 'controller' ? identity.controllerId : null,
+    });
    } catch (err) {
     if (err instanceof ToolError) throw err;
     throw new ToolError(err && err.message ? err.message : 'registration_status failed');
@@ -1532,6 +2047,14 @@ function buildTools() {
   if (!handle) throw new ToolError('Pass `as: "<agent handle>"` to choose which agent to work as (e.g. as: "q").');
   const agent = await deps.resolveWorkspaceAgentByHandle(identity.workspaceId, handle);
   if (!agent) throw new ToolError(`No agent "@${handle}" in this workspace.`);
+  if (identity.kind === 'controller') {
+   if (!controllerHasScope(identity, 'agents:manage_own')) {
+    throw new ToolError('This controller does not have agents:manage_own');
+   }
+   if (!agent.controller_id || String(agent.controller_id) !== String(identity.controllerId)) {
+    throw new ToolError(`@${handle} is not owned by this controller.`);
+   }
+  }
   if (!agent.mcp_approved) throw new ToolError(`@${handle} has not been approved for MCP yet — call register_agent (as: "${handle}") and have it approved first.`);
   return { id: agent.id, name: agent.name };
  }
@@ -1542,6 +2065,8 @@ function buildTools() {
 
  add({
   name: 'claim_job',
+  kinds: [...CONNECTED, 'controller'],
+  controllerScope: 'agents:manage_own',
   description: 'Pull the next queued turn for the agent you are working as, and mark it running. Returns { job: null } when nothing is queued — poll on a loop (every ~5–10s); polling also marks the agent "present" so the workspace routes @mentions to you. When you get a job, generate the agent\'s reply from job.prompt, then call submit_job_result (or fail_job).',
   inputSchema: {
    type: 'object',
@@ -1564,6 +2089,8 @@ function buildTools() {
 
  add({
   name: 'submit_job_result',
+  kinds: [...CONNECTED, 'controller'],
+  controllerScope: 'agents:manage_own',
   description: 'Return a completed job\'s reply. Posts it into the channel as the agent and resumes the conversation. Call after generating the response for a job from claim_job.',
   inputSchema: {
    type: 'object',
@@ -1590,6 +2117,8 @@ function buildTools() {
 
  add({
   name: 'fail_job',
+  kinds: [...CONNECTED, 'controller'],
+  controllerScope: 'agents:manage_own',
   description: 'Report that a job from claim_job could not be completed. Posts a short failure note as the agent and resumes the conversation so the chat does not hang.',
   inputSchema: {
    type: 'object',
@@ -1625,7 +2154,8 @@ function buildTools() {
   // the retired 'invite' compatibility kind: it must not mint daemon tokens for
   // arbitrary agents or rotate a running daemon's token. Per-kind authorization
   // is enforced in run(): agent→self, user→manage role, workspace→control plane.
-  kinds: ['agent', 'workspace', 'user'],
+  kinds: ['agent', 'workspace', 'user', 'controller'],
+  controllerScope: 'agents:manage_own',
   description: 'Get the daemon connect command for an agent so a host can launch an always-on runtime that backs it. Registering as an agent over MCP does NOT make it "connected" — only a running daemon does. Call this, then run the returned `command` as a long-running background process on the machine where the agent should execute; it holds the connection (the agent shows "Connected") and answers turns via `claude -p`. Returns the full `agensis connect …` command, a freshly-minted aga_ token (shown once), and the resolved model / permission settings. NOTE: this ROTATES the agent\'s connect token (restart any existing daemon with the new one) and sets the agent to daemon run-mode.',
   inputSchema: {
    type: 'object',
@@ -1648,6 +2178,9 @@ function buildTools() {
      // A per-agent token may only bootstrap ITS OWN daemon (the "auth'd shoe-in").
      agentId = identity.agentId;
     } else {
+     if (identity.kind === 'controller' && !controllerHasScope(identity, 'agents:manage_own')) {
+      throw new ToolError('This controller does not have agents:manage_own');
+     }
      if (!targetHandle) throw new ToolError('Pass `as: "<agent handle>"` to choose which agent to connect (e.g. as: "claude").');
      // A user token must hold the manage role (mirrors the HTTP connection-command
      // route). The workspace MCP token is the owner-level control-plane secret —
@@ -1659,7 +2192,14 @@ function buildTools() {
      }
      const agent = await deps.resolveWorkspaceAgentByHandle(identity.workspaceId, targetHandle);
      if (!agent) throw new ToolError(`No agent "@${targetHandle}" in this workspace.`);
+     if (identity.kind === 'controller'
+       && (!agent.controller_id || String(agent.controller_id) !== String(identity.controllerId))) {
+      throw new ToolError(`@${targetHandle} is not owned by this controller.`);
+     }
      agentId = agent.id;
+    }
+    if (identity.kind === 'controller' && args?.permission_mode) {
+     throw new ToolError('A controller cannot change an agent permission mode through get_connect_command');
     }
     const payload = await deps.getAgentConnectionCommand({
      agentId,
@@ -1668,6 +2208,7 @@ function buildTools() {
      model: (typeof args?.model === 'string' && args.model.trim()) ? args.model.trim() : null,
      permissionMode: (typeof args?.permission_mode === 'string' && args.permission_mode.trim()) ? args.permission_mode.trim() : null,
      baseUrl: (typeof args?.base_url === 'string' && args.base_url.trim()) ? args.base_url.trim() : null,
+     actorControllerId: identity.kind === 'controller' ? identity.controllerId : null,
     });
     return {
      ...payload,
@@ -1710,7 +2251,10 @@ function buildTools() {
 /** Every gate that decides whether an identity may SEE a tool. */
 function toolAllowedForIdentity(tool, identity) {
  const kinds = tool.kinds || ['agent', 'invite'];
- return kinds.includes(identity.kind) && connectionCanUseTool(identity, tool.name);
+ if (!kinds.includes(identity.kind) || !connectionCanUseTool(identity, tool.name)) return false;
+ if (identity.kind !== 'controller') return true;
+ if (tool.name === 'whoami') return true;
+ return Boolean(tool.controllerScope) && controllerHasScope(identity, tool.controllerScope);
 }
 
 /**
@@ -1731,6 +2275,18 @@ async function runToolForIdentity({ name, args, identity, db, deps, toolMap }) {
  const kinds = tool.kinds || ['agent', 'invite'];
  if (!kinds.includes(identity.kind)) {
   return { ok: false, error: `Tool "${tool.name}" is not available for a ${identity.kind} token.` };
+ }
+ if (
+  identity.kind === 'controller'
+  && tool.name !== 'whoami'
+  && (!tool.controllerScope || !controllerHasScope(identity, tool.controllerScope))
+ ) {
+  return {
+   ok: false,
+   error: tool.controllerScope
+    ? `This controller does not have ${tool.controllerScope}`
+    : `Tool "${tool.name}" is not available for a controller token.`,
+  };
  }
  if (!connectionCanUseTool(identity, tool.name)) {
   return { ok: false, error: `Tool "${tool.name}" is outside this connection's granted scopes.` };
@@ -1841,7 +2397,7 @@ function mcpSubjectUserId(identity) {
  * That is what keeps an agent reading and answering in its own DM (the core
  * product loop) while not opening every other agent's DM to it.
  */
-function mcpSessionScopeSql(identity, alias, params) {
+function mcpSessionScopeSql(identity, alias, params, { lockMembership = false } = {}) {
  const open = `(coalesce(${alias}.visibility, 'workspace') <> 'private'
     and coalesce(${alias}.folder, '') <> 'Direct messages')`;
 
@@ -1871,6 +2427,7 @@ function mcpSessionScopeSql(identity, alias, params) {
        where csm.session_id = ${alias}.id
          and csm.user_id = ${userParam}::uuid
          and (csm.expires_at is null or csm.expires_at > now())
+       ${lockMembership ? 'for share' : ''}
     ))`;
 }
 
@@ -1889,7 +2446,7 @@ async function assertChannelInWorkspace(db, channelId, identity) {
  const scope = mcpSessionScopeSql(identity, 'chat_sessions', params);
  const rows = await db.unsafe(
   `select id from chat_sessions
-     where id = $1 and workspace_id = $2 and ${scope}
+     where id = $1 and workspace_id = $2 and deleted_at is null and ${scope}
      limit 1`,
   params);
  // Deliberately the SAME message as a genuinely missing channel. Telling a
@@ -1918,17 +2475,61 @@ async function insertAgentMessage(ctx, channelId, content, threadParentId, actin
  // meaningful for loadChannelMessages' "top level OR broadcast" predicate rather
  // than letting every flat post carry a stray `true`.
  const broadcast = Boolean(threadParentId) && broadcastToChannel === true;
- const rows = await db.unsafe(
-  `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
-     values ($1, 'assistant', $2, $3, $4, $5, $6, $7) returning *`,
-  [channelId, content, threadParentId || null, senderKind, senderId, senderName, broadcast]);
- deps.notifyDbSubscribers('messages', 'INSERT', rows);
- await db.unsafe('update chat_sessions set updated_at = now() where id = $1', [channelId]).catch(() => { });
- // Posting a reply proves the agent read what came before it — advance its marker
- // to the newest message it did not author (the SQL excludes its own posts).
+ const params = [
+  channelId,
+  content,
+  threadParentId || null,
+  senderKind,
+  senderId,
+  senderName,
+  broadcast,
+  identity.workspaceId,
+ ];
+ const scope = mcpSessionScopeSql(identity, 'live_channel', params, { lockMembership: true });
+ let currentAgentScope = 'true';
  if (senderKind === 'agent' && senderId) {
-  await advanceAgentReadMarker(db, deps, channelId, senderId);
+  params.push(String(senderId));
+  const agentParam = `$${params.length}`;
+  currentAgentScope = `exists (
+    select 1
+      from workspace_agents current_message_agent
+     where current_message_agent.id = ${agentParam}::uuid
+       and current_message_agent.workspace_id = $8::uuid
+       and current_message_agent.enabled is not false
+       ${actingAgent ? 'and current_message_agent.mcp_approved is true' : ''}
+     for share
+  )`;
  }
+ const rows = await db.unsafe(
+  `with live_channel as materialized (
+     select id
+       from chat_sessions live_channel
+      where live_channel.id = $1
+        and live_channel.workspace_id = $8::uuid
+        and live_channel.deleted_at is null
+        and ${scope}
+        and ${currentAgentScope}
+        and (
+          $3::uuid is null
+          or exists (
+            select 1 from messages parent_message
+             where parent_message.id = $3::uuid
+               and parent_message.session_id = live_channel.id
+               and parent_message.deleted_at is null
+          )
+        )
+      for share
+   )
+   insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+      select id, 'assistant', $2, $3, $4, $5, $6, $7 from live_channel
+   returning *`,
+  params);
+ if (!rows[0]) throw new ToolError('Channel not found in this workspace');
+ deps.notifyDbSubscribers('messages', 'INSERT', rows);
+ await db.unsafe(
+  'update chat_sessions set updated_at = now() where id = $1 and workspace_id = $2 and deleted_at is null',
+  [channelId, identity.workspaceId],
+ ).catch(() => { });
  return rows[0];
 }
 

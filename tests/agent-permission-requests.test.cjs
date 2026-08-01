@@ -24,9 +24,10 @@
 //      That split is the whole RBAC design: a member who can talk to the agent
 //      can unblock the job in front of them, but making a grant permanent
 //      writes workspace_agents.metadata, which is MANAGE_ONLY.
-//   5. A decision is DELIVERED before it is recorded. Recording an approval
-//      that never reached the daemon would show "Approved" under a tool call
-//      that never ran.
+//   5. A decision is a durable two-phase command: save intent, PREPARE the exact
+//      daemon, finalize only after its receipt, then COMMIT to release the tool.
+//      A lost socket may delay either phase but can never create an "Approved"
+//      card for a tool call the daemon was not still holding.
 // ============================================================================
 
 'use strict';
@@ -51,6 +52,7 @@ const JOB = {
   id: 'job-1',
   agent_id: 'agent-1',
   workspace_id: 'ws-1',
+  connection_id: 'conn-1',
   session_id: 'session-1',
   status: 'running',
   agent_name: 'Scout',
@@ -84,20 +86,97 @@ function installDb({
     id: 'session-1',
     visibility: 'workspace',
     folder: 'General',
+    participants: [{ kind: 'agent', agent_id: 'agent-1' }],
   },
   sessionMembers = ['user-1'],
   sessionReadError = false,
+  decisionSessionLive = true,
+  decisionParticipates = true,
+  decisionUserCanRead = true,
+  decisionRole = role,
+  decisionAgentEnabled = true,
+  decisionJobStatus = 'running',
+  decisionRequestStatus = null,
+  decisionRequestExpired = false,
+  onDecisionSettle = null,
 } = {}) {
+  session = session ? { deleted_at: null, ...session } : null;
+  let storedRequest = request ? { ...request } : null;
   const calls = [];
-  __test.setTestDb({
+  calls.transactions = 0;
+  calls.currentRequest = () => storedRequest;
+  calls.setRequestStatus = (status) => {
+    if (storedRequest) storedRequest = { ...storedRequest, status };
+  };
+  calls.setDecisionAgentEnabled = (enabled) => {
+    decisionAgentEnabled = Boolean(enabled);
+  };
+  calls.setDecisionRole = (nextRole) => {
+    decisionRole = nextRole;
+  };
+  calls.setDecisionUserCanRead = (canRead) => {
+    decisionUserCanRead = Boolean(canRead);
+  };
+  const db = {
+    async begin(callback) {
+      calls.transactions += 1;
+      return callback(db);
+    },
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
       const q = n.toLowerCase();
       calls.push({ n, params, sql });
+      if (q.startsWith('with recursive permission_workspace_chain')) {
+        if (!decisionRole) {
+          return [{ id: params[0], user_id: 'another-owner', role: null }];
+        }
+        return [{
+          id: params[0],
+          user_id: decisionRole === 'owner' ? params[1] : 'another-owner',
+          role: decisionRole === 'owner' ? null : decisionRole,
+        }];
+      }
       if (n.startsWith('select j.*, a.name as agent_name')) {
-        // Mirror the real WHERE: a mismatched agent or workspace matches nothing.
+        // Mirror the locking proof: token ownership, exact live connection,
+        // running state, live same-workspace session, enabled agent, and roster.
         if (!job || params[0] !== job.id || params[1] !== job.agent_id || params[2] !== job.workspace_id) return [];
+        if (job.connection_id !== params[3] || job.status !== 'running' || !job.session_id) return [];
+        if (!session || session.deleted_at || String(session.id) !== String(job.session_id)) return [];
+        const participants = Array.isArray(session.participants) ? session.participants : [];
+        if (!participants.some((participant) => String(participant.agent_id || '') === String(job.agent_id))) return [];
         return [job];
+      }
+      if (n.startsWith('select s.id, s.workspace_id from chat_sessions s')) {
+        if (!decisionSessionLive || !session || session.deleted_at) return [];
+        if (String(params[0]) !== String(session.id) || String(params[1]) !== String(job?.workspace_id || '')) return [];
+        if (!decisionParticipates || String(params[2]) !== String(job?.agent_id || '')) return [];
+        const isPrivate = session.visibility === 'private' || session.folder === 'Direct messages';
+        if (q.includes('chat_session_members') && isPrivate && !decisionUserCanRead) return [];
+        return [{ id: session.id, workspace_id: job.workspace_id }];
+      }
+      if (n.startsWith('select id, workspace_id, name, handle, metadata from workspace_agents')) {
+        if (!decisionAgentEnabled || !job || params[0] !== job.agent_id || params[1] !== job.workspace_id) return [];
+        return [{
+          id: job.agent_id,
+          workspace_id: job.workspace_id,
+          name: job.agent_name,
+          handle: job.agent_handle,
+          metadata: agentMetadata,
+        }];
+      }
+      if (n.startsWith('select id, workspace_id, agent_id, session_id, connection_id, status from agent_jobs')) {
+        if (!job
+          || decisionJobStatus !== 'running'
+          || params[0] !== job.id
+          || params[1] !== job.workspace_id
+          || params[2] !== job.agent_id
+          || params[3] !== job.session_id
+          || params[4] !== job.connection_id) return [];
+        return [{ ...job, status: decisionJobStatus }];
+      }
+      if (n.startsWith('select session_id, status from agent_jobs')) {
+        if (!job || params[0] !== job.id || params[1] !== job.agent_id || params[2] !== job.workspace_id) return [];
+        return [{ session_id: job.session_id, status: job.status }];
       }
       if (n.startsWith('select thread_parent_id from messages')) {
         return params[0] === 'msg-placeholder' ? [{ thread_parent_id: null }] : [];
@@ -110,19 +189,45 @@ function installDb({
         && q.includes("= 'pending'")
         && q.includes('order by created_at')) {
         assert.match(q, /chat_session_members/, 'the list query must carry the canonical session membership predicate');
-        if (!request) return [];
-        if (!request.session_id) return [request];
-        if (!session || String(session.id) !== String(request.session_id)) return [];
+        if (!storedRequest) return [];
+        if (!storedRequest.session_id) return [storedRequest];
+        if (!session || String(session.id) !== String(storedRequest.session_id)) return [];
         const isPrivate = session.visibility === 'private' || session.folder === 'Direct messages';
-        return !isPrivate || sessionMembers.includes(String(params[1])) ? [request] : [];
+        return !isPrivate || sessionMembers.includes(String(params[1])) ? [storedRequest] : [];
+      }
+      if (n.startsWith('select * from agent_permission_requests where request_key')) {
+        if (!storedRequest
+          || params[0] !== storedRequest.request_key
+          || params[1] !== storedRequest.connection_id
+          || params[2] !== storedRequest.workspace_id
+          || params[3] !== storedRequest.agent_id) return [];
+        return [storedRequest];
       }
       if (n.startsWith('select * from agent_permission_requests where id')) {
-        if (!request || params[0] !== request.id || params[1] !== request.workspace_id) return [];
-        return [request];
+        if (!storedRequest || params[0] !== storedRequest.id || params[1] !== storedRequest.workspace_id) return [];
+        return [storedRequest];
       }
-      if (q.startsWith('select id, visibility, folder from chat_sessions where id')) {
+      if (n.startsWith('select *, (expires_at is not null and expires_at <= now()) as request_expired')) {
+        if (!storedRequest || params[0] !== storedRequest.id || params[1] !== storedRequest.workspace_id) return [];
+        return [{
+          ...storedRequest,
+          status: decisionRequestStatus || storedRequest.status,
+          request_expired: decisionRequestExpired,
+        }];
+      }
+      if (q.startsWith('select id, visibility, folder, deleted_at from chat_sessions where id')) {
         if (sessionReadError) throw new Error('session lookup failed');
         return session && String(params[0]) === String(session.id) ? [session] : [];
+      }
+      if (q.startsWith('select id, visibility, folder from chat_sessions') && q.includes('id = any')) {
+        if (sessionReadError) throw new Error('session lookup failed');
+        return session ? [{ id: session.id, visibility: session.visibility, folder: session.folder }] : [];
+      }
+      if (q.startsWith('select session_id, user_id from chat_session_members') && q.includes('session_id = any')) {
+        if (sessionReadError) throw new Error('session membership lookup failed');
+        return session
+          ? sessionMembers.map((user_id) => ({ session_id: session.id, user_id }))
+          : [];
       }
       if (q.startsWith('select 1 from chat_session_members')) {
         return sessionMembers.includes(String(params[1])) ? [{ ok: 1 }] : [];
@@ -130,11 +235,67 @@ function installDb({
       if (q.startsWith('select user_id from chat_session_members')) {
         return sessionMembers.map((user_id) => ({ user_id }));
       }
+      if (n.startsWith("update agent_permission_requests set status = 'expired'")
+        && q.includes('jsonb_array_elements_text')) {
+        if (!storedRequest
+          || params[0] !== storedRequest.workspace_id
+          || params[1] !== storedRequest.agent_id
+          || storedRequest.status !== 'allowing'
+          || storedRequest.scope !== 'always'
+          || !storedRequest.rules.map(String).includes(String(params[2]))) return [];
+        storedRequest = { ...storedRequest, status: 'expired' };
+        return [storedRequest];
+      }
+      if (n.startsWith("update agent_permission_requests set status = 'expired'")) {
+        if (params.length === 0 && q.includes('expires_at < now()')) {
+          if (!storedRequest || !['pending', 'allowing', 'denying'].includes(storedRequest.status)) return [];
+          storedRequest = { ...storedRequest, status: 'expired' };
+          return [storedRequest];
+        }
+        if (!storedRequest
+          || params[0] !== storedRequest.id
+          || params[1] !== storedRequest.connection_id
+          || !['allowing', 'denying'].includes(storedRequest.status)) return [];
+        storedRequest = { ...storedRequest, status: 'expired' };
+        return [storedRequest];
+      }
       if (n.startsWith('update agent_permission_requests set status = $2')) {
-        return [{ ...request, status: params[1], scope: params[2], decided_by: params[3], decided_by_name: params[4] }];
+        if (!storedRequest || params[0] !== storedRequest.id) return [];
+        const interim = n.includes('scope = $3');
+        if (interim) {
+          const currentStatus = decisionRequestStatus || storedRequest.status;
+          if (currentStatus !== 'pending'
+            || params[5] !== storedRequest.job_id
+            || params[6] !== storedRequest.session_id
+            || params[7] !== storedRequest.agent_id
+            || params[8] !== storedRequest.connection_id) return [];
+          storedRequest = {
+            ...storedRequest,
+            status: params[1],
+            scope: params[2],
+            decided_by: params[3],
+            decided_by_name: params[4],
+          };
+          if (typeof onDecisionSettle === 'function') onDecisionSettle('interim', storedRequest);
+          return [storedRequest];
+        }
+        if (storedRequest.status !== params[2]
+          || params[3] !== storedRequest.job_id
+          || params[4] !== storedRequest.session_id
+          || params[5] !== storedRequest.agent_id
+          || params[6] !== storedRequest.connection_id) return [];
+        storedRequest = { ...storedRequest, status: params[1] };
+        if (typeof onDecisionSettle === 'function') onDecisionSettle('final', storedRequest);
+        return [storedRequest];
       }
       if (n.startsWith('select metadata from workspace_agents')) return [{ metadata: agentMetadata }];
-      if (n.startsWith('update workspace_agents set metadata')) return [{ id: params[0], metadata: params[2] }];
+      if (n.startsWith('update workspace_agents set metadata')) {
+        if (!decisionAgentEnabled) return [];
+        return [{
+          id: params[0], workspace_id: params[1], name: JOB.agent_name, handle: JOB.agent_handle,
+          metadata: params[2], enabled: true,
+        }];
+      }
       if (n.startsWith('update workspace_agents a set permission_mode')) {
         // Mirror the real WHERE: a mismatched agent or workspace updates nothing.
         if (params[0] !== 'agent-1' || params[1] !== 'ws-1') return [];
@@ -163,7 +324,8 @@ function installDb({
       if (n.includes('workspace_members') || n.includes('from workspaces')) return [];
       return [];
     },
-  });
+  };
+  __test.setTestDb(db);
   return calls;
 }
 
@@ -203,6 +365,16 @@ test('a valid request stores the row and posts a card into the job conversation'
 
   assert.equal(result.status, 'pending');
   assert.equal(sent.length, 0, 'a pending request must not answer itself');
+  assert.equal(calls.transactions, 1, 'the job proof and both inserts share one transaction');
+
+  const proof = calls.find((call) => call.n.startsWith('select j.*, a.name as agent_name'));
+  assert.match(proof.n, /join chat_sessions s/);
+  assert.match(proof.n, /s\.deleted_at is null/);
+  assert.match(proof.n, /a\.enabled is true/);
+  assert.match(proof.n, /j\.connection_id = \$4/);
+  assert.match(proof.n, /j\.status = 'running'/);
+  assert.match(proof.n, /jsonb_array_elements/);
+  assert.match(proof.n, /for update of j, s, a/);
 
   const insert = calls.find((call) => call.n.startsWith('insert into agent_permission_requests'));
   // Bound as ARRAYS. postgres.js JSON-encodes a value whose parameter Postgres
@@ -261,6 +433,21 @@ test('a request with no job id is denied instead of throwing at the socket', asy
   const result = await __test.handleAgentPermissionRequest(ws, { requestId: 'r1', toolName: 'Bash' });
   assert.equal(result, null);
   assert.equal(sent[0].behavior, 'deny');
+});
+
+test('a daemon cannot persist an unbounded permission request id', async () => {
+  const calls = installDb();
+  const { ws } = agentWs();
+
+  await assert.rejects(
+    () => __test.handleAgentPermissionRequest(ws, {
+      jobId: 'job-1', requestId: 'r'.repeat(201), toolName: 'Bash',
+    }),
+    /requestId is too long/,
+  );
+
+  assert.equal(calls.transactions, 0);
+  assert.equal(calls.some((call) => call.n.startsWith('insert into agent_permission_requests')), false);
 });
 
 // --- listing ---------------------------------------------------------------
@@ -350,28 +537,94 @@ test('no workspace role can forge, settle, or delete a permission request throug
 
 // --- deciding ---------------------------------------------------------------
 
-function connectAgent({ connectionId = 'conn-1', agentId = 'agent-1' } = {}) {
+function connectAgent({
+  connectionId = 'conn-1',
+  agentId = 'agent-1',
+  workspaceId = 'ws-1',
+  supportsReceipts = true,
+  autoPrepareAck = true,
+  prepareAccepted = true,
+} = {}) {
   const frames = [];
+  const ws = {
+    readyState: 1,
+    agentAuth: { agentId, workspaceId },
+    agentConnectionId: connectionId,
+    send: (raw) => {
+      const frame = JSON.parse(raw);
+      frames.push(frame);
+      if (frame.type === 'agent_permission_prepare' && autoPrepareAck) {
+        queueMicrotask(() => {
+          void __test.handleAgentPermissionPrepared(ws, {
+            requestId: frame.requestId,
+            accepted: prepareAccepted,
+          });
+        });
+      }
+    },
+  };
   __test.registerTestConnectedAgent({
     connectionId,
     agentId,
-    ws: { readyState: 1, send: (raw) => frames.push(JSON.parse(raw)) },
+    workspaceId,
+    metadata: { permissionDecisionReceipts: supportsReceipts },
+    ws,
   });
+  Object.defineProperty(frames, 'ws', { value: ws });
   return frames;
 }
 
+const permissionDecisionFrames = (frames) => frames.filter((frame) => [
+  'agent_permission_prepare',
+  'agent_permission_commit',
+  'agent_permission_abort',
+  'agent_permission_decision',
+].includes(frame.type));
+
 test('allowing once pushes the decision to the daemon and settles the row', async () => {
-  const calls = installDb();
-  const frames = connectAgent();
+  let frames;
+  const calls = installDb({
+    onDecisionSettle(phase) {
+      if (phase === 'interim') {
+        assert.equal(frames.length, 0, 'durable prepare intent must commit before any daemon frame');
+      } else {
+        assert.equal(frames.length, 1, 'prepare is acknowledged before final approval commits');
+        assert.equal(frames[0].type, 'agent_permission_prepare');
+      }
+    },
+  });
+  frames = connectAgent();
 
   const settled = await __test.decideAgentPermissionRequest({
     userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'allow', scope: 'once',
   });
+  assert.equal(calls.transactions, 2, 'durable prepare intent and receipt-driven finalization are separate transactions');
+
+  const workspaceLock = calls.findIndex((call) => call.n.startsWith('with recursive permission_workspace_chain'));
+  const sessionLock = calls.findIndex((call) => call.n.startsWith('select s.id, s.workspace_id from chat_sessions s'));
+  const agentLock = calls.findIndex((call) => call.n.startsWith('select id, workspace_id, name, handle, metadata from workspace_agents'));
+  const jobLock = calls.findIndex((call) => call.n.startsWith('select id, workspace_id, agent_id, session_id, connection_id, status from agent_jobs'));
+  const requestLock = calls.findIndex((call) => call.n.startsWith('select *, (expires_at is not null'));
+  assert.ok(workspaceLock >= 0 && workspaceLock < sessionLock
+    && sessionLock < agentLock && agentLock < jobLock && jobLock < requestLock,
+  'decision follows clear-compatible workspace lineage -> session -> agent -> job -> request lock order');
+  assert.match(calls[workspaceLock].n, /permission_locked_workspaces as materialized/);
+  assert.match(calls[workspaceLock].n, /for share of workspace/);
+  assert.match(calls[workspaceLock].n, /permission_locked_memberships as materialized/);
+  assert.match(calls[workspaceLock].n, /for share of membership/);
+  assert.match(calls[sessionLock].n, /s\.deleted_at is null/);
+  assert.match(calls[sessionLock].n, /jsonb_array_elements/);
+  assert.match(calls[sessionLock].n, /chat_session_members/);
+  assert.match(calls[sessionLock].n, /for share/);
+  assert.match(calls[sessionLock].n, /for update of s$/);
+  assert.match(calls[agentLock].n, /enabled is true for update$/);
+  assert.match(calls[jobLock].n, /connection_id = \$5 and status = 'running' for update$/);
+  assert.match(calls[requestLock].n, /for update$/);
 
   assert.equal(settled.status, 'allowed');
-  assert.equal(frames.length, 1);
+  assert.equal(frames.length, 2);
   assert.deepEqual(frames[0], {
-    type: 'agent_permission_decision',
+    type: 'agent_permission_prepare',
     // The DAEMON's request id, not ours — it is the key the daemon parked under.
     requestId: 'daemon-req-1',
     behavior: 'allow',
@@ -379,8 +632,256 @@ test('allowing once pushes the decision to the daemon and settles the row', asyn
     decidedBy: 'Jason',
     message: '',
   });
+  assert.deepEqual(frames[1], {
+    type: 'agent_permission_commit',
+    requestId: 'daemon-req-1',
+  });
   // 'once' must not touch the agent's permanent rules.
   assert.equal(calls.some((call) => call.n.startsWith('update workspace_agents set metadata')), false);
+});
+
+test('prepare leaves the daemon parked and a permanent grant absent until its receipt', async () => {
+  const calls = installDb({ agentMetadata: { host_folders: ['/srv/code'] } });
+  const frames = connectAgent({ autoPrepareAck: false });
+  let settled = false;
+  const decision = __test.decideAgentPermissionRequest({
+    userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'allow', scope: 'always',
+  }).then((row) => {
+    settled = true;
+    return row;
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(calls.currentRequest().status, 'allowing', 'phase one is the durable delivery outbox');
+  assert.deepEqual(frames.map((frame) => frame.type), ['agent_permission_prepare']);
+  assert.equal(settled, false, 'PREPARE alone must not settle the HTTP decision');
+  assert.equal(
+    calls.some((call) => call.n.startsWith('update workspace_agents set metadata')),
+    false,
+    'an always grant does not exist before the daemon proves it still holds the tool call',
+  );
+
+  assert.equal(await __test.handleAgentPermissionPrepared(frames.ws, {
+    requestId: 'daemon-req-1', accepted: true,
+  }), true);
+  const result = await decision;
+
+  assert.equal(result.status, 'allowed');
+  assert.equal(settled, true);
+  assert.deepEqual(permissionDecisionFrames(frames).map((frame) => frame.type), [
+    'agent_permission_prepare',
+    'agent_permission_commit',
+  ]);
+  assert.equal(
+    calls.filter((call) => call.n.startsWith('update workspace_agents set metadata')).length,
+    1,
+    'the permanent grant is written once, inside receipt-driven finalization',
+  );
+});
+
+test('a daemon that rejects prepare expires the intent without a grant or commit', async () => {
+  const calls = installDb();
+  const frames = connectAgent({ autoPrepareAck: false });
+  const decision = __test.decideAgentPermissionRequest({
+    userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'allow', scope: 'always',
+  });
+  const rejected = assert.rejects(
+    decision,
+    (error) => error.code === 'permission_prepare_rejected',
+  );
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await __test.handleAgentPermissionPrepared(frames.ws, {
+    requestId: 'daemon-req-1', accepted: false,
+  }), false);
+  await rejected;
+
+  assert.equal(calls.currentRequest().status, 'expired');
+  assert.deepEqual(frames.map((frame) => frame.type), ['agent_permission_prepare']);
+  assert.equal(calls.some((call) => call.n.startsWith('update workspace_agents set metadata')), false);
+});
+
+test('conversation clear between prepare and receipt wins without releasing the stale allow', async () => {
+  const calls = installDb();
+  const frames = connectAgent({ autoPrepareAck: false });
+  const decision = __test.decideAgentPermissionRequest({
+    userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'allow', scope: 'once',
+  });
+  const rejected = assert.rejects(decision, (error) => error.code === 'permission_scope_changed');
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.currentRequest().status, 'allowing');
+  calls.setRequestStatus('expired');
+
+  assert.equal(await __test.handleAgentPermissionPrepared(frames.ws, {
+    requestId: 'daemon-req-1', accepted: true,
+  }), false);
+  await rejected;
+
+  assert.deepEqual(frames.map((frame) => frame.type), [
+    'agent_permission_prepare',
+    'agent_permission_abort',
+  ]);
+  assert.match(frames[1].message, /conversation changed/i);
+  assert.equal(frames.some((frame) => frame.type === 'agent_permission_commit'), false);
+  assert.equal(calls.some((call) => call.n.startsWith('update workspace_agents set metadata')), false);
+});
+
+test('the stale sweep aborts an interim decision instead of leaving its promise parked', async () => {
+  const calls = installDb({ request: {
+    ...REQUEST,
+    expires_at: '2026-07-31T00:00:00.000Z',
+  } });
+  const frames = connectAgent({ autoPrepareAck: false });
+  const decision = __test.decideAgentPermissionRequest({
+    userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'allow', scope: 'once',
+  });
+  const rejected = assert.rejects(decision, (error) => error.code === 'permission_scope_changed');
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.currentRequest().status, 'allowing');
+  assert.equal(await __test.expireStalePermissionRequests(), 1);
+  await rejected;
+
+  assert.equal(calls.currentRequest().status, 'expired');
+  assert.deepEqual(permissionDecisionFrames(frames).map((frame) => frame.type), [
+    'agent_permission_prepare',
+    'agent_permission_abort',
+  ]);
+  assert.match(frames[1].message, /expired/i);
+});
+
+test('a phase-two scope failure aborts the prepared daemon instead of waiting for reconnect', async () => {
+  const calls = installDb();
+  const frames = connectAgent({ autoPrepareAck: false });
+  const decision = __test.decideAgentPermissionRequest({
+    userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'allow', scope: 'once',
+  });
+  const rejected = assert.rejects(decision, (error) => error.code === 'permission_scope_changed');
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.currentRequest().status, 'allowing');
+  calls.setDecisionAgentEnabled(false);
+
+  assert.equal(await __test.handleAgentPermissionPrepared(frames.ws, {
+    requestId: 'daemon-req-1', accepted: true,
+  }), false);
+  await rejected;
+
+  assert.deepEqual(permissionDecisionFrames(frames).map((frame) => frame.type), [
+    'agent_permission_prepare',
+    'agent_permission_abort',
+  ]);
+  assert.equal(calls.currentRequest().status, 'expired', 'the failed phase is closed durably before abort');
+  assert.equal(calls.some((call) => call.n.startsWith('update workspace_agents set metadata')), false);
+});
+
+test('a prepared receipt is bound to the authenticated agent connection', async () => {
+  const calls = installDb();
+  const frames = connectAgent({ autoPrepareAck: false });
+  const impostorFrames = connectAgent({ connectionId: 'conn-2', autoPrepareAck: false });
+  const decision = __test.decideAgentPermissionRequest({
+    userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'allow', scope: 'once',
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await __test.handleAgentPermissionPrepared(impostorFrames.ws, {
+    requestId: 'daemon-req-1', accepted: true,
+  }), false);
+  assert.equal(calls.currentRequest().status, 'allowing');
+  assert.deepEqual(impostorFrames, []);
+  assert.deepEqual(frames.map((frame) => frame.type), ['agent_permission_prepare']);
+
+  assert.equal(await __test.handleAgentPermissionPrepared(frames.ws, {
+    requestId: 'daemon-req-1', accepted: true,
+  }), true);
+  assert.equal((await decision).status, 'allowed');
+});
+
+test('an old daemon fails closed before a durable decision is written', async () => {
+  const calls = installDb();
+  const frames = connectAgent({ supportsReceipts: false });
+
+  await assert.rejects(
+    () => __test.decideAgentPermissionRequest({
+      userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'allow', scope: 'once',
+    }),
+    (error) => error.code === 'permission_receipt_unsupported',
+  );
+
+  assert.equal(calls.transactions, 0);
+  assert.equal(calls.currentRequest().status, 'pending');
+  assert.deepEqual(frames, []);
+});
+
+test('a duplicate prepared receipt only replays commit and never repeats the grant', async () => {
+  const calls = installDb();
+  const frames = connectAgent();
+  const result = await __test.decideAgentPermissionRequest({
+    userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'allow', scope: 'always',
+  });
+  assert.equal(result.status, 'allowed');
+
+  const transactions = calls.transactions;
+  const grantWrites = calls.filter((call) => call.n.startsWith('update workspace_agents set metadata')).length;
+  assert.equal(await __test.handleAgentPermissionPrepared(frames.ws, {
+    requestId: 'daemon-req-1', accepted: true,
+  }), true);
+
+  assert.equal(calls.transactions, transactions, 'a duplicate receipt never opens another finalization transaction');
+  assert.equal(
+    calls.filter((call) => call.n.startsWith('update workspace_agents set metadata')).length,
+    grantWrites,
+    'a duplicate receipt cannot widen the permanent rule twice',
+  );
+  assert.deepEqual(permissionDecisionFrames(frames).map((frame) => frame.type), [
+    'agent_permission_prepare',
+    'agent_permission_commit',
+    'agent_permission_commit',
+  ]);
+});
+
+test('a clear or scope revoke that wins after preflight prevents every stale decision frame', async (t) => {
+  const losers = [
+    ['workspace role revoke', { role: 'editor', decisionRole: 'viewer' }],
+    ['private-session member revoke', {
+      role: 'editor',
+      session: { id: 'session-1', visibility: 'private', folder: 'Direct messages' },
+      sessionMembers: ['user-1'],
+      decisionUserCanRead: false,
+    }],
+    ['conversation clear', { decisionSessionLive: false }],
+    ['agent roster revoke', { decisionParticipates: false }],
+    ['agent disable', { decisionAgentEnabled: false }],
+    ['job cancellation', { decisionJobStatus: 'cancelled' }],
+    ['request expiration', { decisionRequestStatus: 'expired' }],
+    ['request deadline', { decisionRequestExpired: true }],
+  ];
+
+  for (const [label, options] of losers) {
+    await t.test(label, async () => {
+      const calls = installDb(options);
+      const frames = connectAgent();
+      await assert.rejects(
+        () => __test.decideAgentPermissionRequest({
+          userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'allow', scope: 'once',
+        }),
+        /no longer attached|already expired|has expired|access changed/,
+      );
+      assert.equal(frames.length, 0, 'the daemon must not receive a stale allow');
+      assert.equal(
+        calls.some((call) => call.n.startsWith('update agent_permission_requests set status')),
+        false,
+        'the losing decision does not settle the request',
+      );
+      assert.equal(
+        calls.some((call) => call.n.startsWith('update workspace_agents set metadata')),
+        false,
+        'the losing decision does not persist a grant',
+      );
+    });
+  }
 });
 
 test('allowing always merges the rule into the agent without clobbering its other metadata', async () => {
@@ -490,8 +991,10 @@ test('an editor who belongs to the private session can decide its permission req
   });
 
   assert.equal(settled.status, 'allowed');
-  assert.equal(frames.length, 1);
+  assert.equal(frames.length, 2);
+  assert.equal(frames[0].type, 'agent_permission_prepare');
   assert.equal(frames[0].behavior, 'allow');
+  assert.equal(frames[1].type, 'agent_permission_commit');
 });
 
 test('denying never needs more than write, whatever scope was asked for', async () => {
@@ -501,9 +1004,11 @@ test('denying never needs more than write, whatever scope was asked for', async 
     userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'deny', scope: 'always',
   });
   assert.equal(denied.status, 'denied');
+  assert.equal(frames[0].type, 'agent_permission_prepare');
   assert.equal(frames[0].behavior, 'deny');
   // Refusing must never wait for an admin.
   assert.match(frames[0].message, /denied this tool call/);
+  assert.equal(frames[1].type, 'agent_permission_commit');
 });
 
 test('a decision that cannot reach the daemon is refused, not recorded', async () => {
@@ -734,6 +1239,65 @@ test('revoking a permanent rule leaves the rest of the agent metadata alone', as
   assert.deepEqual(rules, ['WebFetch']);
   const update = calls.find((call) => call.n.startsWith('update workspace_agents set metadata'));
   assert.deepEqual(update.params[2], { host_folders: ['/root'], permission_rules: ['WebFetch'] });
+  const lock = calls.find((call) => call.n.startsWith('select id, workspace_id, name, handle, metadata from workspace_agents'));
+  assert.ok(lock, 'revocation must read the current whole metadata document under the agent row lock');
+  assert.match(lock.n, /for update$/i);
+  assert.equal(calls.transactions, 1);
+});
+
+test('revoking an absent rule is an atomic no-op with no metadata write or audit row', async () => {
+  const calls = installDb({
+    agentMetadata: { host_folders: ['/srv/project'], permission_rules: ['WebFetch'] },
+  });
+  const rules = await __test.revokeAgentPermissionRule({
+    userId: 'user-1', workspaceId: 'ws-1', agentId: 'agent-1', rule: 'Bash(git clone:*)',
+  });
+  assert.deepEqual(rules, ['WebFetch']);
+  assert.equal(calls.transactions, 1);
+  assert.ok(calls.some((call) => /for update$/i.test(call.n)), 'the no-op result still comes from locked current state');
+  assert.equal(calls.some((call) => call.n.startsWith('update workspace_agents set metadata')), false);
+  assert.equal(calls.some((call) => call.n.startsWith('insert into audit_log')), false);
+});
+
+test('revoking between PREPARE and COMMIT expires the pending permanent grant', async () => {
+  const calls = installDb({
+    agentMetadata: { host_folders: ['/srv/project'], permission_rules: ['WebFetch'] },
+  });
+  const frames = connectAgent({ autoPrepareAck: false });
+  const decision = __test.decideAgentPermissionRequest({
+    userId: 'user-1', workspaceId: 'ws-1', requestId: 'req-1', behavior: 'allow', scope: 'always',
+  });
+  const rejected = assert.rejects(
+    decision,
+    (error) => error.code === 'permission_scope_changed',
+  );
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.currentRequest().status, 'allowing');
+  assert.deepEqual(frames.map((frame) => frame.type), ['agent_permission_prepare']);
+
+  const rules = await __test.revokeAgentPermissionRule({
+    userId: 'user-1', workspaceId: 'ws-1', agentId: 'agent-1', rule: 'Bash(git clone:*)',
+  });
+  await rejected;
+
+  assert.deepEqual(rules, ['WebFetch']);
+  assert.equal(calls.currentRequest().status, 'expired');
+  assert.deepEqual(permissionDecisionFrames(frames).map((frame) => frame.type), [
+    'agent_permission_prepare',
+    'agent_permission_abort',
+  ]);
+  assert.equal(frames.some((frame) => frame.type === 'agent_permission_commit'), false);
+  assert.equal(calls.some((call) => call.n.startsWith('update workspace_agents set metadata')), false);
+  assert.ok(
+    calls.some((call) => call.n.includes('jsonb_array_elements_text')),
+    'revocation must match in-flight prepared grants, not only metadata that already exists',
+  );
+
+  assert.equal(await __test.handleAgentPermissionPrepared(frames.ws, {
+    requestId: 'daemon-req-1', accepted: true,
+  }), false);
+  assert.equal(frames.some((frame) => frame.type === 'agent_permission_commit'), false);
 });
 
 test('revoking requires manage, like granting', async () => {

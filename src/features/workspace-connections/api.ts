@@ -5,6 +5,7 @@ import type {
   WorkspaceConnectionRole,
   WorkspaceJoinLink,
   WorkspaceMember,
+  WorkspaceController,
 } from './model';
 
 type ApiEnvelope<T> = {
@@ -102,9 +103,32 @@ export async function createWorkspaceJoinLink(
         audience: input.audience,
         role: input.role,
         label: input.label?.trim() || '',
+        grantKind: input.grantKind || 'individual',
+        controllerName: input.controllerName?.trim() || '',
+        scopes: input.scopes || [],
       }),
     },
     'Failed to create join link',
+  );
+}
+
+export async function listWorkspaceControllers(workspaceId: string): Promise<WorkspaceController[]> {
+  const data = await requestData<WorkspaceController[]>(
+    workspacePath(workspaceId, '/controllers'),
+    { headers: apiAuthHeaders() },
+    'Failed to load workspace controllers',
+  );
+  return Array.isArray(data) ? data : [];
+}
+
+export async function revokeWorkspaceController(
+  workspaceId: string,
+  controllerId: string,
+): Promise<WorkspaceController> {
+  return requestData<WorkspaceController>(
+    workspacePath(workspaceId, `/controllers/${encodeURIComponent(controllerId)}`),
+    { method: 'DELETE', headers: apiAuthHeaders() },
+    'Failed to revoke workspace controller',
   );
 }
 

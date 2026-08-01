@@ -297,6 +297,23 @@ const savedTemplate: WireframeScene = {
   ],
 };
 
+/** One invite resolves to a human, an agent, or a workspace resource. */
+const connectionResources: WireframeScene = {
+  id: 'connection-resources',
+  alt: 'A single invite link is redeemed into a human connection, an agent connection, or a resource steward inside the workspace.',
+  shapes: [
+    { kind: 'panel', x: 6, y: 10, w: 54, h: 80, tone: 'muted', motion: 'none' },
+    { kind: 'chip', x: 14, y: 22, w: 34, h: 12, tone: 'accent', motion: 'pop', delay: 0.2 },
+    { kind: 'row', x: 14, y: 42, w: 36, h: 9, tone: 'base', motion: 'fade', delay: 0.45 },
+    { kind: 'row', x: 14, y: 56, w: 30, h: 9, tone: 'base', motion: 'fade', delay: 0.65 },
+    { kind: 'panel', x: 72, y: 10, w: 82, h: 80, tone: 'muted', motion: 'none' },
+    { kind: 'row', x: 82, y: 22, w: 54, h: 10, tone: 'base', motion: 'fade', delay: 0.3 },
+    { kind: 'chip', x: 82, y: 42, w: 22, h: 12, tone: 'accent', motion: 'pulse', delay: 0.9 },
+    { kind: 'chip', x: 110, y: 42, w: 22, h: 12, tone: 'base', motion: 'pop', delay: 1.05 },
+    { kind: 'chip', x: 82, y: 62, w: 50, h: 12, tone: 'base', motion: 'pop', delay: 1.2 },
+  ],
+};
+
 /** Lines appended to a ledger, each naming who — the audit log. */
 const auditLog: WireframeScene = {
   id: 'audit-log',
@@ -345,7 +362,7 @@ const stopReason: WireframeScene = {
 
 export const WIREFRAME_SCENES = {
   // In the gallery today.
-  dmPrivacy, automationRule, savedTemplate, auditLog, typingDots, stopReason,
+  dmPrivacy, automationRule, savedTemplate, connectionResources, auditLog, typingDots, stopReason,
   // Retired from the gallery when their feature stopped being news. Kept as
   // authored vocabulary — a scene costs nothing and is the reference for how
   // this format is meant to read.
@@ -367,6 +384,12 @@ export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
  * its scene stays in WIREFRAME_SCENES.
  */
 export const GALLERY_SLIDES: GallerySlide[] = [
+  {
+    note: 'workspace-connections-and-agent-resources',
+    title: 'One link, clear roles',
+    body: 'Invite a person, an agent, or a resource steward with one short-lived link; the workspace keeps authority and capability separate.',
+    scene: connectionResources,
+  },
   {
     note: 'private-direct-messages',
     title: 'Direct messages are private',
@@ -390,12 +413,6 @@ export const GALLERY_SLIDES: GallerySlide[] = [
     title: 'A record of who changed what',
     body: 'Sensitive changes are written to a log you can read back: who did it, what changed, and when.',
     scene: auditLog,
-  },
-  {
-    note: 'typing-indicators',
-    title: 'See when someone is typing',
-    body: 'A dot indicator shows when another person or an agent is part-way through a reply, so you know one is coming.',
-    scene: typingDots,
   },
   {
     note: 'why-an-agent-stopped',

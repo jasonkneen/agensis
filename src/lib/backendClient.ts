@@ -535,7 +535,10 @@ class RealtimeManager {
           return;
         }
         if (message?.type === 'system' && typeof message?.event === 'string') {
-          this.emitSystemEvent(message.event, message.payload);
+          // Most system frames carry a dedicated payload. Subscription
+          // revocations predate that envelope and carry channel/reason at the
+          // top level, so preserve both wire shapes for listeners.
+          this.emitSystemEvent(message.event, message.payload ?? message);
           return;
         }
         for (const channel of this.channels) {
@@ -891,6 +894,44 @@ export interface DeployPublishedPayload {
 export function onDeployPublished(callback: (payload: DeployPublishedPayload) => void): () => void {
   return realtimeManager.onSystemEvent('deploy_published', (payload) => {
     callback((payload ?? {}) as DeployPublishedPayload);
+  });
+}
+
+export interface RealtimeUnsubscribedPayload {
+  channel: string;
+  reason: string;
+}
+
+/**
+ * Listen for a server-forced channel revocation. The server uses this when a
+ * live capability disappears (for example, reciprocal read receipts are
+ * switched off on another device), so consumers must discard state that was
+ * valid only while that subscription was authorized.
+ */
+export function onRealtimeUnsubscribed(
+  callback: (payload: RealtimeUnsubscribedPayload) => void,
+): () => void {
+  return realtimeManager.onSystemEvent('unsubscribed', (payload) => {
+    if (!payload || typeof payload !== 'object') return;
+    const value = payload as Partial<RealtimeUnsubscribedPayload>;
+    if (typeof value.channel !== 'string' || typeof value.reason !== 'string') return;
+    callback({ channel: value.channel, reason: value.reason });
+  });
+}
+
+export interface ReadReceiptPreferencePayload {
+  userId: string;
+  enabled: boolean;
+}
+
+export function onReadReceiptPreference(
+  callback: (payload: ReadReceiptPreferencePayload) => void,
+): () => void {
+  return realtimeManager.onSystemEvent('read_receipts_preference', (payload) => {
+    if (!payload || typeof payload !== 'object') return;
+    const value = payload as Partial<ReadReceiptPreferencePayload>;
+    if (typeof value.userId !== 'string' || typeof value.enabled !== 'boolean') return;
+    callback({ userId: value.userId, enabled: value.enabled });
   });
 }
 

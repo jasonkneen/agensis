@@ -1,16 +1,44 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { extractSseDataLines, finalAssistantStreamContent, messageText, parseAiStreamPayload } from '../lib/chatStream';
-import { computeThreadDivergence } from '../lib/threadMerge';
 import { directAiModel, isSharedModelRoute } from '../lib/chatModelRouting';
-import { cachedFetch } from '../lib/offlineBackend';
+import {
+  buildQuotedSessionContext,
+  QUOTED_CONTEXT_MESSAGE_LIMIT,
+} from '../lib/quotedSessionContext';
+import {
+  cachedFetch,
+  offlineMessageSendResult,
+  redactCachedSessionMessages,
+} from '../lib/offlineBackend';
+import type { OfflineMessageDispatch, OfflineMessageRoute } from '../lib/offlineBackend';
+import { announceActivityRedaction } from '../lib/activityRedaction';
+import { linkedDocumentContext } from '../lib/linkedDocumentContext';
 import { WORKSPACE_UNAVAILABLE, classifyWriteFailure, type WriteFailure } from '../lib/writeFeedback';
 import { channelMessages } from '../components/chat/channelView';
 import { isToolStepMessage } from '../components/chat/toolSteps';
 import { allowsUnpromptedReply, mentionsChannel } from '../lib/channelMentions';
 import { isHuddleSession } from '../lib/huddleTranscript';
 import { dedupeSessionParticipants } from '../lib/sessionParticipants';
+import { redactDeletedMessage } from '../lib/messageTombstone';
+import {
+  applyMessageRow,
+  createMessageSnapshotOverlay,
+  reconcileMessageSnapshot,
+  recordMessageSnapshotChange,
+  resetMessageSnapshotOverlay,
+} from '../lib/messageSnapshot';
+import { closeSession as closeSessionControl } from '../lib/sessionControl';
+import {
+  buildMergeSynthesisPrompt,
+  createMergeSynthesisPoller,
+  isDurableMergeSynthesis,
+  MERGE_BRANCH_MESSAGE_LIMIT,
+  splitDivergence,
+} from '../lib/threadMerge';
+import { reconcileWorkspaceSessions } from '../lib/sessionRealtime';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
+import { useSessionRevocationSignal } from './useSessionRevocationSignal';
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, MessageAttachment, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 
@@ -20,6 +48,44 @@ import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 // is fetched independently at dispatch time, so this display cap never truncates
 // what an agent sees.
 const MESSAGE_PAGE_SIZE = 200;
+// Tool steps and thread-only replies can dominate a busy run. Fetch a bounded
+// surplus, then apply the channel-visible filter before taking the final quote
+// window; limiting to twelve in SQL first could yield an empty "context" even
+// while useful channel messages existed immediately behind those rows.
+const QUOTED_CONTEXT_FETCH_LIMIT = QUOTED_CONTEXT_MESSAGE_LIMIT * 4;
+
+/**
+ * Carry context as one clearly-labelled quote authored by the person doing the
+ * import. Cloning the source rows would make an agent or another human appear
+ * to have spoken natively in the target conversation and would recreate the
+ * attribution-forgery surface the generic message guard closes.
+ */
+async function importQuotedSessionContext(
+  source: ChatSession,
+  targetSessionId: string,
+): Promise<boolean> {
+  const { data, error } = await backendClient
+    .from('messages')
+    .select('*')
+    .eq('session_id', source.id)
+    .order('created_at', { ascending: false })
+    .limit(QUOTED_CONTEXT_FETCH_LIMIT);
+  if (error) return false;
+
+  const sourceMessages = channelMessages(
+    (data || []).filter((message: Message) => !message.deleted_at && !isToolStepMessage(message)),
+  )
+    .slice(0, QUOTED_CONTEXT_MESSAGE_LIMIT)
+    .reverse();
+  const content = buildQuotedSessionContext(source.title || 'Untitled', sourceMessages);
+  const result = await backendClient.from('messages').insert({
+    id: crypto.randomUUID(),
+    session_id: targetSessionId,
+    content,
+    attachments: [],
+  });
+  return !result.error;
+}
 
 /**
  * What /backend/agents/dispatch decided.
@@ -58,7 +124,12 @@ function mainSessionsOf(sessions: ChatSession[]): ChatSession[] {
   return sessions.filter(s => !s.parent_message_id && !s.deleted_at && !isHuddleSession(s));
 }
 
-export function useChat(workspaceId: string | null, currentUserName?: string, seedSessions?: ChatSession[] | null) {
+export function useChat(
+  workspaceId: string | null,
+  currentUserName?: string,
+  seedSessions?: ChatSession[] | null,
+  currentUserId?: string,
+) {
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
     if (!seedSessions?.length) return [];
     return mainSessionsOf(seedSessions);
@@ -66,19 +137,32 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
-  const [streaming, setStreaming] = useState(false);
+  const [, forceStreamingRender] = useState(0);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [closedSessionIds, setClosedSessionIds] = useState<string[]>([]);
 
   // Aborts the in-flight AI stream fetch if the hook unmounts mid-stream, so a
   // disposed component never keeps the request alive or writes into dead state.
-  const streamAbortRef = useRef<AbortController | null>(null);
-  useEffect(() => () => streamAbortRef.current?.abort(), []);
+  const streamAbortRefs = useRef(new Map<string, AbortController>());
+  const streamingSessionIdsRef = useRef(new Set<string>());
+  const pendingMergeForksRef = useRef(new Set<string>());
+  const mergeWatchCleanupRefs = useRef(new Set<() => void>());
+  useEffect(() => () => {
+    for (const controller of streamAbortRefs.current.values()) controller.abort();
+    streamAbortRefs.current.clear();
+    streamingSessionIdsRef.current.clear();
+    for (const cleanup of mergeWatchCleanupRefs.current) cleanup();
+    mergeWatchCleanupRefs.current.clear();
+    pendingMergeForksRef.current.clear();
+  }, []);
 
   // A ref mirror of `messages` so callbacks (loadEarlierMessages, dispatch) can
   // read the current list synchronously without taking it as a dependency.
   const messagesRef = useRef<Message[]>([]);
+  const snapshotOverlayRef = useRef(createMessageSnapshotOverlay());
+  const closedSessionIdsRef = useRef(new Set<string>());
   useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   useEffect(() => {
@@ -116,9 +200,87 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
   const activeSessionId = activeSession?.id ?? null;
   const currentSessionRef = useRef<string | null>(activeSessionId);
   currentSessionRef.current = activeSessionId;
+  resetMessageSnapshotOverlay(snapshotOverlayRef.current, activeSessionId);
+  const streaming = Boolean(activeSessionId && streamingSessionIdsRef.current.has(activeSessionId));
+
+  const setSessionStreaming = useCallback((targetSessionId: string, active: boolean) => {
+    const set = streamingSessionIdsRef.current;
+    const changed = active ? !set.has(targetSessionId) : set.has(targetSessionId);
+    if (!changed) return;
+    if (active) set.add(targetSessionId);
+    else set.delete(targetSessionId);
+    forceStreamingRender(value => value + 1);
+  }, []);
+
+  const commitMessages = useCallback((
+    updater: (previous: Message[]) => Message[],
+  ) => {
+    setMessages(previous => {
+      const next = updater(previous);
+      messagesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const applyScopedMessage = useCallback((targetSessionId: string, row: Message) => {
+    if (currentSessionRef.current !== targetSessionId) return;
+    const normalized = normalizeMessage(row);
+    recordMessageSnapshotChange(snapshotOverlayRef.current, targetSessionId, normalized);
+    commitMessages(previous => applyMessageRow(previous, normalized));
+  }, [commitMessages]);
+
+  const patchScopedMessage = useCallback((
+    targetSessionId: string,
+    messageId: string,
+    patch: Partial<Message>,
+  ) => {
+    if (currentSessionRef.current !== targetSessionId) return;
+    commitMessages(previous => previous.map(message => {
+      if (message.id !== messageId) return message;
+      const next = normalizeMessage({ ...message, ...patch });
+      recordMessageSnapshotChange(snapshotOverlayRef.current, targetSessionId, next);
+      return next;
+    }));
+  }, [commitMessages]);
+
+  const removeScopedMessage = useCallback((targetSessionId: string, messageId: string) => {
+    if (currentSessionRef.current !== targetSessionId) return;
+    recordMessageSnapshotChange(snapshotOverlayRef.current, targetSessionId, null, messageId);
+    commitMessages(previous => previous.filter(message => message.id !== messageId));
+  }, [commitMessages]);
+
+  const clearSessionState = useCallback((targetSessionId: string) => {
+    closedSessionIdsRef.current.add(targetSessionId);
+    setClosedSessionIds(previous => (
+      previous.includes(targetSessionId) ? previous : [...previous, targetSessionId]
+    ));
+    setSessions(previous => previous.filter(session => session.id !== targetSessionId));
+    const controller = streamAbortRefs.current.get(targetSessionId);
+    controller?.abort();
+    streamAbortRefs.current.delete(targetSessionId);
+    setSessionStreaming(targetSessionId, false);
+    if (currentSessionRef.current !== targetSessionId) return;
+    resetMessageSnapshotOverlay(snapshotOverlayRef.current, null);
+    messagesRef.current = [];
+    setMessages([]);
+    setHasMoreMessages(false);
+    setLoading(false);
+    setLoadingEarlier(false);
+    setActiveThreadId(null);
+    setActiveSession(previous => (previous?.id === targetSessionId ? null : previous));
+  }, [setSessionStreaming]);
+
+  useSessionRevocationSignal(activeSessionId, clearSessionState);
 
   const fetchMessages = useCallback(async (sessionId: string) => {
-    setLoading(true);
+    if (closedSessionIdsRef.current.has(sessionId)) {
+      messagesRef.current = [];
+      setMessages([]);
+      setHasMoreMessages(false);
+      setLoading(false);
+      return;
+    }
+    if (currentSessionRef.current === sessionId) setLoading(true);
     // NET-05: load only the newest page on open. The cache key stays per-session
     // so offline reads still work; the endpoint returns { messages, hasMore }.
     const result = await cachedFetch<{ messages: Message[]; hasMore: boolean }>(`messages_page_${sessionId}`, async () => {
@@ -133,11 +295,21 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     // in flight — painting it now would show this session's transcript under
     // the new session's header/composer/thread panel. The newer fetch owns the
     // loading flag from here on, so leave it alone too.
-    if (currentSessionRef.current !== sessionId) return;
+    if (
+      currentSessionRef.current !== sessionId
+      || closedSessionIdsRef.current.has(sessionId)
+    ) return;
     const rows = result?.messages ?? [];
-    // Drop soft-deleted messages (a cleared/closed DM retains its rows in the DB
-    // but they must never re-surface). The server already filters; this is belt.
-    setMessages(rows.filter(m => !m.deleted_at).map(normalizeMessage));
+    // Deleted roots stay as redacted tombstones so retained replies and
+    // sub-threads still have an anchor. normalizeMessage is the client-side
+    // backstop if an older backend sends the unredacted retained row.
+    const reconciled = reconcileMessageSnapshot(
+      rows.map(normalizeMessage),
+      snapshotOverlayRef.current,
+      sessionId,
+    );
+    messagesRef.current = reconciled;
+    setMessages(reconciled);
     setHasMoreMessages(Boolean(result?.hasMore));
     setLoading(false);
   }, []);
@@ -145,6 +317,10 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
   // NET-05: page backwards. Fetches the page of messages older than the oldest
   // currently-loaded row (compound (created_at,id) cursor) and prepends them.
   const loadEarlierMessages = useCallback(async (sessionId: string) => {
+    if (
+      closedSessionIdsRef.current.has(sessionId)
+      || currentSessionRef.current !== sessionId
+    ) return;
     const oldest = messagesRef.current[0];
     if (!oldest) return;
     setLoadingEarlier(true);
@@ -159,19 +335,23 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       });
       if (!res.ok) return;
       const body = await res.json();
-      const older = (body?.data?.messages ?? []).filter((m: Message) => !m.deleted_at).map(normalizeMessage);
+      const older = (body?.data?.messages ?? []).map(normalizeMessage);
+      if (
+        currentSessionRef.current !== sessionId
+        || closedSessionIdsRef.current.has(sessionId)
+      ) return;
       setHasMoreMessages(Boolean(body?.data?.hasMore));
       if (older.length > 0) {
-        setMessages(prev => {
+        commitMessages(prev => {
           const seen = new Set(prev.map(m => m.id));
           const deduped = older.filter((m: Message) => !seen.has(m.id));
           return deduped.length > 0 ? [...deduped, ...prev] : prev;
         });
       }
     } finally {
-      setLoadingEarlier(false);
+      if (currentSessionRef.current === sessionId) setLoadingEarlier(false);
     }
-  }, []);
+  }, [commitMessages]);
 
   // Drop the previous workspace's active session when the workspace changes.
   // fetchSessions preserves `prev ?? first`, so without this the old
@@ -180,6 +360,8 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
   // session instead.
   useEffect(() => {
     setActiveSession(null);
+    closedSessionIdsRef.current.clear();
+    setClosedSessionIds([]);
   }, [workspaceId]);
 
   useEffect(() => {
@@ -190,15 +372,48 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
   // autoTitleSession hand setActiveSession a fresh object for the SAME session,
   // and re-running fetchMessages there replaces `messages` wholesale — wiping
   // client-only rows such as the in-flight streaming assistant placeholder.
-  useEffect(() => {
+  useLayoutEffect(() => {
+    messagesRef.current = [];
+    setMessages([]);
+    setHasMoreMessages(false);
+    setLoadingEarlier(false);
+    setActiveThreadId(null);
     if (activeSessionId) fetchMessages(activeSessionId);
     // No session to load: clear the transcript and release the loading flag,
     // since the stale-response guard above leaves it to whoever loads next.
-    else { setMessages([]); setLoading(false); }
+    else { setLoading(false); }
   }, [activeSessionId, fetchMessages]);
 
   const messageDeduper = useRealtimeDeduper();
   const sessionId = activeSessionId;
+  const sessionDeduper = useRealtimeDeduper();
+  useTableSubscription<ChatSession>(
+    {
+      enabled: Boolean(workspaceId),
+      channelName: `chat-sessions:${workspaceId || ''}`,
+      table: 'chat_sessions',
+      event: '*',
+      schema: 'public',
+      filter: `workspace_id=eq.${workspaceId || ''}`,
+    },
+    (payload) => {
+      if (!sessionDeduper.shouldProcess(payload)) return;
+      const row = payload.new || payload.old;
+      if (!row?.id || String(row.workspace_id || '') !== String(workspaceId || '')) return;
+      const reconciliation = reconcileWorkspaceSessions(sessions, payload, workspaceId);
+      if (reconciliation.closedSessionId) {
+        const id = reconciliation.closedSessionId;
+        void redactCachedSessionMessages(id).catch(() => {});
+        announceActivityRedaction({ sessionId: id });
+        clearSessionState(id);
+        return;
+      }
+      if (row.parent_message_id || isHuddleSession(row)) return;
+      setSessions(prev => reconcileWorkspaceSessions(prev, payload, workspaceId).sessions);
+      setActiveSession(prev => prev?.id === row.id ? { ...prev, ...row } as ChatSession : prev);
+    },
+  );
+
   useTableSubscription<Message>(
     {
       enabled: !!sessionId,
@@ -210,24 +425,24 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     },
     (payload) => {
       if (!messageDeduper.shouldProcess(payload)) return;
+      if (!sessionId || closedSessionIdsRef.current.has(sessionId)) return;
+      const payloadSessionId = String(payload.new?.session_id || payload.old?.session_id || '');
+      if (
+        payloadSessionId !== sessionId
+        || currentSessionRef.current !== sessionId
+      ) return;
       if (payload.eventType === 'INSERT') {
         const row = payload.new;
         if (!row) return;
-        setMessages(prev => {
-          const normalized = normalizeMessage(row);
-          const next = prev.some(message => message.id === row.id)
-            ? prev.map(message => message.id === row.id ? { ...message, ...normalized } : message)
-            : [...prev, normalized];
-          return next.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
-        });
+        applyScopedMessage(sessionId, row);
       } else if (payload.eventType === 'UPDATE') {
         const row = payload.new;
         if (!row) return;
-        setMessages(prev => prev.map(message => message.id === row.id ? normalizeMessage(row) : message));
+        applyScopedMessage(sessionId, row);
       } else if (payload.eventType === 'DELETE') {
         const row = payload.old;
         if (!row?.id) return;
-        setMessages(prev => prev.filter(message => message.id !== row.id));
+        removeScopedMessage(sessionId, row.id);
       }
     },
   );
@@ -275,130 +490,38 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     return { session: null, failure: classifyWriteFailure(error, { online: navigator.onLine }) };
   }, [workspaceId]);
 
-  // Split a thread: clone the session as a new top-level thread and copy its
-  // full top-level transcript into the fork so it mirrors the original. No
-  // agent is dispatched — the human "starts it" by sending the first message
-  // (and can @mention a different agent to pit a competitor against the fork).
+  // Split a thread: clone the session as a new top-level thread and carry its
+  // recent channel-visible transcript as one explicit quoted-context message.
+  // No agent is dispatched — the human starts it by sending the first message.
   const splitSession = useCallback(async (source: ChatSession): Promise<ChatSession | null> => {
     if (!workspaceId) return null;
     if (!navigator.onLine) return null;
+    // The server locks the source, snapshots its context and attachment refs,
+    // creates the fork, stamps exact merge provenance and inserts the quoted
+    // baseline in ONE transaction. A browser timestamp cannot straddle a
+    // concurrent source message, and a failed quote cannot leave an empty shell.
+    const response = await fetch(
+      apiUrl(`/backend/sessions/${encodeURIComponent(source.id)}/split`),
+      { method: 'POST', headers: apiAuthHeaders() },
+    ).catch(() => null);
+    if (!response?.ok) return null;
+    const payload = await response.json().catch(() => null);
+    const forked = payload?.data?.session as ChatSession | null;
+    if (!forked?.id) return null;
 
-    // 1. Clone the session row. Mirror the fields that drive routing/rendering
-    //    (folder, participants, conversation_mode, model); the fork stays
-    //    top-level (parent_message_id null) so it can spawn its own sub-threads.
-    const { data: forked } = await backendClient
-      .from('chat_sessions')
-      .insert({
-        workspace_id: workspaceId,
-        title: `${source.title || 'Untitled'} (split)`,
-        model: source.model || 'auto',
-        conversation_mode: source.conversation_mode ?? 'auto',
-        folder: source.folder ?? null,
-        canvas_id: source.canvas_id ?? null,
-        participants: source.participants ?? null,
-        // Lineage: link the fork to its source so the sidebar can render it
-        // indented under the parent, and merge can diff messages after the
-        // divergence point (split_at).
-        split_parent_id: source.id,
-        split_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-    if (!forked) return null;
-
-    // 2. Copy every top-level message into the fork, preserving authorship and
-    //    order. created_at is carried over so a single bulk insert (which would
-    //    otherwise stamp identical now() values) keeps the original ordering.
-    const { data: sourceMessages } = await backendClient
-      .from('messages')
-      .select('*')
-      .eq('session_id', source.id)
-      .order('created_at', { ascending: true });
-
-    // Copy only top-level messages (not in-session sub-thread replies). The
-    // backendClient query builder has no `.is()`, so filter client-side exactly
-    // like the main view does (see topLevelMessages below).
-    const topLevel = channelMessages((sourceMessages || []) as Message[]);
-    if (topLevel.length > 0) {
-      // Every copy MUST carry the same keys: both backends derive the INSERT
-      // column list from the first row only, so a key that is absent from
-      // copies[0] is silently dropped for the whole batch — a channel that
-      // opens with a human message (no sender_*) would strip agent identity
-      // from every copied agent reply. Emit `?? null` instead of omitting.
-      const copies = topLevel.map(m => {
-        const row: Record<string, unknown> = {
-          id: crypto.randomUUID(),
-          session_id: forked.id,
-          role: m.role,
-          content: m.content,
-          created_at: m.created_at,
-          sender_kind: m.sender_kind ?? null,
-          sender_id: m.sender_id ?? null,
-          sender_name: m.sender_name ?? null,
-          // Present on EVERY copy for the reason above: absent from copies[0]
-          // and the column is dropped for the whole batch, so a split thread's
-          // messages would render with their attachment chips missing.
-          attachments: m.attachments ?? [],
-        };
-        return row;
-      });
-      await backendClient.from('messages').insert(copies);
-    }
-
-    // 3. Register the fork. The caller opens it as its own (non-active) split
-    //    window; it fetches the copied rows itself via useSessionMessages, so
-    //    it never needs to borrow the parent's active-session state.
-    setSessions(prev => [forked, ...prev]);
+    setSessions(prev => (
+      prev.some(session => session.id === forked.id) ? prev : [forked, ...prev]
+    ));
     return forked;
   }, [workspaceId]);
 
-  // Escalate a thread into an EXISTING channel: copy its top-level transcript
-  // in as a block, prefixed with a provenance marker, so the work is no longer
-  // stranded in a DM with no path to a channel/agent. Unlike splitSession this
-  // does not create a new session or lineage row — the target already exists
-  // and keeps its own history; the copy is additive.
+  // Escalate a thread into an existing channel as one bounded, clearly-labelled
+  // quoted-context message. It is a normal human-authored message in the target,
+  // never a clone of somebody else's attribution.
   const escalateSessionToChannel = useCallback(async (source: ChatSession, targetChannelId: string): Promise<boolean> => {
     if (!workspaceId) return false;
     if (!navigator.onLine) return false;
-
-    const { data: sourceMessages } = await backendClient
-      .from('messages')
-      .select('*')
-      .eq('session_id', source.id)
-      .order('created_at', { ascending: true });
-
-    const topLevel = channelMessages((sourceMessages || []) as Message[]);
-
-    const marker: Record<string, unknown> = {
-      id: crypto.randomUUID(),
-      session_id: targetChannelId,
-      role: 'user',
-      content: `— escalated from "${source.title || 'Untitled'}" —`,
-      created_at: new Date().toISOString(),
-      sender_kind: null,
-      sender_id: null,
-      sender_name: null,
-      attachments: [],
-    };
-    await backendClient.from('messages').insert([marker]);
-
-    if (topLevel.length > 0) {
-      // Same "every copy needs every key" caveat as splitSession above.
-      const copies = topLevel.map(m => ({
-        id: crypto.randomUUID(),
-        session_id: targetChannelId,
-        role: m.role,
-        content: m.content,
-        created_at: m.created_at,
-        sender_kind: m.sender_kind ?? null,
-        sender_id: m.sender_id ?? null,
-        sender_name: m.sender_name ?? null,
-        attachments: m.attachments ?? [],
-      }));
-      await backendClient.from('messages').insert(copies);
-    }
-
-    return true;
+    return importQuotedSessionContext(source, targetChannelId);
   }, [workspaceId]);
 
   const updateSession = useCallback(async (id: string, updates: Partial<ChatSession>) => {
@@ -473,7 +596,12 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     threadParentId?: string | null,
     broadcastToChannel?: boolean,
     attachments?: MessageAttachment[],
-  ): Promise<{ message: Message | null; error: { message: string; code?: string | null } | null }> => {
+    offlineDispatch?: Pick<OfflineMessageDispatch, 'route' | 'fallback' | 'replyMessageId' | 'model' | 'replyAgentId'>,
+  ): Promise<{
+    message: Message | null;
+    error: { message: string; code?: string | null } | null;
+    queued: boolean;
+  }> => {
     // "Send to channel" from the thread composer. Only meaningful for a reply that
     // has a thread to be broadcast OUT of — a top-level message is already in the
     // channel, and flagging it would just make it render its own "from a thread"
@@ -484,6 +612,8 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       session_id: session.id,
       role: 'user',
       content,
+      sender_kind: 'user',
+      sender_id: currentUserId || null,
       sender_name: currentUserName || null,
       thread_parent_id: threadParentId ?? null,
       broadcast_to_channel: broadcast,
@@ -493,7 +623,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       created_at: new Date().toISOString(),
     };
 
-    setMessages(prev => [...prev, userMsg]);
+    applyScopedMessage(session.id, userMsg);
 
     const insertPayload: Record<string, unknown> = {
       id: userMsg.id,
@@ -510,22 +640,35 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     // here would double-encode on Fly into a jsonb string scalar — see
     // tests/jsonb-bind-hygiene.test.cjs.
     if (attachments && attachments.length > 0) insertPayload.attachments = attachments;
-    const { error } = await backendClient.from('messages').insert(insertPayload);
+    const write = await offlineMessageSendResult(insertPayload, {
+      workspaceId: String(workspaceId || ''),
+      sessionId: session.id,
+      messageId: userMsg.id,
+      content,
+      threadParentId: threadParentId ?? null,
+      autoThread: true,
+      ...offlineDispatch,
+    });
+    const { error } = write;
 
     // backendClient swallows HTTP failures into { error } instead of throwing,
     // so an unchecked insert left a phantom message on screen after a 403
     // (viewer role), 429 (rate limit) or 500 — and the caller then dispatched a
     // messageId the server never stored. Roll the optimistic row back like the
     // other optimistic mutations do (see handleTogglePin) and report the error.
-    // Offline sends are exempt: sendMessage's offline branch deliberately keeps
-    // the row and posts its own "will be sent when you reconnect" notice.
-    if (error && navigator.onLine) {
-      setMessages(prev => prev.filter(m => m.id !== userMsg.id));
-      return { message: null, error };
+    if (error) {
+      removeScopedMessage(session.id, userMsg.id);
+      return { message: null, error, queued: false };
     }
 
-    return { message: userMsg, error };
-  }, [currentUserName]);
+    return { message: userMsg, error: null, queued: write.queued };
+  }, [
+    applyScopedMessage,
+    currentUserId,
+    currentUserName,
+    removeScopedMessage,
+    workspaceId,
+  ]);
 
   const autoTitleSession = useCallback(async (
     session: ChatSession,
@@ -554,7 +697,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       : null;
 
     const docContext = linkedDocuments && linkedDocuments.length > 0
-      ? linkedDocuments.map(d => `--- Document: ${d.title} ---\n${d.content?.replace(/<[^>]+>/g, '') || ''}`).join('\n\n')
+      ? linkedDocumentContext(linkedDocuments)
       : null;
 
     const messagesPayload = (contextMessages || []).map(m => ({
@@ -603,10 +746,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       : null;
 
     if (dispatchResponse?.ok && dispatchPayload?.data?.message) {
-      setMessages(prev => {
-        const next = normalizeMessage(dispatchPayload.data.message);
-        return prev.some(message => message.id === next.id) ? prev : [...prev, next];
-      });
+      applyScopedMessage(session.id, dispatchPayload.data.message);
       return 'dispatched';
     }
 
@@ -624,7 +764,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     }
 
     return 'failed';
-  }, [workspaceId]);
+  }, [applyScopedMessage, workspaceId]);
 
   const streamDirectAI = useCallback(async (
     session: ChatSession,
@@ -638,20 +778,29 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     directParticipant?: { name?: string | null; handle?: string | null; agent_id?: string | null } | null,
     threadParentId?: string | null,
   ) => {
-    setStreaming(true);
+    setSessionStreaming(session.id, true);
 
     const assistantMsgId = crypto.randomUUID();
+    const replyAgentId = agent?.id
+      || (!isSharedModelRoute(model) ? directParticipant?.agent_id : null)
+      || null;
+    const replyAgentName = agent?.name
+      || (replyAgentId ? (directParticipant?.name || directParticipant?.handle || 'Agent') : 'Agensis');
     const placeholderMsg: Message = {
       id: assistantMsgId,
       session_id: session.id,
       role: 'assistant',
       content: '',
+      sender_kind: replyAgentId ? 'agent' : 'assistant',
+      sender_id: replyAgentId,
+      sender_name: replyAgentName,
       thread_parent_id: threadParentId ?? null,
       created_at: new Date().toISOString(),
     };
-    setMessages(prev => [...prev, placeholderMsg]);
+    applyScopedMessage(session.id, placeholderMsg);
 
     let flushHandle: number | null = null;
+    let controller: AbortController | null = null;
 
     try {
       const agentContext = agent ? {
@@ -672,8 +821,9 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         model: model || 'auto',
       } : null;
 
-      const controller = new AbortController();
-      streamAbortRef.current = controller;
+      controller = new AbortController();
+      streamAbortRefs.current.get(session.id)?.abort();
+      streamAbortRefs.current.set(session.id, controller);
       const response = await fetch(apiUrl('/backend/ai-chat'), {
         method: 'POST',
         signal: controller.signal,
@@ -683,6 +833,11 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
         },
         body: JSON.stringify({
           workspaceId,
+          sessionId: session.id,
+          messageId: assistantMsgId,
+          seedMessageId: userMsg.id,
+          threadParentId: threadParentId ?? null,
+          replyAgentId,
           messages: [...contextMessages, userMsg].map(m => ({ role: m.role, content: messageText(m.content) })),
           model: directAiModel(model, agent?.model),
           memory: memoryContext,
@@ -695,15 +850,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       if (!response.ok || !response.body) {
         const errData = await response.json().catch(() => ({}));
         const errMsg = errorMessage(errData.error || errData.message || 'Failed to connect to AI service');
-        setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: errMsg } : m));
-        const errInsert: Record<string, unknown> = {
-          id: assistantMsgId,
-          session_id: session.id,
-          role: 'assistant',
-          content: errMsg,
-        };
-        if (threadParentId) errInsert.thread_parent_id = threadParentId;
-        await backendClient.from('messages').insert(errInsert);
+        patchScopedMessage(session.id, assistantMsgId, { content: errMsg });
         return;
       }
 
@@ -716,7 +863,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       const flushStreamContent = () => {
         flushHandle = null;
         const snapshot = fullContent;
-        setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: snapshot } : m));
+        patchScopedMessage(session.id, assistantMsgId, { content: snapshot });
       };
 
       const consumeStreamData = (data: string) => {
@@ -757,29 +904,22 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
 
       const finalContent = finalAssistantStreamContent(fullContent, streamError);
-      setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: finalContent } : m));
-
-      const assistantInsert: Record<string, unknown> = {
-        id: assistantMsgId,
-        session_id: session.id,
-        role: 'assistant',
-        content: finalContent,
-        sender_kind: agent || directParticipant ? 'agent' : '',
-        sender_id: agent?.id || directParticipant?.agent_id || directParticipant?.handle || '',
-        sender_name: agent?.name || directParticipant?.name || directParticipant?.handle || '',
-      };
-      if (threadParentId) assistantInsert.thread_parent_id = threadParentId;
-      await backendClient.from('messages').insert(assistantInsert);
+      patchScopedMessage(session.id, assistantMsgId, { content: finalContent });
     } catch (error) {
       if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
       // Unmount aborted the stream — the component is gone, skip all state writes.
       if (error instanceof DOMException && error.name === 'AbortError') return;
       const errMsg = errorMessage(error || 'Something went wrong. Please try again.');
-      setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: errMsg } : m));
+      patchScopedMessage(session.id, assistantMsgId, { content: errMsg });
     } finally {
-      setStreaming(false);
+      if (!controller) {
+        setSessionStreaming(session.id, false);
+      } else if (streamAbortRefs.current.get(session.id) === controller) {
+        streamAbortRefs.current.delete(session.id);
+        setSessionStreaming(session.id, false);
+      }
     }
-  }, [workspaceId]);
+  }, [applyScopedMessage, patchScopedMessage, setSessionStreaming, workspaceId]);
 
   const sendMessage = useCallback(async (
     content: string,
@@ -798,41 +938,92 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     // clearing it into nothing.
     if (!session) return { delivered: false, failure: WORKSPACE_UNAVAILABLE };
 
-    if (!navigator.onLine) {
-      await insertUserMessage(session, content, threadParentId, broadcastToChannel, attachments);
-      const offlineReply: Message = {
-        id: crypto.randomUUID(),
-        session_id: session.id,
-        role: 'assistant',
-        content: 'You are currently offline. Your message will be sent when you reconnect.',
-        thread_parent_id: threadParentId ?? null,
-        created_at: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, offlineReply]);
-      // Deliberately reported as delivered: the offline branch keeps the row on
-      // screen and posts its own notice, so the user's words are still visible
-      // and the composer is free to clear.
-      return { delivered: true, failure: null };
-    }
-
-    const { message: userMsg, error: sendError } = await insertUserMessage(session, content, threadParentId, broadcastToChannel, attachments);
+    // Decide the offline route before touching the network. Re-evaluating this
+    // from the session after reconnect is wrong: the conversation may have
+    // changed, a selected model may have changed, and a post that was intended
+    // for a named agent could be sent to a different agent (or vice versa).
+    // This mirrors the server's deterministic routing inputs available at send
+    // time and is only used when the INSERT itself has to be queued.
+    const preRouteParticipant = directAgentParticipantRecord(session);
+    const preRouteSharedModel = isSharedModelRoute(model);
+    const preRouteHasMention = Boolean(firstAgentMention(content)) || mentionsChannel(content);
+    const preRouteThreadHasAgent = Boolean(
+      threadParentId
+      && hasAgentTargetInThread(messages.filter(message => message.session_id === session.id)),
+    );
+    const preRouteAutoChannel = session.folder !== 'Direct messages'
+      && allowsUnpromptedReply({ conversationMode: session.conversation_mode });
+    const preRouteToAgent = Boolean(
+      !preRouteSharedModel
+      && workspaceId
+      && (
+        preRouteHasMention
+        || preRouteThreadHasAgent
+        || preRouteParticipant
+        || session.folder === 'Direct messages'
+        || preRouteAutoChannel
+      ),
+    );
+    const offlineRoute: OfflineMessageRoute = preRouteSharedModel || (agent && !preRouteToAgent)
+      ? 'direct_ai'
+      : preRouteToAgent
+        ? 'agent'
+        : 'post_only';
+    const offlineDispatch = {
+      route: offlineRoute,
+      fallback: preRouteToAgent && (agent || preRouteParticipant) ? 'direct_ai' as const : 'none' as const,
+      replyMessageId: offlineRoute === 'direct_ai' || (preRouteToAgent && (agent || preRouteParticipant))
+        ? crypto.randomUUID()
+        : null,
+      model: offlineRoute === 'direct_ai' || (preRouteToAgent && (agent || preRouteParticipant))
+        ? directAiModel(model, agent?.model)
+        : null,
+      replyAgentId: agent?.id || (!preRouteSharedModel ? preRouteParticipant?.agent_id || null : null),
+    };
+    const {
+      message: userMsg,
+      error: sendError,
+      queued,
+    } = await insertUserMessage(
+      session,
+      content,
+      threadParentId,
+      broadcastToChannel,
+      attachments,
+      offlineDispatch,
+    );
     // The message never reached the DB (viewer role, rate limit, server error).
     // The optimistic row is already rolled back; say why and abort before
     // dispatch/stream run against a messageId the server has never seen.
     if (!userMsg) {
-      if (activeSession?.id === session.id) {
-        setMessages(prev => [...prev, {
-          id: crypto.randomUUID(),
-          session_id: session.id,
-          role: 'assistant',
-          content: `Couldn't send your message — ${errorMessage(sendError)}`,
-          thread_parent_id: threadParentId ?? null,
-          created_at: new Date().toISOString(),
-        }]);
-      }
+      applyScopedMessage(session.id, {
+        id: crypto.randomUUID(),
+        session_id: session.id,
+        role: 'assistant',
+        content: `Couldn't send your message — ${errorMessage(sendError)}`,
+        thread_parent_id: threadParentId ?? null,
+        created_at: new Date().toISOString(),
+      });
       // Not delivered: the composer restores the draft so the words the user
       // typed are not destroyed along with the send.
       return { delivered: false, failure: classifyWriteFailure(sendError, { online: navigator.onLine }) };
+    }
+    if (queued) {
+      const queuedNotice = offlineDispatch.route === 'post_only'
+        ? 'Queued on this device. It will post when you reconnect.'
+        : offlineDispatch.route === 'direct_ai'
+          ? 'Queued on this device. It will post and run the selected AI reply when you reconnect.'
+          : 'Queued on this device. It will post and wake the agent when you reconnect.';
+      applyScopedMessage(session.id, {
+        id: crypto.randomUUID(),
+        session_id: session.id,
+        role: 'assistant',
+        sender_name: 'Agensis',
+        content: queuedNotice,
+        thread_parent_id: threadParentId ?? null,
+        created_at: new Date().toISOString(),
+      });
+      return { delivered: true, failure: null };
     }
     await autoTitleSession(session, content, threadParentId);
 
@@ -904,16 +1095,14 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       // `messages` state belongs to the active session, so writing a foreign
       // session_id row into it would surface the error in the wrong pane.
       if (!agent && !directParticipant) {
-        if (activeSession?.id === session.id) {
-          setMessages(prev => [...prev, {
-            id: crypto.randomUUID(),
-            session_id: session.id,
-            role: 'assistant',
-            content: "Couldn't reach the agent — your message was posted but no reply was generated. Please try sending it again.",
-            thread_parent_id: threadParentId ?? null,
-            created_at: new Date().toISOString(),
-          }]);
-        }
+        applyScopedMessage(session.id, {
+          id: crypto.randomUUID(),
+          session_id: session.id,
+          role: 'assistant',
+          content: "Couldn't reach the agent — your message was posted but no reply was generated. Please try sending it again.",
+          thread_parent_id: threadParentId ?? null,
+          created_at: new Date().toISOString(),
+        });
         // The message itself IS saved — only the reply is missing — so the
         // composer keeps its clear. The notice above owns the explanation.
         return { delivered: true, failure: null };
@@ -935,7 +1124,17 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
       threadParentId,
     );
     return { delivered: true, failure: null };
-  }, [activeSession, workspaceId, insertUserMessage, autoTitleSession, buildContextStrings, dispatchToAgent, streamDirectAI]);
+  }, [
+    activeSession,
+    messages,
+    applyScopedMessage,
+    workspaceId,
+    insertUserMessage,
+    autoTitleSession,
+    buildContextStrings,
+    dispatchToAgent,
+    streamDirectAI,
+  ]);
 
   // Merge a split fork back into its parent. "What changed" = the messages
   // created after split_at on BOTH branches — the parent kept talking while the
@@ -948,8 +1147,14 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
   // retained), per the merge decision: result → parent, source → soft-delete.
   const mergeSession = useCallback(async (
     fork: ChatSession,
-  ): Promise<{ status: 'merged' | 'empty' | 'error'; parent?: ChatSession }> => {
+  ): Promise<{ status: 'pending' | 'merged' | 'empty' | 'error'; parent?: ChatSession }> => {
     if (!workspaceId || !navigator.onLine) return { status: 'error' };
+    if (pendingMergeForksRef.current.has(fork.id)) {
+      return {
+        status: 'pending',
+        parent: sessions.find(session => session.id === fork.split_parent_id),
+      };
+    }
     const parentId = fork.split_parent_id;
     const splitAt = fork.split_at;
     if (!parentId || !splitAt) return { status: 'error' };
@@ -959,35 +1164,35 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
 
     // Pull both full transcripts; isolate each branch's post-split divergence.
     const [parentRes, forkRes] = await Promise.all([
-      backendClient.from('messages').select('*').eq('session_id', parentId).order('created_at', { ascending: true }),
-      backendClient.from('messages').select('*').eq('session_id', fork.id).order('created_at', { ascending: true }),
+      backendClient.from('messages').select('*').eq('session_id', parentId)
+        .order('created_at', { ascending: false }).limit(MERGE_BRANCH_MESSAGE_LIMIT + 1),
+      backendClient.from('messages').select('*').eq('session_id', fork.id)
+        .order('created_at', { ascending: false }).limit(MERGE_BRANCH_MESSAGE_LIMIT + 1),
     ]);
-    // Channel view, not strictly top level: an agent's answer is now a BROADCAST
-    // thread reply, so a top-level-only diff would show the two branches' human
-    // prompts and none of the answers the merge is supposed to reconcile.
-    const parentTop = channelMessages((parentRes.data || []).filter((m: Message) => !m.deleted_at));
-    const forkTop = channelMessages((forkRes.data || []).filter((m: Message) => !m.deleted_at));
-    // Divergence by set-difference of the shared (copied) history — clock-skew
-    // safe (M7); see computeThreadDivergence.
-    const { parentDiverged, forkDiverged } = computeThreadDivergence(parentTop, forkTop);
+    if (parentRes.error || forkRes.error) return { status: 'error' };
+    const parentRows = (parentRes.data || []) as Message[];
+    const forkRows = (forkRes.data || []) as Message[];
+    const divergence = splitDivergence(fork, parentRows, forkRows);
+    if (!divergence.ok) return { status: 'error' };
+    const parentDiverged = divergence.parent;
+    const forkDiverged = divergence.fork;
+    const parentTop = channelMessages(parentRows.filter((m: Message) => !m.deleted_at));
 
     // Nothing happened in the fork after the split → merge is pure cleanup.
     if (forkDiverged.length === 0) {
-      await backendClient.from('chat_sessions').update({ deleted_at: new Date().toISOString() }).eq('id', fork.id);
+      if (!await closeSessionControl(fork.id)) return { status: 'error', parent };
+      closedSessionIdsRef.current.add(fork.id);
+      setClosedSessionIds(prev => prev.includes(fork.id) ? prev : [...prev, fork.id]);
       setSessions(prev => prev.filter(s => s.id !== fork.id));
       setActiveSession(parent);
       return { status: 'empty', parent };
     }
 
-    const fmt = (msgs: Message[]) =>
-      msgs.map(m => `${m.sender_name || m.role}: ${messageText(m.content)}`).join('\n\n') || '(no further messages)';
-    const prompt =
-      `Merge two diverged branches of this thread into a single combined solution.\n\n` +
-      `Both branches share this thread's history up to the split. After the split they diverged:\n\n` +
-      `=== This thread continued ===\n${fmt(parentDiverged)}\n\n` +
-      `=== Split branch "${fork.title || 'Untitled'}" continued ===\n${fmt(forkDiverged)}\n\n` +
-      `Reconcile them: keep the best of each, resolve any conflicts, and produce one combined result. ` +
-      `If one branch is clearly better, use it and say why.`;
+    const prompt = buildMergeSynthesisPrompt(
+      fork.title || 'Untitled',
+      parentDiverged,
+      forkDiverged,
+    );
 
     // Land on the parent so the synthesis renders in place, then dispatch.
     setActiveSession(parent);
@@ -1006,7 +1211,7 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
     // been asked — soft-deleting the fork would destroy the branch and leave
     // nothing in its place.
     if (dispatched !== 'dispatched') {
-      setMessages(prev => [...prev, {
+      applyScopedMessage(parent.id, {
         id: crypto.randomUUID(),
         session_id: parent.id,
         role: 'assistant',
@@ -1014,31 +1219,97 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
           ? 'This channel is set so nobody has to answer unless asked, so no agent picked up the merge — the split branch has been kept. @mention the agent you want to synthesize it.'
           : "Couldn't reach the agent to synthesize the merge — the split branch has been kept. Please try merging again.",
         created_at: new Date().toISOString(),
-      }]);
+      });
       return { status: 'error', parent };
     }
+    if (!userMsg) return { status: 'error', parent };
+    const mergeSeedId = userMsg.id;
 
-    // Source split done — soft-delete (retain data for audit/history).
-    await backendClient.from('chat_sessions').update({ deleted_at: new Date().toISOString() }).eq('id', fork.id);
-    setSessions(prev => prev.filter(s => s.id !== fork.id));
+    // Dispatch only proves that work STARTED. Keep the source fork until a
+    // durable, non-placeholder synthesis reply is observed under this exact
+    // merge seed. If the agent fails, the tab closes, or realtime never
+    // reconnects, the fork remains available for retry instead of being lost.
+    pendingMergeForksRef.current.add(fork.id);
+    let finished = false;
+    let settling = false;
+    let timeoutId = 0;
+    let stopPoller = () => {};
+    let channel = null as ReturnType<typeof backendClient.channel> | null;
+    const cleanup = () => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(timeoutId);
+      stopPoller();
+      void channel?.unsubscribe();
+      mergeWatchCleanupRefs.current.delete(cleanup);
+      pendingMergeForksRef.current.delete(fork.id);
+    };
+    const settle = async (message: Message) => {
+      if (finished || settling || !isDurableMergeSynthesis(message, mergeSeedId)) return;
+      settling = true;
+      const closed = await closeSessionControl(fork.id);
+      if (!closed) {
+        settling = false;
+        throw new Error('The merged branch could not be closed yet');
+      }
+      cleanup();
+      void redactCachedSessionMessages(fork.id).catch(() => {});
+      clearSessionState(fork.id);
+    };
+    channel = backendClient
+      .channel(`merge-synthesis:${parent.id}:${mergeSeedId}`)
+      .on<Message>(
+        'db_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'messages',
+          filter: `session_id=eq.${parent.id}`,
+        },
+        payload => {
+          if (payload.new) void settle(payload.new).catch(() => {});
+        },
+      )
+      .subscribe();
+    const poller = createMergeSynthesisPoller({
+      mergeSeedId,
+      load: async () => {
+        const existing = await backendClient
+          .from<Message>('messages')
+          .select('*')
+          .eq('session_id', parent.id)
+          .eq('thread_parent_id', mergeSeedId)
+          .order('created_at', { ascending: false })
+          .limit(10);
+        if (existing.error) throw existing.error;
+        return Array.isArray(existing.data) ? existing.data : [];
+      },
+      onFound: settle,
+    });
+    stopPoller = () => poller.stop();
+    timeoutId = window.setTimeout(cleanup, 30 * 60 * 1000);
+    mergeWatchCleanupRefs.current.add(cleanup);
+    void poller.start();
 
-    return { status: 'merged', parent };
-  }, [workspaceId, sessions, insertUserMessage, dispatchToAgent]);
+    return { status: 'pending', parent };
+  }, [
+    workspaceId,
+    sessions,
+    insertUserMessage,
+    dispatchToAgent,
+    applyScopedMessage,
+    clearSessionState,
+  ]);
 
   // Soft delete: never hard-delete a session — stamp deleted_at so the data
   // is retained (for audit/merge/history) and filtered out of every load path
   // (see fetchSessions). Row disappears from the UI immediately.
-  const deleteSession = useCallback(async (id: string) => {
-    await backendClient
-      .from('chat_sessions')
-      .update({ deleted_at: new Date().toISOString() })
-      .eq('id', id);
-    setSessions(prev => prev.filter(s => s.id !== id));
-    if (activeSession?.id === id) {
-      setActiveSession(null);
-      setMessages([]);
-    }
-  }, [activeSession]);
+  const deleteSession = useCallback(async (id: string): Promise<boolean> => {
+    if (!await closeSessionControl(id)) return false;
+    void redactCachedSessionMessages(id).catch(() => {});
+    clearSessionState(id);
+    return true;
+  }, [clearSessionState]);
 
   // Clear + close a conversation: soft-delete every message in the thread AND
   // soft-delete (close) the session, in one action. Nothing is hard-deleted —
@@ -1047,18 +1318,20 @@ export function useChat(workspaceId: string | null, currentUserName?: string, se
   // resolution, message fetch, agent search/digest/context). Used by the DM row's
   // "Delete conversation" action.
   const closeAndClearSession = useCallback(async (id: string) => {
-    const stamp = new Date().toISOString();
-    await backendClient.from('messages').update({ deleted_at: stamp }).eq('session_id', id);
-    await backendClient.from('chat_sessions').update({ deleted_at: stamp }).eq('id', id);
-    setSessions(prev => prev.filter(s => s.id !== id));
-    if (activeSession?.id === id) {
-      setActiveSession(null);
-      setMessages([]);
-    }
-  }, [activeSession]);
+    const response = await fetch(apiUrl(`/backend/sessions/${encodeURIComponent(id)}/clear`), {
+      method: 'POST',
+      headers: apiAuthHeaders(),
+    }).catch(() => null);
+    if (!response?.ok) return false;
+    announceActivityRedaction({ sessionId: id });
+    void redactCachedSessionMessages(id).catch(() => {});
+    clearSessionState(id);
+    return true;
+  }, [clearSessionState]);
 
   return {
     sessions,
+    closedSessionIds,
     activeSession,
     setActiveSession,
     messages,
@@ -1147,8 +1420,8 @@ function errorMessage(value: unknown): string {
 }
 
 function normalizeMessage(message: Message): Message {
-  return {
+  return redactDeletedMessage({
     ...message,
     content: messageText(message.content),
-  };
+  });
 }

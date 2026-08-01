@@ -23,7 +23,7 @@ const { createAutomations, mountAutomationRoutes } = require('./automations.cjs'
 const { createAgentTemplates, mountAgentTemplateRoutes } = require('./agent-templates-routes.cjs');
 const { createWorkspaceSkills, mountWorkspaceSkillRoutes } = require('./workspace-skills-routes.cjs');
 const {
- normalizeAgentTemplate, agentToTemplateDraft, readTemplateExport, templateFingerprint,
+ normalizeAgentTemplate, normalizeAgentIntent, agentToTemplateDraft, readTemplateExport, templateFingerprint,
 } = require('../shared/agentTemplates.cjs');
 // Reactions are written through the generic /backend/db/update route as a whole
 // jsonb map, so their flow events come from diffing that map — see the module
@@ -35,6 +35,7 @@ const { ensureSessionReadStateShape, SHARE_READ_RECEIPTS_DDL } = require('../sha
 const { renderSkillMd, skillManifest, configBlock, claudeMcpAddCommand, mcpEndpoint } = require('./skills.cjs');
 const {
  agentNextSteps,
+ controllerNextSteps,
  joinDescriptor,
  previewDescriptor,
  invalidDescriptor,
@@ -42,6 +43,10 @@ const {
  renderJoinHtml,
  joinUrlFor,
 } = require('./join-page.cjs');
+const {
+ createControllerCredential,
+ verifyControllerToken: verifyScopedControllerToken,
+} = require('./controller-credentials.cjs');
 const {
  PROVIDER_CALL_REDIRECT_NOTE,
  SANDBOX_VAULT_PREFIX,
@@ -72,7 +77,7 @@ const {
  readLibraryEntry,
  unavailable: skillContentUnavailable,
 } = require('./skill-content.cjs');
-const { mountHuddleRoutes, ensureHuddlesSchema } = require('./huddles.cjs');
+const { mountHuddleRoutes, ensureHuddlesSchema, deleteLivekitRoom } = require('./huddles.cjs');
 const {
  createAgentPermissions,
  ensureAgentPermissionsSchema,
@@ -111,20 +116,25 @@ const {
  lockPrivateSessionRoster,
  prepareSessionCreateRows,
  projectSessionCreateRows,
+ sessionLineageKind,
 } = require('../shared/session-lineage.cjs');
 const {
- createThreadHarvest, isDiscardTransition, mountThreadHarvestRoutes,
+ createThreadHarvest, mountThreadHarvestRoutes,
  SUGGEST_SWEEP_INTERVAL_MS,
 } = require('./thread-harvest.cjs');
 
 const TASK_MENTION_CLAIM_MS = 5_000;
 const { mountFeedbackRoutes } = require('./feedback-routes.cjs');
 const { mountAiChatRoutes } = require('./ai-chat-routes.cjs');
+const {
+ normalizeAndBoundAiChatMessages,
+} = require('../shared/ai-chat-context.cjs');
 const { installBrowserProxy } = require('./browser-proxy.cjs');
 const { mountVaultRoutes } = require('./vault-routes.cjs');
 const { mountAuditRoutes } = require('./audit-routes.cjs');
 const { mountTenantsRoutes } = require('./tenants-routes.cjs');
 const { mountSchedulesRoutes } = require('./schedules-routes.cjs');
+const { lockScheduleExecutionScope } = require('./schedule-scope.cjs');
 const { mountCursorbuddyRoutes } = require('./cursorbuddy-routes.cjs');
 const { mountInferenceRoutes } = require('./inference-routes.cjs');
 const { mountFarmRoutes } = require('./farm-routes.cjs');
@@ -133,6 +143,9 @@ const { mountProjectGitRoutes } = require('./project-git-routes.cjs');
 const { mountAuthRoutes } = require('./auth-routes.cjs');
 const { mountMembersInvitesRoutes } = require('./members-invites-routes.cjs');
 const { mountJoinLinksRoutes } = require('./join-links-routes.cjs');
+const { mountControllerRoutes } = require('./controller-routes.cjs');
+const { createWorkspaceResourceService } = require('./workspace-resources.cjs');
+const { mountWorkspaceResourceRoutes } = require('./workspace-resource-routes.cjs');
 const { mountFlowRoutes } = require('./flow-routes.cjs');
 const { mountSystemRoutes } = require('./system-routes.cjs');
 const { mountWorkspacesRoutes } = require('./workspaces-routes.cjs');
@@ -149,6 +162,8 @@ const { mountTtsRoutes } = require('./tts-routes.cjs');
 const { mountMcpDoorsRoutes } = require('./mcp-doors-routes.cjs');
 const { mountConnectionsRoutes } = require('./connections-routes.cjs');
 const { mountSessionsRoutes } = require('./sessions-routes.cjs');
+const { SESSION_RETURNING, settleSessionClosure } = require('../shared/session-close.cjs');
+const { applySessionClosureRuntimeEffects } = require('./session-close-runtime.cjs');
 const { mountAgentWebhooksRoutes } = require('./agent-webhooks-routes.cjs');
 const { createChannelBridges } = require('./channel-bridges.cjs');
 const {
@@ -200,8 +215,8 @@ const {
  FORCE_ATTACHMENT_CONTENT_TYPES,
 } = require('./lib/storage-paths.cjs');
 const {
- // ALLOWED_TABLES / JSON_COLUMNS_BY_TABLE / arrayColumnElemType /
- // toPgArrayLiteral moved with the SQL builders — see server/lib/db-sql.cjs,
+ // ALLOWED_TABLES / JSON_COLUMNS_BY_TABLE / arrayColumnElemType moved with the
+ // SQL builders — see server/lib/db-sql.cjs,
  // which imports them from this same shared core.
  VERSIONED_TABLES,
  WORKSPACE_SCOPED_TABLES: SHARED_WORKSPACE_SCOPED_TABLES,
@@ -212,7 +227,19 @@ const {
  applyAgentPurposeInsertDefaults,
  stampTaskWriteIdentity,
  taskDispatchRequesterSql,
+ stripImmutableDbUpdateValues,
+ appendMessageAuthorshipFilters,
+ appendMessageMutationAccessClause,
+ loadBrowserMessageAuthor,
+ stampBrowserMessageInsert,
  safeSelectColumns,
+ assertGenericSelectAllowed,
+ toPgArrayLiteral,
+ aiStreamErrorText,
+ redactDeletedMessageRows,
+ scrubEditedMessageActivityByMessageId,
+ scrubMessageActivityByMessageId,
+ scrubMessageActivityBySession,
  storagePathBelongsToWorkspace,
  issueAuthToken,
  verifyAuthToken,
@@ -722,6 +749,97 @@ async function enforceWorkspaceRole(userId, workspaceId, mode) {
  return sharedAssertWorkspaceRole({ userId, workspaceId, capability: mode, db: sharedDbAdapter });
 }
 
+/**
+ * 'private' when any of these about-to-be-inserted chat_sessions rows descends
+ * from a private one; null when none does (leave the column's default alone).
+ *
+ * Two edges reach a parent at insert time: `parent_message_id` (a sub-thread
+ * session hangs off a MESSAGE, so the parent session is one join away) and
+ * `split_parent_id` (a fork points straight at another session). The huddle
+ * edge is not here because a transcript session is created server-side and
+ * copies its host's visibility in the same statement.
+ *
+ * Batch-wide rather than per-row on purpose: these inserts are single-row in
+ * practice, and one private parent in a batch making the whole batch private is
+ * the fail-closed direction.
+ */
+async function _resolveInheritedSessionVisibility(
+ rows,
+ userId,
+ db = sharedDbAdapter,
+ { lockParent = false } = {},
+) {
+ let inheritedPrivate = false;
+ for (const row of rows) {
+  if (!row || typeof row !== 'object') continue;
+  const parentSessionId = String(row.split_parent_id || '').trim() || null;
+  const parentMessageId = String(row.parent_message_id || '').trim() || null;
+  if (!parentSessionId && !parentMessageId) continue;
+  try {
+   const found = await db(
+    `select parent_session.id, parent_session.visibility, parent_session.folder
+       from chat_sessions parent_session
+      where parent_session.id = coalesce(
+              $1::uuid,
+              (select parent_message.session_id
+                 from messages parent_message
+                where parent_message.id = $2::uuid
+                  and parent_message.deleted_at is null)
+            )
+        and parent_session.workspace_id = $3::uuid
+        and ${sessionReadableSql('parent_session', '$4', { lockMembership: lockParent })}
+      limit 1
+      ${lockParent ? 'for share of parent_session' : ''}`,
+    [parentSessionId, parentMessageId, String(row.workspace_id || ''), String(userId || '')],
+   );
+   if (found.length !== 1) {
+    throw forbidden('The parent conversation is unavailable');
+   }
+   if (isPrivateSessionRow(found[0])) inheritedPrivate = true;
+  } catch (error) {
+   if (error?.status) throw error;
+   // This lookup proves authority as well as classification. Marking a child
+   // private is not enough when its parent itself was never proven readable and
+   // same-workspace: the member-copy step would still cross that boundary.
+   console.warn('[backend] inherited session visibility lookup failed:', error?.message || error);
+   const unavailable = new Error('Unable to verify the parent conversation');
+   unavailable.status = 503;
+   throw unavailable;
+  }
+ }
+ return inheritedPrivate ? 'private' : null;
+}
+
+/**
+ * Copy a newly created derived session's member list down from its parent.
+ *
+ * Returns false instead of throwing so callers can choose their integrity
+ * boundary. The generic browser insert treats false as fatal inside the same
+ * transaction: a derived private session must never commit with only a partial
+ * inherited audience.
+ */
+async function _copyInheritedSessionMembers(row, db = sharedDbAdapter) {
+ const parentSessionId = row?.split_parent_id ? String(row.split_parent_id) : '';
+ const parentMessageId = row?.parent_message_id ? String(row.parent_message_id) : '';
+ if (!parentSessionId && !parentMessageId) return true;
+ try {
+  await db(
+   `insert into chat_session_members (session_id, user_id, source, granted_by, expires_at)
+      select $1::uuid, m.user_id, m.source, m.granted_by, m.expires_at
+        from chat_session_members m
+       where m.session_id = coalesce(
+               $2::uuid,
+               (select msg.session_id from messages msg where msg.id = $3::uuid)
+             )
+    on conflict (session_id, user_id) do nothing`,
+   [String(row.id), parentSessionId || null, parentMessageId || null],
+  );
+  return true;
+ } catch (error) {
+  console.warn('[backend] inherited session member copy failed:', error?.message || error);
+  return false;
+ }
+}
 // The read gate BELOW the workspace: a private session (a DM, or a sub-thread /
 // huddle transcript derived from one) is readable only by its members. Always
 // called AFTER enforceWorkspaceRole, never instead of it — it narrows, it does
@@ -757,14 +875,57 @@ async function sessionMemberUserIds(sessionId) {
  */
 async function sessionRealtimeAudience(sessionId) {
  if (!sessionId) return null;
+ const audiences = await sessionRealtimeAudiences([sessionId]);
+ return audiences.get(String(sessionId)) || null;
+}
+
+async function sessionRealtimeAudiences(sessionIds) {
+ const ids = [...new Set((Array.isArray(sessionIds) ? sessionIds : [])
+  .map(String)
+  .filter(Boolean))];
+ if (ids.length === 0) return new Map();
  const rows = await sharedDbAdapter(
-  'select id, visibility, folder from chat_sessions where id = $1 limit 1',
-  [String(sessionId)],
+  `select id, visibility, folder
+     from chat_sessions
+    where id = any($1::uuid[]) and deleted_at is null`,
+  [toPgArrayLiteral(ids)],
  );
- const session = rows[0] || null;
- if (!session) return null;
- if (!isPrivateSessionRow(session)) return { memberUserIds: null };
- return { memberUserIds: await sessionMemberUserIds(session.id) };
+ const result = new Map();
+ const privateIds = rows.filter(isPrivateSessionRow).map(row => String(row.id));
+ const membersBySession = new Map(privateIds.map(id => [id, new Set()]));
+ if (privateIds.length > 0) {
+  const memberships = await sharedDbAdapter(
+   `select session_id, user_id
+      from chat_session_members
+     where session_id = any($1::uuid[])
+       and (expires_at is null or expires_at > now())`,
+   [toPgArrayLiteral(privateIds)],
+  );
+  for (const membership of memberships) {
+   membersBySession.get(String(membership.session_id))?.add(String(membership.user_id));
+  }
+ }
+ for (const session of rows) {
+  const id = String(session.id);
+  result.set(id, isPrivateSessionRow(session)
+   ? { memberUserIds: membersBySession.get(id) || new Set() }
+   : { memberUserIds: null });
+ }
+ return result;
+}
+
+async function readReceiptOptedInUserIds(userIds) {
+ const ids = [...new Set(
+  (Array.isArray(userIds) ? userIds : []).map(String).filter(Boolean),
+ )];
+ if (ids.length === 0) return new Set();
+ const rows = await sharedDbAdapter(
+  `select id from app_users
+    where id = any($1::uuid[])
+      and coalesce(share_read_receipts, true)`,
+  [toPgArrayLiteral(ids)],
+ );
+ return new Set(rows.map((row) => String(row.id)));
 }
 
 // Adapter so shared enforceDbOperationAccess can use postgres.js (getDb().unsafe).
@@ -883,6 +1044,8 @@ async function ensureRuntimeSchema() {
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS parent_message_id uuid REFERENCES messages(id) ON DELETE CASCADE;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS split_parent_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS split_at timestamptz;
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS split_baseline_message_id uuid;
+    ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS split_source_boundary_message_id uuid;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
     ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS canvas_id text;
     -- Read scope one level BELOW the workspace role check. See the column
@@ -1428,7 +1591,7 @@ async function ensureRuntimeSchema() {
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
       agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
-      session_id uuid REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
       created_by uuid,
       name text NOT NULL DEFAULT '',
       prompt text NOT NULL DEFAULT '',
@@ -1443,6 +1606,8 @@ async function ensureRuntimeSchema() {
       created_at timestamptz DEFAULT now(),
       updated_at timestamptz DEFAULT now()
     );
+    DELETE FROM agent_schedules WHERE session_id IS NULL;
+    ALTER TABLE agent_schedules ALTER COLUMN session_id SET NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_agent_schedules_workspace_id ON agent_schedules(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_schedules_due ON agent_schedules(next_run_at) WHERE enabled;
 
@@ -1450,11 +1615,21 @@ async function ensureRuntimeSchema() {
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       schedule_id uuid NOT NULL REFERENCES agent_schedules(id) ON DELETE CASCADE,
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
       status text NOT NULL DEFAULT 'ok',
       detail text DEFAULT '',
       created_at timestamptz DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_agent_schedule_runs_schedule ON agent_schedule_runs(schedule_id, created_at desc);
+    ALTER TABLE agent_schedule_runs ADD COLUMN IF NOT EXISTS session_id uuid REFERENCES chat_sessions(id) ON DELETE CASCADE;
+    UPDATE agent_schedule_runs run
+       SET session_id = schedule.session_id
+      FROM agent_schedules schedule
+     WHERE schedule.id = run.schedule_id
+       AND run.session_id IS NULL;
+    DELETE FROM agent_schedule_runs WHERE session_id IS NULL;
+    ALTER TABLE agent_schedule_runs ALTER COLUMN session_id SET NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_agent_schedule_runs_session ON agent_schedule_runs(session_id, created_at desc);
     DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_schedules_interval_bounds') THEN
         ALTER TABLE agent_schedules ADD CONSTRAINT agent_schedules_interval_bounds
@@ -1543,6 +1718,61 @@ async function ensureRuntimeSchema() {
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS broadcast_to_channel boolean NOT NULL DEFAULT false;
     CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
     CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_at);
+    -- A closed conversation is a storage boundary, not a convention every
+    -- producer must remember. Messages are written by browser routes, built-in
+    -- turns, daemon turns, MCP, huddles, bridges, permissions and automations;
+    -- one omitted deleted_at-is-null guard in any of them could otherwise resurrect
+    -- a transcript after it was deleted.
+    --
+    -- INSERT takes a SHARE lock on the live session so it serializes with the
+    -- clear route's FOR UPDATE lock. UPDATE already owns the message tuple
+    -- before a BEFORE ROW trigger runs; refusing an existing tombstone makes
+    -- that tuple lock the serialization point without introducing the inverse
+    -- message-row -> session-row lock order on every streaming delta.
+    CREATE OR REPLACE FUNCTION messages_require_live_session()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+      IF TG_OP = 'UPDATE' THEN
+        IF NEW.session_id IS DISTINCT FROM OLD.session_id THEN
+          RAISE EXCEPTION 'A message cannot move between conversations'
+            USING ERRCODE = 'check_violation',
+                  CONSTRAINT = 'messages_live_session_write_guard';
+        END IF;
+        IF OLD.deleted_at IS NOT NULL THEN
+          RAISE EXCEPTION 'A deleted message is immutable'
+            USING ERRCODE = 'check_violation',
+                  CONSTRAINT = 'messages_live_session_write_guard';
+        END IF;
+        PERFORM 1
+          FROM chat_sessions
+         WHERE id = NEW.session_id
+           AND deleted_at IS NULL;
+      ELSE
+        PERFORM 1
+          FROM chat_sessions
+         WHERE id = NEW.session_id
+           AND deleted_at IS NULL
+         FOR SHARE;
+        IF FOUND THEN
+          NEW.created_at = clock_timestamp();
+        END IF;
+      END IF;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'Messages require a live conversation'
+          USING ERRCODE = 'check_violation',
+                CONSTRAINT = 'messages_live_session_write_guard';
+      END IF;
+      RETURN NEW;
+    END;
+    $$;
+
+    DROP TRIGGER IF EXISTS trg_messages_require_live_session ON messages;
+    CREATE TRIGGER trg_messages_require_live_session
+      BEFORE INSERT OR UPDATE ON messages
+      FOR EACH ROW EXECUTE FUNCTION messages_require_live_session();
     -- Trigram indexes so MCP search_messages / search_docs (leading-wildcard
     -- ILIKE '%q%') use a GIN index instead of a full sequential scan.
     CREATE EXTENSION IF NOT EXISTS pg_trgm;
@@ -2084,18 +2314,214 @@ async function ensureRuntimeSchema() {
       -- The role a HUMAN gets on redeeming. An agent's abilities are governed by
       -- agent RBAC (kinds: ['agent']), not by this.
       role text NOT NULL DEFAULT 'editor' CHECK (role IN ('admin', 'editor', 'commenter', 'viewer')),
-      audience text NOT NULL DEFAULT 'both' CHECK (audience IN ('both', 'human', 'agent')),
+      grant_kind text NOT NULL DEFAULT 'individual' CHECK (grant_kind IN ('individual', 'workspace_control')),
+      audience text NOT NULL DEFAULT 'both' CHECK (audience IN ('both', 'human', 'agent', 'controller')),
       status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'redeemed', 'revoked')),
-      redeemed_as text NOT NULL DEFAULT '' CHECK (redeemed_as IN ('', 'human', 'agent')),
+      redeemed_as text NOT NULL DEFAULT '' CHECK (redeemed_as IN ('', 'human', 'agent', 'controller')),
       redeemed_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
       redeemed_agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      redeemed_controller_id uuid,
+      controller_name text NOT NULL DEFAULT '',
+      controller_scopes jsonb NOT NULL DEFAULT '[]'::jsonb,
+      controller_expires_at timestamptz,
       redeemed_at timestamptz,
       expires_at timestamptz NOT NULL,
       created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
       created_at timestamptz DEFAULT now(),
-      updated_at timestamptz DEFAULT now()
+      updated_at timestamptz DEFAULT now(),
+      CONSTRAINT workspace_join_links_controller_shape_check CHECK (
+        (
+          grant_kind = 'individual'
+          AND audience IN ('both', 'human', 'agent')
+          AND controller_name = ''
+          AND controller_scopes = '[]'::jsonb
+          AND controller_expires_at IS NULL
+        )
+        OR
+        (
+          grant_kind = 'workspace_control'
+          AND audience = 'controller'
+          AND btrim(controller_name) <> ''
+          AND jsonb_typeof(controller_scopes) = 'array'
+          AND jsonb_array_length(controller_scopes) > 0
+          AND controller_scopes <@ '["agents:register", "agents:manage_own", "resources:create", "resources:manage_own"]'::jsonb
+          AND controller_expires_at IS NOT NULL
+        )
+      )
     );
+    ALTER TABLE workspace_join_links ADD COLUMN IF NOT EXISTS grant_kind text NOT NULL DEFAULT 'individual';
+    ALTER TABLE workspace_join_links ADD COLUMN IF NOT EXISTS controller_name text NOT NULL DEFAULT '';
+    ALTER TABLE workspace_join_links ADD COLUMN IF NOT EXISTS controller_scopes jsonb NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE workspace_join_links ADD COLUMN IF NOT EXISTS controller_expires_at timestamptz;
+    ALTER TABLE workspace_join_links ADD COLUMN IF NOT EXISTS redeemed_controller_id uuid;
+    ALTER TABLE workspace_join_links DROP CONSTRAINT IF EXISTS workspace_join_links_grant_kind_check;
+    ALTER TABLE workspace_join_links
+      ADD CONSTRAINT workspace_join_links_grant_kind_check
+      CHECK (grant_kind IN ('individual', 'workspace_control'));
+    ALTER TABLE workspace_join_links DROP CONSTRAINT IF EXISTS workspace_join_links_audience_check;
+    ALTER TABLE workspace_join_links
+      ADD CONSTRAINT workspace_join_links_audience_check
+      CHECK (audience IN ('both', 'human', 'agent', 'controller'));
+    ALTER TABLE workspace_join_links DROP CONSTRAINT IF EXISTS workspace_join_links_redeemed_as_check;
+    ALTER TABLE workspace_join_links
+      ADD CONSTRAINT workspace_join_links_redeemed_as_check
+      CHECK (redeemed_as IN ('', 'human', 'agent', 'controller'));
+    ALTER TABLE workspace_join_links DROP CONSTRAINT IF EXISTS workspace_join_links_controller_shape_check;
+    ALTER TABLE workspace_join_links
+      ADD CONSTRAINT workspace_join_links_controller_shape_check CHECK (
+        (
+          grant_kind = 'individual'
+          AND audience IN ('both', 'human', 'agent')
+          AND controller_name = ''
+          AND controller_scopes = '[]'::jsonb
+          AND controller_expires_at IS NULL
+        )
+        OR
+        (
+          grant_kind = 'workspace_control'
+          AND audience = 'controller'
+          AND btrim(controller_name) <> ''
+          AND jsonb_typeof(controller_scopes) = 'array'
+          AND jsonb_array_length(controller_scopes) > 0
+          AND controller_scopes <@ '["agents:register", "agents:manage_own", "resources:create", "resources:manage_own"]'::jsonb
+          AND controller_expires_at IS NOT NULL
+        )
+      );
     CREATE INDEX IF NOT EXISTS idx_workspace_join_links_workspace_id ON workspace_join_links(workspace_id, created_at DESC);
+
+    -- Named workspace-control credentials. Unlike the legacy agw_ bearer, an
+    -- agc_ credential is individually attributable, expiring, revocable, and
+    -- limited to this closed scope set.
+    CREATE TABLE IF NOT EXISTS workspace_controllers (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      name text NOT NULL,
+      token_hash text NOT NULL UNIQUE,
+      scopes jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (
+        jsonb_typeof(scopes) = 'array'
+        AND jsonb_array_length(scopes) > 0
+        AND scopes <@ '["agents:register", "agents:manage_own", "resources:create", "resources:manage_own"]'::jsonb
+      ),
+      status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+      parent_controller_id uuid REFERENCES workspace_controllers(id) ON DELETE SET NULL,
+      expires_at timestamptz NOT NULL,
+      last_used_at timestamptz,
+      created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      revoked_at timestamptz
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_controllers_workspace
+      ON workspace_controllers(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workspace_controllers_parent
+      ON workspace_controllers(parent_controller_id);
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'workspace_join_links_redeemed_controller_id_fkey'
+      ) THEN
+        ALTER TABLE workspace_join_links
+          ADD CONSTRAINT workspace_join_links_redeemed_controller_id_fkey
+          FOREIGN KEY (redeemed_controller_id) REFERENCES workspace_controllers(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS controller_id uuid;
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'workspace_agents_controller_id_fkey'
+      ) THEN
+        ALTER TABLE workspace_agents
+          ADD CONSTRAINT workspace_agents_controller_id_fkey
+          FOREIGN KEY (controller_id) REFERENCES workspace_controllers(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+    CREATE INDEX IF NOT EXISTS idx_workspace_agents_controller_id ON workspace_agents(controller_id);
+
+    -- Agent-stewarded resources and retry-safe, fenced operations. Both tables
+    -- stay outside generic DB/realtime allowlists; callers receive explicit
+    -- projections only from dedicated routes and MCP tools.
+    CREATE TABLE IF NOT EXISTS workspace_resources (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      steward_agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE RESTRICT,
+      controller_id uuid REFERENCES workspace_controllers(id) ON DELETE SET NULL,
+      name text NOT NULL,
+      description text NOT NULL DEFAULT '',
+      facet text NOT NULL CHECK (facet IN ('context', 'knowledge', 'tooling', 'code')),
+      descriptor jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(descriptor) = 'object'),
+      version integer NOT NULL DEFAULT 1 CHECK (version > 0),
+      visibility text NOT NULL DEFAULT 'workspace' CHECK (visibility IN ('workspace', 'restricted')),
+      status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+      created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_resources_workspace
+      ON workspace_resources(workspace_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workspace_resources_steward
+      ON workspace_resources(steward_agent_id, status);
+    CREATE INDEX IF NOT EXISTS idx_workspace_resources_controller
+      ON workspace_resources(controller_id);
+
+    CREATE TABLE IF NOT EXISTS resource_operations (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      resource_id uuid NOT NULL REFERENCES workspace_resources(id) ON DELETE CASCADE,
+      steward_agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE RESTRICT,
+      requested_by_user_id uuid REFERENCES app_users(id) ON DELETE RESTRICT,
+      requested_by_agent_id uuid REFERENCES workspace_agents(id) ON DELETE RESTRICT,
+      requested_by_controller_id uuid REFERENCES workspace_controllers(id) ON DELETE RESTRICT,
+      requested_by_workspace_id uuid REFERENCES workspaces(id) ON DELETE RESTRICT,
+      requester_key text NOT NULL,
+      claimed_by_agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      operation text NOT NULL CHECK (operation IN ('read', 'propose', 'apply', 'publish')),
+      input_artifact jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(input_artifact) = 'object'),
+      output_artifact jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(output_artifact) = 'object'),
+      status text NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'claimed', 'completed', 'rejected', 'failed', 'cancelled')),
+      resource_version integer NOT NULL CHECK (resource_version > 0),
+      idempotency_key text NOT NULL,
+      attempt integer NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+      lease_version bigint NOT NULL DEFAULT 0 CHECK (lease_version >= 0),
+      lease_expires_at timestamptz,
+      error text NOT NULL DEFAULT '',
+      audit_reference uuid REFERENCES audit_log(id) ON DELETE SET NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      claimed_at timestamptz,
+      completed_at timestamptz,
+      CONSTRAINT resource_operations_one_requester_check CHECK (
+        num_nonnulls(requested_by_user_id, requested_by_agent_id, requested_by_controller_id, requested_by_workspace_id) = 1
+      ),
+      UNIQUE (workspace_id, requester_key, idempotency_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_resource_operations_resource
+      ON resource_operations(resource_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_resource_operations_claim
+      ON resource_operations(steward_agent_id, status, created_at);
+
+ALTER TABLE resource_operations ADD COLUMN IF NOT EXISTS requested_by_workspace_id uuid;
+ALTER TABLE resource_operations DROP CONSTRAINT IF EXISTS resource_operations_one_requester_check;
+ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_one_requester_check CHECK (
+  num_nonnulls(requested_by_user_id, requested_by_agent_id, requested_by_controller_id, requested_by_workspace_id) = 1
+);
+ALTER TABLE resource_operations DROP CONSTRAINT IF EXISTS resource_operations_requested_by_user_id_fkey;
+ALTER TABLE resource_operations DROP CONSTRAINT IF EXISTS resource_operations_requested_by_agent_id_fkey;
+ALTER TABLE resource_operations DROP CONSTRAINT IF EXISTS resource_operations_requested_by_controller_id_fkey;
+ALTER TABLE resource_operations DROP CONSTRAINT IF EXISTS resource_operations_requested_by_workspace_id_fkey;
+ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_user_id_fkey
+  FOREIGN KEY (requested_by_user_id) REFERENCES app_users(id) ON DELETE RESTRICT;
+ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_agent_id_fkey
+  FOREIGN KEY (requested_by_agent_id) REFERENCES workspace_agents(id) ON DELETE RESTRICT;
+ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_controller_id_fkey
+  FOREIGN KEY (requested_by_controller_id) REFERENCES workspace_controllers(id) ON DELETE RESTRICT;
+ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_workspace_id_fkey
+  FOREIGN KEY (requested_by_workspace_id) REFERENCES workspaces(id) ON DELETE RESTRICT;
 
     -- MCP "connect a client" model. ONE workspace token (or your agensis login, or an
     -- invite link) authenticates an MCP client; it then calls register_agent to become an
@@ -2108,6 +2534,7 @@ async function ensureRuntimeSchema() {
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
       agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+      controller_id uuid REFERENCES workspace_controllers(id) ON DELETE SET NULL,
       requested_handle text DEFAULT '',
       requested_name text DEFAULT '',
       client_label text DEFAULT '',
@@ -2121,7 +2548,63 @@ async function ensureRuntimeSchema() {
     -- survive the round trip or a brand new agent loses the avatar and voice it
     -- asked for at the exact moment its row is created.
     ALTER TABLE agent_registrations ADD COLUMN IF NOT EXISTS requested_identity jsonb NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE agent_registrations ADD COLUMN IF NOT EXISTS controller_id uuid;
+    ALTER TABLE agent_registrations ADD COLUMN IF NOT EXISTS requested_purpose text NOT NULL DEFAULT 'collaborator';
+    ALTER TABLE agent_registrations ADD COLUMN IF NOT EXISTS requested_resource_facets jsonb NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE agent_registrations DROP CONSTRAINT IF EXISTS agent_registrations_requested_purpose_check;
+    ALTER TABLE agent_registrations ADD CONSTRAINT agent_registrations_requested_purpose_check
+      CHECK (requested_purpose IN ('collaborator', 'resource'));
+    ALTER TABLE agent_registrations DROP CONSTRAINT IF EXISTS agent_registrations_requested_resource_facets_check;
+    ALTER TABLE agent_registrations ADD CONSTRAINT agent_registrations_requested_resource_facets_check CHECK (
+      jsonb_typeof(requested_resource_facets) = 'array'
+      AND requested_resource_facets <@ '["context", "knowledge", "tooling", "code"]'::jsonb
+    );
+    ALTER TABLE agent_registrations DROP CONSTRAINT IF EXISTS agent_registrations_resource_facets_match_purpose;
+    ALTER TABLE agent_registrations ADD CONSTRAINT agent_registrations_resource_facets_match_purpose CHECK (
+      (requested_purpose = 'collaborator' AND requested_resource_facets = '[]'::jsonb)
+      OR (requested_purpose = 'resource' AND jsonb_array_length(requested_resource_facets) > 0)
+    );
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'agent_registrations_controller_id_fkey'
+      ) THEN
+        ALTER TABLE agent_registrations
+          ADD CONSTRAINT agent_registrations_controller_id_fkey
+          FOREIGN KEY (controller_id) REFERENCES workspace_controllers(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
     CREATE INDEX IF NOT EXISTS idx_agent_registrations_workspace ON agent_registrations(workspace_id, status);
+    CREATE INDEX IF NOT EXISTS idx_agent_registrations_controller ON agent_registrations(controller_id, status);
+    -- Controller ids are attribution, not authority, but they must never point
+    -- across tenants. The single-column FKs above cannot express that.
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_controllers_id_workspace_key') THEN
+        ALTER TABLE workspace_controllers ADD CONSTRAINT workspace_controllers_id_workspace_key UNIQUE (id, workspace_id);
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_controllers_parent_workspace_fkey') THEN
+        ALTER TABLE workspace_controllers ADD CONSTRAINT workspace_controllers_parent_workspace_fkey
+          FOREIGN KEY (parent_controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_agents_controller_workspace_fkey') THEN
+        ALTER TABLE workspace_agents ADD CONSTRAINT workspace_agents_controller_workspace_fkey
+          FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_resources_controller_workspace_fkey') THEN
+        ALTER TABLE workspace_resources ADD CONSTRAINT workspace_resources_controller_workspace_fkey
+          FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_registrations_controller_workspace_fkey') THEN
+        ALTER TABLE agent_registrations ADD CONSTRAINT agent_registrations_controller_workspace_fkey
+          FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_join_links_redeemed_controller_workspace_fkey') THEN
+        ALTER TABLE workspace_join_links ADD CONSTRAINT workspace_join_links_redeemed_controller_workspace_fkey
+          FOREIGN KEY (redeemed_controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+      END IF;
+    END $$;
   `);
  // C3 — make message-activity logging idempotent. A retried daemon finalization
  // re-logs the same message id; the partial unique index lets the logging insert
@@ -2744,6 +3227,10 @@ const joinRedeemRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 // control — it bounds how fast an admin (or a stolen admin session) can page the
 // whole log out, which is the one cheap way to bulk-exfiltrate it.
 const auditReadRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// Resource requests can enqueue durable work for a steward agent. Bound the
+// authenticated human surface independently from generic DB traffic so a stuck
+// UI cannot produce an unbounded operation queue.
+const resourceOperationRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 // Plan 004 — auth hardening: signin is keyed per-email (matches the client's
 // documented "5 attempts" lockout intent); signup is keyed per-IP and looser,
 // to slow down bulk account creation without punishing normal signup retries.
@@ -2994,7 +3481,9 @@ function joinLinkTtlMs() {
 // stays here.
 async function loadJoinLinkForDisplay(token) {
  const rows = await getDb().unsafe(
-  `select l.id, l.workspace_id, l.role, l.label, l.audience, l.expires_at,
+  `select l.id, l.workspace_id, l.role, l.label, l.grant_kind, l.audience,
+            l.controller_name, l.controller_scopes, l.controller_expires_at,
+            l.expires_at,
             w.name as workspace_name
        from workspace_join_links l
        join workspaces w on w.id = l.workspace_id
@@ -3018,9 +3507,9 @@ async function loadJoinLinkForDisplay(token) {
 //
 // Capped at 50 attempts and then allowed through: an unresolvable handle must
 // not fail a redemption that has already consumed the link.
-async function uniqueAgentHandle(workspaceId, desired) {
+async function uniqueAgentHandle(workspaceId, desired, database = getDb()) {
  const base = slugHandle(desired) || 'agent';
- const rows = await getDb().unsafe(
+ const rows = await database.unsafe(
   'select handle, name from workspace_agents where workspace_id = $1',
   [workspaceId],
  );
@@ -3495,7 +3984,25 @@ function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, 
 // unattributed mint ('' actor) is still a recorded mint, which is the property
 // that matters. Note the connect token itself is minted in this function and is
 // never, anywhere below, put in the audit row.
-async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle = null, model = null, permissionMode = null, baseUrl = null, profile = null, actorUserId = null } = {}) {
+function publicAgentConnectionCommandAgent(row) {
+ if (!row || typeof row !== 'object') return null;
+ return {
+  id: row.id || null,
+  workspace_id: row.workspace_id || null,
+  name: row.name || '',
+  handle: row.handle || '',
+  model: row.model || null,
+  run_mode: row.run_mode || null,
+  permission_mode: row.permission_mode || 'default',
+  enabled: row.enabled !== false,
+  mcp_approved: row.mcp_approved === true,
+  purpose: row.purpose === 'resource' ? 'resource' : 'collaborator',
+  resource_facets: parseJsonArray(row.resource_facets),
+  controller_id: row.controller_id || null,
+ };
+}
+
+async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle = null, model = null, permissionMode = null, baseUrl = null, profile = null, actorUserId = null, actorControllerId = null } = {}) {
  const id = String(agentId || '').trim();
  if (!id) throw new Error('agentId is required');
  const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [id]);
@@ -3522,8 +4029,10 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
          version = coalesce(version, 0) + 1
      where id = $1
      returning *`,
-  [id, resolvedHandle, hashAgentToken(token), resolvedModel, resolvedPermissionMode],
+ [id, resolvedHandle, hashAgentToken(token), resolvedModel, resolvedPermissionMode],
  );
+ const updatedAgent = updateRows[0];
+ if (!updatedAgent) throw new Error('Agent could not be updated for connection');
  notifyDbSubscribers('workspace_agents', 'UPDATE', updateRows);
  // A connect token is a real credential: it is the daemon's whole identity, and
  // this UPDATE also (re)sets permission_mode, so a mint is how an agent can end
@@ -3531,7 +4040,10 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
  // Never recorded: the token, and never its hash either.
  await recordAudit({
   workspaceId: agent.workspace_id ? String(agent.workspace_id) : null,
-  actor: { userId: actorUserId ? String(actorUserId) : '' },
+  actor: {
+   userId: actorUserId ? String(actorUserId) : '',
+   label: actorControllerId ? 'controller:' + String(actorControllerId) : '',
+  },
   action: 'agent.connect_token_minted',
   target: { type: 'agent', id, label: resolvedHandle },
   before: String(agent.permission_mode || ''),
@@ -3554,7 +4066,11 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
   profile: profile === null ? resolvedHandle : profile,
  });
  return {
-  agent: updateRows[0],
+  // This response is copied into MCP transcripts and browser state. Never
+  // return the raw workspace_agents row: it contains connect_token_hash,
+  // metadata (host folders/skills), sandbox configuration, identity, and
+  // memory paths that are server-only even when the caller is a controller.
+  agent: publicAgentConnectionCommandAgent(updatedAgent),
   handle: resolvedHandle,
   token,
   command: commands.portableCommand,
@@ -3622,6 +4138,10 @@ async function verifyWorkspaceMcpToken(token) {
  };
 }
 
+async function verifyControllerToken(token) {
+ return verifyScopedControllerToken({ db: getDb(), token });
+}
+
 // "Agensis login": the client authenticates with the user's own auth token. Resolves to
 // the workspace they own (the common case is one). Registrations still pop up for them.
 async function verifyUserAuthMcpToken(token) {
@@ -3654,6 +4174,7 @@ async function verifyFlowConnectionToken(token) {
 async function verifyMcpToken(token, req = null) {
  return (await verifyAgentConnectToken(token, req))
   || (await verifyFlowConnectionToken(token))
+  || (await verifyControllerToken(token))
   || (await verifyWorkspaceMcpToken(token))
   || (await verifyUserAuthMcpToken(token));
 }
@@ -3881,7 +4402,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
   // conversation is itself the disclosure. Filtered here rather than after the
   // fact so the rows never reach the payload builder.
   db.unsafe(
-   `select id, workspace_id, title, model, folder, description, icon, intent, is_favorite, participants, conversation_mode, max_agent_turns, auto_rounds, parent_message_id, split_parent_id, split_at, archived_at, deleted_at, canvas_id, visibility, version, created_at, updated_at
+   `select id, workspace_id, title, model, folder, description, icon, intent, is_favorite, participants, conversation_mode, max_agent_turns, auto_rounds, parent_message_id, split_parent_id, split_at, split_baseline_message_id, split_source_boundary_message_id, archived_at, deleted_at, canvas_id, visibility, version, created_at, updated_at
        from chat_sessions
        where workspace_id = $1 and deleted_at is null
          and ${sessionReadableSql('chat_sessions', '$2')}
@@ -4323,14 +4844,18 @@ function truncateContextEnd(value, maxBytes) {
  return codepoints.slice(0, low).join('') + marker;
 }
 
-function boundAgentContextMessages(messages, maxBytes = CHANNEL_CONTEXT_MAX_BYTES) {
+function boundAgentContextSnapshot(messages, maxBytes = CHANNEL_CONTEXT_MAX_BYTES) {
  const source = Array.isArray(messages) ? messages : [];
  const budget = Math.max(256, Number(maxBytes) || CHANNEL_CONTEXT_MAX_BYTES);
  const selected = [];
  let used = 0;
  for (let index = source.length - 1; index >= 0; index -= 1) {
   const message = source[index];
-  const normalized = { role: message?.role === 'assistant' ? 'assistant' : 'user', content: String(message?.content || '') };
+  const normalized = {
+   role: message?.role === 'assistant' ? 'assistant' : 'user',
+   content: String(message?.content || ''),
+   lastSeenMessageId: message?.lastSeenMessageId ? String(message.lastSeenMessageId) : null,
+  };
   const fullBytes = agentContextBytes([normalized]);
   if (used + fullBytes <= budget) {
    selected.unshift(normalized);
@@ -4353,7 +4878,15 @@ function boundAgentContextMessages(messages, maxBytes = CHANNEL_CONTEXT_MAX_BYTE
   break;
  }
  while (selected.length > 1 && selected[0].role !== 'user') selected.shift();
- return selected;
+ const lastSeen = [...selected].reverse().find(message => message.lastSeenMessageId);
+ return {
+  messages: selected.map(({ role, content }) => ({ role, content })),
+  lastSeenMessageId: lastSeen?.lastSeenMessageId || null,
+ };
+}
+
+function boundAgentContextMessages(messages, maxBytes = CHANNEL_CONTEXT_MAX_BYTES) {
+ return boundAgentContextSnapshot(messages, maxBytes).messages;
 }
 
 // eslint-disable-next-line no-unused-vars -- dead helper, not yet wired up; tracked for removal separately
@@ -4385,6 +4918,18 @@ function directAgentParticipantFromSession(session) {
   .filter((participant) => participant && participant.kind === 'agent' && (participant.agent_id || participant.handle));
  if (agentParticipants.length === 0) return null;
  return agentParticipants.find((participant) => participant.direct) || (agentParticipants.length === 1 ? agentParticipants[0] : null);
+}
+
+function explicitConversationAgent(agents, participantAgentIds, targetAgentId) {
+ if (!targetAgentId) return null;
+ const participants = participantAgentIds instanceof Set
+  ? participantAgentIds
+  : new Set(Array.isArray(participantAgentIds) ? participantAgentIds.map(String) : []);
+ return (Array.isArray(agents) ? agents : []).find(agent => (
+  isAgentEnabled(agent)
+  && String(agent.id) === String(targetAgentId)
+  && participants.has(String(agent.id))
+ )) || null;
 }
 
 // Comment tables that can @mention an agent, and how to describe the thing the
@@ -4445,13 +4990,7 @@ async function findOrCreateDirectSession(workspaceId, agent, humanUserId = null)
   await tx('select pg_advisory_xact_lock(hashtextextended($1::text, 0))', [lockKey]);
 
   const candidates = await tx(
-   `select *
-      from chat_sessions
-     where workspace_id = $1::uuid
-       and folder = 'Direct messages'
-       and archived_at is null
-       and deleted_at is null
-     order by created_at, id`,
+   `select * from chat_sessions where workspace_id = $1::uuid and folder = 'Direct messages' and archived_at is null and deleted_at is null order by created_at, id`,
    [workspaceId],
   );
   const matchingCandidates = candidates.filter((session) => {
@@ -4572,7 +5111,7 @@ async function verifyThreadParent(threadParentId, sessionId) {
  if (!threadParentId || !sessionId) return null;
  try {
   const rows = await getDb().unsafe(
-   'select id from messages where id = $1 and session_id = $2 limit 1',
+   'select id from messages where id = $1 and session_id = $2 and deleted_at is null limit 1',
    [String(threadParentId), String(sessionId)],
   );
   return rows.length > 0 ? String(threadParentId) : null;
@@ -4880,7 +5419,7 @@ async function loadChannelMessages(sessionId, threadParentId = null, limit = CHA
    `select id, role, content, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail, broadcast_to_channel, created_at
          from messages
          where session_id = $1 and (id = $2 or thread_parent_id = $2) and deleted_at is null
-         order by created_at desc
+         order by created_at desc, id desc
          limit $3`,
    [sessionId, threadParentId, limit],
   )
@@ -4894,7 +5433,7 @@ async function loadChannelMessages(sessionId, threadParentId = null, limit = CHA
    `select id, role, content, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail, broadcast_to_channel, created_at
          from messages
          where session_id = $1 and (thread_parent_id is null or broadcast_to_channel) and deleted_at is null
-         order by created_at desc
+         order by created_at desc, id desc
          limit $2`,
    [sessionId, limit],
   );
@@ -4904,7 +5443,7 @@ async function loadChannelMessages(sessionId, threadParentId = null, limit = CHA
 // Rebuild conversation context from the running agent's point of view: its own
 // messages are 'assistant', everyone else (humans and other agents) is 'user'
 // with a "[@handle]:" / "[name]:" prefix so the agent can tell who said what.
-async function buildAgentTurnContext(sessionId, runningAgent, threadParentId = null) {
+async function buildAgentTurnContextSnapshot(sessionId, runningAgent, threadParentId = null) {
  const rows = await loadChannelMessages(sessionId, threadParentId);
  const runningId = String(runningAgent?.id || '');
  const mapped = [];
@@ -4913,22 +5452,33 @@ async function buildAgentTurnContext(sessionId, runningAgent, threadParentId = n
   if (!text) continue;
   const isOwn = row.sender_kind === 'agent' && String(row.sender_id || '') === runningId;
   if (isOwn) {
-   mapped.push({ role: 'assistant', content: text });
+   mapped.push({ role: 'assistant', content: text, lastSeenMessageId: null });
    continue;
   }
   const label = row.sender_kind === 'agent'
    ? `@${slugHandle(row.sender_name || 'agent')}`
    : (row.sender_name ? String(row.sender_name) : 'User');
-  mapped.push({ role: 'user', content: `[${label}]: ${text}` });
+  mapped.push({
+   role: 'user',
+   content: `[${label}]: ${text}`,
+   lastSeenMessageId: row.id ? String(row.id) : null,
+  });
  }
  const merged = [];
  for (const message of mapped) {
   const last = merged[merged.length - 1];
-  if (last && last.role === message.role) last.content = `${last.content}\n\n${message.content}`;
-  else merged.push({ role: message.role, content: message.content });
+  if (last && last.role === message.role) {
+   last.content = `${last.content}\n\n${message.content}`;
+   if (message.lastSeenMessageId) last.lastSeenMessageId = message.lastSeenMessageId;
+  }
+  else merged.push({
+   role: message.role,
+   content: message.content,
+   lastSeenMessageId: message.lastSeenMessageId,
+  });
  }
  while (merged.length > 0 && merged[0].role !== 'user') merged.shift();
- return boundAgentContextMessages(merged);
+ return boundAgentContextSnapshot(merged);
 }
 
 // Cross-session "shared brain": a short digest of what THIS agent has recently
@@ -5802,7 +6352,13 @@ async function resolveWorkThreadParent(sessionId) {
 // agent turn in flight (or ran one to completion). Task dispatch reads it to tell
 // "the agent is on it" from "the turn was refused — put the task back in the
 // queue"; every other caller ignores it.
-async function continueConversation({ workspaceId, sessionId, threadParentId = null, broadcastToChannel = null }) {
+async function continueConversation({
+ workspaceId,
+ sessionId,
+ threadParentId = null,
+ broadcastToChannel = null,
+ targetAgentId = null,
+}) {
  if (!workspaceId || !sessionId) return { started: false, reason: 'missing_input' };
  const lockKey = `${sessionId}::${threadParentId || ''}`;
  if (conversationLocks.has(lockKey)) return { started: false, reason: 'locked' };
@@ -5812,7 +6368,7 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
   // eslint-disable-next-line no-constant-condition
   while (true) {
    const sessionRows = await getDb().unsafe(
-    'select id, workspace_id, participants, conversation_mode, max_agent_turns, folder from chat_sessions where id = $1 limit 1',
+    'select id, workspace_id, title, participants, conversation_mode, max_agent_turns, folder from chat_sessions where id = $1 and deleted_at is null limit 1',
     [sessionId],
    );
    const session = sessionRows[0];
@@ -5879,7 +6435,11 @@ async function continueConversation({ workspaceId, sessionId, threadParentId = n
    // Set by whichever branch below picks the agent, so a new branch that forgets
    // it gets the cautious answer (paced) rather than the loud one.
    let addressedIndividually = false;
-   if (isDirectMessage) {
+   if (targetAgentId) {
+    nextAgent = explicitConversationAgent(agents, participantAgentIds, targetAgentId);
+    if (!nextAgent) return { started, reason: 'target_unavailable' };
+    addressedIndividually = true;
+   } else if (isDirectMessage) {
     if (agentTurns === 0) {
      // Prefer the explicit direct participant; fall back to matching the DM
      // session's title against an enabled agent (legacy DMs whose participant
@@ -6150,80 +6710,231 @@ const PLACEHOLDER_CONTENT_RE = '^Thinking( [0-9]|…)';
 // double-fire), post the schedule's prompt into its session addressed to its agent,
 // let the orchestrator dispatch, then reschedule and record a run-history row.
 let scheduleRunnerRunning = false;
+const SCHEDULE_CLAIM_STALE_MINUTES = 35;
 async function runDueSchedules() {
  if (scheduleRunnerRunning) return;
  scheduleRunnerRunning = true;
  try {
   const db = getDb();
+  // Legacy targetless rows and schedules whose conversation was soft-deleted
+  // cannot ever run. Disable them before applying the batch LIMIT so ten broken
+  // rows cannot starve every valid schedule behind them.
+  const invalidTargets = await db.unsafe(
+   `update agent_schedules schedule
+       set enabled = false,
+           running = false,
+           last_status = 'Target conversation unavailable',
+           updated_at = now()
+     where (schedule.enabled is true or schedule.running is true)
+       and (
+         schedule.session_id is null
+         or not exists (
+           select 1
+             from chat_sessions target_session
+            where target_session.id = schedule.session_id
+              and target_session.workspace_id = schedule.workspace_id
+              and target_session.deleted_at is null
+         )
+       )
+   returning *`,
+  );
+  if (invalidTargets.length > 0) {
+   notifyDbSubscribers('agent_schedules', 'UPDATE', invalidTargets);
+  }
+
+  // A process can die after claim and before finalization. Startup recovery is
+  // not enough on a multi-machine deployment, so reclaim rows older than the
+  // agent hard ceiling plus five minutes on every live worker.
+  const staleClaims = await db.unsafe(
+   `update agent_schedules
+       set running = false,
+           last_status = 'Recovered interrupted schedule run',
+           fail_count = fail_count + 1,
+           updated_at = now()
+     where running is true
+       and coalesce(last_run_at, updated_at, created_at)
+           < now() - ($1 || ' minutes')::interval
+   returning *`,
+   [String(SCHEDULE_CLAIM_STALE_MINUTES)],
+  );
+  if (staleClaims.length > 0) {
+   notifyDbSubscribers('agent_schedules', 'UPDATE', staleClaims);
+  }
+
   // Atomic claim: flip due rows to running and bump next_run_at in one statement.
   const due = await db.unsafe(
-   `update agent_schedules s
+   `with due_candidates as materialized (
+      select candidate.id, candidate.session_id
+        from agent_schedules candidate
+        join chat_sessions candidate_session
+          on candidate_session.id = candidate.session_id
+         and candidate_session.workspace_id = candidate.workspace_id
+         and candidate_session.deleted_at is null
+       where candidate.enabled = true
+         and candidate.running = false
+         and candidate.next_run_at <= now()
+       order by candidate.next_run_at asc, candidate.id asc
+       limit 10
+    ),
+    locked_sessions as materialized (
+      select live_session.id
+        from chat_sessions live_session
+        join due_candidates candidate on candidate.session_id = live_session.id
+       where live_session.deleted_at is null
+       order by live_session.id
+       for share of live_session skip locked
+    ),
+    claimable as materialized (
+      select schedule.id
+        from agent_schedules schedule
+        join due_candidates candidate on candidate.id = schedule.id
+        join locked_sessions live_session on live_session.id = schedule.session_id
+       where schedule.enabled = true
+         and schedule.running = false
+         and schedule.next_run_at <= now()
+       order by schedule.next_run_at asc, schedule.id asc
+       for update of schedule skip locked
+    )
+    update agent_schedules s
           set running = true, last_run_at = now(), updated_at = now(),
               next_run_at = now() + (interval_seconds || ' seconds')::interval
-        where s.id in (
-          select id from agent_schedules
-           where enabled = true and running = false and next_run_at <= now()
-           order by next_run_at asc
-           limit 10
-           for update skip locked
-        )
+        where s.id in (select id from claimable)
         returning *`,
   );
   for (const schedule of due) {
    let status = 'ok';
    let detail = '';
+   let disableSchedule = false;
    try {
-    const agentRows = schedule.agent_id
-     ? await db.unsafe('select * from workspace_agents where id = $1 and workspace_id = $2 limit 1', [schedule.agent_id, schedule.workspace_id])
-     : [];
-    const agent = agentRows[0];
-    if (!agent) throw new Error('scheduled agent no longer exists');
-    if (!isAgentEnabled(agent)) throw new Error('scheduled agent is deactivated');
-    if (!schedule.session_id) throw new Error('schedule has no target session');
-    if (!schedule.created_by) throw new Error('schedule has no author');
-    // A schedule is standing authority, not a snapshot of authority at create
-    // time. Role or DM-membership revocation must stop the next run; otherwise a
-    // removed user can keep posting a private prompt forever through the timer.
-    await enforceWorkspaceRole(schedule.created_by, schedule.workspace_id, 'run_agents');
-    const sessionRows = await db.unsafe(
-     'select id, workspace_id, visibility, folder from chat_sessions where id = $1 limit 1',
-     [schedule.session_id],
-    );
-    const session = sessionRows[0] || null;
-    if (!session || String(session.workspace_id) !== String(schedule.workspace_id)) {
-     throw new Error('scheduled session no longer exists');
+    if (!schedule.session_id) {
+     disableSchedule = true;
+     throw new Error('schedule has no target session');
     }
-    await enforceSessionRead(schedule.created_by, schedule.session_id, session);
-    const handle = slugHandle(agent.handle || agent.name);
-    const promptBody = String(schedule.prompt || '').trim() || 'Run your scheduled task.';
-    // Address the agent explicitly so mention-mode channels still dispatch.
-    const content = promptBody.includes(`@${handle}`) ? promptBody : `@${handle} ${promptBody}`;
-    const messageRows = await db.unsafe(
-     `insert into messages (session_id, role, content, sender_kind, sender_name)
-           values ($1, 'user', $2, 'system', 'Schedule') returning *`,
-     [schedule.session_id, content],
-    );
-    notifyDbSubscribers('messages', 'INSERT', messageRows);
-    await continueConversation({ workspaceId: schedule.workspace_id, sessionId: schedule.session_id });
+    if (!schedule.created_by) {
+     disableSchedule = true;
+     throw new Error('schedule has no author to re-authorize');
+    }
+    const launch = await db.begin(async (tx) => {
+     let current;
+     let agent;
+     try {
+      ({ schedule: current, agent } = await lockScheduleExecutionScope({
+       tx,
+       userId: schedule.created_by,
+       workspaceId: schedule.workspace_id,
+       sessionId: schedule.session_id,
+       scheduleId: schedule.id,
+       agentId: schedule.agent_id,
+       capability: 'run_agents',
+       roleHasWorkspaceCapability,
+       sessionReadableSql,
+      }));
+     } catch (error) {
+      if (error?.code === 'SCHEDULE_SCOPE_CHANGED') {
+       disableSchedule = true;
+       throw new Error('schedule author no longer has access to run this conversation');
+      }
+      if (error?.code === 'SCHEDULE_TARGET_UNAVAILABLE') {
+       disableSchedule = true;
+       throw new Error(error.message);
+      }
+      throw error;
+     }
+     if (!current.running || !current.enabled) {
+      throw new Error('schedule was disabled before its run could start');
+     }
+     const handle = slugHandle(agent.handle || agent.name);
+     const promptBody = String(current.prompt || '').trim() || 'Run your scheduled task.';
+     // Address the agent explicitly so mention-mode channels still dispatch.
+     const content = promptBody.includes(`@${handle}`) ? promptBody : `@${handle} ${promptBody}`;
+     const messageRows = await tx.unsafe(
+      `insert into messages (session_id, role, content, sender_kind, sender_name)
+            values ($1, 'user', $2, 'system', 'Schedule') returning *`,
+      [current.session_id, content],
+     );
+     if (messageRows.length !== 1) {
+      throw new Error('scheduled message could not be created');
+     }
+     return {
+      messageRows,
+      workspaceId: current.workspace_id,
+      sessionId: current.session_id,
+      agentId: current.agent_id,
+     };
+    });
+    notifyDbSubscribers('messages', 'INSERT', launch.messageRows);
+    const dispatch = await continueConversation({
+     workspaceId: launch.workspaceId,
+     sessionId: launch.sessionId,
+     targetAgentId: launch.agentId,
+    });
+    if (!dispatch?.started) {
+     throw new Error(`scheduled agent did not start (${dispatch?.reason || 'refused'})`);
+    }
    } catch (error) {
     status = 'error';
     detail = String(error?.message || error).slice(0, 300);
    }
-   const updated = await db.unsafe(
-    `update agent_schedules
-            set running = false, last_status = $2, updated_at = now(),
-                run_count = run_count + 1,
-                fail_count = fail_count + ($3::int)
-          where id = $1 returning *`,
-    [schedule.id, status, status === 'error' ? 1 : 0],
-   );
-   if (updated.length > 0) notifyDbSubscribers('agent_schedules', 'UPDATE', updated);
-   const runRows = await db.unsafe(
-    `insert into agent_schedule_runs (schedule_id, workspace_id, status, detail)
-         values ($1, $2, $3, $4) returning *`,
-    [schedule.id, schedule.workspace_id, status, detail],
-   );
-   notifyDbSubscribers('agent_schedule_runs', 'INSERT', runRows);
+   let finalized;
+   try {
+    finalized = await db.begin(async (tx) => {
+     const updated = await tx.unsafe(
+      `update agent_schedules
+              set running = false, last_status = $2, updated_at = now(),
+                  enabled = case when $4::boolean then false else enabled end,
+                  run_count = run_count + 1,
+                  fail_count = fail_count + ($3::int)
+            where id = $1 and running = true
+            returning *`,
+      [schedule.id, status, status === 'error' ? 1 : 0, disableSchedule],
+     );
+     if (updated.length !== 1) return { updated: [], runRows: [] };
+     const current = updated[0];
+     const runRows = await tx.unsafe(
+      `insert into agent_schedule_runs (schedule_id, workspace_id, session_id, status, detail)
+           values ($1, $2, $3, $4, $5) returning *`,
+      [current.id, current.workspace_id, current.session_id, status, detail],
+     );
+     return { updated, runRows };
+    });
+   } catch (error) {
+    console.warn(
+     `[backend] schedule ${schedule.id} finalization failed:`,
+     error?.message || error,
+    );
+    // The history insert and ordinary final update share a transaction, so a
+    // history failure rolls both back. Release the claim separately and keep
+    // draining the batch. If even this cleanup fails, the live stale-claim
+    // recovery above clears it after the hard ceiling instead of waiting for a
+    // process restart.
+    try {
+     const recovered = await db.unsafe(
+      `update agent_schedules
+          set running = false,
+              last_status = 'Schedule finalization failed',
+              fail_count = fail_count + 1,
+              updated_at = now()
+        where id = $1 and running = true
+        returning *`,
+      [schedule.id],
+     );
+     if (recovered.length > 0) {
+      notifyDbSubscribers('agent_schedules', 'UPDATE', recovered);
+     }
+    } catch (cleanupError) {
+     console.warn(
+      `[backend] schedule ${schedule.id} claim cleanup failed:`,
+      cleanupError?.message || cleanupError,
+     );
+    }
+    continue;
+   }
+   if (finalized.updated.length > 0) {
+    notifyDbSubscribers('agent_schedules', 'UPDATE', finalized.updated);
+   }
+   if (finalized.runRows.length > 0) {
+    notifyDbSubscribers('agent_schedule_runs', 'INSERT', finalized.runRows);
+   }
   }
  } catch (error) {
   console.warn('[backend] schedule runner error:', error?.message || error);
@@ -6688,60 +7399,138 @@ async function handlePeerListRequest(ws) {
 // approved. Approval is what flips an agent's mcp_approved flag so it can be worked as.
 
 async function finalizeRegistrationApproval(reg) {
- let agentId = reg.agent_id;
- let handle = reg.requested_handle;
- let name = reg.requested_name;
- if (agentId) {
-  const upd = await getDb().unsafe(
-   'update workspace_agents set mcp_approved = true, enabled = true, updated_at = now() where id = $1 returning *',
-   [agentId],
-  );
-  if (upd[0]) { notifyDbSubscribers('workspace_agents', 'UPDATE', upd); handle = slugHandle(upd[0].handle || upd[0].name); name = upd[0].name; }
- } else {
-  const created = await getDb().unsafe(
-   `insert into workspace_agents (workspace_id, name, handle, description, system_prompt, model, run_mode, permission_mode, avatar, accent_color, enabled, mcp_approved)
-       values ($1, $2, $3, '', '', 'auto', 'external', 'default', 'AI', '#00a95c', true, true)
-       returning *`,
-   [reg.workspace_id, name || handle || 'Agent', slugHandle(handle || name || 'agent')],
-  );
-  agentId = created[0].id;
-  handle = slugHandle(created[0].handle || created[0].name);
-  notifyDbSubscribers('workspace_agents', 'INSERT', created);
+ const database = getDb();
+ if (!database || typeof database.begin !== 'function') {
+  throw new Error('Agent registration approval requires transaction support');
  }
- // The identity the client asked for in register_agent, applied now that a row
- // exists. Approval is asynchronous, so this is the first moment it can land —
- // and `isNew` is only true for the branch that just created the row, which is
- // the one case where an agent is allowed to choose its own name.
+ const result = await database.begin(async (transaction) => {
+  const lockedRows = await transaction.unsafe(
+   'select * from agent_registrations where id = $1 for update',
+   [reg.id],
+  );
+  const current = lockedRows[0] || reg;
+  if (current.status && current.status !== 'pending') {
+   return {
+    alreadySettled: true,
+    agentId: current.agent_id,
+    handle: current.requested_handle,
+    name: current.requested_name,
+    agentRows: [],
+    registrationRows: [],
+    isNew: false,
+   };
+  }
+
+  let agentId = current.agent_id;
+  let handle = current.requested_handle;
+  let name = current.requested_name;
+  let agentRows = [];
+  const isNew = !agentId;
+  if (agentId) {
+   agentRows = await transaction.unsafe(
+    `update workspace_agents
+        set mcp_approved = true, enabled = true, updated_at = now()
+      where id = $1
+        and ($2::uuid is null or controller_id = $2)
+      returning *`,
+    [agentId, current.controller_id || null],
+   );
+   if (!agentRows[0]) throw forbidden('The registered agent is no longer owned by this controller');
+   handle = slugHandle(agentRows[0].handle || agentRows[0].name);
+   name = agentRows[0].name;
+  } else {
+   const intent = normalizeAgentIntent(
+    current.requested_purpose,
+    parseJsonArray(current.requested_resource_facets),
+   );
+   if (!intent.ok) throw badRequest(intent.errors.join('; '));
+   agentRows = await transaction.unsafe(
+    `insert into workspace_agents
+        (workspace_id, name, handle, description, system_prompt, model, run_mode,
+         permission_mode, avatar, accent_color, enabled, mcp_approved,
+         ambient_replies, purpose, resource_facets, controller_id)
+       values ($1, $2, $3, '', '', 'auto', 'external', 'default', 'AI', '#00a95c',
+         true, true, $4, $5, $6::jsonb, $7)
+       returning *`,
+    [
+     current.workspace_id,
+     name || handle || 'Agent',
+     slugHandle(handle || name || 'agent'),
+     intent.purpose === 'resource' ? false : true,
+     intent.purpose,
+     intent.resourceFacets,
+     current.controller_id || null,
+    ],
+   );
+   if (!agentRows[0]) throw new Error('Agent could not be created');
+   agentId = agentRows[0].id;
+   handle = slugHandle(agentRows[0].handle || agentRows[0].name);
+   name = agentRows[0].name;
+  }
+  const registrationRows = await transaction.unsafe(
+   `update agent_registrations
+       set status = 'approved', agent_id = $2, decided_at = now(), updated_at = now()
+     where id = $1 and status = 'pending'
+     returning *`,
+   [current.id, agentId],
+  );
+  if (!registrationRows[0]) throw new Error('Agent registration was settled concurrently');
+  return { alreadySettled: false, agentId, handle, name, agentRows, registrationRows, isNew };
+ });
+
+ if (result.alreadySettled) return result;
+ if (result.agentRows.length > 0) {
+  notifyDbSubscribers('workspace_agents', result.isNew ? 'INSERT' : 'UPDATE', result.agentRows);
+ }
+ notifyDbSubscribers('agent_registrations', 'UPDATE', result.registrationRows);
+
+ // Identity is descriptive and best-effort; the authority-bearing agent row and
+ // its registration are already committed atomically above.
  try {
   const declared = parseJsonObject(reg.requested_identity);
   if (Object.keys(declared).length > 0) {
-   const rows = await getDb().unsafe(AGENT_IDENTITY_SELECT, [agentId, reg.workspace_id]);
+   const rows = await getDb().unsafe(AGENT_IDENTITY_SELECT, [result.agentId, reg.workspace_id]);
    const applied = await applyAgentIdentity({
     workspaceId: reg.workspace_id,
-    agentId,
+    agentId: result.agentId,
     row: rows[0],
     declared,
-    isNew: !reg.agent_id,
+    isNew: result.isNew,
    });
-   if (applied) name = applied.name;
+   if (applied) result.name = applied.name;
   }
  } catch (error) {
   console.error('[agensis] register_agent identity declaration failed:', error.message || error);
  }
- const updReg = await getDb().unsafe(
-  `update agent_registrations set status = 'approved', agent_id = $2, decided_at = now(), updated_at = now() where id = $1 returning *`,
-  [reg.id, agentId],
- );
- notifyDbSubscribers('agent_registrations', 'UPDATE', updReg);
- return { agentId, handle, name };
+ return result;
 }
 
-async function registerAgentRequest({ workspaceId, asHandle = null, name = null, handle = null, clientLabel = '', autoApprove = false, identity = null }) {
+async function registerAgentRequest({
+ workspaceId,
+ asHandle = null,
+ name = null,
+ handle = null,
+ clientLabel = '',
+ autoApprove = false,
+ identity = null,
+ controllerId = null,
+ purpose = 'collaborator',
+ resourceFacets = [],
+}) {
  const declaredIdentity = normalizeIdentityDeclaration(identity);
  let agent = null;
  if (asHandle) {
+  if (controllerId && (purpose !== 'collaborator' || (Array.isArray(resourceFacets) && resourceFacets.length > 0))) {
+   throw badRequest('purpose and resourceFacets are only valid when creating a new agent');
+  }
   agent = await resolveWorkspaceAgentByHandle(workspaceId, asHandle);
   if (!agent) throw badRequest(`No agent "@${slugHandle(asHandle)}" in this workspace`);
+  if (
+   controllerId
+   && (!agent.controller_id || String(agent.controller_id) !== String(controllerId))
+  ) {
+   throw forbidden(`@${slugHandle(asHandle)} is not owned by this controller`);
+  }
   if (agent.mcp_approved) {
    // The already-approved reconnect — the common case, and the one that happens
    // several times a day. No registration row is written, so the declaration has
@@ -6755,6 +7544,11 @@ async function registerAgentRequest({ workspaceId, asHandle = null, name = null,
    return { status: 'approved', agentId: agent.id, handle: slugHandle(agent.handle || agent.name) };
   }
  }
+ const intent = normalizeAgentIntent(purpose, resourceFacets);
+ if (!intent.ok) throw badRequest(intent.errors.join('; '));
+ if (!controllerId && (purpose !== 'collaborator' || (Array.isArray(resourceFacets) && resourceFacets.length > 0))) {
+  throw forbidden('Only a workspace controller may choose resource-agent intent during registration');
+ }
  const reqHandle = agent ? slugHandle(agent.handle || agent.name) : slugHandle(handle || name || 'agent');
  // The one door an UNTRUSTED client chooses its own handle through. @channel is
  // reserved, so refuse it here rather than write a pending registration that
@@ -6766,33 +7560,54 @@ async function registerAgentRequest({ workspaceId, asHandle = null, name = null,
  // same bound — otherwise this door would be the one way to smuggle an
  // unbounded string into workspace_agents.name.
  const reqName = agent ? agent.name : (String(name || reqHandle).trim().slice(0, IDENTITY_FIELD_LIMITS.name) || reqHandle);
- const rows = await getDb().unsafe(
-  `insert into agent_registrations (workspace_id, agent_id, requested_handle, requested_name, client_label, status, requested_identity)
-     values ($1, $2, $3, $4, $5, $6, $7::jsonb) returning *`,
-  [
-   workspaceId, agent ? agent.id : null, reqHandle, reqName,
-   String(clientLabel || '').slice(0, 120), autoApprove ? 'approved' : 'pending',
-   // The OBJECT, not JSON.stringify: postgres.js resolves the ::jsonb cast to a
-   // jsonb parameter and serializes the value itself — a pre-stringified value
-   // gets serialized AGAIN and lands as a jsonb string scalar. See
-   // normalizeJsonParam for the full failure mode this caused live.
-   declaredIdentity,
-  ],
- );
+ const common = {
+  agentId: agent ? agent.id : null,
+  clientLabel: String(clientLabel || '').slice(0, 120),
+  status: 'pending',
+};
+ const rows = controllerId
+  ? await getDb().unsafe(
+   `insert into agent_registrations
+       (workspace_id, agent_id, controller_id, requested_handle, requested_name,
+        client_label, status, requested_identity, requested_purpose, requested_resource_facets)
+      values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb) returning *`,
+   [
+    workspaceId, common.agentId, controllerId, reqHandle, reqName,
+    common.clientLabel, common.status, declaredIdentity, intent.purpose, intent.resourceFacets,
+   ],
+  )
+  : await getDb().unsafe(
+   `insert into agent_registrations (workspace_id, agent_id, requested_handle, requested_name, client_label, status, requested_identity, requested_purpose, requested_resource_facets)
+      values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb) returning *`,
+   [
+    workspaceId, common.agentId, reqHandle, reqName,
+    common.clientLabel, common.status,
+    // The OBJECT, not JSON.stringify: postgres.js resolves the ::jsonb cast to a
+    // jsonb parameter and serializes the value itself — a pre-stringified value
+    // gets serialized AGAIN and lands as a jsonb string scalar.
+    declaredIdentity, intent.purpose, intent.resourceFacets,
+   ],
+  );
  const reg = rows[0];
  notifyDbSubscribers('agent_registrations', 'INSERT', rows);
  if (autoApprove) {
-  const out = await finalizeRegistrationApproval(reg);
+  const out = await finalizeRegistrationApproval({ ...reg, status: 'pending' });
   return { registrationId: reg.id, status: 'approved', agentId: out.agentId, handle: out.handle };
  }
  return { registrationId: reg.id, status: 'pending', handle: reqHandle };
 }
 
 // Poll target for the client between register_agent and approval.
-async function getRegistrationStatus({ workspaceId, registrationId }) {
+async function getRegistrationStatus({ workspaceId, registrationId, controllerId = null }) {
+ const params = [registrationId, workspaceId];
+ const controllerClause = controllerId ? ' and controller_id = $3' : '';
+ if (controllerId) params.push(controllerId);
  const rows = await getDb().unsafe(
-  'select id, status, agent_id, requested_handle from agent_registrations where id = $1 and workspace_id = $2 limit 1',
-  [registrationId, workspaceId],
+  `select id, status, agent_id, requested_handle
+     from agent_registrations
+    where id = $1 and workspace_id = $2${controllerClause}
+    limit 1`,
+  params,
  );
  const reg = rows[0];
  if (!reg) throw badRequest('Registration not found');
@@ -7025,23 +7840,7 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
 }
 
 function normalizeAiChatMessages(messages) {
- const out = [];
- const system = [];
- if (!Array.isArray(messages)) return { messages: out, systemPrompt: '' };
- for (const message of messages) {
-  const role = String(message?.role || '').trim().toLowerCase();
-  const content = typeof message?.content === 'string' ? message.content : '';
-  if (!content) continue;
-  if (role === 'system') {
-   system.push(content);
-   continue;
-  }
-  out.push({
-   role: role === 'assistant' ? 'assistant' : 'user',
-   content,
-  });
- }
- return { messages: out, systemPrompt: system.join('\n\n') };
+ return normalizeAndBoundAiChatMessages(messages);
 }
 
 
@@ -7100,15 +7899,20 @@ async function resolveSessionActivityContext(sessionId, { fresh = false } = {}) 
  }
  try {
   const rows = await getDb().unsafe(
-   'select workspace_id, visibility, folder from chat_sessions where id = $1 limit 1',
+   'select workspace_id, visibility, folder, deleted_at from chat_sessions where id = $1 limit 1',
    [sessionId],
   );
   const row = rows[0];
   const workspaceId = row?.workspace_id || null;
-  if (!workspaceId) return null;
+  if (!workspaceId || row.deleted_at) return null;
   // Fail closed: an unreadable/absent row is treated as private by
   // isPrivateSessionRow's own folder backstop rather than assumed open.
-  const context = { workspaceId, isPrivate: isPrivateSessionRow(row) };
+  const context = {
+   workspaceId,
+   isPrivate: isPrivateSessionRow(row),
+   visibility: row.visibility ?? null,
+   folder: row.folder ?? null,
+  };
   if (!fresh) workspaceSessionCacheSet(sessionId, context);
   return context;
  } catch (error) {
@@ -7134,7 +7938,7 @@ async function logMessageActivity(rows) {
    const sessionId = message.session_id;
    const sessionContext = await resolveSessionActivityContext(sessionId);
    if (!sessionContext) continue;
-   const { workspaceId, isPrivate } = sessionContext;
+   const { workspaceId, isPrivate, visibility, folder } = sessionContext;
    const role = message.role || '';
    const senderName = message.sender_name || (role === 'user' ? 'You' : 'Agent');
    const content = typeof message.content === 'string' ? message.content : '';
@@ -7163,11 +7967,35 @@ async function logMessageActivity(rows) {
    // realtime notification below — fire exactly once. Target left off so it
    // degrades to a plain insert if the index hasn't been created yet.
    const inserted = await getDb().unsafe(
-    `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
-         values ($1, $2, 'message_sent', 'message', $3, $4, $5::jsonb, now())
-         on conflict do nothing
-         returning *`,
-    [workspaceId, userId, message.id != null ? String(message.id) : null, title, metadata],
+    `with live_activity_message as materialized (
+       select activity_message.id
+         from messages activity_message
+         join chat_sessions activity_session
+           on activity_session.id = activity_message.session_id
+        where activity_message.id = $3::uuid
+          and activity_message.session_id = $6::uuid
+          and activity_message.deleted_at is null
+          and activity_session.deleted_at is null
+          and activity_session.workspace_id = $1::uuid
+          and activity_session.visibility is not distinct from $7
+          and activity_session.folder is not distinct from $8
+        for share of activity_message, activity_session
+     )
+     insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
+       select $1, $2, 'message_sent', 'message', $3, $4, $5::jsonb, now()
+         from live_activity_message
+     on conflict do nothing
+     returning *`,
+    [
+     workspaceId,
+     userId,
+     message.id != null ? String(message.id) : null,
+     title,
+     metadata,
+     String(sessionId),
+     visibility,
+     folder,
+    ],
    );
    if (inserted.length > 0) {
     // table is 'activity_events' here, so this cannot re-trigger message logging.
@@ -7507,6 +8335,13 @@ async function seedDefaultAgents(workspaceId, ownerUserId) {
 
 
 
+const workspaceResources = createWorkspaceResourceService({
+ getDb: () => getDb(),
+ enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
+ assertWorkspaceRoleLocked: sharedAssertWorkspaceRoleLocked,
+ recordAudit: (...a) => recordAudit(...a),
+});
+
 // The builtin turn: the tool-use loop and the Anthropic stream. Last of Wave 4.
 const builtinTurn = createBuiltinTurn({
  VOICE_HUDDLE_NOTE,
@@ -7514,7 +8349,7 @@ const builtinTurn = createBuiltinTurn({
  agentRuntimePayload,
  buildAgentActivityDigest: (...a) => buildAgentActivityDigest(...a),
  buildAgentConnectionCommand: (...a) => buildAgentConnectionCommand(...a),
- buildAgentTurnContext: (...a) => buildAgentTurnContext(...a),
+ buildAgentTurnContextSnapshot: (...a) => buildAgentTurnContextSnapshot(...a),
  buildDaemonPrompt: (...a) => buildDaemonPrompt(...a),
  buildSystemPrompt: (...a) => buildSystemPrompt(...a),
  callProviderOperation: (...a) => callProviderOperation(...a),
@@ -7538,6 +8373,7 @@ const builtinTurn = createBuiltinTurn({
  resolveWorkThreadParent: (...a) => resolveWorkThreadParent(...a),
  resolveWorkspaceAgentByHandle: (...a) => resolveWorkspaceAgentByHandle(...a),
  roleHasWorkspaceCapability,
+ workspaceResources,
  sessionHasLiveHuddle: (...a) => sessionHasLiveHuddle(...a),
  slugHandle,
  notifyDbSubscribers: (...a) => realtime.notifyDbSubscribers(...a),
@@ -7558,6 +8394,7 @@ const {
  builtinToolIdentity, builtinStepDetail, runAgentTurn, streamAnthropicTurn,
  runAnthropicCompletion, streamFlushDue,
  connectionSupportsAmpRuntime, isAmpRuntimeAgent, loadAmpThreadBinding, validAmpThreadId,
+ cancelBuiltinJob,
  BUILTIN_FLUSH_INTERVAL_MS, BUILTIN_TOOL_LOOP_MAX_CALLS,
  BUILTIN_TOOL_LOOP_MAX_STEPS, BUILTIN_TOOL_NOTE, BUILTIN_TOOL_RESULT_MAX_CHARS,
 } = builtinTurn;
@@ -7566,7 +8403,7 @@ const {
 // "Suggestions" in the product. Constructed here, after runAnthropicCompletion
 // is bound, because that is the one-shot model call it analyses with.
 const {
- queueThreadHarvest, runDueThreadHarvests, sweepIdleSessionHarvests,
+ runDueThreadHarvests, sweepIdleSessionHarvests,
  listThreadHarvests, decideHarvestFinding,
 } = createThreadHarvest({
  getDb: () => getDb(),
@@ -7652,7 +8489,7 @@ const agentJobs = createAgentJobs({
  agentLiveMessageContent: (...a) => agentLiveMessageContent(...a),
  agentPermissionFlags, agentRuntimePayload, badRequest,
  continueConversation: (...a) => continueConversation(...a),
- forbidden, getDb, isAgentEnabled,
+ forbidden, ensureTable, getDb, isAgentEnabled,
  logMessageActivity: (...a) => logMessageActivity(...a),
  mirrorAgentReplyToTaskComment: (...a) => mirrorAgentReplyToTaskComment(...a),
  normalizeAgentPermissionMode, parseJsonObject,
@@ -7693,9 +8530,9 @@ const agentPermissions = createAgentPermissions({
 });
 const {
  decideAgentPermissionRequest, expireConnectionPermissionRequests,
- expireStalePermissionRequests, handleAgentPermissionRequest,
+ expireStalePermissionRequests, handleAgentPermissionPrepared, handleAgentPermissionRequest,
  listAgentPermissionRequests, publicPermissionRequest, rehomePendingPermissionRequests,
- revokeAgentPermissionRule, setAgentPermissionMode,
+ replayPermissionDecisions, revokeAgentPermissionRule, setAgentPermissionMode,
 } = agentPermissions;
 
 // Task dispatch owns four of the maps resetTestState() clears, and the cadence
@@ -7729,7 +8566,7 @@ const agentConnections = createAgentConnections({
  failConnectionJobs, finalizeStuckJob, forbidden, getDb, inferenceBroker,
  isAgentEnabled, logConnectionActivity, normalizeSkillDocuments, parseJsonObject,
  publicAgentConnection, publicFarmEnrolledAgent, quoteIdent, reachFromMessage,
- rehomePendingPermissionRequests, rehomeRunningJobs, repairStoredIdentity,
+ rehomePendingPermissionRequests, rehomeRunningJobs, replayPermissionDecisions, repairStoredIdentity,
  sharedModelsFromMessage, slugHandle,
  // Forwarded lazily: channelBridges is constructed from agentConnections' own
  // exports, so it does not exist yet at this point in the file.
@@ -7788,10 +8625,13 @@ const realtime = createRealtime({
  handleAgentCapabilitiesSync,
  handleAgentJobDelta, handleAgentJobResult, handleAgentJobSegment,
  handleAgentJobStep, handleAgentMemorySync, handleAgentSkillSync,
- handleAgentPermissionRequest,
+ handleAgentPermissionPrepared, handleAgentPermissionRequest,
  handleBridgeMessage: (...args) => channelBridges.handleBridgeMessage(...args),
  handlePeerListRequest, handlePeerTicketRequest, inferenceBroker,
  isPrivateSessionRow, sessionMemberUserIds, sessionRealtimeAudience,
+ sessionRealtimeAudiences,
+ readReceiptOptedInUserIds,
+ redactDeletedMessageRows,
  logMessageActivity, markAgentConnectionOffline,
  refreshConnectedAgentConfigs, registerAgentConnection, updateAgentHeartbeat,
  // Lets the agent-status broadcast resolve both workspace and canonical
@@ -7803,6 +8643,7 @@ const {
  sendWs, notifyDbSubscribers, sanitizeRealtimeRow, relayBroadcast,
  broadcastGlobal, attachRealtime, authorizeRealtimeBinding,
  authorizeRealtimeBroadcast, revokeRealtimeAccessForMember,
+ notifyReadReceiptPreference,
  registerTestWebsocketClient, workspaceIdFromRealtimeChannel,
 } = realtime;
 
@@ -7942,6 +8783,8 @@ function coreDeps() {
   rateLimitBlocked, dbRateLimitBlocked, clientIpFromReq,
   // Common value coercion
   parseJsonObject, parseJsonArray, slugHandle, textFromValue, isAgentEnabled,
+  redactDeletedMessageRows, aiStreamErrorText,
+  scrubMessageActivityByMessageId, scrubMessageActivityBySession,
  };
 }
 
@@ -8050,7 +8893,21 @@ function createApp() {
  // come from stored upload sizes (uploaded_files.size) plus agent memory file
  // content (agent_memory_files.byte_size); counts are workspace-scoped. Messages
  // have no workspace_id column, so they are scoped via their chat_sessions.
- mountSessionsRoutes(app, { ...coreDeps(), buildAgentConnectionCommand, buildWorkspaceBootstrap, ensurePrimaryDaemonAgent, normalizeAgentBackendBaseUrl, requestBaseUrl, resolveSetupWorkspace, resolveWorkspaceIdForSession });
+ mountSessionsRoutes(app, {
+  ...coreDeps(),
+  buildAgentConnectionCommand,
+  buildWorkspaceBootstrap,
+  cancelBuiltinJob,
+  endHuddleRoom: deleteLivekitRoom,
+  ensurePrimaryDaemonAgent,
+  isPrivateSessionRow,
+  normalizeAgentBackendBaseUrl,
+  requestBaseUrl,
+  resolveSetupWorkspace,
+  resolveWorkspaceIdForSession,
+  scheduleTaskQueueDrain: (...a) => taskDispatch.scheduleTaskQueueDrain(...a),
+  sendToConnection,
+ });
 
  mountCursorbuddyRoutes(app, { ...coreDeps(), ...cursorBuddyGuides, dbQuery, cursorBuddyGuidesDbRateLimiter, cursorBuddyGuidesRateLimiter, agentRuntimePayload, buildAgentConnectionCommand, createCursorBuddyConnectionKey, ensureCursorBuddyAgentForKey, ensureCursorBuddyProviderAgent, hashAgentToken, normalizeAgentBackendBaseUrl, normalizeCursorBuddyDomain, normalizeCursorBuddyScope, normalizeCursorBuddySurface, publicCursorBuddyConnectionKey, requestBaseUrl, shellQuote });
 
@@ -8111,7 +8968,11 @@ function createApp() {
  });
 
  mountTenantsRoutes(app, { ...coreDeps(), ...cursorBuddyGuides, dbQuery, CAMPAIGN_CATEGORIES, assertSendable, assertSystemOwner, buildSegmentPreview, campaignMessageDbRateLimiter, campaignMessageRateLimiter, createCampaign, describeSegment, dismissCampaignMessage, getTenantAccount, listCampaigns, listTenantAccounts, listUserCampaignMessages, loadTenantFacts, normalizeCampaignInput, normalizeSegment, selectSegmentMatches, tenantsDbRateLimiter, tenantsRateLimiter });
- mountSchedulesRoutes(app, { ...coreDeps(), runDueSchedules });
+ mountSchedulesRoutes(app, {
+  ...coreDeps(),
+  runDueSchedules,
+  roleHasWorkspaceCapability,
+ });
 
  mountAgentsRoutes(app, {
   ...coreDeps(),
@@ -8149,7 +9010,9 @@ function createApp() {
  mountAuthRoutes(app, {
   ...coreDeps(),
   createPasswordHash, emailLookupRateLimiter, evaluatePasswordServerSide,
-  isReservedSignupEmail, issueToken, setCachedTokenVersion,
+ isReservedSignupEmail, issueToken, setCachedTokenVersion,
+  revokeRealtimeAccessForMember,
+  notifyReadReceiptPreference,
   signinIpFailureLimiter, signinRateLimiter, signupRateLimiter, verifyPassword,
  });
 
@@ -8222,7 +9085,8 @@ function createApp() {
 
  mountJoinPagesRoutes(app, {
   ...coreDeps(),
-  agentNextSteps, bearerToken, configBlock, createAgentConnectToken,
+  agentNextSteps, controllerNextSteps, bearerToken, configBlock,
+  createAgentConnectToken, createControllerCredential,
   hashAgentToken, invalidDescriptor, isJoinLinkToken, joinApiBaseUrl,
   joinDescriptor, joinLinkRateLimiter, joinLinkRefused, joinPublicBaseUrl,
   joinRedeemDbRateLimiter, joinRedeemRateLimiter, joinWantsJson,
@@ -8232,6 +9096,12 @@ function createApp() {
  });
 
  mountJoinLinksRoutes(app, { ...coreDeps(), createJoinLinkToken, hashAgentToken, joinLinkTtlMs, joinPublicBaseUrl, joinUrlFor, logJoinLinkActivity });
+ mountControllerRoutes(app, { ...coreDeps() });
+ mountWorkspaceResourceRoutes(app, {
+  ...coreDeps(),
+  workspaceResources,
+  resourceOperationRateLimiter,
+ });
 
  mountFlowRoutes(app, { ...coreDeps(), createPostgresFlowConnectionStore, getFlowConnectionCore, mcpEndpoint, normalizeBaseUrl, normalizeFlowWebhookUrl, requestBaseUrl });
  mountWorkspaceMcpRoutes(app, { ...coreDeps(), claudeMcpAddCommand, configBlock, createWorkspaceMcpToken, decideAgentRegistration, hashAgentToken, mcpEndpoint, normalizeBaseUrl, requestBaseUrl });
@@ -8240,6 +9110,7 @@ function createApp() {
   try {
    const { table, columns = '*', filters = [], orderBy = null, limit = null, single = false } = req.body || {};
    const tableSql = ensureTable(table);
+   assertGenericSelectAllowed(table);
    await enforceDbOperationAccess(req.userId, table, 'select', { filters });
    const where = table === 'workspaces'
     ? appendWorkspaceAccessClause(buildWhereClause(filters, []), req.userId)
@@ -8248,8 +9119,24 @@ function createApp() {
     // every DM's title and roster.
     : appendSessionAccessClause(buildWhereClause(filters, []), req.userId, table);
    const { clause, params } = where;
-   const rows = await getDb().unsafe(`select ${normalizeColumns(safeSelectColumns(table, columns))} from ${tableSql}${clause}${buildOrderClause(orderBy)}${Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : ''}`, params);
-   res.json({ data: single ? (rows[0] ?? null) : rows, error: null });
+   const safeColumns = safeSelectColumns(table, columns);
+   const normalizedColumns = normalizeColumns(safeColumns);
+   const requestedColumns = String(safeColumns || '*').split(',').map((column) => column.trim());
+   const appendedDeletedAt = table === 'messages'
+    && normalizedColumns !== '*'
+    && !requestedColumns.includes('deleted_at');
+   const queryColumns = appendedDeletedAt
+    ? `${normalizedColumns}, "deleted_at"`
+    : normalizedColumns;
+   const rows = await getDb().unsafe(`select ${queryColumns} from ${tableSql}${clause}${buildOrderClause(orderBy)}${Number.isInteger(limit) ? ` LIMIT ${Number(limit)}` : ''}`, params);
+   const publicRows = table === 'messages'
+    ? redactDeletedMessageRows(rows).map((row) => {
+     if (!appendedDeletedAt) return row;
+     const { deleted_at: _projectionOnly, ...projected } = row;
+     return projected;
+    })
+    : rows;
+   res.json({ data: single ? (publicRows[0] ?? null) : publicRows, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
@@ -8260,6 +9147,9 @@ function createApp() {
    const { table, values, returning = '*', single = false } = req.body || {};
    const tableSql = ensureTable(table);
    await enforceDbOperationAccess(req.userId, table, 'insert', { values });
+   const messageAuthor = table === 'messages'
+    ? await loadBrowserMessageAuthor({ userId: req.userId, db: sharedDbAdapter })
+    : null;
    const rows = (Array.isArray(values) ? values : [values]).map(row => {
     // Validate before any object spread can turn an array or other non-record
     // value into a record that appears safe only after server normalization.
@@ -8268,6 +9158,7 @@ function createApp() {
     next = stampTaskWriteIdentity(table, next, req.userId, { insert: true });
     next = applyAgentPurposeInsertDefaults(table, next);
     if (table === 'workspaces') next = { ...next, user_id: req.userId };
+    if (table === 'messages') next = stampBrowserMessageInsert(next, messageAuthor);
     // Strip agent-invented outline prefixes ("Ship UI work / 1. …") from task
     // titles. Title only on this route: inferring parent_id from a title string
     // is the right call for the MCP tool (server/mcp.cjs, where agents create
@@ -8293,7 +9184,12 @@ function createApp() {
    // Validate the caller-visible projection before opening a transaction or
    // writing anything. A forbidden/invalid RETURNING shape must not create a
    // conversation and then fail while formatting the response.
-   if (table === 'chat_sessions') projectSessionCreateRows([], returning);
+   if (table === 'chat_sessions') {
+    projectSessionCreateRows([], returning);
+    // Pure lineage shape validation belongs before the transaction. A malformed
+    // child with two parent edges must not open a write transaction first.
+    rows.forEach(sessionLineageKind);
+   }
    const insertRows = async (db) => {
     let effectiveRows = rows;
     let lineage = null;
@@ -8392,7 +9288,7 @@ function createApp() {
 
    const responseRows = table === 'chat_sessions'
     ? projectSessionCreateRows(result, returning)
-    : result;
+    : table === 'messages' ? redactDeletedMessageRows(result) : result;
    res.json({ data: single ? (responseRows[0] ?? null) : responseRows, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -8412,7 +9308,7 @@ function createApp() {
    }
    const safeValues = stampTaskWriteIdentity(
     table,
-    stripPrivilegedDbValues(table, values),
+    stripImmutableDbUpdateValues(table, stripPrivilegedDbValues(table, values)),
     req.userId,
    );
 
@@ -8427,9 +9323,13 @@ function createApp() {
    // neither forge a lock nor erase one.
    const { values: markedValues, voice, lockPatch } = markHumanIdentityWrite(table, safeValues);
    const keys = Object.keys(markedValues);
-   if (keys.length === 0 && !lockPatch && !(VERSIONED_TABLES.has(table) && values.version == null)) {
+   if (keys.length === 0 && !lockPatch) {
     return jsonError(res, 400, new Error('No updatable fields provided'));
    }
+   // workspace_agents.version is server-owned: stripPrivilegedDbValues removed
+   // any caller value, so an agent edit can only advance the stored counter.
+   // Other legacy versioned tables retain their explicit-version behaviour.
+   const shouldBumpVersion = VERSIONED_TABLES.has(table) && safeValues.version == null;
 
    const params = [];
    const setParts = keys.map((column) => `${quoteIdent(column)} = ${bindDbParam(params, table, column, markedValues[column])}`);
@@ -8456,7 +9356,7 @@ function createApp() {
     const voiceBound = voice !== undefined ? bindDbParam(params, table, 'identity', voice) : null;
     setParts.push(`"identity" = ${identityWriteSql(voiceBound, bindDbParam(params, table, 'identity', lockPatch))}`);
    }
-   if (VERSIONED_TABLES.has(table) && values.version == null) {
+   if (shouldBumpVersion) {
     setParts.push('"version" = COALESCE("version", 0) + 1');
    }
    if (setParts.length === 0) {
@@ -8494,7 +9394,7 @@ function createApp() {
    if (table === 'chat_sessions' && Object.prototype.hasOwnProperty.call(safeValues, 'deleted_at')) {
     const priorWhere = buildWhereClause(filters, []);
     priorSessionRows = await getDb().unsafe(
-     `select id, workspace_id, deleted_at from ${tableSql}${priorWhere.clause}`,
+     `select id, workspace_id, visibility, folder, deleted_at from ${tableSql}${priorWhere.clause}`,
      priorWhere.params,
     ).catch(() => []);
    }
@@ -8509,13 +9409,174 @@ function createApp() {
     ).catch(() => []);
    }
 
-   const where = buildWhereClause(filters, params);
-   const result = await getDb().unsafe(
-    `update ${tableSql} set ${setClause}${where.clause} returning ${normalizeColumns(safeSelectColumns(table, returning))}`,
-    where.params,
+   const mutationFilters = appendMessageAuthorshipFilters({
+    userId: req.userId,
+    table,
+    op: 'update',
+    filters,
+    values,
+   });
+   const where = appendMessageMutationAccessClause(
+    buildWhereClause(mutationFilters, params),
+    req.userId,
+    table,
    );
+   const editsMessageContent = table === 'messages'
+    && Object.prototype.hasOwnProperty.call(safeValues, 'content');
+   const closesSessions = table === 'chat_sessions'
+    && Object.prototype.hasOwnProperty.call(safeValues, 'deleted_at')
+    && safeValues.deleted_at != null;
+   if (
+    table === 'chat_sessions'
+    && Object.prototype.hasOwnProperty.call(safeValues, 'deleted_at')
+    && safeValues.deleted_at == null
+   ) {
+    throw badRequest('A closed conversation cannot be reopened through the generic database route');
+   }
+   const changesSessionPrivacy = table === 'chat_sessions'
+    && (
+     Object.prototype.hasOwnProperty.call(safeValues, 'visibility')
+     || Object.prototype.hasOwnProperty.call(safeValues, 'folder')
+    );
+   let scrubbedActivity = [];
+   let sessionClosureEffects = null;
+   let canonicalClosedSessionRows = [];
+   const integrityReturning = editsMessageContent
+    ? `${normalizeColumns(returning)}, id as "__integrity_id", session_id as "__integrity_session_id"`
+    : closesSessions
+     ? `${normalizeColumns(returning)}, id as "__integrity_id"`
+     : changesSessionPrivacy
+      ? `${normalizeColumns(returning)}, id as "__integrity_id", visibility as "__integrity_visibility", folder as "__integrity_folder"`
+      : normalizeColumns(returning);
+   const rawResult = editsMessageContent || changesSessionPrivacy || closesSessions
+    ? await getDb().begin(async (transaction) => {
+     let lockedSessionIds = [];
+     if (closesSessions) {
+      const lockWhere = buildWhereClause(filters, []);
+      lockWhere.params.push(req.userId);
+      const userParam = `$${lockWhere.params.length}`;
+      const accessJoin = lockWhere.clause ? ' and ' : ' where ';
+      const locked = await transaction.unsafe(
+       `select close_session_scope.id
+          from chat_sessions close_session_scope
+          ${lockWhere.clause}${accessJoin}${sessionReadableSql(
+            'close_session_scope',
+            userParam,
+            { lockMembership: true },
+           )}
+          for update of close_session_scope`,
+       lockWhere.params,
+      );
+      lockedSessionIds = locked.map(row => String(row.id));
+      if (lockedSessionIds.length === 0) {
+       throw forbidden('Conversation access changed before the close completed');
+      }
+      if (lockedSessionIds.length !== 1) {
+       throw badRequest('Conversations must be closed one at a time');
+      }
+      sessionClosureEffects = await settleSessionClosure({
+       query: (sql, sqlParams) => transaction.unsafe(sql, sqlParams),
+       hostSessionIds: lockedSessionIds,
+       // The generic UPDATE below owns the host row so its requested returning
+       // projection and version semantics remain intact. Linked transcript
+       // sessions still close inside the same transaction.
+       closeHostSessions: false,
+      });
+     }
+     const updated = await transaction.unsafe(
+      `update ${tableSql} set ${setClause}${where.clause} returning ${integrityReturning}`,
+      where.params,
+     );
+     if (closesSessions && updated.length !== lockedSessionIds.length) {
+      throw forbidden('Conversation access changed before the close completed');
+     }
+     if (closesSessions) {
+      // Re-read the complete current rows while their UPDATE locks are still
+      // held. Client-controlled RETURNING remains the HTTP projection only; it
+      // must never become the shape of a realtime lifecycle event.
+      canonicalClosedSessionRows = await transaction.unsafe(
+       `select ${SESSION_RETURNING}
+          from chat_sessions
+         where id = any($1::uuid[])
+         order by id`,
+       [toPgArrayLiteral(lockedSessionIds)],
+      );
+      if (canonicalClosedSessionRows.length !== lockedSessionIds.length) {
+       throw forbidden('Conversation closure could not be canonicalized');
+      }
+     }
+     if (editsMessageContent) {
+      for (const row of updated) {
+       const activityRows = await scrubEditedMessageActivityByMessageId({
+        db: (sql, sqlParams) => transaction.unsafe(sql, sqlParams),
+        messageId: row.__integrity_id,
+        sessionId: row.__integrity_session_id,
+       });
+       scrubbedActivity.push(...activityRows);
+      }
+     } else if (!closesSessions) {
+      for (const row of updated) {
+       if (!closesSessions && !isPrivateSessionRow({
+        visibility: row.__integrity_visibility,
+        folder: row.__integrity_folder,
+       })) continue;
+       await scrubMessageActivityBySession({
+        db: (sql, sqlParams) => transaction.unsafe(sql, sqlParams),
+        sessionId: row.__integrity_id,
+       });
+      }
+     }
+     return updated;
+    })
+    : await getDb().unsafe(
+     `update ${tableSql} set ${setClause}${where.clause} returning ${integrityReturning}`,
+     where.params,
+    );
+   const result = rawResult.map((row) => {
+    const next = { ...row };
+    delete next.__integrity_id;
+    delete next.__integrity_session_id;
+    delete next.__integrity_visibility;
+    delete next.__integrity_folder;
+    return next;
+   });
+   if (table === 'messages' && result.length === 0) {
+    throw forbidden('Message access changed before the edit completed');
+   }
 
-   notifyDbSubscribers(table, 'UPDATE', result);
+   // `returning` is client-controlled, but realtime is a server protocol. A
+   // narrow response such as `returning: 'id'` must not turn a close event into
+   // an id-only frame. The canonical rows above carry every session field from
+   // the committed write while `result` preserves the requested HTTP shape.
+   const realtimeResult = closesSessions ? canonicalClosedSessionRows : result;
+   notifyDbSubscribers(table, 'UPDATE', realtimeResult);
+   if (sessionClosureEffects) {
+    await applySessionClosureRuntimeEffects(sessionClosureEffects, {
+     notifyDbSubscribers,
+     cancelBuiltinJob,
+     sendToConnection,
+     scheduleTaskQueueDrain: (...a) => taskDispatch.scheduleTaskQueueDrain(...a),
+     endHuddleRoom: deleteLivekitRoom,
+     onWarn: (message) => console.warn('[session-close]', message),
+    });
+    const closedHost = result[0];
+    void recordAudit({
+     workspaceId: closedHost?.workspace_id || priorSessionRows[0]?.workspace_id || null,
+     actor: { userId: req.userId },
+     action: 'chat_session.cleared',
+     target: { type: 'chat_session', id: closedHost?.id || priorSessionRows[0]?.id || '' },
+     detail: {
+      sessionIds: sessionClosureEffects.allSessionIds.join(','),
+      clearedMessages: sessionClosureEffects.clearedMessages,
+      cancelledJobs: sessionClosureEffects.jobs.length,
+      expiredPermissionRequests: sessionClosureEffects.permissionRequests.length,
+      endedHuddles: sessionClosureEffects.huddles.length,
+     },
+    });
+   }
+   if (scrubbedActivity.length > 0) {
+    notifyDbSubscribers('activity_events', 'UPDATE', scrubbedActivity);
+   }
 
    // Fire-and-forget, AFTER the row is written and broadcast: an integration
    // that cannot be told about a reaction must never cost somebody the
@@ -8540,22 +9601,6 @@ function createApp() {
    // runs. Fire-and-forget AFTER the row is written and broadcast, so a failed
    // dispatch can never lose the user's edit. dispatchTaskAssignment re-checks
    // everything that matters (agent vs human, disabled, done/cancelled, duplicate).
-   // Discarding a thread is the moment its lessons are most likely to be lost, so
-   // queue a background analysis of what could be gleaned from it. Fire-and-forget
-   // AFTER the row is written and broadcast, and fails open inside: a harvest that
-   // cannot be queued must never cost somebody their delete. Only on the
-   // null -> timestamp EDGE, so a repeat delete or an undelete queues nothing.
-   for (const before of priorSessionRows) {
-    const after = result.find((row) => String(row.id) === String(before.id));
-    if (!after || !isDiscardTransition(before, after)) continue;
-    void queueThreadHarvest({
-     workspaceId: before.workspace_id,
-     sessionId: before.id,
-     reason: 'deleted',
-     requestedBy: req.userId,
-    }).catch((error) => console.error('queueThreadHarvest failed', error));
-   }
-
    for (const before of priorTaskRows) {
     if (String(before.assignee_id || '') === nextAssigneeId) continue;
     void dispatchTaskAssignment({
@@ -8566,7 +9611,8 @@ function createApp() {
     }).catch((error) => console.error('dispatchTaskAssignment failed', error));
    }
 
-   res.json({ data: single ? (result[0] ?? null) : result, error: null });
+   const publicResult = table === 'messages' ? redactDeletedMessageRows(result) : result;
+   res.json({ data: single ? (publicResult[0] ?? null) : publicResult, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
@@ -8580,17 +9626,57 @@ function createApp() {
    if (!Array.isArray(filters) || filters.length === 0) {
     return jsonError(res, 400, new Error('Delete requires at least one filter'));
    }
-   const where = buildWhereClause(filters, []);
+   const mutationFilters = appendMessageAuthorshipFilters({
+    userId: req.userId,
+    table,
+    op: 'delete',
+    filters,
+   });
+   const where = appendMessageMutationAccessClause(
+    buildWhereClause(mutationFilters, []),
+    req.userId,
+    table,
+   );
    if (!where.clause) {
     return jsonError(res, 400, new Error('Delete requires a non-empty where clause'));
    }
    await enforceDbOperationAccess(req.userId, table, 'delete', { filters });
-   const result = await getDb().unsafe(
-    `delete from ${tableSql}${where.clause} returning ${normalizeColumns(safeSelectColumns(table, '*'))}`,
-    where.params,
-   );
-   notifyDbSubscribers(table, 'DELETE', result);
-   res.json({ data: single ? (result[0] ?? null) : null, error: null });
+   // Physical message deletion is not author-local: FK cascades would also
+   // erase other people's replies and whole subthread sessions. A user's
+   // delete therefore retains the row and only hides it from normal reads.
+   let scrubbedActivity = [];
+   const result = table === 'messages'
+    ? await getDb().begin(async (transaction) => {
+     // The logger takes a SHARE lock before mirroring a live message. Updating
+     // first makes any in-flight logger finish; the second statement then gets
+     // a fresh READ COMMITTED snapshot and cannot miss its just-committed row.
+     const deleted = await transaction.unsafe(
+      `update ${tableSql}
+          set deleted_at = coalesce(deleted_at, now())
+          ${where.clause} and deleted_at is null
+        returning *`,
+      where.params,
+     );
+     if (deleted.length === 0) {
+      throw forbidden('Message access changed before the delete completed');
+     }
+     scrubbedActivity = await scrubMessageActivityByMessageId({
+      db: (sql, params) => transaction.unsafe(sql, params),
+      messageId: deleted[0].id,
+      sessionId: deleted[0].session_id,
+     });
+     return deleted;
+    })
+    : await getDb().unsafe(`delete from ${tableSql}${where.clause} returning *`, where.params);
+   if (table === 'messages' && result.length === 0) {
+    throw forbidden('Message access changed before the delete completed');
+   }
+   notifyDbSubscribers(table, table === 'messages' ? 'UPDATE' : 'DELETE', result);
+   if (scrubbedActivity.length > 0) {
+    notifyDbSubscribers('activity_events', 'UPDATE', scrubbedActivity);
+   }
+   const publicResult = table === 'messages' ? redactDeletedMessageRows(result) : result;
+   res.json({ data: single ? (publicResult[0] ?? null) : null, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
@@ -8630,6 +9716,8 @@ function createApp() {
   liveSharedModelRoutes, bindInferenceAbort, getAnthropicApiKey,
   resolveAnthropicModel, buildSystemPrompt, normalizeAiChatMessages,
   assertSafeOutboundUrl, resolveGatewayRoute,
+  emitBridgeOutbound: (...args) => channelBridges.emitBridgeOutbound(...args),
+  logMessageActivity,
   recordAnthropicUsage, createAnthropicUsageAccumulator,
  });
 
@@ -8967,6 +10055,7 @@ module.exports = {
   authorizeRealtimeBinding,
   authorizeRealtimeBroadcast,
   revokeRealtimeAccessForMember,
+  notifyReadReceiptPreference,
   registerTestWebsocketClient,
   notifyDbSubscribers,
   relayBroadcast,
@@ -8984,6 +10073,8 @@ module.exports = {
   buildWhereClause,
   buildDaemonPrompt,
   agentConnectionCommand,
+  buildAgentConnectionCommand,
+  publicAgentConnectionCommandAgent,
   // Reply cadence — the pending-wake bookkeeping. The DECISION is pure and lives
   // in shared/replyCadence.cjs; these are only the seams a test needs to prove
   // that a held turn is booked (and never double-booked) rather than dropped.
@@ -9051,6 +10142,7 @@ module.exports = {
   clearPendingJobFailures,
   // MCP connect-a-client model — exercised against a fake DB.
   verifyWorkspaceMcpToken,
+  verifyControllerToken,
   verifyUserAuthMcpToken,
   verifyMcpToken,
   createWorkspaceMcpToken,
@@ -9064,6 +10156,7 @@ module.exports = {
   ensureCursorBuddyAgentForKey,
   runAgentTurn,
   runDueSchedules,
+  explicitConversationAgent,
   resolveWorkThreadParent,
   loadChannelMessages,
   sanitizeRealtimeRow,
@@ -9142,12 +10235,14 @@ module.exports = {
   cancelFarmAgentJob,
   handleAgentJobDelta,
   handleAgentJobStep,
+  handleAgentPermissionPrepared,
   handleAgentPermissionRequest,
   decideAgentPermissionRequest,
   listAgentPermissionRequests,
   expireStalePermissionRequests,
   expireConnectionPermissionRequests,
   rehomePendingPermissionRequests,
+  replayPermissionDecisions,
   revokeAgentPermissionRule,
   setAgentPermissionMode,
   publicPermissionRequest,

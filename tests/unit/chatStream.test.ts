@@ -28,6 +28,7 @@ describe('chat stream parsing', () => {
 
   it('never finalizes an empty assistant placeholder', () => {
     expect(finalAssistantStreamContent('', 'AI stream failed')).toBe('AI stream failed');
+    expect(finalAssistantStreamContent('partial answer', 'AI stream failed')).toBe('AI stream failed');
     expect(finalAssistantStreamContent('', '')).toBe(EMPTY_STREAM_RESPONSE);
   });
 

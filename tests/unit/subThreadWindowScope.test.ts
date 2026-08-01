@@ -9,7 +9,8 @@ function read(relativePath: string) {
 describe('sub-thread window scope', () => {
   it('records the host chat whenever a sub-thread is opened', () => {
     const chat = read('src/components/windows/ChatWindowContent.tsx');
-    expect(chat).toContain('onOpenSubThread?.(session, inferredSessionId || undefined)');
+    expect(chat).toContain('onOpenSubThread?.(session, sessionId || undefined)');
+    expect(chat).not.toContain('onOpenSubThread?.(session, inferredSessionId');
 
     const hook = read('src/hooks/useSubThreads.ts');
     expect(hook).toContain('setActiveSubThreadHostSessionId(hostSessionId || null)');

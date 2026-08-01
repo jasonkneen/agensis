@@ -1,7 +1,7 @@
 import { NewChannelDialog } from './components/chat/NewChannelDialog';
 import { DEFAULT_BACKGROUND_OPACITY } from './lib/wallpaperDefaults';
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
-import { Globe, SquareTerminal, MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Trash2, Settings, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2, Zap } from 'lucide-react';
+import { Globe, SquareTerminal, MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Database, Trash2, Settings, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2, Zap } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { WorkspaceRail } from './components/layout/WorkspaceRail';
@@ -17,6 +17,7 @@ import { DIRECT_MESSAGES_FOLDER } from './lib/onboardingChecklist';
 import { WindowGroupFrame } from './components/windows/WindowGroupFrame';
 import { ChatWindowContent } from './components/windows/ChatWindowContent';
 import { ChatWindowBody, DocWindowBody, TasksWindowBody } from './components/windows/WindowBodies';
+import { channelMessages } from './components/chat/channelView';
 import { MemorySection } from './components/memory/MemorySection';
 import { SkillsWindowContent } from './components/windows/SkillsWindowContent';
 import { countOpenTasks } from './components/windows/taskSchedule';
@@ -37,7 +38,7 @@ import { RegistrationApprovalPopup } from './components/agents/RegistrationAppro
 import { FeedbackButton } from './components/feedback/FeedbackButton';
 import { NotificationsBell } from './components/notifications/NotificationsBell';
 import { Separator } from './components/ui/separator';
-import { apiAuthHeaders, apiUrl, backendClient, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
+import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
 import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from './lib/openpets';
 import {
@@ -104,16 +105,16 @@ import {
 import { InlineRename } from './components/common/InlineRename';
 import { TenantsWindowContent } from './components/tenants/TenantsWindowContent';
 import { useTenantAccess } from './hooks/useTenants';
-import { writeFailureNotice, type WriteFailure } from './lib/writeFeedback';
+import { writeFailureNotice, type SendOutcome, type WriteFailure } from './lib/writeFeedback';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
 import { useDocuments } from './hooks/useDocuments';
-import { channelMessages } from './components/chat/channelView';
-import { isToolStepMessage } from './components/chat/toolSteps';
 import { useChat, type SendMessageResult } from './hooks/useChat';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
 import { useSubThreads } from './hooks/useSubThreads';
 import { useSessionMessages } from './hooks/useSessionMessages';
+import { useUserProfile } from './hooks/useUserProfile';
+import type { QuotedMessageSource } from './lib/quotedSessionContext';
 import { useMemory } from './hooks/useMemory';
 import { useFiles } from './hooks/useFiles';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
@@ -144,7 +145,8 @@ import { WORKSPACE_BACKGROUND_IMAGES } from './lib/backgrounds';
 import type { CanvasLayer } from './hooks/useCanvasLayers';
 import { CursorOverlay } from './components/cursors/CursorOverlay';
 import { PresenceRoster } from './components/presence/PresenceRoster';
-import type { ChannelParticipant, Document, ChatSession, MemoryFact, MessageAttachment, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, Message as ChatMessage, AgentConnection, UploadedFile } from './types';
+import type { ChannelParticipant, Document, ChatSession, MemoryFact, Message, MessageAttachment, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, AgentConnection, UploadedFile } from './types';
+import { windowsClosedWithSessions } from './lib/sessionRealtime';
 import type { InboxOpenTarget } from './components/inbox/inboxSources';
 import type { InboxOpenSession } from './components/inbox/inboxNavigation';
 import type { WorkspaceMember } from './hooks/useSharing';
@@ -156,6 +158,7 @@ import type { CreateTaskInput } from './hooks/useTasks';
 // Named exports are adapted to the default-export shape React.lazy expects.
 const ActivityWindowContent = lazy(() => import('./components/windows/ActivityWindowContent').then(m => ({ default: m.ActivityWindowContent })));
 const AgentsWindowContent = lazy(() => import('./components/windows/AgentsWindowContent').then(m => ({ default: m.AgentsWindowContent })));
+const ResourcesWindowContent = lazy(() => import('./components/windows/ResourcesWindowContent').then(m => ({ default: m.ResourcesWindowContent })));
 const UsersWindow = lazy(() => import('./components/windows/UsersWindow').then(m => ({ default: m.UsersWindow })));
 const SchedulesWindow = lazy(() => import('./components/windows/SchedulesWindow').then(m => ({ default: m.SchedulesWindow })));
 const AutomationsWindowContent = lazy(() => import('./components/windows/AutomationsWindowContent').then(m => ({ default: m.AutomationsWindowContent })));
@@ -190,6 +193,7 @@ function windowDockIcon(type: FloatingWindow['type']) {
   if (type === 'tasks') return <CheckCircle2 className="size-4" />;
   if (type === 'activity') return <Activity className="size-4" />;
   if (type === 'agents') return <Bot className="size-4" />;
+  if (type === 'resources') return <Database className="size-4" />;
   if (type === 'browser') return <Globe className="size-4" />;
   if (type === 'terminal') return <SquareTerminal className="size-4" />;
   return <FileText className="size-4" />;
@@ -737,7 +741,7 @@ function AppContent() {
   } = useDocuments(activeWorkspaceId, (workspaceBootstrap?.documents as import('./types').Document[] | undefined) || null);
 
   const {
-    sessions, activeSession, setActiveSession, messages, streaming,
+    sessions, closedSessionIds, activeSession, setActiveSession, messages, streaming,
     hasMoreMessages, loadingEarlier, loadEarlierMessages,
     topLevelMessages, threadMessages, threadReplyCounts, activeThreadId,
     openThread, closeThread,
@@ -746,6 +750,7 @@ function AppContent() {
     activeWorkspaceId,
     user?.email?.split('@')[0] || undefined,
     (workspaceBootstrap?.sessions as import('./types').ChatSession[] | undefined) || null,
+    user?.id,
   );
 
   const {
@@ -753,6 +758,9 @@ function AppContent() {
     activeSubThread,
     activeSubThreadHostSessionId,
     subThreadMessages,
+    subThreadHasMore,
+    subThreadLoadingEarlier,
+    loadEarlierSubThreadMessages,
     subThreadStreaming,
     createSubThread,
     openSubThread,
@@ -813,6 +821,16 @@ function AppContent() {
     viewMode,
   } = useWindowManager();
   const canvasRef = useRef<HTMLElement>(null);
+
+  // A server-scoped chat_sessions close removes the canonical session first;
+  // close every matching floating window too so an inactive composer cannot
+  // promote a stale session and fail only after the person presses Send.
+  useEffect(() => {
+    if (closedSessionIds.length === 0) return;
+    for (const windowId of windowsClosedWithSessions(windows, closedSessionIds)) {
+      closeWindow(windowId);
+    }
+  }, [closedSessionIds, windows, closeWindow]);
 
   // Which windows the "Show desktop" sidebar row put away, per desktop. In
   // memory alongside the windows themselves — a stash that outlived a reload
@@ -1373,6 +1391,16 @@ function AppContent() {
     openWindow('users', { title: 'Users', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
+  const handleOpenResources = useCallback(() => {
+    const existing = windows.find(w => w.type === 'resources');
+    if (existing) {
+      focusWindow(existing.id);
+      if (existing.minimized) minimizeWindow(existing.id);
+      return;
+    }
+    openWindow('resources', { title: 'Shared Resources', canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
+
   const handleOpenSchedules = useCallback(() => {
     const existing = windows.find(w => w.type === 'schedules');
     if (existing) {
@@ -1783,9 +1811,9 @@ function AppContent() {
     }
     toast.success(`Split created — “${forked.title}” added under its parent`, { id: pending });
     // Split is a point-in-time duplicate: the source keeps the live session
-    // slot (and any in-flight job), the fork opens as its own independent,
-    // non-active window (InactiveChatWindow) so it never borrows the
-    // source's streaming state or looks like it's still processing.
+    // slot (and any in-flight job), while the fork opens through ChatWindowBody
+    // as its own non-active session so it never borrows the source's streaming
+    // state or looks like it is still processing.
     openSplitWindow(source.id, {
       title: forked.title || 'Split',
       sessionId: forked.id,
@@ -1800,11 +1828,12 @@ function AppContent() {
     });
   }, [splitSession, openSplitWindow, activeLayerId, user?.id, logEvent]);
 
-  // "Escalate" a thread: copy its transcript into an EXISTING channel so a
+  // "Escalate" a thread: carry its transcript as explicit quoted context into
+  // an EXISTING channel so a
   // conversation stranded in a DM (no share/save/hand-off path — see the
   // thread-escalation gap) lands somewhere a team can pick it up. Unlike
   // split, this never creates a new session — it opens the target channel the
-  // human already chose so they land straight on the copy.
+  // human already chose so they land straight on the imported context.
   const handleEscalateToChannel = useCallback(async (source: ChatSession, targetChannelId: string) => {
     const target = sessions.find(item => item.id === targetChannelId);
     const pending = toast.loading(`Escalating “${source.title || 'thread'}” to ${target?.title || 'channel'}…`);
@@ -1813,14 +1842,14 @@ function AppContent() {
       toast.error('Escalate failed — try again', { id: pending });
       return;
     }
-    toast.success(`Copied into “${target?.title || 'channel'}”`, { id: pending });
+    toast.success(`Context added to “${target?.title || 'channel'}”`, { id: pending });
     if (target) handleSessionOpen(target);
   }, [sessions, escalateSessionToChannel, handleSessionOpen]);
 
   // "Hand off" a thread to a different agent: find (or start) a DM with that
-  // agent, copy the source thread's transcript in as context, then actually
+  // agent, carry the source transcript in as quoted context, then actually
   // send a message so the agent is dispatched and picks it up — a hand-off
-  // that just copied text and left it sitting unread would be no better than
+  // that just carried text and left it sitting unread would be no better than
   // the "no options offered at all" gap this replaces.
   const handleHandOffToAgent = useCallback(async (
     source: ChatSession,
@@ -1857,8 +1886,8 @@ function AppContent() {
       target = session;
     }
 
-    const copied = await escalateSessionToChannel(source, target.id);
-    if (!copied) {
+    const contextAdded = await escalateSessionToChannel(source, target.id);
+    if (!contextAdded) {
       toast.error('Hand-off failed — try again', { id: pending });
       return;
     }
@@ -1897,8 +1926,22 @@ function AppContent() {
       toast.success('Nothing diverged in the split — fork removed, parent kept', { id: pending });
       return;
     }
+    if (result.status === 'pending') {
+      toast.success('Synthesis started — the split stays available until the combined reply is saved', { id: pending });
+      return;
+    }
     toast.success('Merged — reconciling both branches into the parent', { id: pending });
   }, [mergeSession, handleSessionOpen]);
+
+  const handleDeleteSession = useCallback(async (id: string) => {
+    const session = sessions.find(item => item.id === id);
+    const pending = toast.loading(`Closing “${session?.title || 'conversation'}”…`);
+    if (!await deleteSession(id)) {
+      toast.error('Close failed — your access may have changed', { id: pending });
+      return;
+    }
+    toast.success('Conversation closed', { id: pending });
+  }, [deleteSession, sessions]);
 
   // Delete a DM conversation: soft-delete all its messages, close (soft-delete)
   // the session, and close any open chat window pointing at it — "close the
@@ -1907,7 +1950,11 @@ function AppContent() {
   // the data is retained for later use.
   const handleDeleteDm = useCallback(async (session: ChatSession) => {
     const pending = toast.loading(`Deleting “${session.title || 'conversation'}”…`);
-    await closeAndClearSession(session.id);
+    const deleted = await closeAndClearSession(session.id);
+    if (!deleted) {
+      toast.error('Delete failed — workspace manager permission is required', { id: pending });
+      return;
+    }
     windows.filter(w => w.sessionId === session.id).forEach(w => closeWindow(w.id));
     toast.success('Conversation deleted and closed', { id: pending });
   }, [closeAndClearSession, windows, closeWindow]);
@@ -1970,10 +2017,11 @@ function AppContent() {
     else if (win.type === 'tasks') handleOpenTasks();
     else if (win.type === 'activity') handleOpenActivity();
     else if (win.type === 'agents') handleOpenAgents();
+    else if (win.type === 'resources') handleOpenResources();
     else if (win.type === 'inbox') handleOpenInbox();
     else if (win.type === 'schedules') handleOpenSchedules();
     else if (win.type === 'automations') handleOpenAutomations();
-  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenAutomations, handleOpenInbox, handleOpenMemory, handleOpenSchedules, handleOpenTasks, handleSessionOpen, sessions]);
+  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenAutomations, handleOpenInbox, handleOpenMemory, handleOpenResources, handleOpenSchedules, handleOpenSkills, handleOpenTasks, handleSessionOpen, sessions]);
 
   const [useWorkspaceCtx, setUseWorkspaceCtx] = useState(() => getSetting('ai_use_workspace_context'));
   const extractedMessageIdsRef = useRef<Set<string>>(new Set());
@@ -2150,11 +2198,20 @@ function AppContent() {
 
   const handleOpenMobileMenu = useCallback(() => setMobileDrawerOpen(true), []);
   const handleToggleWorkspaceCtx = useCallback(() => setUseWorkspaceCtx(v => !v), []);
-  const handleCreateSubThreadFromScene = useCallback(async (messageId: string, agent: WorkspaceAgent, messageContent?: string) => {
+  const handleCreateSubThreadFromScene = useCallback(async (
+    messageId: string,
+    agent: WorkspaceAgent,
+    sourceContext?: QuotedMessageSource,
+  ) => {
     const slug = agent.handle || agent.name.toLowerCase().replace(/\s+/g, '-');
-    await createSubThread(messageId, slug, agent.id, agent.name, {
-      contextMessage: messageContent,
+    const created = await createSubThread(messageId, slug, agent.id, agent.name, {
+      sourceContext,
     });
+    if (!created) {
+      toast.error(`Could not delegate this message to ${agent.name}. Nothing was started.`);
+      return;
+    }
+    toast.success(`Delegated to ${agent.name}.`);
     // Background task — don't open the sub-thread panel; let it run autonomously.
     // The user can view it from the Threads panel.
   }, [createSubThread]);
@@ -2187,7 +2244,7 @@ function AppContent() {
 
   const handleCloseMobileDrawer = useCallback(() => setMobileDrawerOpen(false), []);
   const handleOpenCommandPalette = useCallback(() => setCommandPaletteOpen(true), []);
-  const handleSidebarUploadFile = useCallback(() => { }, []);
+  const handleSidebarUploadFile = useCallback((files: File[]) => uploadFiles(files), [uploadFiles]);
   const handleOpenTemplates = useCallback(() => setTemplatePickerOpen(true), []);
   const handleOpenSettingsFromSidebar = useCallback(() => openLayerSettings(activeLayerId), [openLayerSettings, activeLayerId]);
   const handleSidebarAgentProfile = useCallback((agent: { id: string; agentId: string | null; handle: string | null; name: string }) => {
@@ -2259,6 +2316,9 @@ function AppContent() {
             onRenameWorkspace={handleRenameWorkspace}
             onOpenTenants={isSystemOwner ? handleOpenTenants : undefined}
             onCreateWorkspace={handleCreateWorkspace}
+            loading={wsLoading || workspaceReadiness.status === 'missing' || workspaceReadiness.status === 'preparing'}
+            loadError={workspaceReadiness.status === 'unavailable' ? workspaceReadiness.reason : null}
+            onRetry={workspaceReadiness.canRetry ? retryWorkspaceSetup : undefined}
             titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
             // Phone: the rail rides inside the off-canvas drawer beside a
             // full sidebar, so it stays the icon strip and is not resizable.
@@ -2295,7 +2355,7 @@ function AppContent() {
             activeSessionId={activeSession?.id ?? null}
             onSessionUpdate={updateSession}
             onSessionArchive={archiveSession}
-            onSessionDelete={deleteSession}
+            onSessionDelete={handleDeleteSession}
             onDirectMessageDelete={handleDeleteDm}
             onSessionSplit={handleSplitThread}
             onSessionMerge={handleMergeThread}
@@ -2310,6 +2370,7 @@ function AppContent() {
             onOpenTasks={handleOpenTasks}
             onOpenActivity={handleOpenActivity}
             onOpenAgents={handleOpenAgents}
+            onOpenResources={handleOpenResources}
             onOpenUsers={handleOpenUsers}
             onOpenSchedules={handleOpenSchedules}
             onOpenAutomations={handleOpenAutomations}
@@ -2503,6 +2564,9 @@ function AppContent() {
                   activeSubThread={activeSubThread}
                   activeSubThreadHostSessionId={activeSubThreadHostSessionId}
                   subThreadMessages={subThreadMessages}
+                  subThreadHasMore={subThreadHasMore}
+                  subThreadLoadingEarlier={subThreadLoadingEarlier}
+                  onLoadEarlierSubThread={loadEarlierSubThreadMessages}
                   subThreadStreaming={subThreadStreaming}
                   onOpenSubThread={openSubThread}
                   onCloseSubThread={closeSubThread}
@@ -2850,6 +2914,9 @@ function CanvasLayerScene({
   activeSubThread,
   activeSubThreadHostSessionId,
   subThreadMessages,
+  subThreadHasMore,
+  subThreadLoadingEarlier,
+  onLoadEarlierSubThread,
   subThreadStreaming,
   onOpenSubThread,
   onCloseSubThread,
@@ -2949,11 +3016,18 @@ function CanvasLayerScene({
   activeSubThread: import('./types').ChatSession | null;
   activeSubThreadHostSessionId: string | null;
   subThreadMessages: import('./types').Message[];
+  subThreadHasMore: boolean;
+  subThreadLoadingEarlier: boolean;
+  onLoadEarlierSubThread: () => void;
   subThreadStreaming: boolean;
   onOpenSubThread: (session: import('./types').ChatSession, hostSessionId?: string) => void;
   onCloseSubThread: () => void;
-  onCreateSubThread: (messageId: string, agent: WorkspaceAgent) => void;
-  onSendSubThreadMessage: (content: string) => void;
+  onCreateSubThread: (
+    messageId: string,
+    agent: WorkspaceAgent,
+    sourceContext?: QuotedMessageSource,
+  ) => void;
+  onSendSubThreadMessage: (content: string, attachments?: MessageAttachment[]) => void | Promise<SendOutcome | void>;
   onSplitThread: (source: import('./types').ChatSession) => void;
   /** useItemPresence().setTyping — see src/lib/typingPresence.ts. */
   onTypingChange: (type: 'chat' | 'document', itemId: string, typing: boolean) => void;
@@ -2999,21 +3073,41 @@ function CanvasLayerScene({
   }) => void;
 }) {
   const { selectedWindowIds, viewMode, toggleFullExpand } = useWindowManager();
+  const { profile: userProfile } = useUserProfile(userId || null);
+  const receiptsEnabled = userProfile?.share_read_receipts !== false;
   const isFullExpandMode = viewMode === 'full';
 
   // On a phone the canvas shows exactly one window — the focused one (highest
   // zIndex, the same signal a click uses to raise a window). Everything else is
   // reachable through the bottom switcher bar instead of the free-floating layout.
-  const nonMinimizedWindows = windows.filter(win => !win.minimized);
+  const nonMinimizedWindows = useMemo(
+    () => windows.filter(win => !win.minimized),
+    [windows],
+  );
   const topWindowId = pickActiveWindowId(windows);
   const mobileActiveWindowId = topWindowId;
   // Full-expand shows exactly one window — the top (highest-z, most recently
-  // opened/focused) — edge-to-edge; every other window stays mounted upstream in
-  // useWindows state (cached) so switching to it via the sidebar is instant.
-  // Mobile keeps its own single-window rule. Otherwise render the full float set.
-  const renderedWindows = (isFullExpandMode || isMobile) && topWindowId
-    ? nonMinimizedWindows.filter(win => win.id === topWindowId)
-    : nonMinimizedWindows;
+  // opened/focused) — edge-to-edge. Mobile keeps the same single-window rule.
+  // Otherwise render the full float set.
+  const renderedWindows = useMemo(
+    () => (isFullExpandMode || isMobile) && topWindowId
+      ? nonMinimizedWindows.filter(win => win.id === topWindowId)
+      : nonMinimizedWindows,
+    [isFullExpandMode, isMobile, topWindowId, nonMinimizedWindows],
+  );
+  const renderedWindowIds = useMemo(
+    () => new Set(renderedWindows.map(win => win.id)),
+    [renderedWindows],
+  );
+  // A chat composer owns draft state inside ChatWindowContent. Removing a chat
+  // from this map on minimise, mobile switching, or full-expand used to unmount
+  // that subtree and silently discard the draft. Keep every open chat mounted;
+  // FloatingWindowShell hides inactive ones with the native hidden/inert
+  // semantics so they neither paint nor retain keyboard/pointer input.
+  const mountedWindows = useMemo(
+    () => windows.filter(win => renderedWindowIds.has(win.id) || win.type === 'chat'),
+    [windows, renderedWindowIds],
+  );
 
   const adjacencyByWindowId = useMemo(
     () => new Map(windows.map(w => [w.id, computeAdjacentEdges(w, windows)])),
@@ -3035,6 +3129,18 @@ function CanvasLayerScene({
     () => new Map(windows.map(w => [w.id, computeGroupRole(w, windows)])),
     [windows],
   );
+
+  // Focusing a chat from the phone switcher bypasses the window shell's
+  // pointer handler. Promote its session here as well, otherwise the visible
+  // window and the global thread/composer state can briefly belong to
+  // different chats (especially when the switcher is activated by keyboard).
+  const focusWindowFromSwitcher = useCallback((windowId: string) => {
+    onFocusWindow(windowId);
+    const focused = windows.find(window => window.id === windowId);
+    if (focused?.type !== 'chat' || !focused.sessionId) return;
+    const session = sessions.find(candidate => candidate.id === focused.sessionId);
+    if (session) onSetActiveSession(session);
+  }, [onFocusWindow, onSetActiveSession, sessions, windows]);
 
   // Identical for every chat window — build once instead of per-window in the map.
   const contextControlsElement = useMemo(() => (
@@ -3077,7 +3183,7 @@ function CanvasLayerScene({
         />
       ))}
 
-      {renderedWindows.map(win => {
+      {mountedWindows.map(win => {
         const presenceMode = getPresenceMode(win.ownerUserId);
         const isWindowOwner = !win.ownerUserId || win.ownerUserId === userId;
         const canControlWindow = isWindowOwner && !(win.locked && !isWindowOwner);
@@ -3093,6 +3199,7 @@ function CanvasLayerScene({
             <FloatingWindowShell
               key={win.id}
               window={win}
+              hidden={!renderedWindowIds.has(win.id)}
               isSelected={selectedWindowIds.includes(win.id)}
               adjacentEdges={adjacentEdges}
               groupRole={groupRole}
@@ -3100,92 +3207,76 @@ function CanvasLayerScene({
               isFullExpand={isFullExpandMode}
               onToggleFullExpand={toggleFullExpand}
               onClose={onCloseWindow}
-              onFocus={onFocusWindow}
+              onFocus={id => {
+                onFocusWindow(id);
+                if (winSession) onSetActiveSession(winSession);
+              }}
               onUpdate={onUpdateWindow}
               onMinimize={onMinimizeWindow}
               onShare={() => onShareWindow(win.title)}
               presenceMode={presenceMode}
               currentUserId={userId}
               canControl={canControlWindow}
+              bodyInteractive
               titleIcon={<MessageSquare size={13} />}
               breadcrumb={workspaceName}
             >
               {canControlWindow ? (
-                winSession && activeSession?.id !== win.sessionId ? (
-                  <InactiveChatWindow
-                    session={winSession}
-                    windowTitle={win.title}
-                    facts={facts}
-                    documents={documents}
-                    agents={agents}
-                    agentConnections={agentConnections}
-                    presenceUsers={presenceUsers}
-                    selectedAgent={selectedAgent}
-                    onSelectAgent={onSelectAgent}
-                    onAgentProfile={onAgentProfile}
-                    onSessionMetaSaved={onSessionMetaSaved}
-                    canvasGroups={canvasGroups}
-                    canvasObjects={canvasObjects}
-                    workspaceId={workspaceId}
-                    uploadedFiles={uploadedFiles}
-                    onUploadFiles={onUploadFiles}
-                    onCreateTask={onCreateTask}
-                    systemCapabilities={systemCapabilities}
-                    contextControls={contextControlsElement}
-                    onSetActiveSession={onSetActiveSession}
-                    onSendMessage={onSendMessage}
-                    onOpenThread={onOpenThread}
-                  />
-                ) : (
-                  <ChatWindowBody
-                    winSession={winSession}
-                    isActiveSession={activeSession?.id === win.sessionId}
-                    onAppSendMessage={onSendMessage}
-                    onSetActiveSession={onSetActiveSession}
-                    onAppSplitThread={onSplitThread}
-                    onAppTypingChange={onTypingChange}
-                    messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : EMPTY_MESSAGES}
-                    hasMoreMessages={winSession && activeSession?.id === win.sessionId ? hasMoreMessages : false}
-                    loadingEarlier={loadingEarlier}
-                    onLoadEarlier={winSession ? () => onLoadEarlier(winSession.id) : undefined}
-                    topLevelMessages={winSession && activeSession?.id === win.sessionId ? topLevelMessages : undefined}
-                    threadMessages={threadMessages}
-                    threadReplyCounts={threadReplyCounts}
-                    activeThreadId={activeThreadId}
-                    streaming={activeSession?.id === win.sessionId ? streaming : false}
-                    memoryFacts={facts}
-                    documents={documents}
-                    agents={agents}
-                    agentConnections={agentConnections}
-                    presenceUsers={presenceUsers}
-                    selectedAgent={selectedAgent}
-                    onSelectAgent={onSelectAgent}
-                    onAgentProfile={onAgentProfile}
-                    isDirectMessage={isDirectChatSession(winSession)}
-                    canvasGroups={canvasGroups}
-                    canvasObjects={canvasObjects}
-                    workspaceId={workspaceId}
-                    uploadedFiles={uploadedFiles}
-                    onUploadFiles={onUploadFiles}
-                    onCreateTask={onCreateTask}
-                    systemCapabilities={systemCapabilities}
-                    contextControls={contextControlsElement}
-                    onOpenThread={onOpenThread}
-                    onCloseThread={onCloseThread}
-                    subThreadsByMessage={subThreadsByMessage}
-                    activeSubThread={ownsActiveSubThread ? activeSubThread : null}
-                    subThreadMessages={ownsActiveSubThread ? subThreadMessages : EMPTY_MESSAGES}
-                    subThreadStreaming={ownsActiveSubThread && subThreadStreaming}
-                    onOpenSubThread={onOpenSubThread}
-                    onCloseSubThread={onCloseSubThread}
-                    onCreateSubThread={onCreateSubThreadProp}
-                    onSendSubThreadMessage={onSendSubThreadMessage}
-                    channelTitle={winSession?.title || win.title}
-                    currentUserId={userId}
-                  />
-                )
+                <ChatWindowBody
+                  winSession={winSession}
+                  isActiveSession={activeSession?.id === win.sessionId}
+                  onAppSendMessage={onSendMessage}
+                  onSetActiveSession={onSetActiveSession}
+                  onAppSplitThread={onSplitThread}
+                  onAppTypingChange={onTypingChange}
+                  messages={winSession && activeSession?.id === win.sessionId ? (messages as never[]) : EMPTY_MESSAGES}
+                  hasMoreMessages={winSession && activeSession?.id === win.sessionId ? hasMoreMessages : false}
+                  loadingEarlier={loadingEarlier}
+                  onLoadEarlier={winSession ? () => onLoadEarlier(winSession.id) : undefined}
+                  topLevelMessages={winSession && activeSession?.id === win.sessionId ? topLevelMessages : undefined}
+                  threadMessages={threadMessages}
+                  threadReplyCounts={threadReplyCounts}
+                  activeThreadId={activeThreadId}
+                  streaming={activeSession?.id === win.sessionId ? streaming : false}
+                  memoryFacts={facts}
+                  documents={documents}
+                  agents={agents}
+                  agentConnections={agentConnections}
+                  presenceUsers={presenceUsers}
+                  selectedAgent={selectedAgent}
+                  onSelectAgent={onSelectAgent}
+                  onAgentProfile={onAgentProfile}
+                  onSessionMetaSaved={onSessionMetaSaved}
+                  isDirectMessage={isDirectChatSession(winSession)}
+                  canvasGroups={canvasGroups}
+                  canvasObjects={canvasObjects}
+                  workspaceId={workspaceId}
+                  uploadedFiles={uploadedFiles}
+                  onUploadFiles={onUploadFiles}
+                  onCreateTask={onCreateTask}
+                  systemCapabilities={systemCapabilities}
+                  contextControls={contextControlsElement}
+                  onOpenThread={onOpenThread}
+                  onCloseThread={onCloseThread}
+                  subThreadsByMessage={subThreadsByMessage}
+                  activeSubThread={ownsActiveSubThread ? activeSubThread : null}
+                  subThreadMessages={ownsActiveSubThread ? subThreadMessages : EMPTY_MESSAGES}
+                  subThreadHasMore={ownsActiveSubThread ? subThreadHasMore : false}
+                  subThreadLoadingEarlier={ownsActiveSubThread ? subThreadLoadingEarlier : false}
+                  onLoadEarlierSubThread={onLoadEarlierSubThread}
+                  subThreadStreaming={ownsActiveSubThread && subThreadStreaming}
+                  onOpenSubThread={onOpenSubThread}
+                  onCloseSubThread={onCloseSubThread}
+                  onCreateSubThread={onCreateSubThreadProp}
+                  onSendSubThreadMessage={onSendSubThreadMessage}
+                  channelTitle={winSession?.title || win.title}
+                  currentUserId={userId}
+                  receiptActive={win.id === topWindowId}
+                  receiptsEnabled={receiptsEnabled}
+                />
               ) : (
                 <ReadOnlyChatWindowContent
+                  session={winSession || null}
                   sessionId={win.sessionId || null}
                   memoryFacts={facts}
                   documents={documents}
@@ -3196,6 +3287,13 @@ function CanvasLayerScene({
                   agentConnections={agentConnections}
                   presenceUsers={presenceUsers}
                   uploadedFiles={uploadedFiles}
+                  onAgentProfile={onAgentProfile}
+                  subThreadsByMessage={subThreadsByMessage}
+                  activeSubThread={ownsActiveSubThread ? activeSubThread : null}
+                  subThreadMessages={ownsActiveSubThread ? subThreadMessages : EMPTY_MESSAGES}
+                  subThreadStreaming={ownsActiveSubThread && subThreadStreaming}
+                  onOpenSubThread={onOpenSubThread}
+                  onCloseSubThread={onCloseSubThread}
                 />
               )}
             </FloatingWindowShell>
@@ -3467,39 +3565,108 @@ function CanvasLayerScene({
                   onUpdateWebhook={onUpdateAgentWebhook}
                   onInviteAgent={onInviteAgent}
                   onOpenConnections={onOpenConnections}
-                  // The chat surface needs ~40 inputs that already exist here;
-                  // handing the agents window a closure keeps that wiring in ONE
-                  // place instead of copying it into a second component.
-                  // InactiveChatWindow owns its own message subscription, so the
-                  // pane shows history and live replies for a session that is not
-                  // the globally-active one, and promotes it on first send.
-                  renderSessionChat={session => (
-                    <InactiveChatWindow
-                      session={session}
-                      windowTitle={session.title || 'Conversation'}
-                      facts={facts}
-                      documents={documents}
-                      agents={agents}
-                      agentConnections={agentConnections}
-                      presenceUsers={presenceUsers}
-                      selectedAgent={selectedAgent}
-                      onSelectAgent={onSelectAgent}
-                      onAgentProfile={onAgentProfile}
-                      onSessionMetaSaved={onSessionMetaSaved}
-                      canvasGroups={canvasGroups}
-                      canvasObjects={canvasObjects}
-                      workspaceId={workspaceId}
-                      uploadedFiles={uploadedFiles}
-                      onUploadFiles={onUploadFiles}
-                      onCreateTask={onCreateTask}
-                      systemCapabilities={systemCapabilities}
-                      contextControls={null}
-                      onSetActiveSession={onSetActiveSession}
-                      onSendMessage={onSendMessage}
-                      onOpenThread={onOpenThread}
-                    />
-                  )}
+                  // Reuse the stable per-session chat body used by ordinary chat
+                  // windows. It owns the inactive-session subscription and
+                  // promotes the selected conversation only when the first send
+                  // happens, without borrowing another chat's streaming state.
+                  renderSessionChat={session => {
+                    const isActiveSession = activeSession?.id === session.id;
+                    const ownsActiveSubThread = activeSubThreadHostSessionId === session.id;
+                    return (
+                      <ChatWindowBody
+                        winSession={session}
+                        isActiveSession={isActiveSession}
+                        onAppSendMessage={onSendMessage}
+                        onSetActiveSession={onSetActiveSession}
+                        onAppSplitThread={onSplitThread}
+                        onAppTypingChange={onTypingChange}
+                        messages={isActiveSession ? (messages as never[]) : EMPTY_MESSAGES}
+                        hasMoreMessages={isActiveSession ? hasMoreMessages : false}
+                        loadingEarlier={loadingEarlier}
+                        onLoadEarlier={() => onLoadEarlier(session.id)}
+                        topLevelMessages={isActiveSession ? topLevelMessages : undefined}
+                        threadMessages={threadMessages}
+                        threadReplyCounts={threadReplyCounts}
+                        activeThreadId={activeThreadId}
+                        streaming={isActiveSession ? streaming : false}
+                        memoryFacts={facts}
+                        documents={documents}
+                        agents={agents}
+                        agentConnections={agentConnections}
+                        presenceUsers={presenceUsers}
+                        selectedAgent={selectedAgent}
+                        onSelectAgent={onSelectAgent}
+                        onAgentProfile={onAgentProfile}
+                        onSessionMetaSaved={onSessionMetaSaved}
+                        isDirectMessage={isDirectChatSession(session)}
+                        canvasGroups={canvasGroups}
+                        canvasObjects={canvasObjects}
+                        workspaceId={workspaceId}
+                        uploadedFiles={uploadedFiles}
+                        onUploadFiles={onUploadFiles}
+                        onCreateTask={onCreateTask}
+                        systemCapabilities={systemCapabilities}
+                        contextControls={null}
+                        onOpenThread={messageId => {
+                          if (!isActiveSession) {
+                            onSetActiveSession(session);
+                            // useChat clears the previous session's thread in a
+                            // layout effect. Open this one after that promotion
+                            // commits or the same layout effect erases the click.
+                            queueMicrotask(() => onOpenThread(messageId));
+                            return;
+                          }
+                          onOpenThread(messageId);
+                        }}
+                        onCloseThread={onCloseThread}
+                        subThreadsByMessage={subThreadsByMessage}
+                        activeSubThread={ownsActiveSubThread ? activeSubThread : null}
+                        subThreadMessages={ownsActiveSubThread ? subThreadMessages : EMPTY_MESSAGES}
+                        subThreadHasMore={ownsActiveSubThread ? subThreadHasMore : false}
+                        subThreadLoadingEarlier={ownsActiveSubThread ? subThreadLoadingEarlier : false}
+                        onLoadEarlierSubThread={onLoadEarlierSubThread}
+                        subThreadStreaming={ownsActiveSubThread && subThreadStreaming}
+                        onOpenSubThread={onOpenSubThread}
+                        onCloseSubThread={onCloseSubThread}
+                        onCreateSubThread={onCreateSubThreadProp}
+                        onSendSubThreadMessage={onSendSubThreadMessage}
+                        channelTitle={session.title || 'Conversation'}
+                        currentUserId={userId}
+                        receiptActive={win.id === topWindowId}
+                        receiptsEnabled={receiptsEnabled}
+                      />
+                    );
+                  }}
                 />
+              </Suspense>
+            </FloatingWindowShell>
+          );
+        }
+
+        if (win.type === 'resources') {
+          return (
+            <FloatingWindowShell
+              key={win.id}
+              window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
+              onClose={onCloseWindow}
+              onFocus={onFocusWindow}
+              onUpdate={onUpdateWindow}
+              onMinimize={onMinimizeWindow}
+              onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
+              titleIcon={<Database size={13} />}
+              breadcrumb={workspaceName}
+            >
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <ResourcesWindowContent workspaceId={workspaceId} agents={agents} />
               </Suspense>
             </FloatingWindowShell>
           );
@@ -3702,7 +3869,7 @@ function CanvasLayerScene({
         <MobileWindowSwitcher
           windows={nonMinimizedWindows}
           activeWindowId={mobileActiveWindowId}
-          onFocus={onFocusWindow}
+          onFocus={focusWindowFromSwitcher}
           onClose={onCloseWindow}
           onOpenMenu={onOpenMobileMenu}
         />
@@ -3712,6 +3879,7 @@ function CanvasLayerScene({
 }
 
 function ReadOnlyChatWindowContent({
+  session,
   sessionId,
   memoryFacts,
   documents,
@@ -3722,7 +3890,18 @@ function ReadOnlyChatWindowContent({
   agentConnections = [],
   presenceUsers = [],
   uploadedFiles,
+  onAgentProfile,
+  subThreadsByMessage = {},
+  activeSubThread = null,
+  subThreadMessages = [],
+  subThreadHasMore = false,
+  subThreadLoadingEarlier = false,
+  onLoadEarlierSubThread,
+  subThreadStreaming = false,
+  onOpenSubThread,
+  onCloseSubThread,
 }: {
+  session: ChatSession | null;
   sessionId: string | null;
   memoryFacts: MemoryFact[];
   documents: Document[];
@@ -3733,39 +3912,62 @@ function ReadOnlyChatWindowContent({
   agentConnections?: AgentConnection[];
   presenceUsers?: WorkspacePresenceUser[];
   uploadedFiles: UploadedFile[];
+  onAgentProfile?: (agentIdOrHandle?: string | null) => void;
+  subThreadsByMessage?: Record<string, ChatSession[]>;
+  activeSubThread?: ChatSession | null;
+  subThreadMessages?: Message[];
+  subThreadHasMore?: boolean;
+  subThreadLoadingEarlier?: boolean;
+  onLoadEarlierSubThread?: () => void;
+  subThreadStreaming?: boolean;
+  onOpenSubThread?: (subThread: ChatSession, hostSessionId?: string) => void;
+  onCloseSubThread?: () => void;
 }) {
-  const [remoteMessages, setRemoteMessages] = useState<ChatMessage[]>([]);
+  const {
+    messages: remoteMessages,
+    hasMore,
+    loadingEarlier,
+    loadEarlier,
+  } = useSessionMessages(sessionId);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const topLevelMessages = useMemo(() => channelMessages(remoteMessages), [remoteMessages]);
+  const threadReplyCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const message of remoteMessages) {
+      if (message.thread_parent_id && message.message_kind !== 'tool_step') {
+        counts[message.thread_parent_id] = (counts[message.thread_parent_id] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [remoteMessages]);
+  const threadMessages = useMemo(
+    () => activeThreadId
+      ? remoteMessages.filter(message => message.thread_parent_id === activeThreadId)
+      : [],
+    [activeThreadId, remoteMessages],
+  );
+  const openThread = useCallback((messageId: string) => setActiveThreadId(messageId), []);
+  const closeThread = useCallback(() => setActiveThreadId(null), []);
 
   useEffect(() => {
-    let cancelled = false;
-    if (!sessionId) {
-      setRemoteMessages([]);
-      return;
+    if (activeThreadId && !remoteMessages.some(message => message.id === activeThreadId)) {
+      setActiveThreadId(null);
     }
-
-    backendClient
-      .from('messages')
-      .select('*')
-      .eq('session_id', sessionId)
-      .order('created_at', { ascending: true })
-      .then((result: { data: ChatMessage[] | null }) => {
-        const { data } = result;
-        // Drop soft-deleted rows so a cleared conversation can't linger in a
-        // second open tab that hasn't yet closed the window.
-        if (!cancelled && data) {
-          setRemoteMessages(data.filter(m => !(m as { deleted_at?: string | null }).deleted_at) as ChatMessage[]);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionId]);
+  }, [activeThreadId, remoteMessages]);
 
   return (
     <ChatWindowContent
       sessionId={sessionId}
       messages={remoteMessages}
+      topLevelMessages={topLevelMessages}
+      hasMoreMessages={hasMore}
+      loadingEarlier={loadingEarlier}
+      onLoadEarlier={loadEarlier}
+      threadMessages={threadMessages}
+      threadReplyCounts={threadReplyCounts}
+      activeThreadId={activeThreadId}
+      onOpenThread={openThread}
+      onCloseThread={closeThread}
       streaming={false}
       memoryFacts={memoryFacts}
       documents={documents}
@@ -3776,129 +3978,19 @@ function ReadOnlyChatWindowContent({
       canvasObjects={canvasObjects}
       workspaceId={workspaceId}
       uploadedFiles={uploadedFiles}
+      onAgentProfile={onAgentProfile}
+      subThreadsByMessage={subThreadsByMessage}
+      activeSubThread={activeSubThread}
+      subThreadMessages={subThreadMessages}
+      subThreadHasMore={subThreadHasMore}
+      subThreadLoadingEarlier={subThreadLoadingEarlier}
+      onLoadEarlierSubThread={onLoadEarlierSubThread}
+      subThreadStreaming={subThreadStreaming}
+      onOpenSubThread={onOpenSubThread}
+      onCloseSubThread={onCloseSubThread}
+      channelTitle={session?.title || undefined}
       onSendMessage={NOOP_SEND_MESSAGE}
       readOnly
-    />
-  );
-}
-
-// An owned chat window that is NOT the globally-active session. It loads and
-// live-subscribes to its own session's messages (via useSessionMessages) so a
-// second open agent DM still shows history and receives replies in realtime.
-// It stays interactive: sending or opening a thread first promotes this session
-// to active, after which the live `useChat`-backed path takes over (including
-// token streaming).
-function InactiveChatWindow({
-  session,
-  windowTitle,
-  facts,
-  documents,
-  agents,
-  agentConnections,
-  presenceUsers,
-  selectedAgent,
-  onSelectAgent,
-  onAgentProfile,
-  onSessionMetaSaved,
-  canvasGroups,
-  canvasObjects,
-  workspaceId,
-  uploadedFiles,
-  onUploadFiles,
-  onCreateTask,
-  systemCapabilities,
-  contextControls,
-  onSetActiveSession,
-  onSendMessage,
-  onOpenThread,
-}: {
-  session: ChatSession;
-  windowTitle: string;
-  facts: MemoryFact[];
-  documents: Document[];
-  agents: WorkspaceAgent[];
-  agentConnections: AgentConnection[];
-  presenceUsers: WorkspacePresenceUser[];
-  selectedAgent: WorkspaceAgent | null;
-  onSelectAgent: (agent: WorkspaceAgent | null) => void;
-  onAgentProfile: (agentIdOrHandle?: string | null) => void;
-  /** Propagate a channel row edit to the app session list (sidebar). */
-  onSessionMetaSaved?: (sessionId: string, patch: Record<string, unknown>) => void;
-  canvasGroups: CanvasGroup[];
-  canvasObjects: CanvasObject[];
-  workspaceId: string;
-  uploadedFiles: UploadedFile[];
-  onUploadFiles: (files: File[]) => Promise<UploadedFile[]>;
-  onCreateTask: (input: CreateTaskInput) => void;
-  systemCapabilities: SystemCapabilities | null;
-  contextControls: React.ReactNode;
-  onSetActiveSession: (session: ChatSession) => void;
-  // Resolves `{ delivered: false }` when the message was rejected and rolled
-  // back, so the composer that called it can restore the draft.
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], threadParentId?: string | null, targetSession?: ChatSession | null, broadcastToChannel?: boolean, attachments?: MessageAttachment[]) => Promise<SendMessageResult>;
-  onOpenThread: (messageId: string) => void;
-}) {
-  const { messages, hasMore, loadingEarlier, loadEarlier } = useSessionMessages(session.id);
-  // Same channel view as useChat: top level PLUS broadcast thread replies. Agents
-  // work in threads now, so a top-level-only filter would show this window the
-  // humans' messages and no answers at all.
-  const topLevelMessages = useMemo(() => channelMessages(messages), [messages]);
-  const threadReplyCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    messages.forEach(m => {
-      if (m.thread_parent_id && !isToolStepMessage(m)) counts[m.thread_parent_id] = (counts[m.thread_parent_id] || 0) + 1;
-    });
-    return counts;
-  }, [messages]);
-
-  // Stable references, or the React.memo on ChatWindowContent never hits.
-  const handleSendMessage = useCallback(
-    (content: string, mf?: MemoryFact[], docs?: Document[], attachments?: MessageAttachment[]) => {
-      onSetActiveSession(session);
-      return onSendMessage(content, 'auto', mf, docs, null, session, undefined, attachments);
-    },
-    [onSetActiveSession, onSendMessage, session],
-  );
-
-  const handleOpenThread = useCallback(
-    (messageId: string) => {
-      onSetActiveSession(session);
-      onOpenThread(messageId);
-    },
-    [onSetActiveSession, onOpenThread, session],
-  );
-
-  return (
-    <ChatWindowContent
-      sessionId={session.id}
-      messages={messages as never[]}
-      topLevelMessages={topLevelMessages}
-      threadReplyCounts={threadReplyCounts}
-      hasMoreMessages={hasMore}
-      loadingEarlier={loadingEarlier}
-      onLoadEarlier={loadEarlier}
-      streaming={false}
-      memoryFacts={facts}
-      documents={documents}
-      agents={agents}
-      agentConnections={agentConnections}
-      presenceUsers={presenceUsers}
-      selectedAgent={selectedAgent}
-      onSelectAgent={onSelectAgent}
-      onAgentProfile={onAgentProfile}
-      isDirectMessage={isDirectChatSession(session)}
-      canvasGroups={canvasGroups}
-      canvasObjects={canvasObjects}
-      workspaceId={workspaceId}
-      uploadedFiles={uploadedFiles}
-      onUploadFiles={onUploadFiles}
-      onCreateTask={onCreateTask}
-      systemCapabilities={systemCapabilities}
-      contextControls={contextControls}
-      onSendMessage={handleSendMessage}
-      onSessionMetaSaved={onSessionMetaSaved}
-      onOpenThread={handleOpenThread}
-      channelTitle={session.title || windowTitle}
     />
   );
 }
@@ -4089,7 +4181,15 @@ function WorkspaceDesktopOverlay({
                       data-overlay-desktop={tile.id}
                       onClick={() => onSelectLayer(tile.id)}
                       onKeyDown={e => {
-                        if (e.key === 'Enter' || e.key === ' ') onSelectLayer(tile.id);
+                        // The card is a keyboard launcher, but its Settings and
+                        // Delete buttons are real controls inside it. Do not
+                        // let Space/Enter on either child also switch desktop
+                        // (or scroll the page for Space).
+                        if (e.target !== e.currentTarget) return;
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onSelectLayer(tile.id);
+                        }
                       }}
                       className={cn(
                         'cursor-pointer shadow-lg transition-colors',

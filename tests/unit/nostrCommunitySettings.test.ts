@@ -3,12 +3,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NostrCommunitySetup } from '../../src/components/chat/NostrCommunitySetup';
 import { Dialog, DialogContent } from '../../src/components/ui/dialog';
+import { nostrErrorMessage, NostrRequestError } from '../../src/lib/nostrCommunities';
 import type { NostrChannel, NostrConnection } from '../../src/lib/nostrCommunities';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let container: HTMLDivElement;
-let root: Root;
+let root: Root | undefined;
 
 const connection: NostrConnection = {
   id: 'connection-1', workspaceId: 'workspace-1', relayHttpUrl: 'https://community.test',
@@ -41,7 +42,7 @@ async function settle() {
 function mount(
   onCreate = vi.fn(async () => ({ id: 'session-new' })),
   onCommunityChange = vi.fn(),
-  existingConnection: NostrConnection = connection,
+  existingConnection: NostrConnection | null = connection,
 ) {
   root = createRoot(container);
   act(() => {
@@ -63,12 +64,39 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  act(() => root.unmount());
+  act(() => root?.unmount());
   container.remove();
   vi.restoreAllMocks();
 });
 
 describe('Nostr community settings re-entry', () => {
+  it('distinguishes a stale Agensis preview route from a missing remote relay', () => {
+    expect(nostrErrorMessage(new NostrRequestError(
+      'Request failed (404)', 404, '/backend/nostr-communities/preview',
+    ))).toContain('Agensis backend returned 404');
+    expect(nostrErrorMessage(new NostrRequestError(
+      'Could not read Nostr relay metadata: HTTP 404', 404, '/backend/nostr-communities/preview',
+    ))).toContain('community host returned 404');
+  });
+
+  it('shows an actionable message when the Agensis preview route is stale', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 404 }));
+    mount(undefined, undefined, null);
+    const input = document.body.querySelector<HTMLInputElement>('#nostr-invite-url');
+    expect(input).not.toBeNull();
+    const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setInputValue?.call(input, 'https://community.test/invite/v2.example');
+    input!.dispatchEvent(new Event('input', { bubbles: true }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const check = [...document.body.querySelectorAll<HTMLButtonElement>('button')]
+      .find(button => button.textContent?.includes('Check'));
+    await act(async () => { check?.click(); });
+    await settle();
+    expect(document.body.textContent).toContain('Agensis backend returned 404');
+  });
+
   it('shows an existing paused channel and resumes its subscription', async () => {
     const paused = {
       bridgeId: 'bridge-1', channelId: 'support', sessionId: 'session-1',

@@ -83,6 +83,7 @@ test.before(async () => {
           async query(text, params = []) {
             const n = String(text).replace(/\s+/g, ' ').trim();
             const q = n.toLowerCase();
+            if (['begin', 'commit', 'rollback'].includes(q)) return { rows: [] };
             if (q.startsWith('alter table') || q.startsWith('create table') || q.startsWith('create index')) {
               return { rows: [] };
             }
@@ -97,15 +98,37 @@ test.before(async () => {
             if (q.startsWith('select id, workspace_id from chat_sessions where id')) {
               return { rows: String(params[0]) === SESSION ? [{ id: SESSION, workspace_id: WORKSPACE }] : [] };
             }
+            if (q.startsWith('select id, visibility, folder, deleted_at from chat_sessions where id')) {
+              return {
+                rows: String(params[0]) === SESSION
+                  ? [{ id: SESSION, visibility: 'workspace', folder: 'Channels', deleted_at: null }]
+                  : [],
+              };
+            }
+            if (q.startsWith('select role, sender_kind, sender_id from messages')) {
+              return {
+                rows: String(params[0]) === MESSAGE && String(params[1]) === SESSION
+                  ? [{ role: 'user', sender_kind: 'user', sender_id: USER }]
+                  : [],
+              };
+            }
             // The reaction route's message lookup, then the session it resolves
             // both gates against. A plain channel, so the DM gate returns at once.
             if (q.startsWith('select m.id, m.session_id from messages m')) {
               return { rows: String(params[0]) === MESSAGE ? [{ id: MESSAGE, session_id: SESSION }] : [] };
             }
-            if (q.startsWith('select id, workspace_id, visibility, folder from chat_sessions')) {
+            if (q.startsWith('select id, workspace_id, visibility, folder, parent_message_id, split_parent_id, deleted_at from chat_sessions')) {
               return {
                 rows: String(params[0]) === SESSION
-                  ? [{ id: SESSION, workspace_id: WORKSPACE, visibility: 'workspace', folder: 'General' }]
+                  ? [{
+                    id: SESSION,
+                    workspace_id: WORKSPACE,
+                    visibility: 'workspace',
+                    folder: 'General',
+                    parent_message_id: null,
+                    split_parent_id: null,
+                    deleted_at: null,
+                  }]
                   : [],
               };
             }
@@ -156,8 +179,17 @@ test.before(async () => {
               if (q.includes('"reactions" =')) {
                 state.reactions = typeof params[0] === 'string' ? JSON.parse(params[0]) : params[0];
               }
-              return { rows: [{ id: MESSAGE, session_id: SESSION, reactions: state.reactions }] };
+              return {
+                rows: [{
+                  id: MESSAGE,
+                  session_id: SESSION,
+                  reactions: state.reactions,
+                  __integrity_id: MESSAGE,
+                  __integrity_session_id: SESSION,
+                }],
+              };
             }
+            if (q.startsWith('update activity_events')) return { rows: [] };
             if (q.startsWith('select id, channel_id, events from flow_connections')) {
               return { rows: state.connections.filter(c => String(c.workspace_id) === String(params[0])) };
             }
@@ -173,6 +205,12 @@ test.before(async () => {
               return { rows: [] };
             }
             throw new Error(`Unexpected DB query in the netlify reaction test: ${n}`);
+          },
+          async connect() {
+            return {
+              query: (text, params = []) => this.query(text, params),
+              release() {},
+            };
           },
         },
       }),
@@ -277,7 +315,10 @@ test('a Netlify message edit that does not touch reactions reads no before-image
     body: JSON.stringify({
       table: 'messages',
       values: { content: 'edited' },
-      filters: [{ column: 'session_id', operator: 'eq', value: SESSION }],
+      filters: [
+        { column: 'id', operator: 'eq', value: MESSAGE },
+        { column: 'session_id', operator: 'eq', value: SESSION },
+      ],
     }),
   }));
   assert.equal(res.status, 200);

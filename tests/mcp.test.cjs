@@ -14,6 +14,21 @@ const EDITOR_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-editor',
 const ADMIN_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-admin', name: 'admin@x.com', autoApprove: true, role: 'admin' };
 const WORKSPACE = { kind: 'workspace', workspaceId: WS, name: 'MCP client', autoApprove: false };
 const USER_IDENTITY = { kind: 'user', userId: 'user-1', workspaceId: WS, name: 'MCP client', autoApprove: false };
+const CONTROLLER_REGISTER = {
+  kind: 'controller',
+  controllerId: 'controller-1',
+  workspaceId: WS,
+  name: 'Build farm',
+  scopes: ['agents:register'],
+};
+const CONTROLLER_MANAGE = {
+  ...CONTROLLER_REGISTER,
+  scopes: ['agents:register', 'agents:manage_own'],
+};
+const CONTROLLER_RESOURCES = {
+  ...CONTROLLER_REGISTER,
+  scopes: ['resources:create', 'resources:manage_own'],
+};
 const FLOW_CHANNEL = {
   kind: 'integration',
   connectionId: 'flow-1',
@@ -67,7 +82,8 @@ function makeDb() {
         if (params[0] === 'item-other') return [{ id: 'item-other', session_id: 'ch-other' }];
         return [];
       }
-      if (n.startsWith('insert into messages')) {
+      if (n.startsWith('insert into messages')
+        || (n.startsWith('with live_channel') && n.includes('insert into messages'))) {
         messageSeq += 1;
         const row = {
           id: `m-${messageSeq}`, session_id: params[0], content: params[1],
@@ -125,6 +141,9 @@ function makeDeps(overrides = {}) {
     'editor-invite-token': EDITOR_INVITE,
     'admin-invite-token': ADMIN_INVITE,
     'flow-token': FLOW_CHANNEL,
+    'controller-register-token': CONTROLLER_REGISTER,
+    'controller-manage-token': CONTROLLER_MANAGE,
+    'controller-resources-token': CONTROLLER_RESOURCES,
   };
   const deps = {
     getDb: () => overrides.db,
@@ -202,6 +221,9 @@ test('tools/list exposes the full surface', async () => {
   const names = res.body.result.tools.map((t) => t.name);
   for (const expected of [
     'whoami', 'list_channels', 'read_channel', 'search_messages', 'list_members', 'list_agents',
+    'list_workspace_resources', 'get_workspace_resource', 'request_resource_operation',
+    'list_resource_operations', 'get_resource_operation', 'claim_resource_operation',
+    'settle_resource_operation',
     'post_message', 'dispatch_agent', 'create_channel',
     'list_docs', 'read_doc', 'write_doc', 'search_docs',
     'list_tasks', 'create_task', 'update_task',
@@ -224,6 +246,230 @@ test('whoami returns the resolved agent identity', async () => {
   assert.equal(payload.agentId, 'agent-1');
   assert.equal(payload.handle, 'coder');
   assert.equal(payload.workspaceId, WS);
+});
+
+test('a controller discovers only tools backed by its explicit scopes', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  const listed = await call(handler, {
+    token: 'controller-register-token',
+    body: rpc('tools/list'),
+  });
+  assert.deepEqual(
+    listed.body.result.tools.map(tool => tool.name).sort(),
+    ['register_agent', 'registration_status', 'whoami'],
+  );
+
+  const who = await call(handler, {
+    token: 'controller-register-token',
+    body: rpc('tools/call', { name: 'whoami', arguments: {} }),
+  });
+  const payload = JSON.parse(who.body.result.content[0].text);
+  assert.equal(payload.kind, 'controller');
+  assert.equal(payload.controllerId, 'controller-1');
+  assert.deepEqual(payload.scopes, ['agents:register']);
+  assert.match(payload.note, /cannot read private sessions/i);
+});
+
+test('controller registration is auto-approved and attributed to the controller', async () => {
+  const db = makeDb();
+  const registrations = [];
+  const { deps } = makeDeps({
+    db,
+    deps: {
+      registerAgentRequest: async args => {
+        registrations.push(args);
+        return { registrationId: 'reg-controller', status: 'approved', handle: 'child' };
+      },
+    },
+  });
+  const handler = createMcpHandler(deps);
+  const response = await call(handler, {
+    token: 'controller-register-token',
+    body: rpc('tools/call', {
+      name: 'register_agent',
+      arguments: { name: 'Child agent' },
+    }),
+  });
+  assert.equal(response.body.result.isError ?? false, false);
+  assert.equal(registrations[0].autoApprove, true);
+  assert.equal(registrations[0].controllerId, 'controller-1');
+});
+
+test('a controller can operate only agents attributed to it', async () => {
+  const db = makeDb();
+  const claims = [];
+  const { deps } = makeDeps({
+    db,
+    deps: {
+      resolveWorkspaceAgentByHandle: async (_workspaceId, handle) => ({
+        id: handle === 'owned' ? 'agent-owned' : 'agent-foreign',
+        handle,
+        name: handle,
+        mcp_approved: true,
+        controller_id: handle === 'owned' ? 'controller-1' : 'controller-2',
+      }),
+      claimMcpJob: async args => {
+        claims.push(args);
+        return null;
+      },
+    },
+  });
+  const handler = createMcpHandler(deps);
+  const foreign = await call(handler, {
+    token: 'controller-manage-token',
+    body: rpc('tools/call', { name: 'claim_job', arguments: { as: 'foreign' } }),
+  });
+  assert.equal(foreign.body.result.isError, true);
+  assert.match(foreign.body.result.content[0].text, /not owned by this controller/i);
+  assert.equal(claims.length, 0);
+
+  const owned = await call(handler, {
+    token: 'controller-manage-token',
+    body: rpc('tools/call', { name: 'claim_job', arguments: { as: 'owned' } }),
+  });
+  assert.equal(owned.body.result.isError ?? false, false);
+  assert.equal(claims[0].agentId, 'agent-owned');
+});
+
+test('resource tools are visible only to identities with the matching authority', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+
+  const agentNames = (await call(handler, {
+    token: 'good-token',
+    body: rpc('tools/list'),
+  })).body.result.tools.map(tool => tool.name);
+  for (const name of [
+    'list_workspace_resources', 'get_workspace_resource', 'request_resource_operation',
+    'list_resource_operations', 'get_resource_operation', 'claim_resource_operation',
+    'settle_resource_operation',
+  ]) assert.ok(agentNames.includes(name), `agent missing ${name}`);
+  assert.ok(!agentNames.includes('create_workspace_resource'));
+  assert.ok(!agentNames.includes('update_workspace_resource'));
+
+  const userNames = (await call(handler, {
+    token: 'user-token',
+    body: rpc('tools/list'),
+  })).body.result.tools.map(tool => tool.name);
+  for (const name of [
+    'list_workspace_resources', 'get_workspace_resource', 'create_workspace_resource',
+    'update_workspace_resource', 'request_resource_operation', 'list_resource_operations',
+    'get_resource_operation',
+  ]) assert.ok(userNames.includes(name), `user missing ${name}`);
+  assert.ok(!userNames.includes('claim_resource_operation'));
+  assert.ok(!userNames.includes('settle_resource_operation'));
+
+  const controllerNames = (await call(handler, {
+    token: 'controller-resources-token',
+    body: rpc('tools/list'),
+  })).body.result.tools.map(tool => tool.name).sort();
+  assert.deepEqual(controllerNames, [
+    'create_workspace_resource', 'get_resource_operation', 'get_workspace_resource',
+    'list_resource_operations', 'list_workspace_resources', 'request_resource_operation',
+    'update_workspace_resource', 'whoami',
+  ].sort());
+  assert.ok(!controllerNames.includes('list_channels'));
+  assert.ok(!controllerNames.includes('claim_resource_operation'));
+
+  const registerOnlyNames = (await call(handler, {
+    token: 'controller-register-token',
+    body: rpc('tools/list'),
+  })).body.result.tools.map(tool => tool.name);
+  assert.ok(!registerOnlyNames.includes('list_workspace_resources'));
+});
+
+test('resource tools derive the actor solely from the authenticated identity', async () => {
+  const db = makeDb();
+  const calls = [];
+  const workspaceResources = Object.fromEntries([
+    'listResources', 'getResource', 'createResource', 'updateResource', 'requestOperation',
+    'listOperations', 'getOperation', 'claimOperation', 'settleOperation',
+  ].map(method => [method, async input => {
+    calls.push({ method, input });
+    return method.startsWith('list') ? [] : { id: `${method}-result` };
+  }]));
+  const { deps } = makeDeps({ db, deps: { workspaceResources } });
+  const handler = createMcpHandler(deps);
+
+  const created = await call(handler, {
+    token: 'controller-resources-token',
+    body: rpc('tools/call', {
+      name: 'create_workspace_resource',
+      arguments: { steward_agent_id: 'steward-1', name: 'Codebase', facet: 'code' },
+    }),
+  });
+  assert.equal(created.body.result.isError ?? false, false);
+  assert.deepEqual(calls.at(-1).input.actor, {
+    kind: 'controller', controllerId: 'controller-1', workspaceId: WS,
+  });
+  assert.equal(calls.at(-1).input.workspaceId, WS);
+
+  const requested = await call(handler, {
+    token: 'good-token',
+    body: rpc('tools/call', {
+      name: 'request_resource_operation',
+      arguments: {
+        resource_id: 'resource-1', operation: 'read', idempotency_key: 'read-1',
+      },
+    }),
+  });
+  assert.equal(requested.body.result.isError ?? false, false);
+  assert.deepEqual(calls.at(-1).input.requester, {
+    kind: 'agent', agentId: 'agent-1', workspaceId: WS,
+  });
+
+  const claimed = await call(handler, {
+    token: 'good-token',
+    body: rpc('tools/call', { name: 'claim_resource_operation', arguments: {} }),
+  });
+  assert.equal(claimed.body.result.isError ?? false, false);
+  assert.deepEqual(calls.at(-1).input.actor, {
+    kind: 'agent', agentId: 'agent-1', workspaceId: WS,
+  });
+
+  const settled = await call(handler, {
+    token: 'good-token',
+    body: rpc('tools/call', {
+      name: 'settle_resource_operation',
+      arguments: {
+        operation_id: 'operation-1', lease_version: '7', status: 'completed',
+        output_artifact: { commit: 'abc123' },
+      },
+    }),
+  });
+  assert.equal(settled.body.result.isError ?? false, false);
+  assert.deepEqual(calls.at(-1).input.actor, {
+    kind: 'agent', agentId: 'agent-1', workspaceId: WS,
+  });
+  assert.equal(calls.at(-1).input.leaseVersion, '7');
+});
+
+test('resource tools fail closed when the service is absent or refuses access', async () => {
+  const db = makeDb();
+  const missingHandler = createMcpHandler(makeDeps({ db }).deps);
+  const missing = await call(missingHandler, {
+    token: 'good-token',
+    body: rpc('tools/call', { name: 'list_workspace_resources', arguments: {} }),
+  });
+  assert.equal(missing.body.result.isError, true);
+  assert.match(missing.body.result.content[0].text, /not available on this backend/i);
+
+  const denied = new Error('Resource is outside this controller lineage');
+  denied.status = 403;
+  const { deps } = makeDeps({
+    db,
+    deps: { workspaceResources: { listResources: async () => { throw denied; } } },
+  });
+  const deniedHandler = createMcpHandler(deps);
+  const response = await call(deniedHandler, {
+    token: 'controller-resources-token',
+    body: rpc('tools/call', { name: 'list_workspace_resources', arguments: {} }),
+  });
+  assert.equal(response.body.result.isError, true);
+  assert.match(response.body.result.content[0].text, /outside this controller lineage/i);
 });
 
 test('channel-scoped Flows connections discover only granted tools and cannot cross channels', async () => {
@@ -263,6 +509,38 @@ test('channel-scoped Flows connections discover only granted tools and cannot cr
   });
   assert.equal(deniedThreadUpdate.body.result.isError, true);
   assert.match(deniedThreadUpdate.body.result.content[0].text, /limited to a different channel/i);
+});
+
+test('a channel-pinned integration cannot enumerate its channel after deletion', async () => {
+  const calls = [];
+  const db = {
+    async unsafe(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+      calls.push({ normalized, params });
+      if (!normalized.includes('from chat_sessions') || !normalized.includes('id = $2')) return [];
+      // Model PostgreSQL faithfully: the deleted row exists, but the live-row
+      // predicate must filter it. If production drops that predicate this fake
+      // deliberately returns the row and the behavioural assertion fails.
+      return normalized.includes('deleted_at is null')
+        ? []
+        : [{ id: 'ch-1', title: 'Deleted channel', deleted_at: '2026-07-31T00:00:00.000Z' }];
+    },
+  };
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  const response = await call(handler, {
+    token: 'flow-token',
+    body: rpc('tools/call', { name: 'list_channels', arguments: {} }),
+  });
+  const payload = JSON.parse(response.body.result.content[0].text);
+
+  assert.deepEqual(payload.channels, []);
+  assert.equal(payload.next_cursor, null);
+  assert.ok(
+    calls.some(({ normalized }) =>
+      normalized.includes('where workspace_id = $1 and id = $2 and deleted_at is null')),
+    'the pinned branch must query only a live channel',
+  );
 });
 
 test('post_message inserts + notifies but does NOT trigger continueConversation', async () => {

@@ -110,6 +110,37 @@ const REQUEST_FIELDS = Object.freeze(['tools', 'skills', 'runMode', 'runtime']);
  */
 const INTENT_FIELDS = Object.freeze(['purpose', 'resourceFacets']);
 
+function normalizeAgentIntent(purpose = 'collaborator', resourceFacets = []) {
+ const errors = [];
+ const normalizedPurpose = String(purpose || 'collaborator').trim() || 'collaborator';
+ if (!PURPOSES.has(normalizedPurpose)) {
+  errors.push(`purpose must be one of ${[...PURPOSES].join(', ')}`);
+ }
+ const source = Array.isArray(resourceFacets) ? resourceFacets : null;
+ if (!source) {
+  errors.push('resourceFacets must be an array of strings');
+ }
+ const values = source || [];
+ const invalid = values.filter((facet) => typeof facet !== 'string' || !RESOURCE_FACET_SET.has(facet));
+ if (invalid.length) {
+  errors.push(`resourceFacets may contain only ${RESOURCE_FACETS.join(', ')}`);
+ }
+ const selected = new Set(values.filter((facet) => RESOURCE_FACET_SET.has(facet)));
+ const normalizedFacets = RESOURCE_FACETS.filter((facet) => selected.has(facet));
+ if (normalizedPurpose === 'resource' && normalizedFacets.length === 0) {
+  errors.push('a resource agent must select at least one resource facet');
+ }
+ if (normalizedPurpose === 'collaborator' && normalizedFacets.length > 0) {
+  errors.push('a collaborator agent cannot carry resource facets');
+ }
+ return {
+  ok: errors.length === 0,
+  errors: [...new Set(errors)],
+  purpose: normalizedPurpose,
+  resourceFacets: normalizedFacets,
+ };
+}
+
 const CARRIED_FIELDS = Object.freeze([...PROSE_FIELDS, ...REQUEST_FIELDS, ...INTENT_FIELDS]);
 
 /**
@@ -119,6 +150,7 @@ const CARRIED_FIELDS = Object.freeze([...PROSE_FIELDS, ...REQUEST_FIELDS, ...INT
  */
 const NEVER_CARRIED_FIELDS = Object.freeze([
  'permission_mode', 'permissionMode',
+ 'controller_id', 'controllerId',
  'metadata',
  'sandbox_provider', 'sandboxProvider',
  'sandbox_config', 'sandboxConfig',
@@ -284,23 +316,9 @@ function normalizeAgentTemplate(raw, { allowUnknown = false } = {}) {
  const skills = stringListOrNull(raw.skills);
  if (skills === null) errors.push('skills must be an array of strings');
 
- const purpose = String(raw.purpose || 'collaborator');
- if (!PURPOSES.has(purpose)) errors.push(`purpose must be one of ${[...PURPOSES].join(', ')}`);
-
  const parsedFacets = stringListOrNull(raw.resourceFacets);
- if (parsedFacets === null) errors.push('resourceFacets must be an array of strings');
- const invalidFacets = (parsedFacets || []).filter((facet) => !RESOURCE_FACET_SET.has(facet));
- if (invalidFacets.length) {
-  errors.push(`resourceFacets may contain only ${RESOURCE_FACETS.join(', ')}`);
- }
- const selectedFacets = new Set((parsedFacets || []).filter((facet) => RESOURCE_FACET_SET.has(facet)));
- const resourceFacets = RESOURCE_FACETS.filter((facet) => selectedFacets.has(facet));
- if (purpose === 'resource' && resourceFacets.length === 0) {
-  errors.push('a resource template must select at least one resource facet');
- }
- if (purpose === 'collaborator' && resourceFacets.length > 0) {
-  errors.push('a collaborator template cannot carry resource facets');
- }
+ const intent = normalizeAgentIntent(raw.purpose, parsedFacets === null ? null : parsedFacets);
+ errors.push(...intent.errors);
 
  if (errors.length) return { ok: false, errors, template: null, rejected };
 
@@ -319,8 +337,8 @@ function normalizeAgentTemplate(raw, { allowUnknown = false } = {}) {
    instructions: text(raw.instructions, MAX_PROSE),
    tools,
    skills,
-   purpose,
-   resourceFacets,
+   purpose: intent.purpose,
+   resourceFacets: intent.resourceFacets,
    model: text(raw.model, MAX_NAME) || 'auto',
    runMode,
    runtime,
@@ -582,6 +600,7 @@ module.exports = {
  MAX_PROSE,
  TEMPLATE_EXPORT_FORMAT,
  TEMPLATE_EXPORT_VERSION,
+ normalizeAgentIntent,
  buildTemplateExport,
  readTemplateExport,
  normalizeAgentTemplate,

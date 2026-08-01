@@ -182,6 +182,16 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
+      // Keep the single invite URL usable in local development as well as on
+      // Netlify/Fly. Clean /join/<token> navigation must reach the server-rendered
+      // join page; otherwise Vite serves the SPA shell and agents receive no
+      // redemption contract.
+      '/join': {
+        target: 'http://127.0.0.1:3142',
+        changeOrigin: true,
+        ws: false,
+        rewrite: (path) => `/backend${path}`,
+      },
     },
   },
   plugins: [

@@ -22,7 +22,7 @@ function uniqueTokens(values: unknown[]) {
   return new Set(values.map(value => typeof value === 'string' ? value.trim() : '').filter(Boolean));
 }
 
-function buildContextCounts(
+export function buildContextCounts(
   documents: Document[],
   facts: MemoryFact[],
   tasks: Task[],
@@ -31,7 +31,12 @@ function buildContextCounts(
   capabilities: SystemCapabilities | null,
 ): WorkspaceContextCounts {
   const openTaskCount = tasks.filter(task => task.status !== 'done' && task.status !== 'cancelled').length;
-  const availableLibraries = capabilities?.skills.filter(skill => skill.available) || [];
+  // Capabilities are fetched from a separately deployable backend. A stale
+  // response can be JSON-shaped but still omit one of these arrays; that must
+  // reduce the count to zero, not take down the entire signed-in shell.
+  const availableLibraries = Array.isArray(capabilities?.skills)
+    ? capabilities.skills.filter(skill => skill.available)
+    : [];
   const detectedSkillCount = availableLibraries
     .filter(skill => skill.type === 'skills' || skill.type === 'agents')
     .reduce((total, skill) => total + skill.count, 0);
@@ -40,9 +45,13 @@ function buildContextCounts(
     .reduce((total, skill) => total + skill.count, 0);
   const selectedAgentSkills = uniqueTokens(agents.flatMap(agent => agent.skills || []));
   const selectedAgentTools = uniqueTokens(agents.flatMap(agent => agent.tools || []));
-  const availableCommandCount = capabilities?.clis.filter(cli => cli.available).length || 0;
-  const availablePackageCount = capabilities?.packages.filter(pkg => pkg.available).length || 0;
-  const codexAppServerCount = capabilities?.codexAppServer.available ? 1 : 0;
+  const availableCommandCount = Array.isArray(capabilities?.clis)
+    ? capabilities.clis.filter(cli => cli.available).length
+    : 0;
+  const availablePackageCount = Array.isArray(capabilities?.packages)
+    ? capabilities.packages.filter(pkg => pkg.available).length
+    : 0;
+  const codexAppServerCount = capabilities?.codexAppServer?.available ? 1 : 0;
 
   return {
     docs: documents.length,

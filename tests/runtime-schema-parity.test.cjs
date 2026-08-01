@@ -24,8 +24,15 @@ const runtimeColumns = (source) => {
   )) {
     const table = match[1].toLowerCase();
     for (const line of match[2].split('\n')) {
-      const column = line.trim().match(/^([a-z_][a-z0-9_]*)\s+/i)?.[1]?.toLowerCase();
-      if (!column || ['constraint', 'primary', 'unique', 'check', 'foreign'].includes(column)) continue;
+      const trimmed = line.trim();
+      const column = trimmed.match(/^([a-z_][a-z0-9_]*)\s+/i)?.[1]?.toLowerCase();
+      if (
+        !column
+        || ['constraint', 'primary', 'unique', 'check', 'foreign', 'and', 'or'].includes(column)
+        // A multiline CHECK branch may start with `field = ...`; that is a
+        // predicate, not a second declaration of `field`.
+        || /^[a-z_][a-z0-9_]*\s*(?:=|<>|!=|<=|>=|<|>|\bis\b|\bin\b|\blike\b|@>|<@)/i.test(trimmed)
+      ) continue;
       add(table, column);
     }
   }
@@ -36,6 +43,21 @@ const runtimeColumns = (source) => {
   }
   return columns;
 };
+
+test('runtime column parser ignores multiline CHECK predicates', () => {
+  const parsed = runtimeColumns(`
+    CREATE TABLE IF NOT EXISTS example (
+      id uuid PRIMARY KEY,
+      mode text NOT NULL,
+      CONSTRAINT example_mode_check CHECK (
+        mode = 'one'
+        AND id IS NOT NULL
+        OR mode = 'two'
+      )
+    );
+  `);
+  assert.deepEqual([...parsed.get('example')].sort(), ['id', 'mode']);
+});
 
 test('every inline runtime-bootstrap table is canonical and migrated', () => {
   const runtimeTables = createdTables(read('server/index.cjs'));

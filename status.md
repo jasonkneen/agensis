@@ -1,58 +1,180 @@
 # Enterprise overhaul reboot handoff
 
-Snapshot: 2026-08-01 (latest live verification). Nothing has been merged, reset, pushed, or deployed. Preserve every dirty worktree.
+Snapshot: 2026-08-01. The working tree is **not committed or deployed**. Do not reset, clean, rebase, or discard it.
 
-## Plain answer
+## Current answer
 
-This is **not complete** and is not ready to call enterprise-grade or deploy. The integration branch is still a staging point; controller/resources and message-integrity contain uncommitted work, and ACP still has a known CLI parser blocker. No browser/visual end-to-end pass has been proven.
+The local integration is materially further along, but it is not complete. The main checkout now contains the integration baseline plus the controller/resources and message-integrity lanes. Git cannot write its index in this environment (`.git/index.lock: Operation not permitted`), so the edits are intentionally present but unstaged/uncommitted. Git may still show the resolved audit document as `UU`; its worktree has no conflict markers, but the index cannot be updated here.
 
-The controller lane was resumed after reboot and now includes registration intent fields (`purpose`/`resource_facets`), transactional approval, generic-write protection for `workspace_agents.controller_id`, composite tenant-lineage constraints, safe connect-command projection/audit attribution, workspace requesters, and lease renewal. Those changes are still uncommitted.
+## Verified locally
 
-Latest verification (2026-08-01): controller/resource syntax and `git diff --check` pass; the focused controller/resource/MCP/connect safety suite is **51 passing, 1 optional PostgreSQL test skipped, 0 failing**. This is not a full application or browser pass. The controller worktree remains dirty and uncommitted.
+- `npm run typecheck` passes after the final UI continuation.
+- `npm run build` passes after the final UI continuation (Vite emits only the
+  existing `__dirname`/large-chunk warnings).
+- `npm run smoke`: **19/19 passing** after hardening `UsersWindowContent` to
+  tolerate callers that have not loaded controller data yet (the Members
+  surface previously crashed while evaluating the controller expiry effect).
+  The gate now also mounts populated Resources, Thread, and Sub-thread surfaces.
+- Nostr invite preview errors now distinguish a stale Agensis `/preview` route
+  from a 404 returned by the remote community host; the settings unit suite
+  covers both messages.
+- The enterprise audit now reflects the integrated scoped-controller/resource
+  lane instead of the earlier broad-credential design.
+- `npm run lint` has **0 errors** and 27 remaining warnings; the high-confidence
+  stale-closure warnings in the touched app surfaces were fixed in this
+  continuation. The remaining warnings are primarily Fast Refresh export
+  boundaries plus one unused server/test suppression.
+- `npm run test:unit`: **2,814/2,814 passing (198 files)** after the latest
+  thread-pagination, sidebar upload, document-control, desktop-chooser,
+  icon-only accessibility, and participant-menu keyboard tests.
+- Netlify parity/auth suite: **56/56 passing**.
+- Netlify's explicit-backend mirror now forwards unified join preview,
+  redemption, join-link management, workspace-controller list/revoke, legacy
+  member/invite compatibility, live agent controls, audit reads, authored
+  templates, and public webhook triggers to the canonical Fly service. It
+  preserves query/Accept negotiation, bearer/body forwarding, CORS, and the
+  join page's no-store/referrer security headers. The forwarding contract is
+  covered by `tests/netlify-join-forwarding.test.cjs` (**9/9 passing**); Fly
+  remains the only credential-minting, audit, live-daemon-control, and
+  template-validation implementation.
+- Controller/resources/MCP/connect suite: **80 passing, 1 optional PostgreSQL lock test skipped, 0 failing**.
+- Expanded no-listener agent/template/controller/resource/MCP/Nostr suite:
+  **201 passing, 1 optional PostgreSQL lock test skipped, 0 failing**.
+- Realtime schedules/gateways path: **10/10 passing**.
+- Runtime/canonical/migration schema parity and Netlify no-DDL checks: **5/5 passing**.
+- All merged production JavaScript modules and remaining test files pass `node --check`; no conflict markers remain in the worktree.
 
-## Branches and worktrees
+Latest continuation verification (2026-08-01):
 
-- Main: `enterprise-overhaul-2026-07-31` at `f19f57a` (`docs: make overhaul audit status explicit`). Existing dirty file: `public/release-notes.json`.
-- Integration: `.worktrees/enterprise-integration`, `enterprise-integration-2026-07-31` at `55ebd943`, clean before this handoff. Foundation work is integrated here.
-- Controller/resources: `.worktrees/controller-resources`, `enterprise-controller-resources` at `55ebd943`, large substantive uncommitted diff. Read its `WORKTREE_NOTES.md`. Do not reset or clean.
-- Message integrity: `.worktrees/message-integrity`, `enterprise-message-integrity` at `eff5f069`, large substantive uncommitted diff. Read its `WORKTREE_NOTES.md`. Do not reset or clean.
-- Daemon/ACP: `/Users/jkneen/Documents/GitHub/agensis-agent/.worktrees/enterprise-service`, `enterprise-supervisor-service-2026-07-31` at `aba6859`; supervisor commits are saved, ACP work is substantive and uncommitted. Read its `WORKTREE_NOTES.md`.
+- Re-ran `npm run typecheck`, `npm run build`, `npm run test:unit` (**2,814/2,814 across 198 files**), `npm run smoke` (**19/19**), `npm run lint` (0 errors, 27 warnings), and `git diff --check`; all passed. The build still emits only the existing Vite `__dirname`/large-chunk warnings.
+- Re-ran the focused session-lineage/security tests with Node's module-mock flag: **16/17 passed**. The only failure is the generic-route test blocked at `listen(127.0.0.1)` `EPERM`; the six Netlify lineage tests and all pure session-scope tests pass.
+- Re-ran the combined no-listener security/parity/resource matrix with the required Node module-mock flag: **165 passing, 1 environment-blocked listener test, 2 optional PostgreSQL skips**. No application assertion failed.
+- Added Fly and Netlify pre-transaction `sessionLineageKind` validation so a malformed request containing both parent forms is rejected before `BEGIN`, and updated the Netlify contract tests to the current query shape.
+- Hardened `useWorkspaceKnowledge` against incomplete or malformed capability payloads; capability counts now fail closed to zero instead of crashing the shell, with a focused unit test.
+- Fixed high-confidence React dependency hazards in presence window opening,
+  thread-inbox refresh, document metadata/listener effects, agent manifest
+  loading, workspace seeding, canvas applet message delivery, and reaction
+  memoization. Re-ran typecheck, unit, smoke, build, lint, and diff checks after
+  the changes.
+- After the Netlify control-plane forwarding addition, the dedicated forwarding
+  suite is **9/9 passing** and `git diff --check` remains clean. The matcher now
+  covers all currently identified Fly-owned HTTP surfaces, including bootstrap,
+  messages/access, huddles, gateways, skills, schedules, Nostr, permissions,
+  files, and project-git operations.
+- Closed three concrete UI interaction gaps: sidebar file upload now opens a
+  real picker and calls `useFiles.uploadFiles`, ordinary thread panels expose
+  the owning session's earlier-history pagination, and embedded sketch Clear
+  plus desktop chooser cards have native/guarded keyboard behavior. Focused
+  tests cover each path.
+- Closed the participant-popover accessibility gap: informational rows are no
+  longer Radix `DropdownMenuItem`s with nested buttons, so Remove controls stay
+  in the normal keyboard tab order. Icon-only sub-thread close and automation
+  delete controls also expose accessible names.
+- Used the Playwright connector against a local Vite fixture with mocked backend responses. The rendered app opened a channel, displayed persisted channel history, opened the Sub-threads panel and a sub-thread, and opened a private/direct-message window with its history. This is browser/render evidence only; the backend was mocked, realtime had no local WS server, and it is not production E2E proof.
+- At a 390x844 viewport the mobile drawer opened, the private chat filled the viewport, its composer remained reachable, and the Users window rendered the unified “Person or agent / Person only / Agent only / Workspace controller” invite selector plus controller copy. The same mocked-backend limitation applies.
+- A user-supplied typography screenshot shows `Continue`/`Ask`, but that literal control is not present in this Agensis checkout. No blind global font-size change was made; the exact surface needs to be identified before changing typography.
 
-## Current outcome
+The forwarding paths require `AGENSIS_DAEMON_BASE_URL` in a deployed Netlify
+runtime. If it is absent, the function fails closed with a 503 for Fly-owned
+controls rather than returning a misleading 404 or pretending a live operation
+completed. This is a deployment/configuration gate, not local proof of hosted
+parity.
 
-- Concrete hosted 404: the Nostr community modal called `POST /backend/nostr-communities/preview`, but the Netlify mirror had no route. Main now contains commit `260286e`, which adds the authenticated Netlify preview route and parity coverage. The hosted URL will remain 404 until that commit is deployed; this local fix does not deploy Fly or Netlify.
-- Unified `/join/<token>` human, agent, and workspace-controller flow is substantially implemented.
-- Controller/resource schema, Fly routes, MCP tools, Netlify resource mirror, Resources UI, controller ownership, resource operations, fencing, auditing, and tests are present.
-- Join redemption was hardened: the link is consumed in an outer transaction and provisioning runs in a savepoint, preventing orphan identities while keeping a failed one-time link spent. Focused controller/resource suite: 149 pass, 1 optional PostgreSQL test skipped.
-- Message-integrity lane contains extensive chat/subthread/private-session/realtime/offline/read-receipt hardening. Latest permission revoke race and canonical session-close fanout fixes are present and focused tests pass.
-- Daemon supervisor work is committed. ACP integration is largely implemented against verified `@agentclientprotocol/sdk@1.3.0`; focused ACP tests pass 42/42 and unit tests pass 129/129.
+The route suites that create loopback HTTP listeners (huddles, Fly/Netlify message routes, several invite/link-preview paths) cannot run in this sandbox because `listen(127.0.0.1)` is denied with `EPERM`. That is an environment limitation, not a passing end-to-end proof. A real host with loopback permission must run them.
 
-## Stop-ship work remaining
+The attempted real local stack boot confirmed the same boundary from a second
+angle: the backend cannot bind `127.0.0.1:3142` here, and the configured Neon
+hostname cannot resolve from this sandbox. No local server remained running
+and no database-backed browser claim is being made.
 
-Controller/resources (implemented but still uncommitted unless marked otherwise):
+The required `npm run ci` was started after reboot. Its typecheck, unit suite,
+smoke gate, build, and lint components are green; the top-level Node route
+runner cannot complete here because those listener-based tests fail at socket
+creation (`EPERM`) and the process leaves later files pending. Do not treat
+that as a full CI pass until it is rerun on a host with loopback permission.
 
-1. Registration intent, transactional approval, lease renewal, requester `RESTRICT` semantics, tenant-lineage FKs, safe controller connect responses, audit attribution, workspace requesters, and removal of inert `placements:request` are implemented and covered by the latest focused suite.
-2. Netlify still lacks complete join/redemption/controller route parity; hosted clean invite URLs require the updated Fly backend to be deployed. Local Vite `/join` proxy is now present.
-3. Resources UI still needs the stale-operation, launcher, role-control, polling, and state/visual fixes reviewed in the worktree notes.
-4. No real browser/visual end-to-end pass has been proven.
+## What is in the tree
 
-Message integrity:
+- Unified short-lived, one-use `/join/<token>` redemption for human, agent, and workspace-controller intent.
+- Scoped `agc_` controller credentials, controller-owned agents, resource purpose/facets (`context`, `knowledge`, `tooling`, `code`), dedicated resource service/routes/MCP/UI, Netlify mirror, fenced idempotent operations, lease renewal, audit attribution, and schema parity.
+- Private-session/derived-session inheritance, message authorship and tombstone guards, deterministic offline routing/replay, read-receipt/session/realtime scoping, huddle transcript isolation, schedule/job access checks, and fanout allowlist coverage.
+- Fly and Netlify session creation now validate the derived-session parent shape before starting the transaction, avoiding a needless transaction for an ambiguous request.
+- Chat/subthread window rendering is typechecked and built; a local Playwright
+  fixture has now exercised channel history, private history, and sub-thread
+  panels, but real-backend browser/visual interaction remains unproven.
+- The latest continuation also makes read-only shared chats genuinely readable:
+  the body is no longer blanket-disabled, thread/sub-thread panels and earlier
+  pagination are available, message mutations/composer are gated, and channel
+  mutation actions are hidden. These changes are covered by the unit/smoke
+  gates above but still need a real browser pass.
+- The Members/People surface now renders safely before controller data arrives;
+  the smoke fixture covers the populated-member path.
+- The hosted community preview 404 has a local Netlify mirror fix in commit `260286e`, plus actionable UI diagnostics for stale backend versus remote-host 404s; the hosted service will remain 404 until Fly/Netlify deployments are updated. No deployment was performed here.
+- The public `/join/*` Netlify rewrite still targets the configured Fly
+  deployment in `netlify.toml`; update that rewrite together with
+  `AGENSIS_DAEMON_BASE_URL` if the backend origin changes. No hosted deploy was
+  performed here, so the reported public 404 remains unverified until release.
+- The screenshot was taken on `localhost:5174`; with the current empty local
+  backend override, `/backend/*` is proxied to `127.0.0.1:3142`. A 404 there
+  means the process listening on 3142 is stale or not this checkout; the current
+  source mounts the preview route. The hosted Fly route still needs deployment.
+- The ACP blocker is now isolated to the sibling CLI parser: its `--acp-arg`
+  branch rejects values beginning with `--` (including the required
+  `--acp-arg --stdio` form). The correct one-line guard is known, but this
+  session cannot persist edits outside the Agensis writable root; no sibling
+  file was changed.
 
-1. Deterministic offline routing is now implemented: queued sends persist `agent`, `direct_ai`, or `post_only`, capture model/participant/reply ids, preserve an agent-to-direct-AI fallback, and sub-thread sends explicitly persist the agent lane. Replay is idempotent, consumes the persisted AI stream, and fails closed on an absent/error stream.
-2. Verified on 2026-08-01: offline intent/replay Vitest **11/11**, frontend unit suite **2,774/2,774**, `npm run typecheck` pass, production `npm run build` pass, segmented-agent plus source-hygiene Node tests **25/25**. Route tests that bind `127.0.0.1` remain blocked by sandbox `listen EPERM`; the Fly canonical session-closure test still needs a host with loopback permission.
-3. The lane is still uncommitted. Do not treat the passing local gates as a merged/deployed result.
+## Worktrees
 
-ACP:
+- Root: branch `enterprise-overhaul-2026-07-31`, HEAD `60584a7`, dirty by design.
+- `.worktrees/enterprise-integration`: `enterprise-integration-2026-07-31` at `55ebd943`, clean foundation.
+- `.worktrees/controller-resources`: `enterprise-controller-resources` at `55ebd943`, substantive dirty lane; see its `WORKTREE_NOTES.md`.
+- `.worktrees/message-integrity`: `enterprise-message-integrity` at `eff5f069`, substantive dirty lane; see its `WORKTREE_NOTES.md`.
+- `../agensis-agent/.worktrees/enterprise-service`: supervisor work is committed; ACP work remains uncommitted and still has the CLI parser blocker for normal `--acp-arg --stdio` forms. This sibling is outside the writable root, so it was not edited here.
 
-1. CLI parser rejects normal `--acp-arg --stdio` and `--acp-arg=--stdio`; fix and add a real CLI parser/spawn test before committing.
-2. Add daemon-level ACP routing/result and cancel/restart tests, then run `npm ci && npm run verify` and packed-artifact smoke.
+## Remaining stop-ship work
 
-## Resume order
+1. On a host that permits loopback, run the complete Node route suite and fix any genuine failures rather than treating `EPERM` as coverage.
+2. Fix and test the ACP argument parser in the daemon sibling, then run its package/verification gates.
+3. Run browser/visual acceptance for viewing chats, subthreads, buttons, invite redemption, controller/resource UI, and responsive layouts. Include the legacy member/invite, audit, template, agent-control, and webhook paths through an explicit Netlify backend.
+4. Review the resulting diff, stage/commit the coherent lanes, and deploy Fly before Netlify. Recheck the hosted preview and join URLs after deployment.
 
-1. Read this file and all three `WORKTREE_NOTES.md` files.
-2. Commit the verified controller/resource worktree (the current sandbox denied linked-worktree index/object writes).
-3. Commit the verified message-integrity worktree (same Git write boundary here).
-4. Fix ACP CLI parsing, run its gates, and commit the daemon worktree.
-5. Merge committed lanes into `enterprise-integration-2026-07-31` without resetting any worktree; resolve overlaps there.
-6. Run full CI, production build, real browser chat/subthread/button/visual testing, and route-manifest smoke.
-7. Deploy Fly before Netlify. The hosted Buzz/community and new join endpoints can continue returning 404 until the current Fly backend is deployed.
+### UI findings addressed in the latest continuation
+
+- Shared read-only chat bodies now remain interactive for scrolling, selection,
+  copying, and thread links; window-level controls remain gated
+  (`FloatingWindowShell.tsx`, `tests/unit/chatWindowPersistence.test.ts`).
+- The dead generic Duplicate item was removed because there is no safe generic
+  duplicate semantic for a window.
+- Resource operation detail polling now merges fresh operation status without
+  losing artifact fields (`src/features/workspace-resources/model.ts`).
+- Mobile chat switching now promotes the selected session/thread.
+- The channel header scrolls horizontally on narrow windows instead of clipping
+  controls; read-only channel menus no longer expose edit/add/connect/split or
+  participant-removal mutations.
+- Controller loading is included in the aggregate connection state and is shown
+  in Members before the empty state.
+- Sub-thread attachments are preserved as structured message attachments, and
+  earlier sub-thread pagination is available.
+
+### UI verification still required
+
+- A real-backend browser/visual pass is still required for every header/window
+  button, invite redemption, controller and resource flows, keyboard focus,
+  responsive layouts, and visual regressions. The mocked local pass covered
+  chat history, private history, and sub-thread rendering only.
+- Read-only behavior has source/unit coverage, but browser-level assertions are
+  still needed to prove rendered scrolling, selection, and side-panel behavior.
+
+## Resume commands
+
+```sh
+cd /path/to/agensis
+git status --short --branch
+npm run typecheck
+npm run build
+npm run test:unit
+node --require ./tests/helpers/test-env.cjs --test tests/netlify-parity.test.cjs tests/workspace-resources-service.test.cjs tests/schedules-gateways-realtime.test.cjs
+```
+
+The current state is recoverable: all substantive files are in the root or their named worktrees, and no destructive Git operation was run.

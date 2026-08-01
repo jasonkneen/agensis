@@ -132,6 +132,7 @@ function permissionDb({ requests = [] } = {}) {
       if (text.startsWith('update agent_jobs set connection_id')) return [];
       if (text.startsWith('select * from agent_jobs where connection_id')) return [];
       if (text.startsWith('insert into activity_events')) return [];
+      if (text.startsWith('select id, workspace_id from chat_sessions where id')) return [];
 
       // --- the two statements this file exists for ---------------------------
 
@@ -144,17 +145,24 @@ function permissionDb({ requests = [] } = {}) {
         // filters by agent anyway still returns one row, so the isolation test
         // passes while the isolation is gone. Deriving them means the fixture
         // stops enforcing whatever the query stops asking for.
+        const statusSet = new Set(
+          [...text.matchAll(/'([^']+)'/g)]
+            .map((match) => match[1])
+            .filter((value) => ['pending', 'allowing', 'denying', 'allowed', 'denied'].includes(value)),
+        );
         const asks = {
           workspace: text.includes('workspace_id = $2'),
           agent: text.includes('agent_id = $3'),
-          pending: text.includes("status = 'pending'"),
+          statusSet,
           ttl: text.includes('expires_at > now()'),
+          ttlPendingOnly: text.includes("status <> 'pending'"),
           keys: text.includes('request_key = any($4::text[])'),
         };
         const moved = db.requests.filter((row) => (!asks.workspace || row.workspace_id === workspaceId)
           && (!asks.agent || row.agent_id === agentId)
-          && (!asks.pending || row.status === 'pending')
-          && (!asks.ttl || !row.expires_at || new Date(row.expires_at).getTime() > Date.now())
+          && (asks.statusSet.size === 0 || asks.statusSet.has(row.status))
+          && (!asks.ttl || (asks.ttlPendingOnly && row.status !== 'pending')
+            || !row.expires_at || new Date(row.expires_at).getTime() > Date.now())
           && (!asks.keys || keys.includes(row.request_key))
           && row.connection_id !== connectionId);
         for (const row of moved) row.connection_id = connectionId;
@@ -165,7 +173,13 @@ function permissionDb({ requests = [] } = {}) {
         // prefix; only the by-connection one binds a parameter.
         const connectionId = params[0];
         db.statements.push({ kind: 'expire', connectionId });
-        const hit = db.requests.filter((row) => row.status === 'pending' && row.connection_id === connectionId);
+        const allowedStatuses = new Set(
+          [...text.matchAll(/'([^']+)'/g)]
+            .map((match) => match[1])
+            .filter((value) => ['pending', 'allowing', 'denying'].includes(value)),
+        );
+        const hit = db.requests.filter((row) => (allowedStatuses.size === 0 || allowedStatuses.has(row.status))
+          && row.connection_id === connectionId);
         for (const row of hit) row.status = 'expired';
         return hit.map((row) => ({ ...row }));
       }
@@ -177,9 +191,9 @@ function permissionDb({ requests = [] } = {}) {
         const row = db.requests.find((entry) => entry.id === params[0] && entry.workspace_id === params[1]);
         return row ? [{ ...row }] : [];
       }
-      if (text.startsWith('select id, visibility, folder from chat_sessions where id')) {
+      if (text.startsWith('select id, visibility, folder, deleted_at from chat_sessions where id')) {
         return params[0] === 'session-1'
-          ? [{ id: 'session-1', visibility: 'workspace', folder: 'General' }]
+          ? [{ id: 'session-1', visibility: 'workspace', folder: 'General', deleted_at: null }]
           : [];
       }
       if (text.startsWith('update agent_permission_requests set status = $2')) {
@@ -198,7 +212,7 @@ function permissionDb({ requests = [] } = {}) {
   return db;
 }
 
-async function register(ws, { permissionRequestIds } = {}) {
+async function register(ws, { permissionRequestIds, supportsReceipts = true } = {}) {
   await __test.registerAgentConnection(ws, {
     workspaceId: WORKSPACE,
     agentId: ws.agentAuth.agentId,
@@ -206,6 +220,7 @@ async function register(ws, { permissionRequestIds } = {}) {
     name: 'Coder',
     host: 'example-host.local',
     cwd: '/Users/alice/Documents/GitHub/agensis',
+    metadata: { permissionDecisionReceipts: supportsReceipts },
     ...(permissionRequestIds ? { permissionRequestIds } : {}),
   });
   await settle();
@@ -216,6 +231,11 @@ async function register(ws, { permissionRequestIds } = {}) {
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 const registeredFrame = (ws) => ws.sent.find((frame) => frame.type === 'agent_registered');
+
+const decisionFrames = (ws) => ws.sent.filter((frame) => [
+  'agent_permission_prepare',
+  'agent_permission_commit',
+].includes(frame.type));
 
 // --- the drop -----------------------------------------------------------------
 
@@ -297,6 +317,68 @@ test('a daemon that re-asserts its parked id keeps the request answerable', asyn
     ['daemon-req-1'],
     'the daemon is told which parks survived, so it keeps waiting on exactly those',
   );
+});
+
+test('registration acknowledges a prepared park before replaying prepare', async () => {
+  const db = permissionDb({ requests: [permissionRow({
+    status: 'allowing',
+    scope: 'session',
+    decided_by_name: 'Jason',
+  })] });
+  __test.setTestDb(db);
+
+  const ws = agentSocket('prepared-reconnect');
+  await register(ws, { permissionRequestIds: ['daemon-req-1'] });
+
+  assert.equal(db.requests[0].connection_id, ws.agentConnectionId);
+  assert.deepEqual(ws.sent.map((frame) => frame.type), [
+    'agent_registered',
+    'agent_permission_prepare',
+  ]);
+  assert.deepEqual(decisionFrames(ws), [{
+    type: 'agent_permission_prepare',
+    requestId: 'daemon-req-1',
+    behavior: 'allow',
+    scope: 'session',
+    decidedBy: 'Jason',
+    message: '',
+  }]);
+});
+
+test('registration acknowledges a finalized park before replaying commit', async () => {
+  const db = permissionDb({ requests: [permissionRow({
+    status: 'denied',
+    decided_by_name: 'Jason',
+  })] });
+  __test.setTestDb(db);
+
+  const ws = agentSocket('final-reconnect');
+  await register(ws, { permissionRequestIds: ['daemon-req-1'] });
+
+  assert.equal(db.requests[0].connection_id, ws.agentConnectionId);
+  assert.deepEqual(ws.sent.map((frame) => frame.type), [
+    'agent_registered',
+    'agent_permission_commit',
+  ]);
+  assert.deepEqual(decisionFrames(ws), [{
+    type: 'agent_permission_commit',
+    requestId: 'daemon-req-1',
+  }]);
+});
+
+test('a daemon without receipt capability never receives a prepared decision phase', async () => {
+  const db = permissionDb({ requests: [permissionRow({ status: 'allowing', scope: 'once' })] });
+  __test.setTestDb(db);
+
+  const ws = agentSocket('old-daemon');
+  await register(ws, {
+    permissionRequestIds: ['daemon-req-1'],
+    supportsReceipts: false,
+  });
+
+  assert.deepEqual(registeredFrame(ws).resumedPermissionRequests, ['daemon-req-1']);
+  assert.deepEqual(decisionFrames(ws), [], 'old daemons fail closed instead of receiving an unreceipted allow');
+  assert.equal(db.requests[0].status, 'allowing', 'the durable outbox remains recoverable for an upgraded reconnect');
 });
 
 test('the re-home runs before the stale sweep, or there is nothing left to save', async () => {
@@ -448,6 +530,24 @@ test('a deliberate eviction still expires the parks immediately', async () => {
   await settle();
 
   assert.equal(db.requests[0].status, 'expired');
+});
+
+test('a deliberate eviction expires prepared rows but leaves finalized rows durable', async () => {
+  const prepared = permissionRow({ id: 'req-prepared', request_key: 'daemon-prepared', status: 'allowing' });
+  const final = permissionRow({ id: 'req-final', request_key: 'daemon-final', status: 'allowed' });
+  const db = permissionDb({ requests: [prepared, final] });
+  __test.setTestDb(db);
+
+  const ws = agentSocket('deactivated-after-decision');
+  await register(ws);
+  prepared.connection_id = ws.agentConnectionId;
+  final.connection_id = ws.agentConnectionId;
+
+  await __test.disconnectAgentDaemons(AGENT, WORKSPACE, 'deactivated');
+  await settle();
+
+  assert.equal(prepared.status, 'expired', 'a prepare can no longer be committed after terminal disconnect');
+  assert.equal(final.status, 'allowed', 'a committed decision remains durable for audit/transcript truth');
 });
 
 // --- input handling -----------------------------------------------------------

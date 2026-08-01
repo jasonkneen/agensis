@@ -70,9 +70,9 @@ function makeDb({ owners = {}, roles = {}, sessions = {}, visibility = {}, folde
    return ws ? [{ workspace_id: ws }] : [];
   }
   // The session gate: fetch the row, then ask whether this user is a member.
-  if (n.startsWith('select id, visibility, folder from chat_sessions where id = $1')) {
+  if (n.startsWith('select id, visibility, folder, deleted_at from chat_sessions where id = $1')) {
    if (!sessions[params[0]]) return [];
-   return [{ id: params[0], visibility: visibility[params[0]] || 'workspace', folder: folders[params[0]] || 'General' }];
+   return [{ id: params[0], visibility: visibility[params[0]] || 'workspace', folder: folders[params[0]] || 'General', deleted_at: null }];
   }
   if (n.startsWith('select 1 from chat_session_members')) {
    return members.has(`${params[0]}:${params[1]}`) ? [{ ok: 1 }] : [];

@@ -46,6 +46,7 @@ function createAgentJobs(deps = {}) {
   getConnectedAgents,
   scheduleTaskQueueDrain,
   forbidden,
+  ensureTable = (table) => table,
   getDb,
   isAgentEnabled,
   logMessageActivity,
@@ -59,19 +60,36 @@ function createAgentJobs(deps = {}) {
   verifyThreadParent,
  } = deps;
 
- // Advance an agent's read high-water mark to the newest message it did not
- // author, and fan the row out on the same lane as any other read receipt so the
- // eye lights up live. Mirrors advanceAgentReadMarker in server/mcp.cjs; kept
- // local because that one closes over the MCP handler's deps. Failures are
- // swallowed on purpose — a marker that fails to advance is invisible, never
- // wrong, and must never take a finished turn down with it.
- async function advanceAgentReadMarker(sessionId, agentId) {
-  if (!sessionId || !agentId) return;
+ function publishCommittedFanout(pendingFanout) {
+  for (const [table, eventType, rows] of pendingFanout) {
+   // Pending events are assembled by internal orchestration code, but the
+   // table name is still dynamic at this boundary. Re-run the same allowlist
+   // gate as the generic DB routes before anything reaches a socket.
+   ensureTable(table);
+   notifyDbSubscribers(table, eventType, rows);
+  }
+ }
+
+ // A pull worker has read only after claimMcpJob returns its prompt. Its metadata
+ // carries the exact newest inbound message in that bounded prompt, so the marker
+ // cannot widen to a later or out-of-thread message while the job is running.
+ async function advanceAgentReadMarker(
+  sessionId,
+  agentId,
+  lastSeenMessageId,
+  threadParentId = null,
+  db = getDb(),
+  publish = notifyDbSubscribers,
+ ) {
+  if (!sessionId || !agentId || !lastSeenMessageId) return;
   try {
-   const rows = await getDb().unsafe(ADVANCE_AGENT_READ_MARKER_SQL, [String(sessionId), String(agentId)]);
-   if (rows.length > 0) notifyDbSubscribers('session_read_state', 'INSERT', rows);
+   const rows = await db.unsafe(
+    ADVANCE_AGENT_READ_MARKER_SQL,
+    [String(sessionId), String(agentId), String(lastSeenMessageId), threadParentId || null],
+   );
+   if (rows.length > 0) publish('session_read_state', 'INSERT', rows);
   } catch (error) {
-   console.error('advanceAgentReadMarker (job finalize) failed', error);
+   console.error('advanceAgentReadMarker (job claim) failed', error);
   }
  }
 
@@ -80,21 +98,169 @@ function createAgentJobs(deps = {}) {
  // trigger already created the turn's job (won the race), so we clean up the
  // just-created "Thinking" placeholder message (if any) and return null; callers
  // treat null like the pending path and stop the drain loop.
- async function insertActiveAgentJob(sql, params, placeholderMessageId = null) {
+ async function insertActiveAgentJob(sql, params, placeholderMessageId = null, reservation = {}) {
+  const workspaceId = String(reservation.workspaceId || '').trim();
+  const agentId = String(reservation.agentId || '').trim();
+  const sessionId = String(reservation.sessionId || '').trim();
+  if (!workspaceId || !agentId || !sessionId) {
+   throw new Error('insertActiveAgentJob requires workspaceId, agentId, and sessionId');
+  }
+
+  const cleanupPlaceholder = async () => {
+   if (!placeholderMessageId) return;
+   try {
+    const del = await getDb().unsafe(
+     'delete from messages where id = $1 and deleted_at is null returning *',
+     [placeholderMessageId],
+    );
+    if (del.length > 0) notifyDbSubscribers('messages', 'DELETE', del);
+   } catch { /* best effort placeholder cleanup */ }
+  };
+
   try {
-   return await getDb().unsafe(sql, params);
+   const inserted = await getDb().begin(async (tx) => {
+    // This is the FINAL reservation proof, deliberately after any eager
+    // placeholder write. Holding both rows through the INSERT closes the race
+    // where clear could otherwise delete the conversation between the caller's
+    // optimistic setup and a raw agent_jobs insert. Roster membership lives on
+    // the session row, so its lock also serializes participant removal.
+    const live = await tx.unsafe(
+     `select s.id
+        from chat_sessions s
+        join workspace_agents a
+          on a.id = $2
+         and a.workspace_id = s.workspace_id
+         and a.enabled is true
+         and ($4::boolean is false or a.mcp_approved is true)
+       where s.id = $3
+         and s.workspace_id = $1
+         and s.deleted_at is null
+         and exists (
+           select 1
+             from jsonb_array_elements(
+               case when jsonb_typeof(s.participants) = 'array'
+                    then s.participants else '[]'::jsonb end
+             ) participant
+            where participant->>'agent_id' = a.id::text
+         )
+       for share of s, a`,
+     [workspaceId, agentId, sessionId, reservation.requireMcpApproval === true],
+    );
+    if (live.length !== 1) return null;
+    return tx.unsafe(sql, params);
+   });
+   if (!inserted) await cleanupPlaceholder();
+   return inserted;
   } catch (error) {
    if (error && error.code === '23505') {
-    if (placeholderMessageId) {
-     try {
-      const del = await getDb().unsafe('delete from messages where id = $1 returning *', [placeholderMessageId]);
-      if (del.length > 0) notifyDbSubscribers('messages', 'DELETE', del);
-     } catch { /* best effort placeholder cleanup */ }
-    }
+    await cleanupPlaceholder();
     return null;
    }
    throw error;
   }
+ }
+
+ /**
+  * Run one daemon-originated mutation while the exact live job scope is locked.
+  *
+  * The websocket token supplies workspace/agent identity; the connection id
+  * binds the frame to the process currently assigned to the job. The database
+  * supplies every mutable fact: running status, live same-workspace session,
+  * enabled agent, and current roster participation. Holding all three rows until
+  * the callback commits makes clear, disable, re-home and roster removal wait.
+  */
+ async function withCurrentDaemonJob(ws, jobId, work, { allowSessionlessFarm = false } = {}) {
+  const auth = ws.agentAuth;
+  const pendingFanout = [];
+  const pendingAfterCommit = [];
+  const outcome = await getDb().begin(async (tx) => {
+   let rows = await tx.unsafe(
+    `select j.*, a.name as agent_name, a.handle as agent_handle
+       from agent_jobs j
+       join chat_sessions s
+         on s.id = j.session_id
+        and s.workspace_id = j.workspace_id
+        and s.deleted_at is null
+       join workspace_agents a
+         on a.id = j.agent_id
+        and a.workspace_id = j.workspace_id
+        and a.enabled is true
+      where j.id = $1
+        and j.agent_id = $2
+        and j.workspace_id = $3
+        and j.connection_id = $4
+        and j.status = 'running'
+        and exists (
+          select 1
+            from jsonb_array_elements(
+              case when jsonb_typeof(s.participants) = 'array'
+                   then s.participants else '[]'::jsonb end
+            ) participant
+           where participant->>'agent_id' = a.id::text
+        )
+      limit 1
+      for update of j, s, a`,
+    [jobId, auth.agentId, auth.workspaceId, ws.agentConnectionId],
+   );
+   if (!rows[0] && allowSessionlessFarm) {
+    rows = await tx.unsafe(
+     `select j.*, a.name as agent_name, a.handle as agent_handle
+        from agent_jobs j
+        join workspace_agents a
+          on a.id = j.agent_id
+         and a.workspace_id = j.workspace_id
+         and a.enabled is true
+       where j.id = $1
+         and j.agent_id = $2
+         and j.workspace_id = $3
+         and j.connection_id = $4
+         and j.session_id is null
+         and (j.metadata->>'mode') = 'farm'
+         and j.status = 'running'
+       limit 1
+       for update of j, a`,
+     [jobId, auth.agentId, auth.workspaceId, ws.agentConnectionId],
+    );
+   }
+   if (!rows[0]) {
+    // A frame already in flight when a terminal transition commits is stale,
+    // not an authorization failure. Diagnose that narrow case by the exact
+    // immutable websocket identity, but never use this weaker lookup to admit a
+    // write: a RUNNING row that failed the live-scope proof means the session
+    // was cleared, the agent was disabled/removed, or roster participation was
+    // revoked, and must fail closed.
+    const current = await tx.unsafe(
+     `select status from agent_jobs
+        where id = $1
+          and agent_id = $2
+          and workspace_id = $3
+          and connection_id = $4
+        limit 1`,
+     [jobId, auth.agentId, auth.workspaceId, ws.agentConnectionId],
+    );
+    if (current[0] && current[0].status !== 'running') return { stale: true, value: undefined };
+    throw forbidden('Agent job not found');
+   }
+   const publishAfterCommit = (table, eventType, eventRows) => {
+    if (Array.isArray(eventRows) && eventRows.length > 0) {
+     pendingFanout.push([table, eventType, eventRows]);
+    }
+   };
+   const afterCommit = (callback) => {
+    if (typeof callback === 'function') pendingAfterCommit.push(callback);
+   };
+   return { stale: false, value: await work({ tx, job: rows[0], publishAfterCommit, afterCommit }) };
+  });
+  if (outcome?.stale) return undefined;
+  publishCommittedFanout(pendingFanout);
+  for (const callback of pendingAfterCommit) {
+   try {
+    callback();
+   } catch (error) {
+    console.error('daemon job post-commit callback failed', error);
+   }
+  }
+  return outcome?.value;
  }
 
  // A queued/running job is "live" only if the worker meant to answer it still exists.
@@ -184,17 +350,18 @@ function createAgentJobs(deps = {}) {
  // Scoped hard: this agent, this session, this turn's own window. The M15 unique
  // index allows only one queued/running job per (session, agent), so no live turn's
  // placeholder can be inside that window while this one terminates.
- async function clearStrandedPlaceholders(job, keepMessageId = null) {
+ async function clearStrandedPlaceholders(job, keepMessageId = null, db = getDb(), publish = notifyDbSubscribers) {
   if (!job || !job.session_id || !job.agent_id) return;
   const since = job.started_at || job.created_at;
   if (!since) return;
   try {
-   const rows = await getDb().unsafe(
+   const rows = await db.unsafe(
     `delete from messages
        where session_id = $1
          and sender_id = $2
          and sender_kind = 'agent'
          and coalesce(message_kind, '') = ''
+         and deleted_at is null
          and content ~ $3
          -- The eager placeholder is inserted just BEFORE the job row it belongs to,
          -- so the window has to open slightly ahead of the job's own clock.
@@ -203,7 +370,7 @@ function createAgentJobs(deps = {}) {
        returning *`,
     [job.session_id, String(job.agent_id), PLACEHOLDER_CONTENT_RE, since, keepMessageId || null],
    );
-   if (rows.length > 0) notifyDbSubscribers('messages', 'DELETE', rows);
+   if (rows.length > 0) publish('messages', 'DELETE', rows);
   } catch {
    // best effort — tidy-up must never fail a job that otherwise finished correctly
   }
@@ -546,7 +713,20 @@ function createAgentJobs(deps = {}) {
   };
  }
 
- async function finalizeAgentJobResult(job, { responseText = '', errorText = '', fallbackName = null, fallbackHandle = null, resultMetadata = null, resultStop = null } = {}) {
+ async function finalizeAgentJobResult(job, {
+  responseText = '', errorText = '', fallbackName = null, fallbackHandle = null,
+  resultMetadata = null, resultStop = null,
+  db = null, publish = notifyDbSubscribers, statusGuardOverride = '', afterCommit = null,
+ } = {}) {
+  const jobDb = db || getDb();
+  // Most callers use autocommit statements, so their side effects can run
+  // immediately. The daemon result path holds a wider transaction across the
+  // terminal job row and transcript writes; it supplies a queue here so task
+  // draining, mirroring and continuation cannot race ahead of that commit and
+  // observe the old running state.
+  const afterDurableWrite = typeof afterCommit === 'function'
+   ? afterCommit
+   : (callback) => callback();
   const jobMetadata = parseJsonObject(job.metadata);
   const validatedAmp = validateAmpJobResult(jobMetadata, resultMetadata, errorText);
   const finalErrorText = validatedAmp.errorText;
@@ -556,21 +736,28 @@ function createAgentJobs(deps = {}) {
   // server produces byte-identical metadata to what it produced before.
   const stopMetadata = stopResultMetadata(resultStop);
   const mergedMetadata = { ...jobMetadata, ...validatedAmp.metadata, ...stopMetadata };
-  const statusGuard = jobMetadata.mode === 'farm'
-   ? "status in ('queued', 'running')"
-   : "status in ('queued', 'running', 'error')";
-  const updatedRows = await getDb().unsafe(
-   `update agent_jobs set status = $2, response = $3, error = $4, metadata = $5::jsonb, finished_at = now(), updated_at = now()
-      where id = $1 and ${statusGuard} returning *`,
-   [job.id, status, storedResponseText, finalErrorText, mergedMetadata],
+  // Terminal states are monotonic. In particular, an MCP timeout is recorded as
+  // `error`; a worker result arriving after that reaper commit must not resurrect
+  // the job to `done` or append a second terminal transcript. Callers may narrow
+  // this guard (daemon/MCP results require exactly `running`) but must never widen
+  // it to a terminal state.
+  const statusGuard = statusGuardOverride || "status in ('queued', 'running')";
+  // Callers that need a wider authority proof (daemon/MCP) hold the live
+  // session/agent/job rows in the transaction supplied as `db`. This guarded
+  // transition and every transcript write below therefore commit or roll back
+  // together.
+  const updatedRows = await jobDb.unsafe(
+    `update agent_jobs set status = $2, response = $3, error = $4, metadata = $5::jsonb, finished_at = now(), updated_at = now()
+       where id = $1 and ${statusGuard} returning *`,
+    [job.id, status, storedResponseText, finalErrorText, mergedMetadata],
   );
   if (updatedRows.length === 0) return null;
-  notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
+  publish('agent_jobs', 'UPDATE', updatedRows);
 
   // The agent just freed its one active-job slot: give it the next task waiting on
   // it. Fire-and-forget, before the early returns below so farm/sessionless jobs
   // drain too — a job finishing is a job finishing.
-  scheduleTaskQueueDrain(job.workspace_id, job.agent_id, `job_${status}`);
+  afterDurableWrite(() => scheduleTaskQueueDrain(job.workspace_id, job.agent_id, `job_${status}`));
 
   // Farm-originated coding jobs are control-plane work, not chat turns. They
   // deliberately have no session and are polled through the integration API;
@@ -582,6 +769,17 @@ function createAgentJobs(deps = {}) {
   const senderName = job.agent_name || fallbackName || handle;
   const ampThreadLink = !finalErrorText && mergedMetadata.ampThreadUrl
    ? `\n\n[Amp thread](${mergedMetadata.ampThreadUrl})`
+   : '';
+  const lastSegmentText = Number(jobMetadata.segmentCount || 0) > 0
+   ? textFromValue(jobMetadata.lastSegmentText).trim()
+   : '';
+  const finalText = textFromValue(responseText).trim();
+  // This discriminator is the durable success receipt consumed by merge
+  // cleanup. It is server-authored in the SAME statement that commits the
+  // answer row. Failure/stop/empty-output notices stay ordinary messages, so
+  // their human-readable wording can never become a data-deletion decision.
+  const resultMessageKind = !finalErrorText && (finalText || lastSegmentText)
+   ? 'agent_result'
    : '';
   const content = finalErrorText
    ? `@${handle} failed: ${failureSentence(mergedMetadata.stopReason, finalErrorText)}`
@@ -595,6 +793,36 @@ function createAgentJobs(deps = {}) {
   // feature existed, which keeps their behaviour identical.
   const broadcastToChannel = jobMetadata.broadcastToChannel === true;
   const workThreadParentId = jobMetadata.workThreadParentId || threadParentId;
+  let transcriptDurable = false;
+
+  // A placeholder can disappear while a turn is running (for example, a human
+  // deletes it, or an older client never created a lazy placeholder). The job
+  // result still needs one durable transcript row. This fallback deliberately
+  // gets a fresh database id: reusing a tombstoned/conflicting placeholder id
+  // would make ON CONFLICT look like success while preserving no visible reply.
+  const insertReplacementTranscript = async (replacementContent = content) => {
+   const rows = await jobDb.unsafe(
+    `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel, message_kind)
+        values ($1, 'assistant', $2, $3, 'agent', $4, $5, $6, $7) returning *`,
+    [
+     job.session_id,
+     replacementContent,
+     workThreadParentId,
+     String(job.agent_id || ''),
+     senderName,
+     broadcastToChannel,
+     resultMessageKind,
+    ],
+   );
+   if (rows.length !== 1) throw new Error('Agent result transcript row was not created');
+   publish('messages', 'INSERT', rows);
+   afterDurableWrite(() => {
+    void logMessageActivity(rows);
+    void mirrorAgentReplyToTaskComment(rows[0]);
+   });
+   transcriptDurable = true;
+   return rows;
+  };
   // A segmented turn (see handleAgentJobSegment) has already posted every completed
   // text block as its own message and left a FRESH placeholder waiting for the next
   // one. A turn that ends right after a block leaves that placeholder with nothing
@@ -603,52 +831,83 @@ function createAgentJobs(deps = {}) {
   // the block's own message stands in for it in Activity and task mirroring. A turn
   // whose tail streamed on past the last segment still lands in the placeholder as
   // before, and so does an error.
-  const lastSegmentText = Number(jobMetadata.segmentCount || 0) > 0
-   ? textFromValue(jobMetadata.lastSegmentText).trim()
-   : '';
-  const finalText = textFromValue(responseText).trim();
-  const trailingPlaceholderIsSpent = !errorText && !!lastSegmentText && (!finalText || finalText === lastSegmentText);
+  const trailingPlaceholderIsSpent = !finalErrorText && !!lastSegmentText
+   && (!finalText || finalText === lastSegmentText);
   if (responseMessageId && trailingPlaceholderIsSpent) {
-   const removedRows = await getDb().unsafe(
-    'delete from messages where id = $1 and session_id = $2 returning *',
+   const removedRows = await jobDb.unsafe(
+    'delete from messages where id = $1 and session_id = $2 and deleted_at is null returning *',
     [responseMessageId, job.session_id],
    );
-   if (removedRows.length > 0) notifyDbSubscribers('messages', 'DELETE', removedRows);
+   if (removedRows.length > 0) publish('messages', 'DELETE', removedRows);
    // The last completed BLOCK stands in as the turn's reply, so it is the row that
    // gets broadcast — the placeholder that would have carried the flag is gone.
    // UPDATE ... returning so the flip fans out to clients like any other change.
    const segmentRows = jobMetadata.lastSegmentMessageId
-    ? await getDb().unsafe(
+    ? await jobDb.unsafe(
      ampThreadLink
       ? `update messages
           set broadcast_to_channel = case when $3 then true else broadcast_to_channel end,
-              content = case when position($4 in content) = 0 then content || $4 else content end
-          where id = $1 and session_id = $2 returning *`
+              content = case when position($4 in content) = 0 then content || $4 else content end,
+              message_kind = $5
+          where id = $1 and session_id = $2
+            and messages.deleted_at is null
+         returning *`
       : broadcastToChannel
-       ? `update messages set broadcast_to_channel = true
-            where id = $1 and session_id = $2 returning *`
-       : 'select * from messages where id = $1 and session_id = $2 limit 1',
+       ? `update messages set broadcast_to_channel = true, message_kind = $3
+           where id = $1 and session_id = $2
+             and messages.deleted_at is null
+          returning *`
+       : `update messages set message_kind = $3
+           where id = $1 and session_id = $2 and deleted_at is null
+          returning *`,
      ampThreadLink
-      ? [String(jobMetadata.lastSegmentMessageId), job.session_id, broadcastToChannel, ampThreadLink]
-      : [String(jobMetadata.lastSegmentMessageId), job.session_id],
+      ? [
+       String(jobMetadata.lastSegmentMessageId),
+       job.session_id,
+       broadcastToChannel,
+       ampThreadLink,
+       resultMessageKind,
+      ]
+      : [String(jobMetadata.lastSegmentMessageId), job.session_id, resultMessageKind],
     )
     : [];
    if (segmentRows.length > 0) {
-    if (broadcastToChannel || ampThreadLink) notifyDbSubscribers('messages', 'UPDATE', segmentRows);
-    void logMessageActivity(segmentRows);
-    void mirrorAgentReplyToTaskComment(segmentRows[0]);
+    transcriptDurable = true;
+    publish('messages', 'UPDATE', segmentRows);
+    afterDurableWrite(() => {
+     void logMessageActivity(segmentRows);
+     void mirrorAgentReplyToTaskComment(segmentRows[0]);
+    });
+   } else {
+    // The metadata said a completed segment carried the answer, but its row is
+    // no longer present. Preserve the work instead of committing a terminal job
+    // whose transcript contains nothing.
+    await insertReplacementTranscript(`${lastSegmentText || finalText || content}${ampThreadLink}`);
    }
   } else if (responseMessageId) {
-   const messageRows = await getDb().unsafe(
+   const messageRows = await jobDb.unsafe(
     `update messages set content = $2, sender_kind = 'agent', sender_id = $3, sender_name = $4,
-                         broadcast_to_channel = $6
-        where id = $1 and session_id = $5 returning *`,
-    [responseMessageId, content, String(job.agent_id || ''), senderName, job.session_id, broadcastToChannel],
+                         broadcast_to_channel = $6, message_kind = $7
+      where id = $1 and session_id = $5
+        and messages.deleted_at is null
+     returning *`,
+    [
+     responseMessageId,
+     content,
+     String(job.agent_id || ''),
+     senderName,
+     job.session_id,
+     broadcastToChannel,
+     resultMessageKind,
+    ],
    );
    if (messageRows.length > 0) {
-    notifyDbSubscribers('messages', 'UPDATE', messageRows);
-    void logMessageActivity(messageRows);
-    void mirrorAgentReplyToTaskComment(messageRows[0]);
+    transcriptDurable = true;
+    publish('messages', 'UPDATE', messageRows);
+    afterDurableWrite(() => {
+     void logMessageActivity(messageRows);
+     void mirrorAgentReplyToTaskComment(messageRows[0]);
+    });
    } else if (jobMetadata.pendingPlaceholder) {
     // The placeholder was reserved by a segment but never written, because it is
     // created LAZILY by the first delta that has text for it (handleAgentJobDelta)
@@ -659,42 +918,40 @@ function createAgentJobs(deps = {}) {
     // nothing and the reply is silently DROPPED. That took the final block of a
     // turn with it, and worse, swallowed the failure message on the error path:
     // a crashed agent said nothing at all. Materialise the row instead.
-    const createdRows = await getDb().unsafe(
-     `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
-         values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7)
+    const createdRows = await jobDb.unsafe(
+     `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel, message_kind)
+         values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7, $8)
          on conflict (id) do nothing
          returning *`,
      [
       responseMessageId, job.session_id, content,
       jobMetadata.pendingPlaceholderParentId || workThreadParentId,
-      String(job.agent_id || ''), senderName, broadcastToChannel,
+      String(job.agent_id || ''), senderName, broadcastToChannel, resultMessageKind,
      ],
     );
     if (createdRows.length > 0) {
-     notifyDbSubscribers('messages', 'INSERT', createdRows);
-     void logMessageActivity(createdRows);
-     void mirrorAgentReplyToTaskComment(createdRows[0]);
+     transcriptDurable = true;
+     publish('messages', 'INSERT', createdRows);
+     afterDurableWrite(() => {
+      void logMessageActivity(createdRows);
+      void mirrorAgentReplyToTaskComment(createdRows[0]);
+     });
+    } else {
+     await insertReplacementTranscript();
     }
+   } else {
+    await insertReplacementTranscript();
    }
   } else {
    // No placeholder was ever created (an 'external' agent queued with nobody
    // attached, claimed later). The answer still belongs in the work thread, still
    // broadcast — otherwise it would land top-level and lose the thread it answered.
-   const messageRows = await getDb().unsafe(
-    `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
-        values ($1, 'assistant', $2, $3, 'agent', $4, $5, $6) returning *`,
-    [job.session_id, content, workThreadParentId, String(job.agent_id || ''), senderName, broadcastToChannel],
-   );
-   notifyDbSubscribers('messages', 'INSERT', messageRows);
-   void mirrorAgentReplyToTaskComment(messageRows[0]);
+   // The job CAS above and this insert are one transaction on daemon/MCP paths.
+   // Since the CAS no longer admits terminal rows, a retry can never reach this
+   // unkeyed insert after the first transaction commits.
+   await insertReplacementTranscript();
   }
-  // The agent has just answered, which means it read what it is answering — so
-  // advance its read marker to the newest inbound message here at the finalize
-  // choke point, once for all three write branches above. The MCP HTTP tool
-  // server does this in read_channel/post_message, but a daemon-served DM or
-  // channel turn (this path) went through NEITHER, so the eye never appeared for
-  // any agent reply the daemon produced. Same SQL, same fanout as mcp.cjs.
-  await advanceAgentReadMarker(job.session_id, job.agent_id);
+  if (!transcriptDurable) throw new Error('Agent result did not produce a durable transcript row');
   // The turn is over, so nothing in it may still be counting. The branches above
   // resolve the placeholder the job was TRACKING; a segmented turn rotated through
   // others, and a tick that raced this finalization can re-create one moments after
@@ -702,13 +959,15 @@ function createAgentJobs(deps = {}) {
   // run that has finished. `responseMessageId` is held back because that row now
   // holds the real reply — which, on the day an agent opens one with "Thinking 5s",
   // would otherwise match the placeholder pattern and be deleted as debris.
-  await clearStrandedPlaceholders(job, responseMessageId);
+  await clearStrandedPlaceholders(job, responseMessageId, jobDb, publish);
   // Work asked for in a huddle outlives the call. If the huddle has since been
   // hung up, this answer landed in a transcript session nobody is watching any
   // more — so put it where the person who asked for it will actually see it.
-  void relayEndedHuddleWorkToChannel(job, content, senderName);
-  void continueConversation({ workspaceId: job.workspace_id, sessionId: job.session_id, threadParentId })
-   .catch((error) => console.error('continueConversation (job finalize) failed', error));
+  afterDurableWrite(() => {
+   void relayEndedHuddleWorkToChannel(job, content, senderName);
+   void continueConversation({ workspaceId: job.workspace_id, sessionId: job.session_id, threadParentId })
+    .catch((error) => console.error('continueConversation (job finalize) failed', error));
+  });
   return updatedRows[0] || null;
  }
 
@@ -737,9 +996,18 @@ function createAgentJobs(deps = {}) {
   try {
    if (!job || !job.session_id || !content) return null;
    const rows = await getDb().unsafe(
-    `select id, session_id from huddles
-        where transcript_session_id = $1 and ended_at is not null
-        order by ended_at desc limit 1`,
+    `select huddles.id, huddles.session_id
+       from huddles
+       join chat_sessions transcript_session
+         on transcript_session.id = huddles.transcript_session_id
+        and transcript_session.deleted_at is null
+       join chat_sessions host_session
+         on host_session.id = huddles.session_id
+        and host_session.deleted_at is null
+      where huddles.transcript_session_id = $1
+        and huddles.ended_at is not null
+      order by huddles.ended_at desc
+      limit 1`,
     [job.session_id],
    );
    const huddle = rows[0];
@@ -881,31 +1149,36 @@ function createAgentJobs(deps = {}) {
   if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
   const jobId = String(message.jobId || '');
   if (!jobId) throw badRequest('jobId is required');
-  const rows = await getDb().unsafe(
-   `select j.*, a.name as agent_name, a.handle as agent_handle
-      from agent_jobs j left join workspace_agents a on a.id = j.agent_id
-      where j.id = $1 and j.agent_id = $2 and j.workspace_id = $3 limit 1`,
-   [jobId, auth.agentId, auth.workspaceId],
-  );
-  const job = rows[0];
-  if (!job) throw forbidden('Agent job not found');
   // A cancelled control-plane job may still race with process teardown and
   // report one final result. Cancellation is authoritative; discard the late
   // frame rather than changing it back to done/error.
-  if (job.status === 'cancelled') {
+  const diagnosticRows = await getDb().unsafe(
+   `select status from agent_jobs
+      where id = $1 and agent_id = $2 and workspace_id = $3 and connection_id = $4 limit 1`,
+   [jobId, auth.agentId, auth.workspaceId, ws.agentConnectionId],
+  );
+  if (diagnosticRows[0]?.status === 'cancelled') {
    await updateAgentHeartbeat(ws, { busy: false }).catch(() => { });
    return;
   }
-  await finalizeAgentJobResult(job, {
-   responseText: textFromValue(message.response).trim(),
-   errorText: textFromValue(message.error).trim(),
-   fallbackName: auth.name,
-   fallbackHandle: auth.handle,
-   resultMetadata: message.metadata,
-   // Untrusted, validated in stopResultMetadata. The whole frame is passed
-   // rather than pre-picked fields so there is one validator, not two.
-   resultStop: message,
-  });
+  await withCurrentDaemonJob(ws, jobId, ({ tx, job, publishAfterCommit, afterCommit }) => (
+   finalizeAgentJobResult(job, {
+    responseText: textFromValue(message.response).trim(),
+    errorText: textFromValue(message.error).trim(),
+    fallbackName: auth.name,
+    fallbackHandle: auth.handle,
+    resultMetadata: message.metadata,
+    // Untrusted, validated in stopResultMetadata. The whole frame is passed
+    // rather than pre-picked fields so there is one validator, not two.
+    resultStop: message,
+    db: tx,
+    publish: publishAfterCommit,
+    afterCommit,
+    // The locked scope admitted a running job. The terminal CAS must preserve a
+    // cancellation even if this helper is changed to use a weaker lock later.
+    statusGuardOverride: "status = 'running'",
+   })
+  ), { allowSessionlessFarm: true });
   await updateAgentHeartbeat(ws, { busy: false }).catch(() => { });
  }
 
@@ -918,51 +1191,157 @@ function createAgentJobs(deps = {}) {
   if (!agentId) return null;
   touchMcpPresence(agentId);
   const claimed = await getDb().unsafe(
-   `update agent_jobs set status = 'running', started_at = now(), updated_at = now()
-      where id = (
-        select id from agent_jobs
-         where workspace_id = $1 and agent_id = $2 and status = 'queued' and (metadata->>'mode') = 'mcp'
-         order by created_at asc limit 1 for update skip locked
-      ) returning *`,
+   `with claimable_job as materialized (
+      select j.id, to_jsonb(a) as current_agent
+        from agent_jobs j
+        join chat_sessions s
+          on s.id = j.session_id
+         and s.workspace_id = j.workspace_id
+         and s.deleted_at is null
+        join workspace_agents a
+          on a.id = j.agent_id
+         and a.workspace_id = j.workspace_id
+         and a.enabled is true
+         and a.mcp_approved is true
+       where j.workspace_id = $1
+         and j.agent_id = $2
+         and j.status = 'queued'
+         and (j.metadata->>'mode') = 'mcp'
+         and exists (
+           select 1
+             from jsonb_array_elements(
+               case when jsonb_typeof(s.participants) = 'array'
+                    then s.participants else '[]'::jsonb end
+             ) participant
+            where participant->>'agent_id' = a.id::text
+         )
+       order by j.created_at asc
+       limit 1
+       for update of j, s, a skip locked
+    )
+    update agent_jobs j
+       set status = 'running', started_at = now(), updated_at = now()
+      from claimable_job current_job
+     where j.id = current_job.id
+       and j.status = 'queued'
+    returning j.*, current_job.current_agent`,
    [workspaceId, agentId],
   );
-  const job = claimed[0];
+  const claimedRow = claimed[0];
+  if (!claimedRow) return null;
+  const currentAgent = parseJsonObject(claimedRow.current_agent);
+  const { current_agent: _currentAgent, ...job } = claimedRow;
   if (!job) return null;
-  notifyDbSubscribers('agent_jobs', 'UPDATE', claimed);
-  const agentRows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [agentId]);
+  // `current_agent` is a private proof artifact from the locking CTE, not an
+  // agent_jobs column. Never fan the full agent row out on the jobs channel.
+  notifyDbSubscribers('agent_jobs', 'UPDATE', [job]);
   const meta = parseJsonObject(job.metadata);
+  // This is the point the external worker actually receives the prompt. The id
+  // was captured with that prompt; resolving "latest" now would claim messages
+  // that arrived while the job sat queued.
+  await advanceAgentReadMarker(
+   job.session_id,
+   job.agent_id,
+   meta.lastSeenMessageId,
+   meta.readScopeThreadParentId || null,
+  );
   return {
    jobId: job.id,
    prompt: job.prompt || '',
    sessionId: job.session_id,
    threadParentId: meta.threadParentId || null,
-   agent: agentRows[0] ? agentRuntimePayload(agentRows[0]) : null,
+   agent: currentAgent.id ? agentRuntimePayload(currentAgent) : null,
   };
  }
 
  async function submitMcpJobResult({ workspaceId, agentId, jobId, responseText = '', errorText = '' }) {
   if (!jobId) throw badRequest('jobId is required');
   if (!agentId) throw badRequest('Agent job not found');
-  const rows = await getDb().unsafe(
-   `select j.*, a.name as agent_name, a.handle as agent_handle
-      from agent_jobs j left join workspace_agents a on a.id = j.agent_id
-      where j.id = $1 and j.workspace_id = $2 and j.agent_id = $3 limit 1`,
-   [jobId, workspaceId, agentId],
-  );
-  const job = rows[0];
-  if (!job) throw badRequest('Agent job not found');
-  if (parseJsonObject(job.metadata).mode !== 'mcp') throw badRequest('Job is not an MCP job');
-  // Accept a late result even after the reaper force-failed the job to 'error'
-  // (the client wasn't actually dead, just slow) — recovering the real response
-  // is better than discarding it. Only a job that already completed successfully
-  // ('done') or was never claimed ('queued') is genuinely not awaiting a result.
-  // (M3, 2026-07 review.)
-  if (job.status !== 'running' && job.status !== 'error') {
-   throw badRequest(`Job is ${job.status}, not awaiting a result`);
+  const status = errorText ? 'error' : 'done';
+  const pendingFanout = [];
+  const pendingAfterCommit = [];
+  // Lock/prove the live MCP scope, rewrite (or replace) its transcript row, and
+  // transition the job in ONE transaction. The old path committed the terminal
+  // job first and only then touched the placeholder; a transient transcript
+  // failure made the result unretryable while the conversation stayed on
+  // "Thinking …" forever. A failure below now rolls the job back to its
+  // awaiting state, so submitting the same result again is safe.
+  const outcome = await getDb().begin(async (tx) => {
+   const currentRows = await tx.unsafe(
+    `select j.*, a.name as agent_name, a.handle as agent_handle
+       from agent_jobs j
+       join chat_sessions s
+         on s.id = j.session_id
+        and s.workspace_id = j.workspace_id
+        and s.deleted_at is null
+       join workspace_agents a
+         on a.id = j.agent_id
+        and a.workspace_id = j.workspace_id
+        and a.enabled is true
+        and a.mcp_approved is true
+      where j.id = $1
+        and j.workspace_id = $2
+        and j.agent_id = $3
+        and j.status = 'running'
+        and (j.metadata->>'mode') = 'mcp'
+        and exists (
+          select 1
+            from jsonb_array_elements(
+              case when jsonb_typeof(s.participants) = 'array'
+                   then s.participants else '[]'::jsonb end
+            ) participant
+           where participant->>'agent_id' = a.id::text
+        )
+      limit 1
+      for update of j, s, a`,
+    [jobId, workspaceId, agentId],
+   );
+   const current = currentRows[0];
+   if (!current) return null;
+   const publishAfterCommit = (table, eventType, rows) => {
+    if (Array.isArray(rows) && rows.length > 0) pendingFanout.push([table, eventType, rows]);
+   };
+   const afterCommit = (callback) => {
+    if (typeof callback === 'function') pendingAfterCommit.push(callback);
+   };
+   const finalized = await finalizeAgentJobResult(current, {
+    responseText,
+    errorText,
+    db: tx,
+    publish: publishAfterCommit,
+    afterCommit,
+    statusGuardOverride: "status = 'running'",
+   });
+   if (!finalized) throw new Error('MCP job result could not be finalized');
+   return finalized;
+  });
+  if (!outcome) {
+   // Preserve the route's useful diagnostics without using a stale preflight
+   // read as authority. This SELECT explains a failed CAS; it never authorizes a
+   // write and deliberately cannot turn a zero-row proof into success.
+   const currentRows = await getDb().unsafe(
+    `select status, metadata from agent_jobs
+       where id = $1 and workspace_id = $2 and agent_id = $3 limit 1`,
+    [jobId, workspaceId, agentId],
+   );
+   const current = currentRows[0];
+   if (!current) throw badRequest('Agent job not found');
+   if (parseJsonObject(current.metadata).mode !== 'mcp') throw badRequest('Job is not an MCP job');
+   if (current.status !== 'running') {
+    throw badRequest(`Job is ${current.status}, not awaiting a result`);
+   }
+   throw badRequest('Agent job is no longer attached to a live approved session');
+  }
+  publishCommittedFanout(pendingFanout);
+  for (const callback of pendingAfterCommit) {
+   try {
+    callback();
+   } catch (error) {
+    console.error('MCP job post-commit callback failed', error);
+   }
   }
   touchMcpPresence(agentId); // a submitting client is alive
-  await finalizeAgentJobResult(job, { responseText, errorText });
-  return { jobId: job.id, status: errorText ? 'error' : 'done' };
+  return { jobId: outcome.id, status };
  }
 
  // Backstop: an MCP job whose client vanished mid-flight (or nobody ever claimed it)
@@ -980,7 +1359,50 @@ function createAgentJobs(deps = {}) {
           and coalesce(j.started_at, j.created_at) < now() - interval '240 seconds'`,
    );
    for (const job of rows) {
-    await finalizeAgentJobResult(job, { errorText: 'the MCP client stopped responding' }).catch(() => { });
+    const pendingFanout = [];
+    const pendingAfterCommit = [];
+    try {
+     const finalized = await getDb().begin(async (tx) => {
+      const currentRows = await tx.unsafe(
+       `select j.*, a.name as agent_name, a.handle as agent_handle
+          from agent_jobs j
+          join chat_sessions s
+            on s.id = j.session_id
+           and s.workspace_id = j.workspace_id
+           and s.deleted_at is null
+          left join workspace_agents a on a.id = j.agent_id
+         where j.id = $1
+           and (j.metadata->>'mode') = 'mcp'
+           and j.status in ('queued', 'running')
+         for update of j, s`,
+       [job.id],
+      );
+      const current = currentRows[0];
+      if (!current) return null;
+      const publishAfterCommit = (table, eventType, eventRows) => {
+       if (Array.isArray(eventRows) && eventRows.length > 0) {
+        pendingFanout.push([table, eventType, eventRows]);
+       }
+      };
+      const afterCommit = (callback) => {
+       if (typeof callback === 'function') pendingAfterCommit.push(callback);
+      };
+      return finalizeAgentJobResult(current, {
+       errorText: 'the MCP client stopped responding',
+       db: tx,
+       publish: publishAfterCommit,
+       afterCommit,
+       statusGuardOverride: "status in ('queued', 'running')",
+      });
+     });
+     if (!finalized) continue;
+     publishCommittedFanout(pendingFanout);
+     for (const callback of pendingAfterCommit) callback();
+    } catch {
+     // Leave the job awaiting a result. The next sweep retries the whole atomic
+     // finalization; committing terminal state without its failure transcript is
+     // worse than a delayed timeout card.
+    }
    }
   } catch {
    // best effort
@@ -992,16 +1414,7 @@ function createAgentJobs(deps = {}) {
   if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
   const jobId = String(message.jobId || '');
   if (!jobId) throw badRequest('jobId is required');
-  const rows = await getDb().unsafe(
-   `select j.*, a.name as agent_name, a.handle as agent_handle
-      from agent_jobs j
-      left join workspace_agents a on a.id = j.agent_id
-      where j.id = $1 and j.agent_id = $2 and j.workspace_id = $3
-      limit 1`,
-   [jobId, auth.agentId, auth.workspaceId],
-  );
-  const job = rows[0];
-  if (!job) throw forbidden('Agent job not found');
+  const wrote = await withCurrentDaemonJob(ws, jobId, async ({ tx, job, publishAfterCommit }) => {
   const metadata = parseJsonObject(job.metadata);
   const responseMessageId = metadata.responseMessageId || null;
   const deltaText = textFromValue(message.content ?? message.response ?? '').trim();
@@ -1015,12 +1428,13 @@ function createAgentJobs(deps = {}) {
    elapsedMs: Number(message.elapsedMs || 0),
   };
   if (deltaText) nextMetadata.lastContentAt = nextMetadata.lastDeltaAt;
-  const deltaRows = await getDb().unsafe(
+  const deltaRows = await tx.unsafe(
    `update agent_jobs
       set response = $2,
           updated_at = now(),
           metadata = $3::jsonb
-      where id = $1 and status in ('queued', 'running')
+      where id = $1 and status = 'running'
+        and connection_id = $5
         and (jsonb_typeof(metadata) <> 'object'
              or coalesce(metadata->>'responseMessageId', '') = $4)
       returning id`,
@@ -1050,20 +1464,21 @@ function createAgentJobs(deps = {}) {
     // into a string scalar reads NULL for every key, so a strict comparison would
     // wedge the job permanently in the one state that most needs repairing.
     responseMessageId || '',
+    ws.agentConnectionId,
    ],
   );
   // Either the job already finished, or a segment moved the placeholder on between
   // the read above and this write. Everything below is stale either way.
-  if (deltaRows.length === 0) return;
+  if (deltaRows.length === 0) return false;
   if (responseMessageId) {
    const content = agentLiveMessageContent(message);
-   const updatedRows = await getDb().unsafe(
+   const updatedRows = await tx.unsafe(
     `update messages
         set content = $2,
             sender_kind = 'agent',
             sender_id = $3,
             sender_name = $4
-        where id = $1 and session_id = $5
+        where id = $1 and session_id = $5 and deleted_at is null
           and ($6::boolean or content ~ $7)
         returning *`,
     [
@@ -1080,7 +1495,7 @@ function createAgentJobs(deps = {}) {
     ],
    );
    if (updatedRows.length > 0) {
-    notifyDbSubscribers('messages', 'UPDATE', updatedRows);
+    publishAfterCommit('messages', 'UPDATE', updatedRows);
    } else if (metadata.pendingPlaceholder && deltaText) {
     // A segment handed us an id but deliberately did not create the row, so the
     // thread is not littered with empty "Thinking …" bubbles while the agent runs
@@ -1090,7 +1505,7 @@ function createAgentJobs(deps = {}) {
     // materialised the row as "Thinking Ns" — re-creating the very bubble lazy
     // creation exists to prevent, and minting the row that then strands when the
     // turn rotates past it.
-    const createdRows = await getDb().unsafe(
+    const createdRows = await tx.unsafe(
      `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
         values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6)
         on conflict (id) do nothing
@@ -1101,10 +1516,12 @@ function createAgentJobs(deps = {}) {
       String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent',
      ],
     );
-    if (createdRows.length > 0) notifyDbSubscribers('messages', 'INSERT', createdRows);
+    if (createdRows.length > 0) publishAfterCommit('messages', 'INSERT', createdRows);
    }
   }
-  await updateAgentHeartbeat(ws, { busy: true }).catch(() => { });
+  return true;
+  }, { allowSessionlessFarm: true });
+  if (wrote) await updateAgentHeartbeat(ws, { busy: true }).catch(() => { });
  }
 
  // The two halves of a step, normalized to one clipped line each: the tool name
@@ -1137,20 +1554,10 @@ function createAgentJobs(deps = {}) {
   if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
   const jobId = String(message.jobId || '');
   if (!jobId) throw badRequest('jobId is required');
-  const rows = await getDb().unsafe(
-   `select j.*, a.name as agent_name, a.handle as agent_handle
-      from agent_jobs j
-      left join workspace_agents a on a.id = j.agent_id
-      where j.id = $1 and j.agent_id = $2 and j.workspace_id = $3
-      limit 1`,
-   [jobId, auth.agentId, auth.workspaceId],
-  );
-  const job = rows[0];
-  if (!job) throw forbidden('Agent job not found');
-  if (!job.session_id) return; // farm/control-plane jobs have no conversation to post into
   const content = agentStepContent(message);
   if (!content) return;
   const step = agentStepParts(message);
+  return withCurrentDaemonJob(ws, jobId, async ({ tx, job, publishAfterCommit }) => {
   const metadata = parseJsonObject(job.metadata);
   // Steps hang off the reply's THREAD ROOT, not off the reply itself. The
   // "Thinking …" placeholder is itself a thread reply (a channel turn works in the
@@ -1176,8 +1583,8 @@ function createAgentJobs(deps = {}) {
   // still worth showing; a step that cannot be WRITTEN is lost.
   let threadParentId = null;
   if (responseMessageId) {
-   const parentRows = await getDb().unsafe(
-    'select thread_parent_id from messages where id = $1 and session_id = $2 limit 1',
+   const parentRows = await tx.unsafe(
+    'select thread_parent_id from messages where id = $1 and session_id = $2 and deleted_at is null limit 1',
     [responseMessageId, job.session_id],
    );
    if (parentRows[0]) {
@@ -1211,11 +1618,12 @@ function createAgentJobs(deps = {}) {
    elapsedMs: Number(message.elapsedMs || 0),
   };
   nextMetadata.lastContentAt = nextMetadata.lastDeltaAt;
-  const stepRows = await getDb().unsafe(
+  const stepRows = await tx.unsafe(
    `update agent_jobs
       set updated_at = now(),
           metadata = $2::jsonb
-      where id = $1 and status in ('queued', 'running')
+      where id = $1 and status = 'running'
+        and connection_id = $4
         and (jsonb_typeof(metadata) <> 'object'
              or coalesce(metadata->>'responseMessageId', '') = $3)
       returning id`,
@@ -1227,18 +1635,19 @@ function createAgentJobs(deps = {}) {
    // just before a segment rotated the placeholder would silently put the OLD id
    // back — after which the next liveness tick streams "Thinking Ns" over the block
    // the segment had just finalised.
-   [jobId, nextMetadata, responseMessageId || ''],
+   [jobId, nextMetadata, responseMessageId || '', ws.agentConnectionId],
   );
   // The job already finished, or a segment moved the placeholder on under us. The
   // step's thread parent was resolved from the old placeholder either way, so it
   // would land in the wrong place.
   if (stepRows.length === 0) return;
-  const messageRows = await getDb().unsafe(
+  const messageRows = await tx.unsafe(
    `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail)
       values ($1, 'assistant', $2, $3, 'agent', $4, $5, 'tool_step', $6, $7) returning *`,
    [job.session_id, content, threadParentId, String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent', step.name, step.detail],
   );
-  notifyDbSubscribers('messages', 'INSERT', messageRows);
+  publishAfterCommit('messages', 'INSERT', messageRows);
+  });
  }
 
  // An agent turn is really [text][tool][text][tool][text]. The delta pump owns ONE
@@ -1255,19 +1664,9 @@ function createAgentJobs(deps = {}) {
   if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
   const jobId = String(message.jobId || '');
   if (!jobId) throw badRequest('jobId is required');
-  const rows = await getDb().unsafe(
-   `select j.*, a.name as agent_name, a.handle as agent_handle
-      from agent_jobs j
-      left join workspace_agents a on a.id = j.agent_id
-      where j.id = $1 and j.agent_id = $2 and j.workspace_id = $3
-      limit 1`,
-   [jobId, auth.agentId, auth.workspaceId],
-  );
-  const job = rows[0];
-  if (!job) throw forbidden('Agent job not found');
-  if (!job.session_id) return; // farm/control-plane jobs have no conversation to post into
   const text = textFromValue(message.text ?? message.content ?? message.response).trim();
   if (!text) return; // an empty block is not a message; never rotate the placeholder on one
+  return withCurrentDaemonJob(ws, jobId, async ({ tx, job, publishAfterCommit }) => {
   const metadata = parseJsonObject(job.metadata);
   const responseMessageId = metadata.responseMessageId || null;
   const nextPlaceholderId = crypto.randomUUID();
@@ -1290,15 +1689,16 @@ function createAgentJobs(deps = {}) {
    lastSegmentMessageId: blockMessageId,
   };
   nextMetadata.lastContentAt = nextMetadata.lastDeltaAt;
-  const segmentRows = await getDb().unsafe(
+  const segmentRows = await tx.unsafe(
    `update agent_jobs
       set updated_at = now(),
           metadata = $2::jsonb
-      where id = $1 and status in ('queued', 'running')
+      where id = $1 and status = 'running'
+        and connection_id = $3
       returning id`,
    // Bind the merged OBJECT, never JSON.stringify — a stringified bind becomes a
    // jsonb string scalar and corrupts the column (see handleAgentJobDelta).
-   [jobId, nextMetadata],
+   [jobId, nextMetadata, ws.agentConnectionId],
   );
   if (segmentRows.length === 0) return; // the job already finished; the segment is stale
   const senderName = job.agent_name || auth.name || auth.handle || 'Agent';
@@ -1316,18 +1716,18 @@ function createAgentJobs(deps = {}) {
    job.session_id,
   );
   if (responseMessageId) {
-   const finalizedRows = await getDb().unsafe(
+   const finalizedRows = await tx.unsafe(
     `update messages
         set content = $2,
             sender_kind = 'agent',
             sender_id = $3,
             sender_name = $4
-        where id = $1 and session_id = $5
+        where id = $1 and session_id = $5 and deleted_at is null
         returning *`,
     [responseMessageId, text, String(job.agent_id || ''), senderName, job.session_id],
    );
    if (finalizedRows.length > 0) {
-    notifyDbSubscribers('messages', 'UPDATE', finalizedRows);
+    publishAfterCommit('messages', 'UPDATE', finalizedRows);
     // The replacement has to sit in exactly the same place as the message it
     // succeeds, so read the parent off the row instead of recomputing one: inside
     // a thread the placeholder is itself a reply (the same reason a tool step
@@ -1339,7 +1739,7 @@ function createAgentJobs(deps = {}) {
     // second text block without any delta in between, the UPDATE above matches
     // nothing and the block is silently DROPPED — a turn of three blocks showed
     // only the first. Write the row this segment was going to finalise.
-    const blockRows = await getDb().unsafe(
+    const blockRows = await tx.unsafe(
      `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
         values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6)
         on conflict (id) do nothing
@@ -1351,17 +1751,17 @@ function createAgentJobs(deps = {}) {
      ],
     );
     if (blockRows.length > 0) {
-     notifyDbSubscribers('messages', 'INSERT', blockRows);
+     publishAfterCommit('messages', 'INSERT', blockRows);
      threadParentId = blockRows[0].thread_parent_id || null;
     }
    }
   } else {
-   const blockRows = await getDb().unsafe(
+   const blockRows = await tx.unsafe(
     `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
        values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6) returning *`,
     [blockMessageId, job.session_id, text, threadParentId, String(job.agent_id || ''), senderName],
    );
-   notifyDbSubscribers('messages', 'INSERT', blockRows);
+   publishAfterCommit('messages', 'INSERT', blockRows);
   }
   // The next placeholder is created LAZILY, by the first delta that actually has
   // text for it (see handleAgentJobDelta). Creating it here left a visible
@@ -1375,16 +1775,18 @@ function createAgentJobs(deps = {}) {
   // it back. Build a fresh object rather than mutating `nextMetadata` — that one
   // was already bound by the first statement, and mutating it after the fact is a
   // trap waiting for anyone who later reads the bind back.
-  await getDb().unsafe(
+  await tx.unsafe(
    `update agent_jobs
       set updated_at = now(),
           metadata = $2::jsonb
-      where id = $1 and status in ('queued', 'running')
+      where id = $1 and status = 'running'
+        and connection_id = $3
       returning id`,
    // Bind the merged OBJECT, never JSON.stringify — a stringified bind becomes a
    // jsonb STRING scalar, after which metadata->>'…' reads NULL for every key.
-   [jobId, { ...nextMetadata, pendingPlaceholder: true, pendingPlaceholderParentId: threadParentId }],
+   [jobId, { ...nextMetadata, pendingPlaceholder: true, pendingPlaceholderParentId: threadParentId }, ws.agentConnectionId],
   );
+  });
  }
 
  return {

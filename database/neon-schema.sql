@@ -271,6 +271,11 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   parent_message_id uuid,
   split_parent_id uuid REFERENCES chat_sessions(id) ON DELETE SET NULL,
   split_at timestamptz,
+  -- Server-authored split provenance. The baseline is the one quoted-context
+  -- message in the fork; the source boundary is the newest source row visible
+  -- in the same locked snapshot. Merge never guesses either from text/time.
+  split_baseline_message_id uuid,
+  split_source_boundary_message_id uuid,
   archived_at timestamptz,
   deleted_at timestamptz,
   canvas_id text,
@@ -332,7 +337,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_session_members_user ON chat_session_members
 -- three default to '' so every pre-existing row stays valid.
 CREATE TABLE IF NOT EXISTS messages (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  session_id uuid REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
   role text NOT NULL CHECK (role IN ('user', 'assistant')),
   content text NOT NULL DEFAULT '',
   message_kind text DEFAULT '',
@@ -373,6 +378,58 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachments jsonb DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS idx_messages_pinned ON messages(session_id, pinned);
 CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(session_id, deleted_at);
+
+-- A closed conversation is a storage boundary shared by every message writer.
+-- INSERT locks the live session against the clear route; UPDATE cannot move a
+-- message or modify a tombstone. Mirrors ensureRuntimeSchema and the dedicated
+-- migration.
+CREATE OR REPLACE FUNCTION messages_require_live_session()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    IF NEW.session_id IS DISTINCT FROM OLD.session_id THEN
+      RAISE EXCEPTION 'A message cannot move between conversations'
+        USING ERRCODE = 'check_violation',
+              CONSTRAINT = 'messages_live_session_write_guard';
+    END IF;
+    IF OLD.deleted_at IS NOT NULL THEN
+      RAISE EXCEPTION 'A deleted message is immutable'
+        USING ERRCODE = 'check_violation',
+              CONSTRAINT = 'messages_live_session_write_guard';
+    END IF;
+    PERFORM 1
+      FROM chat_sessions
+     WHERE id = NEW.session_id
+       AND deleted_at IS NULL;
+  ELSE
+    PERFORM 1
+      FROM chat_sessions
+     WHERE id = NEW.session_id
+       AND deleted_at IS NULL
+     FOR SHARE;
+    -- Stamp after the live-session lock is acquired. A message INSERT waiting
+    -- behind an atomic split/close must sort after that boundary even when its
+    -- transaction began earlier (now() would preserve the stale start time).
+    IF FOUND THEN
+      NEW.created_at = clock_timestamp();
+    END IF;
+  END IF;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Messages require a live conversation'
+      USING ERRCODE = 'check_violation',
+            CONSTRAINT = 'messages_live_session_write_guard';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_messages_require_live_session ON messages;
+CREATE TRIGGER trg_messages_require_live_session
+  BEFORE INSERT OR UPDATE ON messages
+  FOR EACH ROW EXECUTE FUNCTION messages_require_live_session();
 
 -- "Send to channel": an agent WORKS inside a thread and only its final answer is
 -- broadcast to the channel/DM. A broadcast reply KEEPS its thread_parent_id (it is
@@ -854,19 +911,230 @@ CREATE TABLE IF NOT EXISTS workspace_join_links (
   token_hash text NOT NULL UNIQUE,
   label text NOT NULL DEFAULT '',
   role text NOT NULL DEFAULT 'editor' CHECK (role IN ('admin', 'editor', 'commenter', 'viewer')),
-  audience text NOT NULL DEFAULT 'both' CHECK (audience IN ('both', 'human', 'agent')),
+  grant_kind text NOT NULL DEFAULT 'individual' CHECK (grant_kind IN ('individual', 'workspace_control')),
+  audience text NOT NULL DEFAULT 'both' CHECK (audience IN ('both', 'human', 'agent', 'controller')),
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'redeemed', 'revoked')),
-  redeemed_as text NOT NULL DEFAULT '' CHECK (redeemed_as IN ('', 'human', 'agent')),
+  redeemed_as text NOT NULL DEFAULT '' CHECK (redeemed_as IN ('', 'human', 'agent', 'controller')),
   redeemed_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
   redeemed_agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+  redeemed_controller_id uuid,
+  controller_name text NOT NULL DEFAULT '',
+  controller_scopes jsonb NOT NULL DEFAULT '[]'::jsonb,
+  controller_expires_at timestamptz,
   redeemed_at timestamptz,
   expires_at timestamptz NOT NULL,
   created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
   created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now()
+  updated_at timestamptz DEFAULT now(),
+  CONSTRAINT workspace_join_links_controller_shape_check CHECK (
+    (
+      grant_kind = 'individual'
+      AND audience IN ('both', 'human', 'agent')
+      AND controller_name = ''
+      AND controller_scopes = '[]'::jsonb
+      AND controller_expires_at IS NULL
+    )
+    OR
+    (
+      grant_kind = 'workspace_control'
+      AND audience = 'controller'
+      AND btrim(controller_name) <> ''
+      AND jsonb_typeof(controller_scopes) = 'array'
+      AND jsonb_array_length(controller_scopes) > 0
+      AND controller_scopes <@ '["agents:register", "agents:manage_own", "resources:create", "resources:manage_own"]'::jsonb
+      AND controller_expires_at IS NOT NULL
+    )
+  )
 );
 
+ALTER TABLE workspace_join_links ADD COLUMN IF NOT EXISTS grant_kind text NOT NULL DEFAULT 'individual';
+ALTER TABLE workspace_join_links ADD COLUMN IF NOT EXISTS controller_name text NOT NULL DEFAULT '';
+ALTER TABLE workspace_join_links ADD COLUMN IF NOT EXISTS controller_scopes jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE workspace_join_links ADD COLUMN IF NOT EXISTS controller_expires_at timestamptz;
+ALTER TABLE workspace_join_links ADD COLUMN IF NOT EXISTS redeemed_controller_id uuid;
+ALTER TABLE workspace_join_links DROP CONSTRAINT IF EXISTS workspace_join_links_grant_kind_check;
+ALTER TABLE workspace_join_links
+  ADD CONSTRAINT workspace_join_links_grant_kind_check
+  CHECK (grant_kind IN ('individual', 'workspace_control'));
+ALTER TABLE workspace_join_links DROP CONSTRAINT IF EXISTS workspace_join_links_audience_check;
+ALTER TABLE workspace_join_links
+  ADD CONSTRAINT workspace_join_links_audience_check
+  CHECK (audience IN ('both', 'human', 'agent', 'controller'));
+ALTER TABLE workspace_join_links DROP CONSTRAINT IF EXISTS workspace_join_links_redeemed_as_check;
+ALTER TABLE workspace_join_links
+  ADD CONSTRAINT workspace_join_links_redeemed_as_check
+  CHECK (redeemed_as IN ('', 'human', 'agent', 'controller'));
+ALTER TABLE workspace_join_links DROP CONSTRAINT IF EXISTS workspace_join_links_controller_shape_check;
+ALTER TABLE workspace_join_links
+  ADD CONSTRAINT workspace_join_links_controller_shape_check CHECK (
+    (
+      grant_kind = 'individual'
+      AND audience IN ('both', 'human', 'agent')
+      AND controller_name = ''
+      AND controller_scopes = '[]'::jsonb
+      AND controller_expires_at IS NULL
+    )
+    OR
+    (
+      grant_kind = 'workspace_control'
+      AND audience = 'controller'
+      AND btrim(controller_name) <> ''
+      AND jsonb_typeof(controller_scopes) = 'array'
+      AND jsonb_array_length(controller_scopes) > 0
+      AND controller_scopes <@ '["agents:register", "agents:manage_own", "resources:create", "resources:manage_own"]'::jsonb
+      AND controller_expires_at IS NOT NULL
+    )
+  );
+
 CREATE INDEX IF NOT EXISTS idx_workspace_join_links_workspace_id ON workspace_join_links(workspace_id, created_at DESC);
+
+-- Named, individually revocable workspace-control credentials. These are not
+-- workspace members and are deliberately absent from ALLOWED_TABLES: their
+-- only surfaces are dedicated owner routes and explicitly controller-aware MCP
+-- tools. The scope shape cannot express role grants, raw vault reads, generic
+-- message posting, or private-session reads.
+CREATE TABLE IF NOT EXISTS workspace_controllers (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  token_hash text NOT NULL UNIQUE,
+  scopes jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (
+    jsonb_typeof(scopes) = 'array'
+    AND jsonb_array_length(scopes) > 0
+    AND scopes <@ '["agents:register", "agents:manage_own", "resources:create", "resources:manage_own"]'::jsonb
+  ),
+  status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+  parent_controller_id uuid REFERENCES workspace_controllers(id) ON DELETE SET NULL,
+  expires_at timestamptz NOT NULL,
+  last_used_at timestamptz,
+  created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  revoked_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_controllers_workspace
+  ON workspace_controllers(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_controllers_parent
+  ON workspace_controllers(parent_controller_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'workspace_join_links_redeemed_controller_id_fkey'
+  ) THEN
+    ALTER TABLE workspace_join_links
+      ADD CONSTRAINT workspace_join_links_redeemed_controller_id_fkey
+      FOREIGN KEY (redeemed_controller_id) REFERENCES workspace_controllers(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+-- Every agent enrolled by a controller carries that lineage. This is
+-- attribution, not authority: changing controller_id does not change the
+-- agent's model, permission mode, token, tools, host folders, or session access.
+ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS controller_id uuid;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'workspace_agents_controller_id_fkey'
+  ) THEN
+    ALTER TABLE workspace_agents
+      ADD CONSTRAINT workspace_agents_controller_id_fkey
+      FOREIGN KEY (controller_id) REFERENCES workspace_controllers(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_workspace_agents_controller_id ON workspace_agents(controller_id);
+
+-- Shared resources remain agent-gated. Nothing here is generically selectable
+-- or subscribable; callers ask for a structured operation and the steward agent
+-- on its own host claims and settles it.
+CREATE TABLE IF NOT EXISTS workspace_resources (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  steward_agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE RESTRICT,
+  controller_id uuid REFERENCES workspace_controllers(id) ON DELETE SET NULL,
+  name text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  facet text NOT NULL CHECK (facet IN ('context', 'knowledge', 'tooling', 'code')),
+  descriptor jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(descriptor) = 'object'),
+  version integer NOT NULL DEFAULT 1 CHECK (version > 0),
+  visibility text NOT NULL DEFAULT 'workspace' CHECK (visibility IN ('workspace', 'restricted')),
+  status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+  created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_resources_workspace
+  ON workspace_resources(workspace_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_resources_steward
+  ON workspace_resources(steward_agent_id, status);
+CREATE INDEX IF NOT EXISTS idx_workspace_resources_controller
+  ON workspace_resources(controller_id);
+
+CREATE TABLE IF NOT EXISTS resource_operations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  resource_id uuid NOT NULL REFERENCES workspace_resources(id) ON DELETE CASCADE,
+  steward_agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE RESTRICT,
+  requested_by_user_id uuid REFERENCES app_users(id) ON DELETE RESTRICT,
+  requested_by_agent_id uuid REFERENCES workspace_agents(id) ON DELETE RESTRICT,
+  requested_by_controller_id uuid REFERENCES workspace_controllers(id) ON DELETE RESTRICT,
+  requested_by_workspace_id uuid REFERENCES workspaces(id) ON DELETE RESTRICT,
+  requester_key text NOT NULL,
+  claimed_by_agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+  operation text NOT NULL CHECK (operation IN ('read', 'propose', 'apply', 'publish')),
+  input_artifact jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(input_artifact) = 'object'),
+  output_artifact jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(output_artifact) = 'object'),
+  status text NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'claimed', 'completed', 'rejected', 'failed', 'cancelled')),
+  resource_version integer NOT NULL CHECK (resource_version > 0),
+  idempotency_key text NOT NULL,
+  attempt integer NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+  lease_version bigint NOT NULL DEFAULT 0 CHECK (lease_version >= 0),
+  lease_expires_at timestamptz,
+  error text NOT NULL DEFAULT '',
+  audit_reference uuid REFERENCES audit_log(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  claimed_at timestamptz,
+  completed_at timestamptz,
+  CONSTRAINT resource_operations_one_requester_check CHECK (
+    num_nonnulls(requested_by_user_id, requested_by_agent_id, requested_by_controller_id, requested_by_workspace_id) = 1
+  ),
+  UNIQUE (workspace_id, requester_key, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_resource_operations_resource
+  ON resource_operations(resource_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_resource_operations_claim
+  ON resource_operations(steward_agent_id, status, created_at);
+-- Controller ids are attribution, not authority, but they must never point
+-- across tenants. The single-column FKs above cannot express that.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_controllers_id_workspace_key') THEN
+    ALTER TABLE workspace_controllers ADD CONSTRAINT workspace_controllers_id_workspace_key UNIQUE (id, workspace_id);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_controllers_parent_workspace_fkey') THEN
+    ALTER TABLE workspace_controllers ADD CONSTRAINT workspace_controllers_parent_workspace_fkey
+      FOREIGN KEY (parent_controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_agents_controller_workspace_fkey') THEN
+    ALTER TABLE workspace_agents ADD CONSTRAINT workspace_agents_controller_workspace_fkey
+      FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_resources_controller_workspace_fkey') THEN
+    ALTER TABLE workspace_resources ADD CONSTRAINT workspace_resources_controller_workspace_fkey
+      FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_join_links_redeemed_controller_workspace_fkey') THEN
+    ALTER TABLE workspace_join_links ADD CONSTRAINT workspace_join_links_redeemed_controller_workspace_fkey
+      FOREIGN KEY (redeemed_controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS canvas_groups (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1047,19 +1315,66 @@ CREATE TABLE IF NOT EXISTS agent_registrations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
+  controller_id uuid REFERENCES workspace_controllers(id) ON DELETE SET NULL,
   requested_handle text DEFAULT '',
   requested_name text DEFAULT '',
   -- Identity declared in register_agent. Approval is asynchronous, so this has
   -- to outlive the pending state or a new agent loses the avatar/voice it asked
   -- for at the moment its workspace_agents row is created.
   requested_identity jsonb NOT NULL DEFAULT '{}'::jsonb,
+  requested_purpose text NOT NULL DEFAULT 'collaborator'
+    CHECK (requested_purpose IN ('collaborator', 'resource')),
+  requested_resource_facets jsonb NOT NULL DEFAULT '[]'::jsonb
+    CHECK (
+      jsonb_typeof(requested_resource_facets) = 'array'
+      AND requested_resource_facets <@ '["context", "knowledge", "tooling", "code"]'::jsonb
+    ),
   client_label text DEFAULT '',
   status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied')),
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now(),
-  decided_at timestamptz
+  decided_at timestamptz,
+  CONSTRAINT agent_registrations_resource_facets_match_purpose CHECK (
+    (requested_purpose = 'collaborator' AND requested_resource_facets = '[]'::jsonb)
+    OR (requested_purpose = 'resource' AND jsonb_array_length(requested_resource_facets) > 0)
+  )
 );
+ALTER TABLE agent_registrations ADD COLUMN IF NOT EXISTS controller_id uuid;
+ALTER TABLE agent_registrations ADD COLUMN IF NOT EXISTS requested_purpose text NOT NULL DEFAULT 'collaborator';
+ALTER TABLE agent_registrations ADD COLUMN IF NOT EXISTS requested_resource_facets jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE agent_registrations DROP CONSTRAINT IF EXISTS agent_registrations_requested_purpose_check;
+ALTER TABLE agent_registrations ADD CONSTRAINT agent_registrations_requested_purpose_check
+  CHECK (requested_purpose IN ('collaborator', 'resource'));
+ALTER TABLE agent_registrations DROP CONSTRAINT IF EXISTS agent_registrations_requested_resource_facets_check;
+ALTER TABLE agent_registrations ADD CONSTRAINT agent_registrations_requested_resource_facets_check CHECK (
+  jsonb_typeof(requested_resource_facets) = 'array'
+  AND requested_resource_facets <@ '["context", "knowledge", "tooling", "code"]'::jsonb
+);
+ALTER TABLE agent_registrations DROP CONSTRAINT IF EXISTS agent_registrations_resource_facets_match_purpose;
+ALTER TABLE agent_registrations ADD CONSTRAINT agent_registrations_resource_facets_match_purpose CHECK (
+  (requested_purpose = 'collaborator' AND requested_resource_facets = '[]'::jsonb)
+  OR (requested_purpose = 'resource' AND jsonb_array_length(requested_resource_facets) > 0)
+);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'agent_registrations_controller_id_fkey'
+  ) THEN
+    ALTER TABLE agent_registrations
+      ADD CONSTRAINT agent_registrations_controller_id_fkey
+      FOREIGN KEY (controller_id) REFERENCES workspace_controllers(id) ON DELETE SET NULL;
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_agent_registrations_workspace ON agent_registrations(workspace_id, status);
+CREATE INDEX IF NOT EXISTS idx_agent_registrations_controller ON agent_registrations(controller_id, status);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_registrations_controller_workspace_fkey') THEN
+    ALTER TABLE agent_registrations ADD CONSTRAINT agent_registrations_controller_workspace_fkey
+      FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+  END IF;
+END $$;
 
 -- Link preview (unfurl) cache. Keyed by a hash of the normalized URL and
 -- deliberately NOT workspace-scoped: one outbound fetch per URL for the whole
@@ -1390,24 +1705,36 @@ CREATE INDEX IF NOT EXISTS idx_inbox_read_state_workspace ON inbox_read_state(wo
 -- "a non-member cannot see who read a private conversation" a property of the
 -- schema rather than of a query remembering to say so.
 --
--- session_id leads the PK because every read is "all markers for THIS session",
--- and that prefix is covered by the PK btree — so no second index is created.
+-- session_id leads the unique indexes because the normal read is "all markers
+-- for THIS session". Opt-out is the deliberate reverse lookup: delete every
+-- marker for one human, so user_id also has a partial lookup index.
 -- A reader is EITHER a human (user_id -> app_users) or an agent (agent_id ->
 -- workspace_agents). "Has this agent seen it" is a first-class receipt, so the
 -- table carries both nullable FKs, a CHECK that exactly one is set, and a partial
 -- unique index per kind in place of the old (session_id, user_id) primary key.
 CREATE TABLE IF NOT EXISTS session_read_state (
+  marker_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  event_version bigint GENERATED BY DEFAULT AS IDENTITY,
   session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
   user_id uuid REFERENCES app_users(id) ON DELETE CASCADE,
   agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
+  thread_parent_id uuid REFERENCES messages(id) ON DELETE CASCADE,
+  last_seen_message_id uuid NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
   read_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz DEFAULT now(),
+  CONSTRAINT session_read_state_marker_id_key UNIQUE (marker_id),
   CONSTRAINT session_read_state_one_reader CHECK ((user_id IS NOT NULL) <> (agent_id IS NOT NULL))
 );
-CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_user_uidx
-  ON session_read_state (session_id, user_id) WHERE user_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_agent_uidx
-  ON session_read_state (session_id, agent_id) WHERE agent_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_user_scope_uidx
+  ON session_read_state (session_id, user_id, thread_parent_id) NULLS NOT DISTINCT
+  WHERE user_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS session_read_state_agent_scope_uidx
+  ON session_read_state (session_id, agent_id, thread_parent_id) NULLS NOT DISTINCT
+  WHERE agent_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS session_read_state_user_lookup_idx
+  ON session_read_state (user_id) WHERE user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS session_read_state_agent_lookup_idx
+  ON session_read_state (agent_id) WHERE agent_id IS NOT NULL;
 
 -- The receipts opt-out, and it is RECIPROCAL: switching it off stops your
 -- markers being written AND stops you seeing anyone else's (both halves are in
@@ -1492,7 +1819,7 @@ CREATE TABLE IF NOT EXISTS agent_schedules (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
-  session_id uuid REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
   created_by uuid,
   name text NOT NULL DEFAULT '',
   prompt text NOT NULL DEFAULT '',
@@ -1514,11 +1841,13 @@ CREATE TABLE IF NOT EXISTS agent_schedule_runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   schedule_id uuid NOT NULL REFERENCES agent_schedules(id) ON DELETE CASCADE,
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
   status text NOT NULL DEFAULT 'ok',
   detail text DEFAULT '',
   created_at timestamptz DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_agent_schedule_runs_schedule ON agent_schedule_runs(schedule_id, created_at desc);
+CREATE INDEX IF NOT EXISTS idx_agent_schedule_runs_session ON agent_schedule_runs(session_id, created_at desc);
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_schedules_interval_bounds') THEN
     ALTER TABLE agent_schedules ADD CONSTRAINT agent_schedules_interval_bounds

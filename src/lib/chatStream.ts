@@ -60,7 +60,10 @@ export function parseAiStreamPayload(payload: unknown): { text: string; error: s
 }
 
 export function finalAssistantStreamContent(fullContent: string, streamError: string): string {
-  return fullContent || streamError || EMPTY_STREAM_RESPONSE;
+  // A terminal error wins over partial text. In particular, persistence
+  // failures are delivered as the final SSE error; showing the partial reply
+  // as if it were durable would leave the browser and transcript disagreeing.
+  return streamError || fullContent || EMPTY_STREAM_RESPONSE;
 }
 
 export function extractSseDataLines(buffer: string, flush = false): { data: string[]; remainder: string } {

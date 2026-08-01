@@ -28,31 +28,59 @@
 //
 // WHERE THE DM GATE ACTUALLY IS, and why it is not in this file.
 //
-// server/realtime.cjs applies its private-session filter ONLY when
-// `table === 'chat_sessions'`; every other table fans out to whatever sockets
-// hold a matching subscription. That is a live, known property of the fanout and
-// this feature must not widen it.
-//
-// It does not, and the reason is structural rather than a second filter:
-// `session_read_state` has NO workspace_id column, so a subscription cannot be
-// expressed except by naming a session — and naming a private session has to
-// clear enforceSessionReadAccess at SUBSCRIBE time
-// (authorizeRealtimeBinding -> enforceDbOperationAccess with op 'select'). A
-// non-member therefore never holds a subscription for the row to match against.
-// That refusal is pinned in tests/session-read-state.test.cjs; this file pins
-// the other half — that a socket which DID name a different session gets
-// nothing, and that a workspace-shaped filter matches no receipt row at all.
+// `session_read_state` has NO workspace_id column, so a subscription must name
+// a session and clear enforceSessionReadAccess at bind time. Fanout then resolves
+// that session's CURRENT audience again, because a socket bound while a channel
+// was public must not retain access after it becomes private.
 // ============================================================================
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { __test } = require('../server/index.cjs');
+const { createRealtime } = require('../server/realtime.cjs');
 
 const SESSION_A = 'chan-a';
 const SESSION_B = 'chan-b';
 const WORKSPACE = 'w1';
 
+let privateMembers = null;
+let optedOutUsers = null;
+
+function pgArrayValues(value) {
+  return [...String(value || '').matchAll(/"((?:\\.|[^"\\])*)"/g)]
+    .map(match => match[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
+}
+
+test.beforeEach(() => {
+  privateMembers = null;
+  optedOutUsers = new Set();
+  __test.setTestDb({
+    async unsafe(sql, params = []) {
+      const q = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+      if (q.startsWith('select id, visibility, folder from chat_sessions')
+        && q.includes('where id = any')) {
+        return pgArrayValues(params[0])
+          .filter(id => [SESSION_A, SESSION_B].includes(id))
+          .map(id => ({
+            id,
+            visibility: privateMembers === null ? 'workspace' : 'private',
+            folder: privateMembers === null ? 'General' : 'Direct messages',
+          }));
+      }
+      if (q.startsWith('select session_id, user_id from chat_session_members')) {
+        return pgArrayValues(params[0]).flatMap(session_id =>
+          [...(privateMembers || [])].map(user_id => ({ session_id, user_id })));
+      }
+      if (q.startsWith('select id from app_users where id = any')) {
+        const ids = String(params[0]).match(/"([^"]+)"/g)?.map(value => value.slice(1, -1)) || [];
+        return ids.filter(id => !optedOutUsers.has(id)).map(id => ({ id }));
+      }
+      return [];
+    },
+  });
+});
 test.afterEach(() => __test.resetTestState());
+const settle = () => new Promise(resolve => setTimeout(resolve, 20));
 
 function fakeClient(userId, subscriptions) {
   const sent = [];
@@ -74,17 +102,33 @@ function receiptSub(sessionId) {
   };
 }
 
-function marker(sessionId, userId) {
-  return { session_id: sessionId, user_id: userId, read_at: '2026-07-01T00:00:00.000Z' };
+function marker(sessionId, userId, {
+  markerId = `marker-${sessionId}-${userId}`,
+  eventVersion = '1',
+  threadParentId = null,
+  lastSeenMessageId = `message-${sessionId}`,
+  readAt = '2026-07-01T00:00:00.000Z',
+} = {}) {
+  return {
+    marker_id: markerId,
+    event_version: eventVersion,
+    session_id: sessionId,
+    user_id: userId,
+    agent_id: null,
+    thread_parent_id: threadParentId,
+    last_seen_message_id: lastSeenMessageId,
+    read_at: readAt,
+  };
 }
 
 const framesFor = (ws, table) => ws.sent.filter(m => m.type === 'db_changes' && m.table === table);
 
-test('a receipt reaches the socket that named its session, and only that one', () => {
+test('a receipt reaches the socket that named its session, and only that one', async () => {
   const inSession = __test.registerTestWebsocketClient(fakeClient('u1', [receiptSub(SESSION_A)]));
   const elsewhere = __test.registerTestWebsocketClient(fakeClient('u2', [receiptSub(SESSION_B)]));
 
   __test.notifyDbSubscribers('session_read_state', 'INSERT', [marker(SESSION_A, 'u1')]);
+  await settle();
 
   assert.equal(framesFor(inSession, 'session_read_state').length, 1, 'the subscriber to this session gets it');
   assert.deepEqual(framesFor(elsewhere, 'session_read_state'), [], 'a subscriber to another session gets NOTHING');
@@ -94,7 +138,7 @@ test('a receipt reaches the socket that named its session, and only that one', (
   assert.deepEqual(frame.payload.new, marker(SESSION_A, 'u1'));
 });
 
-test('a subscription to a DIFFERENT table never receives a receipt', () => {
+test('a subscription to a DIFFERENT table never receives a receipt', async () => {
   const other = __test.registerTestWebsocketClient(fakeClient('u2', [{
     channel: `messages:${SESSION_A}`,
     type: 'db_changes',
@@ -103,10 +147,11 @@ test('a subscription to a DIFFERENT table never receives a receipt', () => {
   }]));
 
   __test.notifyDbSubscribers('session_read_state', 'INSERT', [marker(SESSION_A, 'u1')]);
+  await settle();
   assert.deepEqual(other.sent, [], 'same session, wrong table');
 });
 
-test('a workspace-shaped filter matches no receipt row, so it cannot be used to widen the audience', () => {
+test('a workspace-shaped filter matches no receipt row, so it cannot be used to widen the audience', async () => {
   // The one uncertainty in the design that had to be executed rather than
   // reasoned about. A caller could try `workspace_id=eq.<ws>` as a filter:
   // resolveOperationWorkspace WOULD accept it (it reads the filter, not the
@@ -125,22 +170,49 @@ test('a workspace-shaped filter matches no receipt row, so it cannot be used to 
   }]));
 
   __test.notifyDbSubscribers('session_read_state', 'INSERT', [marker(SESSION_A, 'u1')]);
+  await settle();
   assert.deepEqual(workspaceWide.sent, [], 'a filter on a column the row does not have matches nothing');
 });
 
-test('a receipt row carries no message content and no second clock', () => {
-  // What the wire may say about a person: which conversation, who, how far. Not
-  // WHICH message (the high-water mark never records that) and not `updated_at`,
-  // which records when the marker last moved and is a finer clock than the
-  // disclosure this feature makes.
+test('a receipt row carries marker identity, generation, exact scope, and no second clock', async () => {
+  // The exact message id is needed to order equal-time messages and the marker id
+  // plus generation lets consumers reject stale delivery. `updated_at` remains an
+  // operational second clock and must not ride the wire.
   const socket = __test.registerTestWebsocketClient(fakeClient('u1', [receiptSub(SESSION_A)]));
   __test.notifyDbSubscribers('session_read_state', 'INSERT', [marker(SESSION_A, 'u1')]);
+  await settle();
 
   const [frame] = framesFor(socket, 'session_read_state');
-  assert.deepEqual(Object.keys(frame.payload.new).sort(), ['read_at', 'session_id', 'user_id']);
+  assert.deepEqual(Object.keys(frame.payload.new).sort(), [
+    'agent_id', 'event_version', 'last_seen_message_id', 'marker_id', 'read_at',
+    'session_id', 'thread_parent_id', 'user_id',
+  ]);
+  assert.equal('updated_at' in frame.payload.new, false);
 });
 
-test('a reaction still rides the messages lane, session-filtered', () => {
+test('successive generations preserve one marker identity and advance the exact message', async () => {
+  const socket = __test.registerTestWebsocketClient(fakeClient('u1', [receiptSub(SESSION_A)]));
+  const first = marker(SESSION_A, 'u2', {
+    markerId: 'stable-marker',
+    eventVersion: '41',
+    lastSeenMessageId: 'message-1',
+  });
+  const second = marker(SESSION_A, 'u2', {
+    markerId: 'stable-marker',
+    eventVersion: '42',
+    lastSeenMessageId: 'message-2',
+  });
+
+  __test.notifyDbSubscribers('session_read_state', 'INSERT', [first, second]);
+  await settle();
+
+  const delivered = framesFor(socket, 'session_read_state').map(frame => frame.payload.new);
+  assert.deepEqual(delivered.map(row => row.marker_id), ['stable-marker', 'stable-marker']);
+  assert.deepEqual(delivered.map(row => row.event_version), ['41', '42']);
+  assert.deepEqual(delivered.map(row => row.last_seen_message_id), ['message-1', 'message-2']);
+});
+
+test('a reaction still rides the messages lane, session-filtered', async () => {
   // Reactions did not move lanes and must not: `messages` is already
   // session-scoped and an UNFILTERED messages subscription cannot be established
   // at all, so the audience is correct by construction. The alternative someone
@@ -163,12 +235,13 @@ test('a reaction still rides the messages lane, session-filtered', () => {
   __test.notifyDbSubscribers('messages', 'UPDATE', [
     { id: 'm1', session_id: SESSION_A, reactions: { '✅': ['u1'] }, sender_kind: 'human' },
   ]);
+  await settle();
 
   assert.equal(framesFor(inSession, 'messages').length, 1);
   assert.deepEqual(framesFor(elsewhere, 'messages'), []);
 });
 
-test('two sessions changing at once do not cross over', () => {
+test('two sessions changing at once do not cross over', async () => {
   // A single notify carrying rows for more than one session is the shape where a
   // loop that hoisted the filter check out would leak, and it would look correct
   // in every single-row test above.
@@ -179,6 +252,7 @@ test('two sessions changing at once do not cross over', () => {
     marker(SESSION_A, 'u1'),
     marker(SESSION_B, 'u2'),
   ]);
+  await settle();
 
   assert.deepEqual(
     framesFor(a, 'session_read_state').map(f => f.payload.new.session_id),
@@ -188,4 +262,170 @@ test('two sessions changing at once do not cross over', () => {
     framesFor(b, 'session_read_state').map(f => f.payload.new.session_id),
     [SESSION_B],
   );
+});
+
+test('a receipt binding made while public does not survive a private transition', async () => {
+  const member = __test.registerTestWebsocketClient(fakeClient('u1', [receiptSub(SESSION_A)]));
+  const outsider = __test.registerTestWebsocketClient(fakeClient('u2', [receiptSub(SESSION_A)]));
+  privateMembers = new Set(['u1']);
+
+  __test.notifyDbSubscribers('session_read_state', 'INSERT', [marker(SESSION_A, 'u1')]);
+  await settle();
+
+  assert.equal(framesFor(member, 'session_read_state').length, 1);
+  assert.equal(framesFor(outsider, 'session_read_state').length, 0);
+});
+
+test('an existing receipt binding stops receiving immediately after opt-out', async () => {
+  const socket = __test.registerTestWebsocketClient(fakeClient('u1', [receiptSub(SESSION_A)]));
+  optedOutUsers.add('u1');
+
+  __test.notifyDbSubscribers('session_read_state', 'INSERT', [marker(SESSION_A, 'u2')]);
+  await settle();
+
+  assert.deepEqual(framesFor(socket, 'session_read_state'), []);
+});
+
+test('receipt DELETE frames carry the removed marker in old', async () => {
+  const socket = __test.registerTestWebsocketClient(fakeClient('u1', [receiptSub(SESSION_A)]));
+  const removed = marker(SESSION_A, 'u2');
+
+  __test.notifyDbSubscribers('session_read_state', 'DELETE', [removed]);
+  await settle();
+
+  const [frame] = framesFor(socket, 'session_read_state');
+  assert.equal(frame.payload.eventType, 'DELETE');
+  assert.deepEqual(frame.payload.new, {});
+  assert.deepEqual(frame.payload.old, removed);
+});
+
+test('receipt subscription authorization requires both a session filter and current opt-in', async () => {
+  let optedIn = false;
+  const forbidden = (message) => Object.assign(new Error(message), { status: 403 });
+  const realtime = createRealtime({
+    ensureTable() {},
+    async enforceDbOperationAccess() {},
+    async readReceiptOptedInUserIds(ids) {
+      return optedIn ? new Set(ids.map(String)) : new Set();
+    },
+    forbidden,
+  });
+  const binding = receiptSub(SESSION_A);
+
+  await assert.rejects(
+    () => realtime.authorizeRealtimeBinding('u1', binding.channel, binding),
+    { status: 403, message: 'Read receipts are disabled' },
+  );
+
+  optedIn = true;
+  await realtime.authorizeRealtimeBinding('u1', binding.channel, binding);
+
+  const socket = realtime.registerTestWebsocketClient(fakeClient('u1', [binding]));
+  optedIn = false;
+  await realtime.revokeRealtimeAccessForMember('u1');
+  assert.deepEqual(socket.subscriptions, []);
+  assert.deepEqual(socket.sent, [{
+    type: 'system',
+    event: 'unsubscribed',
+    channel: binding.channel,
+    reason: 'access_revoked',
+  }]);
+
+  optedIn = true;
+  await assert.rejects(
+    () => realtime.authorizeRealtimeBinding('u1', 'session_read_state:all', {
+      ...binding,
+      filter: 'workspace_id=eq.w1',
+    }),
+    { status: 403, message: 'Read receipt subscriptions require a session filter' },
+  );
+});
+
+test('the default receipt opt-in resolver fails closed at bind and delivery time', async () => {
+  const forbidden = message => Object.assign(new Error(message), { status: 403 });
+  const realtime = createRealtime({
+    ensureTable() {},
+    async enforceDbOperationAccess() {},
+    async enqueueFlowWebhookEvents() { return []; },
+    async enqueueAutomationRuns() { return []; },
+    async sessionRealtimeAudiences(ids) {
+      return new Map(ids.map(id => [String(id), { memberUserIds: null }]));
+    },
+    forbidden,
+  });
+  const binding = receiptSub(SESSION_A);
+
+  await assert.rejects(
+    () => realtime.authorizeRealtimeBinding('u1', binding.channel, binding),
+    { status: 403, message: 'Read receipts are disabled' },
+  );
+
+  const socket = realtime.registerTestWebsocketClient(fakeClient('u1', [binding]));
+  realtime.notifyDbSubscribers('session_read_state', 'INSERT', [marker(SESSION_A, 'u2')]);
+  await settle();
+  assert.deepEqual(socket.sent, [], 'an injected audience cannot make the default opt-in guess true');
+});
+
+test('receipt fanout resolves only candidate sessions and batches audience plus opt-in lookups', async () => {
+  const audienceCalls = [];
+  const optInCalls = [];
+  const realtime = createRealtime({
+    async enqueueFlowWebhookEvents() { return []; },
+    async enqueueAutomationRuns() { return []; },
+    async sessionRealtimeAudiences(ids) {
+      audienceCalls.push([...ids]);
+      return new Map([
+        [SESSION_A, { memberUserIds: null }],
+        [SESSION_B, { memberUserIds: new Set(['u2']) }],
+      ]);
+    },
+    async readReceiptOptedInUserIds(ids) {
+      optInCalls.push([...ids]);
+      return new Set(ids.map(String));
+    },
+  });
+  const a = realtime.registerTestWebsocketClient(fakeClient('u1', [receiptSub(SESSION_A)]));
+  const b = realtime.registerTestWebsocketClient(fakeClient('u2', [receiptSub(SESSION_B)]));
+  const noMatchingRow = realtime.registerTestWebsocketClient(fakeClient('u3', [receiptSub('chan-c')]));
+
+  realtime.notifyDbSubscribers('session_read_state', 'INSERT', [
+    marker(SESSION_A, 'reader-a'),
+    marker(SESSION_B, 'reader-b'),
+  ]);
+  await settle();
+
+  assert.deepEqual(audienceCalls, [[SESSION_A, SESSION_B]], 'one audience batch, only for sessions with rows and subscribers');
+  assert.deepEqual(optInCalls, [['u1', 'u2']], 'recipient privacy is resolved once for the candidate socket set');
+  assert.deepEqual(framesFor(a, 'session_read_state').map(frame => frame.payload.new.session_id), [SESSION_A]);
+  assert.deepEqual(framesFor(b, 'session_read_state').map(frame => frame.payload.new.session_id), [SESSION_B]);
+  assert.deepEqual(noMatchingRow.sent, []);
+});
+
+test('account opt-out invalidates a live device even when it has no receipt subscription', async () => {
+  const realtime = createRealtime({
+    ensureTable() {},
+    async enforceDbOperationAccess() {},
+    async readReceiptOptedInUserIds() { return new Set(); },
+    forbidden(message) { return Object.assign(new Error(message), { status: 403 }); },
+  });
+  const socket = realtime.registerTestWebsocketClient(fakeClient('u1', []));
+
+  await realtime.revokeRealtimeAccessForMember('u1', {
+    reason: 'read_receipts_disabled',
+  });
+
+  assert.deepEqual(socket.sent, [
+    {
+      type: 'system',
+      event: 'unsubscribed',
+      channel: 'session_read_state:*',
+      reason: 'read_receipts_disabled',
+    },
+    {
+      type: 'system',
+      event: 'read_receipts_preference',
+      userId: 'u1',
+      enabled: false,
+    },
+  ]);
 });

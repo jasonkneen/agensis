@@ -36,6 +36,20 @@ describe('sub-thread creation has a live entry point', () => {
     expect(hook).toContain('participants: [primaryParticipant]');
   });
 
+  it('dispatches the same bounded provenance-labelled quote that it persists', () => {
+    const app = read('src/App.tsx');
+    const chat = read('src/components/windows/ChatWindowContent.tsx');
+    const hook = read('src/hooks/useSubThreads.ts');
+    expect(app).toContain('sourceContext,');
+    expect(chat).toContain('sender: parentMsg.sender_name || parentMsg.role');
+    expect(chat).toContain('sessionId: parentMsg.session_id');
+    expect(chat).toContain("sessionTitle: channelTitle || 'Untitled'");
+    expect(hook).toContain('buildQuotedMessageContext(messageId, options.sourceContext)');
+    expect(hook).toContain('content: quotedContext');
+    expect(hook).toContain("messages: [{ role: 'user', content: quotedContext }]");
+    expect(hook).not.toContain('options.contextMessage');
+  });
+
   it('the prop reaches the message bubble that renders the button', () => {
     const app = read('src/App.tsx');
     const chat = read('src/components/windows/ChatWindowContent.tsx');
@@ -44,7 +58,7 @@ describe('sub-thread creation has a live entry point', () => {
     expect(app).toContain('onCreateSubThread={onCreateSubThreadProp}');
     // …ChatWindowContent accepts it and hands the bubble a click handler…
     expect(chat).toContain('onCreateSubThread');
-    expect(chat).toMatch(/onCreateSubThread=\{onCreateSubThread \? \(\) =>/);
+    expect(chat).toMatch(/onCreateSubThread=\{onCreateSubThread && !msg\.deleted_at \? \(\) =>/);
     // …and something is actually wired to invoke it.
     expect(chat).toMatch(/onCreateSubThread\(subThreadPickerMessageId, agent/);
   });

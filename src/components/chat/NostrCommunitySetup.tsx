@@ -9,6 +9,7 @@ import {
   getNostrChannels,
   importableNostrChannels,
   mapNostrChannels,
+  nostrErrorMessage,
   previewNostrInvite,
   setNostrChannelSubscription,
   type NostrChannel,
@@ -59,7 +60,7 @@ export function NostrCommunitySetup({
     getNostrChannels(existingConnection.id, controller.signal)
       .then(channels => setConnected({ connection: existingConnection, channels, alreadyConnected: true }))
       .catch(reason => {
-        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason));
+        if (!controller.signal.aborted) setError(nostrErrorMessage(reason));
       })
       .finally(() => {
         if (!controller.signal.aborted) setBusy(null);
@@ -91,7 +92,7 @@ export function NostrCommunitySetup({
       setConnected(null);
       setSelected(new Set());
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(nostrErrorMessage(reason));
     } finally {
       setBusy(null);
     }
@@ -114,7 +115,7 @@ export function NostrCommunitySetup({
       setSelected(new Set(importableNostrChannels(result.channels).map(channel => channel.id)));
       onCommunityChange?.();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(nostrErrorMessage(reason));
     } finally {
       setBusy(null);
     }
@@ -134,7 +135,7 @@ export function NostrCommunitySetup({
         } : current);
         onCommunityChange?.();
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        setError(nostrErrorMessage(reason));
       } finally {
         setBusy(null);
       }
@@ -181,7 +182,7 @@ export function NostrCommunitySetup({
         onClose();
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(nostrErrorMessage(reason));
     } finally {
       setBusy(null);
     }

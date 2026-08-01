@@ -739,7 +739,7 @@ const PRESENCE_COLUMNS = 'huddle_id, identity, connection_epoch, last_seen_at, h
  * server/index.cjs. From index.cjs:
  *
  *   mountHuddleRoutes(app, {
- *    getDb, requireAuth, enforceWorkspaceRole, enforceSessionRead, jsonError,
+ *    getDb, requireAuth, enforceWorkspaceRole, enforceSessionRead, sessionReadableSql, jsonError,
  *    notifyDbSubscribers, rateLimitBlocked, webhookRateLimiter, clientIpFromReq,
  *   });
  */
@@ -749,6 +749,7 @@ function mountHuddleRoutes(app, deps = {}) {
   requireAuth,
   enforceWorkspaceRole,
   enforceSessionRead,
+  sessionReadableSql,
   assertWorkspaceRoleLocked,
   installCreatedSessionMemberships,
   lockPrivateSessionRoster,
@@ -766,6 +767,7 @@ function mountHuddleRoutes(app, deps = {}) {
  if (!app) throw new Error('mountHuddleRoutes requires an express app');
  for (const [name, value] of Object.entries({
   getDb, requireAuth, enforceWorkspaceRole, enforceSessionRead,
+  sessionReadableSql,
   assertWorkspaceRoleLocked, installCreatedSessionMemberships,
   lockPrivateSessionRoster, jsonError,
  })) {
@@ -799,7 +801,7 @@ function mountHuddleRoutes(app, deps = {}) {
  // against workspace B's session id.
  async function sessionInWorkspace(sessionId, workspaceId) {
   const rows = await getDb().unsafe(
-   'select id, title, visibility, folder from chat_sessions where id = $1 and workspace_id = $2 limit 1',
+   'select id, title, visibility, folder, deleted_at from chat_sessions where id = $1 and workspace_id = $2 limit 1',
    [sessionId, workspaceId],
   );
   return rows[0] || null;
@@ -810,6 +812,90 @@ function mountHuddleRoutes(app, deps = {}) {
  // called from, including the "no implicit owner oversight" rule for DMs.
  async function enforceHuddleRead(userId, huddle) {
   if (huddle?.session_id) await enforceSessionRead(userId, huddle.session_id);
+ }
+
+ // A route-level access check is only a useful early error. It is not authority
+ // for a token or a later mutation: the host can be deleted, made private, or
+ // have this member revoked while the request is still running. These helpers
+ // take row locks inside the operation's transaction and re-use the one
+ // canonical session predicate rather than spelling the DM rule again here.
+ function accessChanged(message = 'Huddle access changed before the operation completed') {
+  const error = new Error(message);
+  error.status = 403;
+  return error;
+ }
+
+ function isPrivateHost(host) {
+  return String(host?.visibility || '') === 'private'
+   || String(host?.folder || '') === 'Direct messages';
+ }
+
+ async function lockCurrentMember(tx, host, userId) {
+  if (!isPrivateHost(host)) return;
+  const rows = await tx.unsafe(
+   `select 1
+      from chat_session_members huddle_member
+     where huddle_member.session_id = $1
+       and huddle_member.user_id = $2::uuid
+       and (huddle_member.expires_at is null or huddle_member.expires_at > now())
+     for share of huddle_member`,
+   [host.id, userId],
+  );
+  if (rows.length !== 1) throw accessChanged();
+ }
+
+ async function lockActorSession(tx, { sessionId, workspaceId, userId }) {
+  const rows = await tx.unsafe(
+   `select host.id, host.title, host.visibility, host.folder, host.deleted_at
+      from chat_sessions host
+     where host.id = $1
+       and host.workspace_id = $2
+       and ${sessionReadableSql('host', '$3')}
+     for share of host`,
+   [sessionId, workspaceId, userId],
+  );
+  const host = rows[0] || null;
+  if (!host) throw accessChanged();
+  // The canonical predicate proves the membership at the statement snapshot;
+  // this second lock proves it still exists and keeps a concurrent revoke from
+  // committing until the protected operation is complete.
+  await lockCurrentMember(tx, host, userId);
+  return host;
+ }
+
+ async function lockActorHuddle(tx, {
+  huddleId,
+  workspaceId,
+  sessionId,
+  userId,
+  requireLive = true,
+  forUpdate = false,
+ }) {
+  // Lock every row in one order across every actor path: host, private member,
+  // then huddle. Besides making the access decision stable, the order matters
+  // to clear-session, which also starts with the host before it settles linked
+  // huddles. A joined SELECT leaves PostgreSQL free to acquire those row locks
+  // in a plan-dependent order.
+  await lockActorSession(tx, { sessionId, workspaceId, userId });
+  const liveSql = requireLive ? 'and h.ended_at is null' : '';
+  // A route that will UPDATE the huddle must take the write-compatible lock
+  // now. Taking SHARE here and upgrading in the next statement lets two Notes
+  // or End requests each hold SHARE while each waits to upgrade: a real
+  // PostgreSQL deadlock. Read/token/presence paths keep the weaker SHARE lock.
+  const rowLock = forUpdate ? 'for update of h' : 'for share of h';
+  const rows = await tx.unsafe(
+   `select ${HUDDLE_COLUMNS.split(', ').map((column) => `h.${column}`).join(', ')}
+      from huddles h
+     where h.id = $1
+       and h.workspace_id = $2
+       and h.session_id = $3
+       ${liveSql}
+     ${rowLock}`,
+   [huddleId, workspaceId, sessionId],
+  );
+  const row = rows[0] || null;
+  if (!row) throw accessChanged();
+  return row;
  }
 
  async function loadEvents(huddleId) {
@@ -860,19 +946,82 @@ function mountHuddleRoutes(app, deps = {}) {
  // Append one event and broadcast it. The insert is the ONLY write shape for
  // huddle_events — nothing ever updates or deletes a row here, which is what
  // makes the fold safe to replay.
- async function appendEvent({ huddle, kind, identity = '', displayName = '', eventId = '', createdAt = null }) {
+ async function appendEvent(
+  { huddle, kind, identity = '', displayName = '', eventId = '', createdAt = null },
+  {
+   db = getDb(),
+   actorUserId = '',
+   requireLiveHost = false,
+   requireLiveHuddle = false,
+   deferFanout = false,
+  } = {},
+ ) {
   if (!EVENT_KINDS.has(kind)) return null;
-  const rows = await getDb().unsafe(
-   `insert into huddle_events (huddle_id, workspace_id, session_id, kind, identity, display_name, event_id, created_at)
-         values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::timestamptz, now()))
+  const liveHuddleSql = requireLiveHuddle ? 'and h.ended_at is null' : '';
+  let scopeSql;
+  const params = [
+   huddle.id,
+   huddle.workspace_id,
+   huddle.session_id,
+   kind,
+   identity,
+   displayName,
+   eventId,
+   createdAt,
+  ];
+  if (actorUserId) {
+   params.push(actorUserId);
+   scopeSql = `
+      from huddles h
+      join chat_sessions host
+        on host.id = h.session_id
+       and host.workspace_id = h.workspace_id
+     where h.id = $1
+       and h.workspace_id = $2
+       and h.session_id = $3
+       ${liveHuddleSql}
+       and ${sessionReadableSql('host', '$9')}`;
+  } else if (requireLiveHost) {
+   scopeSql = `
+      from huddles h
+      join chat_sessions host
+        on host.id = h.session_id
+       and host.workspace_id = h.workspace_id
+     where h.id = $1
+       and h.workspace_id = $2
+       and h.session_id = $3
+       ${liveHuddleSql}
+       and host.deleted_at is null`;
+  } else {
+   // Cleanup-only writes (leave, reap, ended) deliberately survive the host
+   // closing, but still resolve the exact huddle/workspace/session tuple from
+   // the database rather than trusting the caller's copied row values.
+   scopeSql = `
+      from huddles h
+     where h.id = $1
+       and h.workspace_id = $2
+       and h.session_id = $3
+       ${liveHuddleSql}`;
+  }
+  const lockSql = actorUserId || requireLiveHost ? 'for share of h, host' : 'for share of h';
+  const rows = await db.unsafe(
+   `with event_scope as (
+       select h.id, h.workspace_id, h.session_id
+         ${scopeSql}
+       ${lockSql}
+     )
+     insert into huddle_events (huddle_id, workspace_id, session_id, kind, identity, display_name, event_id, created_at)
+         select event_scope.id, event_scope.workspace_id, event_scope.session_id, $4, $5, $6, $7,
+                coalesce($8::timestamptz, now())
+           from event_scope
          on conflict do nothing
          returning ${EVENT_COLUMNS}`,
-   [huddle.id, huddle.workspace_id, huddle.session_id, kind, identity, displayName, eventId, createdAt],
+   params,
   );
   const row = rows[0] || null;
   // No row means the ON CONFLICT swallowed a redelivery — correct, and not
   // something to re-broadcast.
-  if (row) fanout('huddle_events', 'INSERT', [row]);
+  if (row && !deferFanout) fanout('huddle_events', 'INSERT', [row]);
   return row;
  }
 
@@ -882,6 +1031,30 @@ function mountHuddleRoutes(app, deps = {}) {
   const row = rows[0];
   if (!row) return '';
   return String(row.display_name || '').trim() || String(row.email || '').trim();
+ }
+
+ // Token minting is the one non-database side effect on this surface. Keep the
+ // host, huddle, and (for a private session) member row locked until the minter
+ // has finished, so a concurrent clear/revoke has a serial order with the
+ // credential: it either commits first and no token is minted, or waits until
+ // this already-authorized mint completes.
+ async function mintLockedJoin({ huddle, workspaceId, userId, name }) {
+  return getDb().begin(async (tx) => {
+   const locked = await lockActorHuddle(tx, {
+    huddleId: huddle.id,
+    workspaceId,
+    sessionId: huddle.session_id,
+    userId,
+    requireLive: true,
+   });
+   const token = await mintToken({
+    roomName: locked.room_name,
+    identity: participantIdentity(userId),
+    name,
+    ttlSeconds: tokenTtlSeconds(),
+   });
+   return { huddle: locked, token };
+  });
  }
 
  /**
@@ -1006,45 +1179,86 @@ function mountHuddleRoutes(app, deps = {}) {
   * row and this statement never clears that column, so what comes back is the
   * value the reaper last wrote.
   */
- async function touchPresence(huddleId, identity, connectionEpoch, beat) {
-  const rows = await getDb().unsafe(
-   // $4 is cast EXPLICITLY: a bare parameter inside a CASE has no column to
+ async function touchPresence({ db = getDb(), huddle, userId, identity, connectionEpoch, beat }) {
+  const rows = await db.unsafe(
+   // $6 is cast EXPLICITLY: a bare parameter inside a CASE has no column to
    // infer its type from, and Postgres answers "could not determine data type
    // of parameter" — which this module's best-effort catch would swallow,
    // shipping a heartbeat that silently records nothing.
    `insert into huddle_presence (huddle_id, identity, connection_epoch, last_seen_at, heartbeat_at)
-         values ($1, $2, $3, now(), case when $4::boolean then now() else null end)
+         select h.id, $4, $5, now(), case when $6::boolean then now() else null end
+           from huddles h
+           join chat_sessions host
+             on host.id = h.session_id
+            and host.workspace_id = h.workspace_id
+          where h.id = $1
+            and h.workspace_id = $2
+            and h.session_id = $3
+            and h.ended_at is null
+            and ${sessionReadableSql('host', '$7')}
          on conflict (huddle_id, identity) do update
             set connection_epoch = excluded.connection_epoch,
                 last_seen_at = now(),
-                heartbeat_at = case when $4::boolean then now() else huddle_presence.heartbeat_at end
+                heartbeat_at = case when $6::boolean then now() else huddle_presence.heartbeat_at end
          returning ${PRESENCE_COLUMNS}`,
-   [huddleId, identity, String(connectionEpoch || ''), Boolean(beat)],
+   [
+    huddle.id,
+    huddle.workspace_id,
+    huddle.session_id,
+    identity,
+    String(connectionEpoch || ''),
+    Boolean(beat),
+    userId,
+   ],
   );
   return rows[0] || null;
  }
 
- async function clearPresence(huddleId, identity) {
-  await getDb().unsafe('delete from huddle_presence where huddle_id = $1 and identity = $2', [huddleId, identity]);
+ async function clearPresence(huddle, identity) {
+  await getDb().unsafe(
+   `delete from huddle_presence p
+          using huddles h
+          where p.huddle_id = h.id
+            and h.id = $1
+            and h.workspace_id = $2
+            and h.session_id = $3
+            and p.identity = $4`,
+   [huddle.id, huddle.workspace_id, huddle.session_id, identity],
+  );
  }
 
  // An ended huddle has no live presence by definition, so the rows are dropped
  // with it — the table means "who is in a call right now", not "who ever was"
  // (that is the event log's job, and it is the one that must be permanent).
  // Best-effort: a huddle must still end if this fails.
- async function clearAllPresence(huddleId) {
+ async function clearAllPresence(huddle) {
   try {
-   await getDb().unsafe('delete from huddle_presence where huddle_id = $1', [huddleId]);
+   await getDb().unsafe(
+    `delete from huddle_presence p
+           using huddles h
+           where p.huddle_id = h.id
+             and h.id = $1
+             and h.workspace_id = $2
+             and h.session_id = $3`,
+    [huddle.id, huddle.workspace_id, huddle.session_id],
+   );
   } catch (error) {
    console.warn('[huddles] could not clear presence:', (error && error.message) || error);
   }
  }
 
- async function markPresenceReaped(huddleId, identities) {
+ async function markPresenceReaped(huddle, identities) {
   for (const identity of identities) {
    await getDb().unsafe(
-    'update huddle_presence set reaped_at = now() where huddle_id = $1 and identity = $2',
-    [huddleId, identity],
+    `update huddle_presence p
+        set reaped_at = now()
+       from huddles h
+      where p.huddle_id = h.id
+        and h.id = $1
+        and h.workspace_id = $2
+        and h.session_id = $3
+        and p.identity = $4`,
+    [huddle.id, huddle.workspace_id, huddle.session_id, identity],
    );
   }
  }
@@ -1128,7 +1342,7 @@ function mountHuddleRoutes(app, deps = {}) {
      eventId: `reap:leave:${identity}:${String((row && row.connection_epoch) || '')}`,
     });
    }
-   if (stale.length > 0) await markPresenceReaped(huddle.id, stale);
+   if (stale.length > 0) await markPresenceReaped(huddle, stale);
 
    const remaining = state.participants.length - stale.length;
    if (!endIfEmpty) return huddle;
@@ -1148,15 +1362,21 @@ function mountHuddleRoutes(app, deps = {}) {
   */
  async function endEmptyHuddle(huddle) {
   const rows = await getDb().unsafe(
-   `update huddles set ended_at = now() where id = $1 and ended_at is null returning ${HUDDLE_COLUMNS}`,
-   [huddle.id],
+   `update huddles
+       set ended_at = now()
+     where id = $1
+       and workspace_id = $2
+       and session_id = $3
+       and ended_at is null
+     returning ${HUDDLE_COLUMNS}`,
+   [huddle.id, huddle.workspace_id, huddle.session_id],
   );
   if (!rows[0]) return null;
   const ended = rows[0];
   fanout('huddles', 'UPDATE', [ended]);
   await appendEvent({ huddle: ended, kind: 'ended', identity: '', eventId: `reap:ended:${ended.id}` });
   await writeHuddleMarker(ended);
-  await clearAllPresence(ended.id);
+  await clearAllPresence(ended);
   try {
    await endRoom(ended.room_name);
   } catch (error) {
@@ -1238,6 +1458,7 @@ function mountHuddleRoutes(app, deps = {}) {
     return jsonError(res, 404, new Error('Session not found in this workspace'));
    }
    await enforceSessionRead(req.userId, sessionId, host);
+   const name = await displayNameFor(req.userId);
 
    // Reap first. Pressing "Huddle" on a channel whose last call is a room full
    // of crashed browsers must open a NEW one, not enrol you in the wake — and
@@ -1245,6 +1466,7 @@ function mountHuddleRoutes(app, deps = {}) {
    let huddle = await reapHuddle(await liveHuddleForSession(sessionId));
    if (huddle && huddle.ended_at) huddle = null;
    let created = false;
+   let token = '';
    if (!huddle) {
     const id = crypto.randomUUID();
     try {
@@ -1318,22 +1540,23 @@ function mountHuddleRoutes(app, deps = {}) {
    }
    if (!huddle) return jsonError(res, 409, new Error('Could not open a huddle for this session'));
 
-   if (created) {
+  if (created) {
     // The huddle, transcript, private member graph, and transcript link have
     // committed before any durable huddle state becomes visible to subscribers.
     fanout('huddles', 'INSERT', [huddle]);
     // A 'started' marker, not a synthetic participant_joined: nobody has
     // connected to the room yet and the card must not claim they have.
-    await appendEvent({ huddle, kind: 'started', identity: participantIdentity(req.userId) });
+    await appendEvent(
+     { huddle, kind: 'started', identity: participantIdentity(req.userId) },
+     { actorUserId: req.userId, requireLiveHuddle: true },
+    );
    }
 
-   const name = await displayNameFor(req.userId);
-   const token = await mintToken({
-    roomName: huddle.room_name,
-    identity: participantIdentity(req.userId),
-    name,
-    ttlSeconds: tokenTtlSeconds(),
-   });
+   if (!created) {
+    const lockedJoin = await mintLockedJoin({ huddle, workspaceId, userId: req.userId, name });
+    huddle = lockedJoin.huddle;
+    token = lockedJoin.token;
+   }
 
    res.status(created ? 201 : 200).json({
     data: {
@@ -1373,19 +1596,16 @@ function mountHuddleRoutes(app, deps = {}) {
    if (huddle.ended_at) return jsonError(res, 409, new Error('This huddle has ended'));
 
    const name = await displayNameFor(req.userId);
-   const token = await mintToken({
-    roomName: huddle.room_name,
-    identity: participantIdentity(req.userId),
-    name,
-    ttlSeconds: tokenTtlSeconds(),
-   });
+   const lockedJoin = await mintLockedJoin({ huddle, workspaceId, userId: req.userId, name });
+   const lockedHuddle = lockedJoin.huddle;
+   const token = lockedJoin.token;
    res.json({
     data: {
-     ...(await huddlePayload(huddle)),
+     ...(await huddlePayload(lockedHuddle)),
      token,
      url: livekitConfig().url,
      identity: participantIdentity(req.userId),
-     roomName: huddle.room_name,
+     roomName: lockedHuddle.room_name,
      heartbeatIntervalMs: HUDDLE_HEARTBEAT_INTERVAL_MS,
     },
     error: null,
@@ -1426,27 +1646,44 @@ function mountHuddleRoutes(app, deps = {}) {
    await reapHuddle(huddle, { endIfEmpty: false });
    const identity = participantIdentity(req.userId);
    const epoch = String(req.body?.connectionEpoch || '0');
-   await appendEvent({
-    huddle,
-    kind: 'participant_joined',
-    identity,
-    displayName: await displayNameFor(req.userId),
-    // Per-connection, not per-user: rejoin after a drop is a NEW event, while
-    // the same connection re-confirming (a retry) stays one row.
-    eventId: `self:join:${identity}:${epoch}`,
+   const displayName = await displayNameFor(req.userId);
+   const confirmed = await getDb().begin(async (tx) => {
+    const locked = await lockActorHuddle(tx, {
+     huddleId,
+     workspaceId,
+     sessionId: huddle.session_id,
+     userId: req.userId,
+     requireLive: true,
+    });
+    const event = await appendEvent({
+     huddle: locked,
+     kind: 'participant_joined',
+     identity,
+     displayName,
+     // Per-connection, not per-user: rejoin after a drop is a NEW event, while
+     // the same connection re-confirming (a retry) stays one row.
+     eventId: `self:join:${identity}:${epoch}`,
+    }, {
+     db: tx,
+     actorUserId: req.userId,
+     requireLiveHuddle: true,
+     deferFanout: true,
+    });
+    const presence = await touchPresence({
+     db: tx,
+     huddle: locked,
+     userId: req.userId,
+     identity,
+     connectionEpoch: epoch,
+     beat: false,
+    });
+    if (!presence) throw accessChanged();
+    return { huddle: locked, event };
    });
-   // Seed the liveness row WITHOUT a heartbeat: this join is now on a clock the
-   // empty-huddle grace can read, but nothing is reapable until the browser
-   // actually starts beating.
-   //
-   // Best-effort. Joining a call must not fail because its bookkeeping row
-   // could not be written — the join EVENT is what puts you in the room, and
-   // the heartbeat route will create this row on its own a moment later.
-   await touchPresence(huddle.id, identity, epoch, false)
-    .catch((error) => console.warn('[huddles] could not seed presence:', (error && error.message) || error));
+   if (confirmed.event) fanout('huddle_events', 'INSERT', [confirmed.event]);
    res.json({
     data: {
-     ...(await huddlePayload(await huddleInWorkspace(huddleId, workspaceId))),
+     ...(await huddlePayload(confirmed.huddle)),
      heartbeatIntervalMs: HUDDLE_HEARTBEAT_INTERVAL_MS,
     },
     error: null,
@@ -1478,7 +1715,7 @@ function mountHuddleRoutes(app, deps = {}) {
    // row is also what keeps the table one-per-live-participant rather than
    // one-per-person-who-was-ever-here. Best-effort for the same reason as the
    // seed above: the leave EVENT is what takes you out of the room.
-   await clearPresence(huddle.id, identity)
+   await clearPresence(huddle, identity)
     .catch((error) => console.warn('[huddles] could not clear presence:', (error && error.message) || error));
    res.json({ data: await huddlePayload(await huddleInWorkspace(huddleId, workspaceId)), error: null });
   } catch (error) {
@@ -1511,32 +1748,71 @@ function mountHuddleRoutes(app, deps = {}) {
 
    const identity = participantIdentity(req.userId);
    const epoch = String(req.body?.connectionEpoch || '0');
-   const row = await touchPresence(huddle.id, identity, epoch, true);
-
-   // We were expired while away — longer than the window, so the roster has
-   // already been told we left. Say we are back rather than staying live in
-   // the room and invisible on the card. The event id is keyed on the reap
-   // that caused it, so the retry of a failed beat collapses onto one row.
-   let rejoined = false;
-   if (row && row.reaped_at) {
-    await appendEvent({
-     huddle,
-     kind: 'participant_joined',
-     identity,
-     displayName: await displayNameFor(req.userId),
-     eventId: `reap:rejoin:${identity}:${isoOf(row.reaped_at) || ''}`,
+   const displayName = await displayNameFor(req.userId);
+   const heartbeat = await getDb().begin(async (tx) => {
+    const locked = await lockActorHuddle(tx, {
+     huddleId,
+     workspaceId,
+     sessionId: huddle.session_id,
+     userId: req.userId,
+     requireLive: true,
     });
-    await getDb().unsafe(
-     'update huddle_presence set reaped_at = null where huddle_id = $1 and identity = $2',
-     [huddle.id, identity],
-    );
-    rejoined = true;
-   }
+    const row = await touchPresence({
+     db: tx,
+     huddle: locked,
+     userId: req.userId,
+     identity,
+     connectionEpoch: epoch,
+     beat: true,
+    });
+    if (!row) throw accessChanged();
+    if (!row.reaped_at) return { rejoined: false, event: null };
+
+    // We were expired while away — longer than the window, so the roster has
+    // already been told we left. Say we are back rather than staying live in
+    // the room and invisible on the card. The event id is keyed on the reap
+    // that caused it, so the retry of a failed beat collapses onto one row.
+    const event = await appendEvent({
+      huddle: locked,
+      kind: 'participant_joined',
+      identity,
+      displayName,
+      eventId: `reap:rejoin:${identity}:${isoOf(row.reaped_at) || ''}`,
+     }, {
+      db: tx,
+      actorUserId: req.userId,
+      requireLiveHuddle: true,
+      deferFanout: true,
+     });
+    const cleared = await tx.unsafe(
+      `update huddle_presence p
+          set reaped_at = null
+         from huddles h
+         join chat_sessions host
+           on host.id = h.session_id
+          and host.workspace_id = h.workspace_id
+        where p.huddle_id = h.id
+          and h.id = $1
+          and h.workspace_id = $2
+          and h.session_id = $3
+          and h.ended_at is null
+          and p.identity = $4
+          and ${sessionReadableSql('host', '$5')}
+        returning p.huddle_id`,
+      [locked.id, locked.workspace_id, locked.session_id, identity, req.userId],
+     );
+    if (cleared.length !== 1) throw accessChanged();
+    return { rejoined: true, event };
+   });
+   if (heartbeat.event) fanout('huddle_events', 'INSERT', [heartbeat.event]);
 
    // Deliberately NOT the folded payload. This runs every 30 seconds per
    // participant; loading the whole event log to answer it would turn the
    // cheapest write in the module into the most expensive read.
-   res.json({ data: { ok: true, rejoined, heartbeatIntervalMs: HUDDLE_HEARTBEAT_INTERVAL_MS }, error: null });
+   res.json({
+    data: { ok: true, rejoined: heartbeat.rejoined, heartbeatIntervalMs: HUDDLE_HEARTBEAT_INTERVAL_MS },
+    error: null,
+   });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
@@ -1555,21 +1831,43 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!existing) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
    await enforceHuddleRead(req.userId, existing);
 
-   // `ended_at is null` makes this idempotent: a second End is a no-op that
-   // still returns the ended state instead of moving the timestamp.
-   const rows = await getDb().unsafe(
-    `update huddles set ended_at = now() where id = $1 and workspace_id = $2 and ended_at is null
-        returning ${HUDDLE_COLUMNS}`,
-    [huddleId, workspaceId],
-   );
-   const huddle = rows[0] || existing;
-   if (rows[0]) {
+   // `ended_at is null` makes this idempotent. The current host/member scope is
+   // locked first and repeated in the UPDATE, so a clear or revoke cannot land
+   // between the route check and the authoritative lifecycle transition.
+   const ended = await getDb().begin(async (tx) => {
+    const locked = await lockActorHuddle(tx, {
+     huddleId,
+     workspaceId,
+     sessionId: existing.session_id,
+     userId: req.userId,
+     requireLive: false,
+     forUpdate: true,
+    });
+    const rows = await tx.unsafe(
+     `update huddles h
+         set ended_at = now()
+        from chat_sessions host
+       where h.id = $1
+         and h.workspace_id = $2
+         and h.session_id = $3
+         and h.ended_at is null
+         and host.id = h.session_id
+         and host.workspace_id = h.workspace_id
+         and ${sessionReadableSql('host', '$4')}
+       returning ${HUDDLE_COLUMNS.split(', ').map((column) => `h.${column}`).join(', ')}`,
+     [huddleId, workspaceId, existing.session_id, req.userId],
+    );
+    if (!locked.ended_at && rows.length !== 1) throw accessChanged();
+    return { huddle: rows[0] || locked, changed: Boolean(rows[0]) };
+   });
+   const huddle = ended.huddle;
+   if (ended.changed) {
     fanout('huddles', 'UPDATE', [huddle]);
     await appendEvent({ huddle, kind: 'ended', identity: participantIdentity(req.userId) });
     // After the 'ended' event, so the fold the marker is built from already
     // knows the huddle is over and reports a real duration.
     await writeHuddleMarker(huddle);
-    await clearAllPresence(huddle.id);
+    await clearAllPresence(huddle);
     try {
      await endRoom(huddle.room_name);
     } catch (error) {
@@ -1608,12 +1906,32 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!existing) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
    await enforceHuddleRead(req.userId, existing);
 
-   const rows = await getDb().unsafe(
-    `update huddles set notes = $1 where id = $2 and workspace_id = $3 returning ${HUDDLE_COLUMNS}`,
-    [notes, huddleId, workspaceId],
-   );
-   const huddle = rows[0] || existing;
-   if (rows[0]) fanout('huddles', 'UPDATE', [huddle]);
+   const huddle = await getDb().begin(async (tx) => {
+    const locked = await lockActorHuddle(tx, {
+     huddleId,
+     workspaceId,
+     sessionId: existing.session_id,
+     userId: req.userId,
+     requireLive: false,
+     forUpdate: true,
+    });
+    const rows = await tx.unsafe(
+     `update huddles h
+         set notes = $1
+        from chat_sessions host
+       where h.id = $2
+         and h.workspace_id = $3
+         and h.session_id = $4
+         and host.id = h.session_id
+         and host.workspace_id = h.workspace_id
+         and ${sessionReadableSql('host', '$5')}
+       returning ${HUDDLE_COLUMNS.split(', ').map((column) => `h.${column}`).join(', ')}`,
+     [notes, huddleId, workspaceId, existing.session_id, req.userId],
+    );
+    if (rows.length !== 1) throw accessChanged();
+    return rows[0] || locked;
+   });
+   fanout('huddles', 'UPDATE', [huddle]);
    res.json({ data: await huddlePayload(huddle), error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -1657,36 +1975,54 @@ function mountHuddleRoutes(app, deps = {}) {
 
    await ensureSchemaOnce();
    const rows = await getDb().unsafe(
-    `select ${HUDDLE_COLUMNS} from huddles where room_name = $1 limit 1`,
-    [roomName],
+    `select ${HUDDLE_COLUMNS} from huddles where room_name = $1 and id = $2 limit 1`,
+    [roomName, huddleId],
    );
    const huddle = rows[0];
    if (!huddle) return res.status(200).json({ data: { ignored: true }, error: null });
 
-   const participant = payload.participant || {};
-   const event = await appendEvent({
-    huddle,
-    kind,
-    identity: String(participant.identity || ''),
-    displayName: String(participant.name || ''),
-    eventId: String(payload.id || ''),
-    createdAt: webhookEventTime(payload),
-   });
-
+   let event = null;
    if (kind === 'ended' && !huddle.ended_at) {
     const updated = await getDb().unsafe(
-     `update huddles set ended_at = now() where id = $1 and ended_at is null returning ${HUDDLE_COLUMNS}`,
-     [huddle.id],
+     `update huddles
+         set ended_at = now()
+       where id = $1
+         and workspace_id = $2
+         and session_id = $3
+         and ended_at is null
+       returning ${HUDDLE_COLUMNS}`,
+     [huddle.id, huddle.workspace_id, huddle.session_id],
     );
     // `returning` is the guard: a room_finished redelivery updates zero rows,
     // so the channel cannot collect a second marker for the same huddle. This
     // is the OTHER way a huddle ends (everyone walked away rather than someone
     // pressing End) and it must leave the same record behind.
     if (updated[0]) {
+     event = await appendEvent({
+      huddle: updated[0],
+      kind,
+      identity: '',
+      displayName: '',
+      eventId: String(payload.id || ''),
+      createdAt: webhookEventTime(payload),
+     });
      fanout('huddles', 'UPDATE', [updated[0]]);
      await writeHuddleMarker(updated[0]);
-     await clearAllPresence(updated[0].id);
+     await clearAllPresence(updated[0]);
     }
+   } else if (kind !== 'ended') {
+    const participant = payload.participant || {};
+    // An ordinary join/leave is not cleanup. It may only extend the append-only
+    // log while both the huddle and its host are currently live; late webhook
+    // delivery after End/clear is acknowledged but writes nothing.
+    event = await appendEvent({
+     huddle,
+     kind,
+     identity: String(participant.identity || ''),
+     displayName: String(participant.name || ''),
+     eventId: String(payload.id || ''),
+     createdAt: webhookEventTime(payload),
+    }, { requireLiveHost: true, requireLiveHuddle: true });
    }
 
    return res.status(200).json({ data: { accepted: Boolean(event), kind }, error: null });
@@ -1729,6 +2065,7 @@ module.exports = {
  huddleEventKindFor,
  webhookEventTime,
  livekitConfigured,
+ deleteLivekitRoom,
  tokenTtlSeconds,
  mintJoinToken,
 };

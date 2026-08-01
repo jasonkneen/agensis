@@ -308,6 +308,7 @@ test('re-granting an existing PARTICIPANT does not demote them to a grant', asyn
 
 test('sessionReadableSql filters expiry and checks membership', () => {
  const sql = core.sessionReadableSql('s', '$2').replace(/\s+/g, ' ');
+ assert.match(sql, /s\.deleted_at is null/, 'a deleted conversation is DB-only');
  assert.match(sql, /chat_session_members/, 'membership must be part of the predicate');
  assert.match(sql, /expires_at is null or csm\.expires_at > now\(\)/, 'expiry must be evaluated in SQL');
  assert.match(sql, /coalesce\(s\.visibility, 'workspace'\) <> 'private'/);
@@ -329,9 +330,63 @@ test('sessionReadableSql groups its OR correctly', () => {
  const sql = core.sessionReadableSql('s', '$2');
  const beforeOr = sql.slice(0, sql.indexOf(' or exists'));
  assert.equal(
-  (beforeOr.match(/\(/g) || []).length - (beforeOr.match(/\)/g) || []).length, 1,
+  (beforeOr.match(/\(/g) || []).length - (beforeOr.match(/\)/g) || []).length, 2,
   'the two public conditions must be bracketed together as one OR operand',
  );
+});
+
+test('sessionReadableSql can lock the qualifying private-member row for a mutation', () => {
+ const sql = core.sessionReadableSql('s', '$2', { lockMembership: true });
+ assert.match(sql, /from chat_session_members csm[\s\S]*for share/);
+});
+
+test('the row-at-a-time gate rejects a deleted conversation before privacy membership', async () => {
+ await assert.rejects(
+  core.enforceSessionReadAccess({
+   userId: OWNER,
+   sessionId: DM,
+   sessionRow: {
+    id: DM,
+    visibility: 'private',
+    folder: 'Direct messages',
+    deleted_at: '2026-07-31T12:00:00.000Z',
+   },
+   db: async () => {
+    throw new Error('a complete session row must not trigger a second lookup');
+   },
+  }),
+  { status: 404, message: 'Conversation not found' },
+ );
+});
+
+test('the row-at-a-time gate re-reads a partial session row before deciding privacy', async () => {
+ const reads = [];
+ await assert.rejects(
+  core.enforceSessionReadAccess({
+   userId: OUTSIDER,
+   sessionId: DM,
+   // Having the deletion marker is not enough: without visibility/folder this
+   // row cannot prove that the conversation is workspace-visible.
+   sessionRow: { id: DM, deleted_at: null },
+   db: async (sql) => {
+    const normalized = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+    reads.push(normalized);
+    if (normalized.startsWith('select id, visibility, folder, deleted_at from chat_sessions')) {
+     return [{
+      id: DM,
+      visibility: 'private',
+      folder: 'Direct messages',
+      deleted_at: null,
+     }];
+    }
+    if (normalized.startsWith('select 1 from chat_session_members')) return [];
+    throw new Error(`Unexpected session access query: ${sql}`);
+   },
+  }),
+  { status: 403, message: 'This conversation is private' },
+ );
+ assert.match(reads[0], /visibility, folder, deleted_at/);
+ assert.ok(reads.some((sql) => sql.startsWith('select 1 from chat_session_members')));
 });
 
 test('appendSessionAccessClause constrains every workspace-wide session-bearing result', () => {
@@ -534,6 +589,65 @@ test('a private row with an unresolvable member set is sent to nobody', async ()
  realtime.notifyDbSubscribers('chat_sessions', 'INSERT', [{ id: DM, workspace_id: 'w1', visibility: 'private' }]);
  await new Promise((resolve) => setTimeout(resolve, 50));
  assert.equal(sent.length, 0, 'a failed membership lookup must withhold, never broadcast');
+});
+
+test('message fanout reauthorizes the current session audience after a public channel becomes private', async () => {
+ const { createRealtime } = require('../server/realtime.cjs');
+ let audience = { memberUserIds: null };
+ const realtime = createRealtime({
+  ensureTable: (table) => table,
+  forbidden: (message) => Object.assign(new Error(message), { status: 403 }),
+  enqueueFlowWebhookEvents: async () => {},
+  enqueueAutomationRuns: async () => [],
+  logMessageActivity: () => {},
+  sessionRealtimeAudience: async (sessionId) => (
+   sessionId === CHANNEL ? audience : null
+  ),
+ });
+ const socket = (userId) => realtime.registerTestWebsocketClient({
+  userId,
+  readyState: 1,
+  subscriptions: [{
+   type: 'db_changes',
+   table: 'messages',
+   event: '*',
+   schema: 'public',
+   filter: `session_id=eq.${CHANNEL}`,
+  }],
+  sent: [],
+  send(raw) { this.sent.push(JSON.parse(raw)); },
+ });
+ const member = socket(OWNER);
+ const outsider = socket(OUTSIDER);
+ const row = {
+  id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  session_id: CHANNEL,
+  role: 'user',
+  sender_kind: 'user',
+  sender_id: OWNER,
+  content: 'current-audience proof',
+ };
+
+ realtime.notifyDbSubscribers('messages', 'INSERT', [row]);
+ await new Promise((resolve) => setTimeout(resolve, 20));
+ assert.equal(member.sent.length, 1, 'an open channel still reaches a subscribed workspace reader');
+ assert.equal(outsider.sent.length, 1, 'open-channel fanout remains unchanged');
+
+ member.sent.length = 0;
+ outsider.sent.length = 0;
+ audience = { memberUserIds: new Set([OWNER]) };
+ // The same bindings survive. Only the current audience resolver changes,
+ // matching a privacy update committed by the other backend process.
+ realtime.notifyDbSubscribers('messages', 'INSERT', [{ ...row, id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }]);
+ await new Promise((resolve) => setTimeout(resolve, 20));
+ assert.equal(member.sent.length, 1, 'a current private-session member still receives the message');
+ assert.equal(outsider.sent.length, 0, 'a socket authorized while public is not authorized forever');
+
+ member.sent.length = 0;
+ audience = null;
+ realtime.notifyDbSubscribers('messages', 'INSERT', [{ ...row, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }]);
+ await new Promise((resolve) => setTimeout(resolve, 20));
+ assert.equal(member.sent.length, 0, 'an unresolvable current audience fails closed');
 });
 
 test('aggregate reads and item-id-only thread updates carry the session scope', () => {

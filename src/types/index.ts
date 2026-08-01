@@ -91,6 +91,10 @@ export interface ChatSession {
  split_parent_id?: string | null;
  /** When the split happened; the divergence baseline for merging the two branches. */
  split_at?: string | null;
+ /** Exact server-authored quoted-context message in this fork. */
+ split_baseline_message_id?: string | null;
+ /** Newest source message in the atomic split snapshot, or null for an empty source. */
+ split_source_boundary_message_id?: string | null;
  /** Soft-delete marker. Sessions are never hard-deleted so the data stays usable. */
  deleted_at?: string | null;
  /**
@@ -147,6 +151,9 @@ export interface Message {
  // ("Allowed by Jason: Bash · git clone …"), so a client that does not know the
  // kind still reads something true; permission_request_id below is what turns it
  // into a card with buttons.
+ // ...and 'agent_result' is the server-authored terminal receipt for a
+ // successful nonempty agent answer. Failure/status/empty-output notices never
+ // carry it; merge cleanup relies on that structural distinction.
  message_kind?: string | null;
  tool_name?: string | null;
  tool_detail?: string | null;
@@ -154,6 +161,8 @@ export interface Message {
  huddle_id?: string | null;
  /** Set only on a permission-request card. Points at agent_permission_requests.id. */
  permission_request_id?: string | null;
+ /** Optional provenance link for task-originated server messages. */
+ source_task_id?: string | null;
  // "Send to channel": a thread reply that is ALSO shown in the channel/DM view.
  // An agent works inside a thread and flags only its final answer; a human can
  // flag a reply from the thread composer. The row KEEPS its thread_parent_id, so a
@@ -283,7 +292,7 @@ export type CanvasTool = 'select' | 'pen' | 'rect' | 'ellipse' | 'diamond' | 'li
 
 export type ActiveView = 'chat' | 'document' | 'memory' | 'skills' | 'files' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules' | 'automations';
 
-export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules' | 'automations' | 'inbox' | 'tenants' | 'browser' | 'terminal';
+export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'tasks' | 'activity' | 'agents' | 'resources' | 'users' | 'schedules' | 'automations' | 'inbox' | 'tenants' | 'browser' | 'terminal';
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';

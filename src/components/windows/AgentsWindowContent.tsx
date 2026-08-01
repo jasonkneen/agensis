@@ -2045,6 +2045,9 @@ function AgentDetailPane({
     voiceBaseline.current = seedVoice;
     setDisconnecting(false);
     editBaseline.current = agentFormUpdates(seed);
+  // Key this reset by identity only: a live row refresh must not overwrite an
+  // edit already in progress for the same agent.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent?.id]);
 
   if (!agent) {
@@ -2596,10 +2599,13 @@ function AgentConnectDialog({
   }, [open, agent?.id]);
 
   // Load the MCP skill manifest once the dialog is open for an agent.
+  const agentId = agent?.id ?? '';
+  const agentName = agent?.name ?? '';
+
   useEffect(() => {
-    if (!open || !agent) return;
+    if (!open || !agentId || !agentName) return;
     let cancelled = false;
-    const params = new URLSearchParams({ name: agent.name, handle });
+    const params = new URLSearchParams({ name: agentName, handle });
     fetch(apiUrl(`/backend/skill?${params.toString()}`), { headers: { ...apiAuthHeaders() } })
       .then(async (res) => {
         const payload = await res.json().catch(() => null);
@@ -2616,7 +2622,7 @@ function AgentConnectDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, agent?.id, agent?.name, handle]);
+  }, [open, agentId, agentName, handle]);
 
   if (!agent) return null;
 

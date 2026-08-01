@@ -1,5 +1,5 @@
+import { Bot, Check, MessageSquare, Pencil, Plus, Send, Trash2, User, X } from 'lucide-react';
 import React, { useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Bot, MessageSquare, Plus, Send, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolStepGroup } from './ToolStepGroup';
@@ -19,12 +19,13 @@ import {
 } from './ComposerAddContent';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { validAgentAccentColor } from '../../lib/agentAccent';
+import { prependLinkedDocumentContext } from '../../lib/linkedDocumentContext';
 import {
   extractActivityVerb,
   isActivityPlaceholderMessage,
   isLiveActivityPlaceholder,
 } from '../../lib/activityStatus';
-import type { CanvasGroup, ChatSession, Document, Message as ChatMessage, UploadedFile, WorkspaceAgent } from '../../types';
+import type { CanvasGroup, ChatSession, Document, Message as ChatMessage, MessageAttachment, UploadedFile, WorkspaceAgent } from '../../types';
 import { Button } from '@/components/ui/button';
 import {
   Empty,
@@ -57,15 +58,20 @@ import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
 import { SUB_THREAD_COMPOSER_PLACEHOLDER } from '@/lib/composerPlaceholder';
 import { useComposerAutosize } from '../../hooks/useComposerAutosize';
+import { useOwnMessageMutation } from '../../hooks/useOwnMessageMutation';
 import type { SendOutcome } from '../../lib/writeFeedback';
+import { buildMessageAttachments } from '../../lib/messageAttachments';
 
 interface SubThreadPanelProps {
   session: ChatSession;
   messages: ChatMessage[];
+  hasMoreMessages?: boolean;
+  loadingEarlier?: boolean;
+  onLoadEarlier?: () => void;
   streaming: boolean;
   resolveMessageAccent?: (message: ChatMessage) => string;
   // May resolve `{ delivered: false }` — the message was rejected and rolled back.
-  onSendMessage: (content: string) => void | Promise<SendOutcome | void>;
+  onSendMessage?: (content: string, attachments?: MessageAttachment[]) => void | Promise<SendOutcome | void>;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   onClose: () => void;
   embedded?: boolean;
@@ -77,11 +83,16 @@ interface SubThreadPanelProps {
   composerProjectFiles?: Array<{ file: ProjectFileEntry; source: ProjectFileSource }>;
   skillOptions?: ComposerContextOption[];
   toolOptions?: ComposerContextOption[];
+  currentUserId?: string | null;
+  readOnly?: boolean;
 }
 
 export function SubThreadPanel({
   session,
   messages,
+  hasMoreMessages = false,
+  loadingEarlier = false,
+  onLoadEarlier,
   streaming,
   resolveMessageAccent,
   onSendMessage,
@@ -96,6 +107,8 @@ export function SubThreadPanel({
   composerProjectFiles = [],
   skillOptions = [],
   toolOptions = [],
+  currentUserId,
+  readOnly = false,
 }: SubThreadPanelProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const mentions = useComposerMentions({ agents, workspaceId: session.workspace_id, inputRef });
@@ -176,10 +189,11 @@ export function SubThreadPanel({
   };
 
   const handleSend = async () => {
-    if (streaming) return;
+    if (readOnly || streaming || !onSendMessage) return;
     let content = mentions.buildContent();
     if (!content) return;
     if (linkedFiles.length > 0) content = `${buildFileContext(linkedFiles)}\n\n${content}`;
+    content = prependLinkedDocumentContext(content, linkedDocs);
     if (linkedGroups.length > 0) {
       const groupContext = linkedGroups.map(g => `[Canvas Group "${g.name}"]`).join('\n');
       content = `${groupContext}\n\n${content}`;
@@ -196,7 +210,8 @@ export function SubThreadPanel({
     setLinkedGroups([]);
     inputRef.current?.focus();
 
-    const outcome = await onSendMessage(content);
+    const attachments = buildMessageAttachments(linkedFiles);
+    const outcome = await onSendMessage?.(content, attachments);
     if (outcome && outcome.delivered === false) {
       mentions.restore(draft);
       setLinkedFiles(previousFiles);
@@ -271,6 +286,20 @@ export function SubThreadPanel({
         <MessageScroller className="channel-message-surface flex-1">
           <MessageScrollerViewport onScroll={handleScrollerScroll}>
             <MessageScrollerContent className="min-h-full gap-3 p-3">
+              {hasMoreMessages && onLoadEarlier && (
+                <div className="flex justify-center py-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-muted-foreground"
+                    disabled={loadingEarlier}
+                    onClick={onLoadEarlier}
+                  >
+                    {loadingEarlier ? 'Loading…' : 'Load earlier messages'}
+                  </Button>
+                </div>
+              )}
               {messages.length === 0 ? (
                 <Empty className="min-h-full border-0 p-4">
                   <EmptyHeader>
@@ -299,6 +328,7 @@ export function SubThreadPanel({
                           msg={row.message}
                           accent={resolveMessageAccent?.(row.message)}
                           onAgentProfile={onAgentProfile}
+                          currentUserId={readOnly ? null : currentUserId}
                           isStreaming={streaming && isLastRow && row.message.role === 'assistant'}
                         />
                       </MessageScrollerItem>
@@ -332,7 +362,7 @@ export function SubThreadPanel({
         </div>
       )}
 
-      <div className={`${COMPOSER_SHELL_CLASS} shrink-0`}>
+      {!readOnly && <div className={`${COMPOSER_SHELL_CLASS} shrink-0`}>
         {hasAttachments && (
           <div className="mb-2 flex flex-wrap gap-1.5">
             {linkedFiles.map(file => (
@@ -411,7 +441,6 @@ export function SubThreadPanel({
                       uploadStatus={uploadStatus}
                       onUploadFiles={() => fileInputRef.current?.click()}
                       onUploadFolder={() => folderInputRef.current?.click()}
-                      onOpenFiles={() => setAddContextOpen(false)}
                       onAddUploadedFile={(file) => addLinkedFile(linkedUploadedFile(file))}
                       onAddProjectFile={(file, source) => addLinkedFile(linkedProjectFile(file, source))}
                       onAddDocument={addLinkedDoc}
@@ -464,24 +493,27 @@ export function SubThreadPanel({
             {...({ webkitdirectory: 'true', directory: 'true' } as Record<string, string>)}
           />
         </div>
-      </div>
+      </div>}
     </aside>
   );
 }
 
-function SubThreadBubble({
+export function SubThreadBubble({
   msg,
   accent,
   onAgentProfile,
   isStreaming,
+  currentUserId,
 }: {
   msg: ChatMessage;
   accent?: string;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   isStreaming?: boolean;
+  currentUserId?: string | null;
 }) {
   const isUser = msg.role === 'user';
-  const content = safeText(msg.content);
+  const ownMutation = useOwnMessageMutation(msg, currentUserId, safeText(msg.content));
+  const content = ownMutation.content;
   const artifact = content ? extractHtmlArtifact(content) : null;
   const displayContent = artifact ? artifact.remainingText : content;
   const isActivityPlaceholder = isActivityPlaceholderMessage(msg);
@@ -528,9 +560,55 @@ function SubThreadBubble({
             </span>
           )}
           {timeLabel && <span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel}</span>}
+          {ownMutation.mutable && (
+            <span className="ml-auto flex shrink-0 items-center gap-0.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Edit post"
+                title="Edit post"
+                disabled={ownMutation.busy}
+                onClick={ownMutation.startEdit}
+              >
+                <Pencil />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Delete post"
+                title="Delete post"
+                disabled={ownMutation.busy}
+                onClick={() => void ownMutation.deleteMessage()}
+              >
+                <Trash2 />
+              </Button>
+            </span>
+          )}
         </div>
         <div className="mt-0.5 text-sm leading-relaxed text-foreground">
-          {isActivityPlaceholder ? (
+          {ownMutation.editing ? (
+            <div className="space-y-1.5">
+              <textarea
+                value={ownMutation.draft}
+                onChange={event => ownMutation.setDraft(event.target.value)}
+                className="min-h-20 w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                aria-label="Edit message"
+                disabled={ownMutation.busy}
+              />
+              <div className="flex justify-end gap-1">
+                <Button type="button" variant="ghost" size="sm" onClick={ownMutation.cancelEdit} disabled={ownMutation.busy}>
+                  <X />
+                  Cancel
+                </Button>
+                <Button type="button" size="sm" onClick={() => void ownMutation.saveEdit()} disabled={ownMutation.busy || !ownMutation.draft.trim()}>
+                  <Check />
+                  Save
+                </Button>
+              </div>
+            </div>
+          ) : isActivityPlaceholder ? (
             <span className="flex items-center gap-2 text-muted-foreground">
               <Spinner className="size-3" />
               {placeholderLabel}

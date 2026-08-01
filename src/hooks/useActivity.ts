@@ -2,7 +2,12 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
-import type { ActivityEvent, ActivityEventType } from '../types';
+import type { ActivityEvent, ActivityEventType, ChatSession } from '../types';
+import {
+  ACTIVITY_REDACTION_EVENT,
+  redactActivityEvents,
+  type ActivityRedactionTarget,
+} from '../lib/activityRedaction';
 
 export interface LogEventInput {
   event_type: ActivityEventType;
@@ -47,17 +52,61 @@ export function useActivity(workspaceId: string | null, userId?: string) {
       enabled: !!workspaceId,
       channelName: `activity:${workspaceId}`,
       table: 'activity_events',
-      event: 'INSERT',
+      event: '*',
       schema: 'public',
       filter: `workspace_id=eq.${workspaceId}`,
     },
     (payload) => {
       if (!deduper.shouldProcess(payload)) return;
+      if (payload.eventType === 'DELETE') {
+        const id = payload.old?.id;
+        if (id) setEvents(prev => prev.filter(event => event.id !== id));
+        return;
+      }
       const row = payload.new;
       if (!row) return;
-      setEvents(prev => prev.some(e => e.id === row.id) ? prev : [row, ...prev].slice(0, 100));
+      setEvents((prev) => {
+        if (payload.eventType === 'UPDATE') {
+          return prev.map(event => event.id === row.id ? row : event);
+        }
+        return prev.some(event => event.id === row.id) ? prev : [row, ...prev].slice(0, 100);
+      });
     },
   );
+
+  // Conversation clear emits one bounded chat_sessions invalidation instead of
+  // one activity UPDATE per message. Evict every already-rendered source row.
+  useTableSubscription<ChatSession>(
+    {
+      enabled: !!workspaceId,
+      channelName: `activity-session-redaction:${workspaceId}`,
+      table: 'chat_sessions',
+      event: 'UPDATE',
+      schema: 'public',
+      filter: `workspace_id=eq.${workspaceId}`,
+    },
+    (payload) => {
+      const session = payload.new;
+      if (
+        !session?.deleted_at
+        && session?.visibility !== 'private'
+        && session?.folder !== 'Direct messages'
+      ) return;
+      setEvents(prev => redactActivityEvents(prev, { sessionId: session.id }));
+    },
+  );
+
+  // The Netlify mirror has no websocket server. The caller that performed a
+  // delete evicts its own stale feed immediately; its next fetch sees the same
+  // scrubbed database row.
+  useEffect(() => {
+    const redact = (event: Event) => {
+      const detail = (event as CustomEvent<ActivityRedactionTarget>).detail;
+      setEvents(prev => redactActivityEvents(prev, detail || {}));
+    };
+    window.addEventListener(ACTIVITY_REDACTION_EVENT, redact);
+    return () => window.removeEventListener(ACTIVITY_REDACTION_EVENT, redact);
+  }, []);
 
   const logEvent = useCallback(async (input: LogEventInput) => {
     if (!workspaceId || !navigator.onLine) return;

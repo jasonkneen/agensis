@@ -16,18 +16,30 @@
 //
 // tests/unit/windowBodies.test.ts fails if any of this regresses.
 
-import { useCallback, type ComponentProps } from 'react';
+import { useCallback, useMemo, type ComponentProps } from 'react';
 import { ChatWindowContent } from './ChatWindowContent';
 import { DocWindowContent } from './DocWindowContent';
 import { AppletDocWindowContent } from './AppletDocWindowContent';
 import { TasksWindowContent } from './TasksWindowContent';
 import { APPLETS_FOLDER } from '../../lib/canvasApps';
 import type { SendMessageResult } from '../../hooks/useChat';
-import type { ChatSession, Document, FloatingWindow, MemoryFact, MessageAttachment } from '../../types';
+import { useSessionMessages } from '../../hooks/useSessionMessages';
+import { channelMessages } from '../chat/channelView';
+import { isToolStepMessage } from '../chat/toolSteps';
+import type {
+  ChatSession,
+  Document,
+  FloatingWindow,
+  MemoryFact,
+  Message,
+  MessageAttachment,
+} from '../../types';
+
+const NO_MESSAGES: Message[] = [];
 
 export type ChatWindowBodyProps = Omit<
   ComponentProps<typeof ChatWindowContent>,
-  'onSendMessage' | 'onSendThreadReply' | 'onSplitThread' | 'onTypingChange'
+  'sessionId' | 'onSendMessage' | 'onSendThreadReply' | 'onSplitThread' | 'onTypingChange'
 > & {
   winSession: ChatSession | undefined;
   isActiveSession: boolean;
@@ -65,6 +77,21 @@ export function ChatWindowBody({
   ...contentProps
 }: ChatWindowBodyProps) {
   const { memoryFacts, activeThreadId } = contentProps;
+  const sessionId = winSession?.id ?? null;
+  const inactive = useSessionMessages(isActiveSession ? null : sessionId);
+  const inactiveTopLevelMessages = useMemo(
+    () => channelMessages(inactive.messages),
+    [inactive.messages],
+  );
+  const inactiveThreadReplyCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const message of inactive.messages) {
+      if (message.thread_parent_id && !isToolStepMessage(message)) {
+        counts[message.thread_parent_id] = (counts[message.thread_parent_id] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [inactive.messages]);
 
   const handleSendMessage = useCallback(
     (content: string, mf?: MemoryFact[], docs?: Document[], attachments?: MessageAttachment[]) => {
@@ -86,7 +113,6 @@ export function ChatWindowBody({
     if (winSession) onAppSplitThread(winSession);
   }, [winSession, onAppSplitThread]);
 
-  const sessionId = winSession?.id;
   const handleTypingChange = useCallback((typing: boolean) => {
     if (!sessionId || !onAppTypingChange) return;
     onAppTypingChange('chat', sessionId, typing);
@@ -95,7 +121,26 @@ export function ChatWindowBody({
   return (
     <ChatWindowContent
       {...contentProps}
-      sessionId={sessionId}
+      sessionId={sessionId || null}
+      messages={isActiveSession ? contentProps.messages : inactive.messages}
+      topLevelMessages={isActiveSession
+        ? contentProps.topLevelMessages
+        : inactiveTopLevelMessages}
+      hasMoreMessages={isActiveSession
+        ? contentProps.hasMoreMessages
+        : inactive.hasMore}
+      loadingEarlier={isActiveSession
+        ? contentProps.loadingEarlier
+        : inactive.loadingEarlier}
+      onLoadEarlier={isActiveSession
+        ? contentProps.onLoadEarlier
+        : inactive.loadEarlier}
+      threadMessages={isActiveSession ? contentProps.threadMessages : NO_MESSAGES}
+      threadReplyCounts={isActiveSession
+        ? contentProps.threadReplyCounts
+        : inactiveThreadReplyCounts}
+      activeThreadId={isActiveSession ? contentProps.activeThreadId : null}
+      streaming={isActiveSession ? contentProps.streaming : false}
       onSendMessage={handleSendMessage}
       onSendThreadReply={handleSendThreadReply}
       onSplitThread={winSession ? handleSplitThread : undefined}

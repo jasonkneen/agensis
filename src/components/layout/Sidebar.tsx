@@ -12,6 +12,7 @@ import {
  Code2,
  Copy,
  CreditCard,
+ Database,
  FileText,
  Filter,
  Folder,
@@ -29,6 +30,7 @@ import {
  MoreHorizontal,
  Split,
  Trash2,
+ Upload,
  PanelLeft,
  PanelLeftClose,
  Plus,
@@ -230,7 +232,7 @@ interface SidebarProps {
  /** Re-enter an imported community to add or pause channel subscriptions. */
  onManageNostrCommunity?: (connection: NostrConnection) => void;
  onNewDocument: () => void;
- onUploadFile: () => void;
+ onUploadFile: (files: File[]) => void | Promise<unknown>;
  onCreateWorkspace: () => void;
  onDocumentOpen: (doc: Document) => void;
  onDocumentUpdate?: (id: string, updates: { title?: string; content?: string; folder?: string | null }) => void;
@@ -272,6 +274,7 @@ interface SidebarProps {
  onOpenTasks?: () => void;
  onOpenActivity?: () => void;
  onOpenAgents?: () => void;
+ onOpenResources?: () => void;
  onOpenUsers?: () => void;
  onOpenSchedules?: () => void;
  onOpenAutomations?: () => void;
@@ -318,6 +321,7 @@ export const Sidebar = React.memo(function Sidebar({
  onNewChat,
  onManageNostrCommunity,
  onNewDocument,
+ onUploadFile,
  onCreateWorkspace,
  onDocumentOpen,
  onDocumentUpdate,
@@ -343,6 +347,7 @@ export const Sidebar = React.memo(function Sidebar({
  onOpenTasks,
  onOpenActivity,
  onOpenAgents,
+ onOpenResources,
  onOpenUsers,
  onOpenSchedules,
  onOpenAutomations,
@@ -384,6 +389,15 @@ export const Sidebar = React.memo(function Sidebar({
   setAccountDialogTab(tab);
   setAccountDialogOpen(true);
  };
+ const openUploadPicker = React.useCallback(() => {
+  uploadInputRef.current?.click();
+ }, []);
+ const handleUploadInputChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+  const files = Array.from(event.currentTarget.files || []);
+  // Reset the input so selecting the same file twice still emits a change.
+  event.currentTarget.value = '';
+  if (files.length > 0) void onUploadFile(files);
+ }, [onUploadFile]);
  const [sidebarWidth, setSidebarWidth] = React.useState(() => {
   if (typeof localStorage === 'undefined') return 280;
   const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
@@ -393,6 +407,7 @@ export const Sidebar = React.memo(function Sidebar({
  const footerRef = React.useRef<HTMLDivElement | null>(null);
  const resizeRef = React.useRef<{ startX: number; startWidth: number } | null>(null);
  const resizeFrameRef = React.useRef<number | null>(null);
+ const uploadInputRef = React.useRef<HTMLInputElement | null>(null);
  const [openSections, setOpenSections] = React.useState<Set<string>>(() => new Set());
  const [favoriteAgentKeys, setFavoriteAgentKeys] = React.useState<Set<string>>(() => {
   if (typeof localStorage === 'undefined') return new Set();
@@ -501,6 +516,7 @@ export const Sidebar = React.memo(function Sidebar({
  // different things (see server/thread-inbox.cjs), and it is the message
  // threads a person means when they ask what they still need to read.
  const threadInbox = useThreadInbox(workspace?.id ?? null);
+ const refetchThreadInbox = threadInbox.refetch;
  // The Threads list fetches once per (workspace, reloadToken) and nothing ever
  // bumped the token, so it was a load-time snapshot frozen at whenever the page
  // opened while Activity kept moving. Refetch whenever the newest session
@@ -514,8 +530,8 @@ export const Sidebar = React.memo(function Sidebar({
   [uniqueSessions],
  );
  React.useEffect(() => {
-  threadInbox.refetch();
- }, [latestActivitySig, threadInbox.refetch]);
+  refetchThreadInbox();
+ }, [latestActivitySig, refetchThreadInbox]);
  const nostrChannelGroups = React.useMemo(
   () => splitNostrChannelGroups(activeChannelSessions, nostrConnections),
   [activeChannelSessions, nostrConnections],
@@ -553,7 +569,7 @@ export const Sidebar = React.memo(function Sidebar({
   document.documentElement.style.setProperty('--workspace-viewport-top', `${WORKSPACE_CHROME_GAP}px`);
   document.documentElement.style.setProperty('--workspace-viewport-right', `${WORKSPACE_CHROME_GAP}px`);
   document.documentElement.style.setProperty('--workspace-viewport-bottom', `${WORKSPACE_CHROME_GAP}px`);
- }, [collapsed, overlay, titlebarInset, leadingInset]);
+ }, [collapsed, overlay, leadingInset]);
 
  React.useEffect(() => {
   setWorkspaceViewportLeft(sidebarWidth);
@@ -597,8 +613,17 @@ export const Sidebar = React.memo(function Sidebar({
     // element. Depth and elevation for all three shell columns live in that one
     // rule — see src/lib/chromeDepth.ts.
     className="sidebar-collapsed-panel flex h-full shrink-0 flex-col items-center gap-1 overflow-visible rounded-none border-r border-border bg-card/45 py-2 text-card-foreground"
-    style={{ ...SIDEBAR_FRAME_STYLE, width: COLLAPSED_SIDEBAR_WIDTH, paddingTop: titlebarInset ? titlebarInset + 8 : undefined }}
+   style={{ ...SIDEBAR_FRAME_STYLE, width: COLLAPSED_SIDEBAR_WIDTH, paddingTop: titlebarInset ? titlebarInset + 8 : undefined }}
    >
+    <input
+     ref={uploadInputRef}
+     type="file"
+     multiple
+     className="sr-only"
+     tabIndex={-1}
+     onChange={handleUploadInputChange}
+     aria-label="Upload files"
+    />
     {/* Theme-accent wash on the chrome — see .sidebar-accent-wash in index.css.
         Decorative, non-interactive, and out of flow, so it is not a flex item. */}
     <div aria-hidden="true" className="sidebar-accent-wash" />
@@ -625,12 +650,14 @@ export const Sidebar = React.memo(function Sidebar({
     <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadInbox.unreadCount} onClick={() => revealSection('threads')} />
     <SidebarRailButton icon={<Hash />} title="Channels" count={activeChannelSessions.length} onClick={() => revealSection('channels')} />
     <SidebarRailButton icon={<FileText />} title="Documents" count={uniqueRecents.length} onClick={() => revealSection('documents')} />
+    <SidebarRailButton icon={<Upload />} title="Upload files" onClick={openUploadPicker} />
     <SidebarRailButton icon={<Bot />} title="Direct messages" count={directMessageTargets.length} onClick={() => revealSection('direct-messages')} />
     <SidebarRailButton icon={<Archive />} title="Archive" count={archivedSessions.length} onClick={() => revealSection('archive')} />
     <Separator />
     {onOpenSkills && <SidebarRailButton icon={<Sparkles />} title="Skills" onClick={onOpenSkills} />}
     {onOpenActivity && <SidebarRailButton icon={<RotateCcw />} title="Activity" onClick={onOpenActivity} />}
     {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
+    {onOpenResources && <SidebarRailButton icon={<Database />} title="Resources" onClick={onOpenResources} />}
     {onOpenUsers && <SidebarRailButton icon={<Users />} title="Users" onClick={onOpenUsers} />}
     {onOpenSchedules && <SidebarRailButton icon={<Clock />} title="Schedules" onClick={onOpenSchedules} />}
     {onOpenAutomations && <SidebarRailButton icon={<Zap />} title="Automations" onClick={onOpenAutomations} />}
@@ -681,6 +708,15 @@ export const Sidebar = React.memo(function Sidebar({
 
  return (
   <>
+   <input
+    ref={uploadInputRef}
+    type="file"
+    multiple
+    className="sr-only"
+    tabIndex={-1}
+    onChange={handleUploadInputChange}
+    aria-label="Upload files"
+   />
    <aside
     ref={sidebarRef}
     data-sidebar-panel
@@ -958,6 +994,20 @@ export const Sidebar = React.memo(function Sidebar({
        count={uniqueRecents.length}
        actionLabel="New document"
        onAction={onNewDocument}
+       headerActions={(
+        <button
+         type="button"
+         className="sidebar-section-action"
+         aria-label="Upload files"
+         title="Upload files"
+         onClick={event => {
+          event.stopPropagation();
+          openUploadPicker();
+         }}
+        >
+         <Upload className="size-4" />
+        </button>
+       )}
        open={openSections.has('documents')}
        onOpenChange={open => toggleSection('documents', open)}
       >
@@ -1061,6 +1111,7 @@ export const Sidebar = React.memo(function Sidebar({
       {onOpenSkills && <ActionTile icon={<Sparkles />} label="Skills" active={focusedWindowType === 'skills'} onClick={onOpenSkills} />}
       {onOpenActivity && <ActionTile icon={<RotateCcw />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
       {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
+      {onOpenResources && <ActionTile icon={<Database />} label="Resources" active={focusedWindowType === 'resources'} onClick={onOpenResources} />}
       {onOpenUsers && <ActionTile icon={<Users />} label="Users" active={focusedWindowType === 'users'} onClick={onOpenUsers} />}
       {onOpenSchedules && <ActionTile icon={<Clock />} label="Schedules" active={focusedWindowType === 'schedules'} onClick={onOpenSchedules} />}
       {onOpenAutomations && <ActionTile icon={<Zap />} label="Automations" active={focusedWindowType === 'automations'} onClick={onOpenAutomations} />}

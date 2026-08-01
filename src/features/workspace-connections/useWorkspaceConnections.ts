@@ -3,16 +3,20 @@ import {
   createWorkspaceJoinLink as createWorkspaceJoinLinkRequest,
   listWorkspaceJoinLinks,
   listWorkspaceMembers,
+  listWorkspaceControllers,
   removeWorkspaceMember as removeWorkspaceMemberRequest,
   revokeWorkspaceJoinLink as revokeWorkspaceJoinLinkRequest,
   updateWorkspaceMemberRole as updateWorkspaceMemberRoleRequest,
+  revokeWorkspaceController as revokeWorkspaceControllerRequest,
 } from './api';
 import {
   canManageWorkspace,
+  isWorkspaceOwner,
   type CreatedWorkspaceJoinLink,
   type CreateWorkspaceJoinLinkInput,
   type WorkspaceJoinLink,
   type WorkspaceMember,
+  type WorkspaceController,
 } from './model';
 
 type MembersState = {
@@ -26,12 +30,17 @@ function listedJoinLink(created: CreatedWorkspaceJoinLink): WorkspaceJoinLink {
     workspace_id: created.workspace_id,
     label: created.label,
     role: created.role,
+    grant_kind: created.grant_kind,
     audience: created.audience,
     status: created.status,
     redeemed_as: null,
     redeemed_by: null,
     redeemed_agent_id: null,
+    redeemed_controller_id: null,
     redeemed_at: null,
+    controller_name: created.controller_name,
+    controller_scopes: created.controller_scopes,
+    controller_expires_at: created.controller_expires_at,
     expires_at: created.expires_at,
     created_by: created.created_by,
     created_by_email: null,
@@ -44,14 +53,18 @@ export function useWorkspaceConnections(workspaceId: string | null, currentUserI
   activeWorkspaceRef.current = workspaceId;
   const memberRequestRef = useRef(0);
   const joinLinkRequestRef = useRef(0);
+  const controllerRequestRef = useRef(0);
   const [membersState, setMembersState] = useState<MembersState>({ workspaceId: null, rows: [] });
   const [joinLinks, setJoinLinks] = useState<WorkspaceJoinLink[]>([]);
+  const [controllers, setControllers] = useState<WorkspaceController[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
   const [joinLinksLoading, setJoinLinksLoading] = useState(false);
+  const [controllersLoading, setControllersLoading] = useState(false);
   const [error, setError] = useState('');
 
   const members = membersState.workspaceId === workspaceId ? membersState.rows : [];
   const canManage = canManageWorkspace(members, currentUserId);
+  const canIssueWorkspaceControl = isWorkspaceOwner(members, currentUserId);
   const membershipPending = Boolean(workspaceId) && membersState.workspaceId !== workspaceId;
 
   const refreshMembers = useCallback(async () => {
@@ -110,10 +123,39 @@ export function useWorkspaceConnections(workspaceId: string | null, currentUserI
     void refreshJoinLinks();
   }, [refreshJoinLinks]);
 
+  const refreshControllers = useCallback(async () => {
+    const requestId = controllerRequestRef.current + 1;
+    controllerRequestRef.current = requestId;
+    if (!workspaceId || !canIssueWorkspaceControl) {
+      setControllers([]);
+      setControllersLoading(false);
+      return;
+    }
+    setControllersLoading(true);
+    try {
+      const rows = await listWorkspaceControllers(workspaceId);
+      if (controllerRequestRef.current !== requestId || activeWorkspaceRef.current !== workspaceId) return;
+      setControllers(rows);
+    } catch (requestError) {
+      if (controllerRequestRef.current !== requestId || activeWorkspaceRef.current !== workspaceId) return;
+      setControllers([]);
+      setError(requestError instanceof Error ? requestError.message : 'Failed to load workspace controllers');
+    } finally {
+      if (controllerRequestRef.current === requestId) setControllersLoading(false);
+    }
+  }, [canIssueWorkspaceControl, workspaceId]);
+
+  useEffect(() => {
+    void refreshControllers();
+  }, [refreshControllers]);
+
   const createJoinLink = useCallback(async (
     input: CreateWorkspaceJoinLinkInput,
   ): Promise<CreatedWorkspaceJoinLink> => {
     if (!workspaceId || !canManage) throw new Error('Only workspace owners and admins can create join links');
+    if (input.grantKind === 'workspace_control' && !canIssueWorkspaceControl) {
+      throw new Error('Only the workspace owner can create a workspace-control enrollment');
+    }
     setError('');
     try {
       const created = await createWorkspaceJoinLinkRequest(workspaceId, input);
@@ -126,7 +168,7 @@ export function useWorkspaceConnections(workspaceId: string | null, currentUserI
       setError(message);
       throw new Error(message);
     }
-  }, [canManage, workspaceId]);
+  }, [canIssueWorkspaceControl, canManage, workspaceId]);
 
   const revokeJoinLink = useCallback(async (linkId: string): Promise<void> => {
     if (!workspaceId || !canManage) throw new Error('Only workspace owners and admins can revoke join links');
@@ -146,6 +188,25 @@ export function useWorkspaceConnections(workspaceId: string | null, currentUserI
       throw new Error(message);
     }
   }, [canManage, refreshJoinLinks, workspaceId]);
+
+  const revokeController = useCallback(async (controllerId: string): Promise<void> => {
+    if (!workspaceId || !canIssueWorkspaceControl) {
+      throw new Error('Only the workspace owner can revoke a workspace controller');
+    }
+    setError('');
+    try {
+      await revokeWorkspaceControllerRequest(workspaceId, controllerId);
+      if (activeWorkspaceRef.current !== workspaceId) return;
+      // Revocation is recursive: child controller credentials are invalidated
+      // with their parent. Reload the explicit projection so descendants cannot
+      // remain visually "active" until this window happens to be reopened.
+      await refreshControllers();
+    } catch (requestError) {
+      const message = requestError instanceof Error ? requestError.message : 'Failed to revoke workspace controller';
+      setError(message);
+      throw new Error(message);
+    }
+  }, [canIssueWorkspaceControl, refreshControllers, workspaceId]);
 
   const removeMember = useCallback(async (memberId: string): Promise<void> => {
     if (!workspaceId || !canManage) throw new Error('Only workspace owners and admins can remove members');
@@ -193,15 +254,20 @@ export function useWorkspaceConnections(workspaceId: string | null, currentUserI
   return {
     members,
     joinLinks,
+    controllers,
     canManage,
-    loading: membershipPending || membersLoading || joinLinksLoading,
+    canIssueWorkspaceControl,
+    loading: membershipPending || membersLoading || joinLinksLoading || controllersLoading,
     membersLoading: membershipPending || membersLoading,
     joinLinksLoading,
+    controllersLoading,
     error,
     refreshMembers,
     refreshJoinLinks,
+    refreshControllers,
     createJoinLink,
     revokeJoinLink,
+    revokeController,
     removeMember,
     changeMemberRole,
   };

@@ -66,9 +66,11 @@ function makeCoreDb({
       const row = sessions[String(params[0])];
       return row ? [{ workspace_id: row.workspace_id }] : [];
     }
-    if (n.startsWith('select id, visibility, folder from chat_sessions where id = $1')) {
+    if (n.startsWith('select id, visibility, folder') && n.includes('from chat_sessions where id = $1')) {
       const row = sessions[String(params[0])];
-      return row ? [{ id: row.id, visibility: row.visibility, folder: row.folder }] : [];
+      return row
+        ? [{ id: row.id, visibility: row.visibility, folder: row.folder, deleted_at: row.deleted_at ?? null }]
+        : [];
     }
     if (n.startsWith('select 1 from chat_session_members')) {
       return String(params[0]) === DM && members.includes(String(params[1])) ? [{ ok: 1 }] : [];
@@ -76,7 +78,7 @@ function makeCoreDb({
     if (n.startsWith('select workspace_id from "thread_items" where id = $1')) {
       return itemSessions[String(params[0])] ? [{ workspace_id: WS }] : [];
     }
-    if (n.startsWith('select session_id from "thread_items" where id = $1')) {
+    if (n.startsWith('select session_id') && n.includes('from "thread_items" where id = $1')) {
       const sessionId = itemSessions[String(params[0])];
       return sessionId ? [{ session_id: sessionId }] : [];
     }
@@ -126,7 +128,7 @@ test('thread item UPDATE and DELETE resolve an id-only filter back to its privat
       message: 'This conversation is private',
     });
     assert.ok(
-      db.calls.some((call) => /select session_id from "thread_items"/i.test(call.sql)),
+      db.calls.some((call) => /select session_id(?: as session_id)?\s+from "thread_items"/i.test(call.sql)),
       `${op} must resolve the source row's session before authorizing`,
     );
   }

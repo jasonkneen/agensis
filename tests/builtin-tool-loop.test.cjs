@@ -117,6 +117,61 @@ test('a turn with no tool use behaves exactly as before: one model call, its tex
   assert.deepEqual(callModel.calls[0].messages, [{ role: 'user', content: 'hello' }]);
 });
 
+test('builtin cancellation stops the loop before another model or tool boundary', async () => {
+  const beforeStart = new AbortController();
+  const cleared = Object.assign(new Error('Conversation cleared'), { code: 'builtin_job_cancelled' });
+  beforeStart.abort(cleared);
+  let modelCalls = 0;
+  let toolCalls = 0;
+
+  await assert.rejects(
+    () => __test.runToolUseLoop({
+      messages: [{ role: 'user', content: 'go' }],
+      tools: [{ name: 'read_channel', description: '', input_schema: {} }],
+      signal: beforeStart.signal,
+      callModel: async () => { modelCalls += 1; return { text: 'should not run', toolUses: [] }; },
+      callTool: async () => { toolCalls += 1; return { ok: true, value: {} }; },
+    }),
+    (error) => error === cleared,
+  );
+  assert.equal(modelCalls, 0);
+  assert.equal(toolCalls, 0);
+
+  const duringModel = new AbortController();
+  await assert.rejects(
+    () => __test.runToolUseLoop({
+      messages: [{ role: 'user', content: 'go' }],
+      tools: [{ name: 'read_channel', description: '', input_schema: {} }],
+      signal: duringModel.signal,
+      callModel: async () => {
+        modelCalls += 1;
+        duringModel.abort(cleared);
+        return { text: '', toolUses: [use('tu-cancelled', 'read_channel')] };
+      },
+      callTool: async () => { toolCalls += 1; return { ok: true, value: {} }; },
+    }),
+    (error) => error === cleared,
+  );
+  assert.equal(modelCalls, 1, 'the in-flight model call settled once');
+  assert.equal(toolCalls, 0, 'its requested tool never started after cancellation');
+});
+
+test('builtin cancellation is keyed and cleaned up by the exact agent job id', () => {
+  assert.match(TURN, /const builtinAbortControllers = new Map\(\)/);
+  assert.match(TURN, /builtinAbortControllers\.set\(builtinJobId, abortController\)/);
+  assert.match(
+    TURN,
+    /function cancelBuiltinJob\(jobId,[\s\S]*?builtinAbortControllers\.get\(id\)[\s\S]*?controller\.abort\(builtinCancellationError\(reason\)\)/,
+  );
+  assert.match(
+    TURN,
+    /builtinAbortControllers\.get\(builtinJobId\) === abortController[\s\S]*?builtinAbortControllers\.delete\(builtinJobId\)/,
+    'an older turn cannot delete a replacement controller for the same id',
+  );
+  const terminalRunningCas = TURN.match(/where id = \$1 and status = 'running' returning \*/g) || [];
+  assert.ok(terminalRunningCas.length >= 2, 'both done and error terminal writes preserve a winning cancellation');
+});
+
 test('a single tool call executes, and its result reaches the model', async () => {
   const callModel = scriptedModel([
     { text: 'Let me look.', toolUses: [use('tu-1', 'read_channel', { channel_id: 'ch-1' })] },
@@ -490,7 +545,8 @@ function installFetch(responses) {
   const original = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     requests.push({ url: String(url), body: JSON.parse(init.body) });
-    const body = responses[Math.min(requests.length - 1, responses.length - 1)];
+    const scripted = responses[Math.min(requests.length - 1, responses.length - 1)];
+    const body = typeof scripted === 'function' ? scripted({ url, init }) : scripted;
     return {
       ok: true,
       body: (async function* stream() { yield Buffer.from(body); })(),
@@ -501,9 +557,11 @@ function installFetch(responses) {
   return requests;
 }
 
-function installTurnDb() {
+function installTurnDb({ reservationAccepted = true, agentMcpApproved = true } = {}) {
   const store = new Map();
   const jobs = new Map();
+  const receiptWrites = [];
+  const receiptAttempts = [];
   let seq = 0;
   store.set('msg-human', {
     id: 'msg-human', session_id: SESSION_ID, role: 'user', content: '@coder check #general',
@@ -514,14 +572,57 @@ function installTurnDb() {
   const db = {
     store,
     jobs,
+    receiptWrites,
+    receiptAttempts,
+    async begin(callback) { return callback(db); },
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
       const lower = n.toLowerCase();
 
+      if (lower.startsWith('with readable_agent_session as materialized')) {
+        // Emulate the load-bearing SQL predicates instead of returning a marker
+        // unconditionally. This makes the end-to-end builtin test below fail if
+        // read-marker authorization is accidentally tied back to MCP approval.
+        receiptAttempts.push(params.map(String));
+        if (lower.includes('marker_agent.mcp_approved is true') && !agentMcpApproved) return [];
+        if (params[0] !== SESSION_ID || params[1] !== AGENT_ROW.id) return [];
+        const seen = store.get(String(params[2]));
+        if (!seen || seen.session_id !== SESSION_ID) return [];
+        if (seen.sender_kind === 'agent' && String(seen.sender_id || '') === AGENT_ROW.id) return [];
+        const readScopeThreadParentId = params[3] == null ? null : String(params[3]);
+        if (readScopeThreadParentId === null && seen.thread_parent_id && !seen.broadcast_to_channel) return [];
+        if (readScopeThreadParentId !== null
+          && seen.id !== readScopeThreadParentId
+          && seen.thread_parent_id !== readScopeThreadParentId) return [];
+        const marker = {
+          marker_id: `marker-${AGENT_ROW.id}-${readScopeThreadParentId || 'channel'}`,
+          event_version: String(receiptWrites.length + 1),
+          session_id: SESSION_ID,
+          user_id: null,
+          agent_id: AGENT_ROW.id,
+          thread_parent_id: readScopeThreadParentId,
+          last_seen_message_id: seen.id,
+          read_at: seen.created_at,
+        };
+        receiptWrites.push(marker);
+        return [{ ...marker }];
+      }
+
+      if (lower.startsWith('select s.id from chat_sessions s join workspace_agents a')) {
+        return reservationAccepted ? [{ id: params[2] }] : [];
+      }
+
       if (n.startsWith('select id, role, content, sender_kind, sender_id, sender_name, message_kind')) {
+        const threadScoped = lower.includes('(id = $2 or thread_parent_id = $2)');
         return [...store.values()]
-          .filter((row) => row.session_id === params[0] && !row.thread_parent_id)
-          .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+          .filter((row) => row.session_id === params[0])
+          .filter((row) => threadScoped
+            ? row.id === params[1] || row.thread_parent_id === params[1]
+            : !row.thread_parent_id || row.broadcast_to_channel)
+          .sort((a, b) => (
+            String(b.created_at).localeCompare(String(a.created_at))
+            || String(b.id).localeCompare(String(a.id))
+          ));
       }
       if (n.startsWith("select id from messages where session_id = $1 and thread_parent_id is null and role = 'user'")) {
         const rows = [...store.values()].filter((r) => r.session_id === params[0] && !r.thread_parent_id && r.role === 'user');
@@ -602,6 +703,22 @@ const bubbles = (db) => [...db.store.values()].filter((r) => r.sender_kind === '
 
 test.afterEach(() => __test.resetTestState());
 
+test('an external turn posts no queued stand-in when its final live-scope reservation fails', async () => {
+  const db = installTurnDb({ reservationAccepted: false });
+  const result = await __test.runAgentTurn(
+    { ...AGENT_ROW, run_mode: 'external' },
+    { workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, createdBy: 'user-1' },
+  );
+
+  assert.deepEqual(result, { ok: false, pending: true });
+  assert.equal(db.jobs.size, 0, 'no job was queued');
+  assert.deepEqual(
+    [...db.store.values()].map((row) => row.id),
+    ['msg-human'],
+    'no removed-agent or falsely queued stand-in was written',
+  );
+});
+
 test('a builtin turn attaches tools, runs one, surfaces it as a chip, and answers', async () => {
   process.env.ANTHROPIC_API_KEY = 'test-key';
   const db = installTurnDb();
@@ -675,6 +792,123 @@ test('a builtin turn with no tool use still writes exactly one reply, as before'
     assert.equal(texts.length, 1, 'one reply, in the placeholder it streamed into');
     assert.equal(texts[0].content, 'Just an answer.');
     assert.equal(texts[0].broadcast_to_channel, true);
+  } finally {
+    requests.restore();
+  }
+});
+
+test('a default builtin agent records a receipt without MCP approval', async () => {
+  process.env.ANTHROPIC_API_KEY = 'test-key';
+  const db = installTurnDb({ agentMcpApproved: false });
+  const requests = installFetch([sseBody([{ text: 'Read and understood.' }])]);
+
+  try {
+    const result = await __test.runAgentTurn(
+      { ...AGENT_ROW, mcp_approved: false },
+      { workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, createdBy: 'user-1' },
+    );
+    assert.deepEqual(result, { ok: true, pending: false });
+    assert.deepEqual(db.receiptWrites, [{
+      marker_id: `marker-${AGENT_ROW.id}-channel`,
+      event_version: '1',
+      session_id: SESSION_ID,
+      user_id: null,
+      agent_id: AGENT_ROW.id,
+      thread_parent_id: null,
+      last_seen_message_id: 'msg-human',
+      read_at: '2026-07-25T10:00:00.000Z',
+    }]);
+    assert.deepEqual(db.receiptAttempts, [[SESSION_ID, AGENT_ROW.id, 'msg-human', 'null']]);
+  } finally {
+    requests.restore();
+  }
+});
+
+test('a builtin receipt stays pinned to its thread snapshot while newer messages arrive', async () => {
+  process.env.ANTHROPIC_API_KEY = 'test-key';
+  const db = installTurnDb({ agentMcpApproved: false });
+  db.store.set('thread-reply', {
+    id: 'thread-reply',
+    session_id: SESSION_ID,
+    role: 'user',
+    content: 'the scoped question',
+    thread_parent_id: 'msg-human',
+    sender_kind: 'user',
+    sender_id: 'user-1',
+    sender_name: 'Jason',
+    broadcast_to_channel: false,
+    created_at: '2026-07-25T10:01:00.000Z',
+  });
+  const requests = installFetch([() => {
+    // The context query has completed when the provider call begins. This later,
+    // top-level message must not widen a marker captured for the thread.
+    db.store.set('msg-late', {
+      id: 'msg-late',
+      session_id: SESSION_ID,
+      role: 'user',
+      content: 'arrived after prompt capture',
+      thread_parent_id: null,
+      sender_kind: 'user',
+      sender_id: 'user-2',
+      sender_name: 'Later',
+      broadcast_to_channel: false,
+      created_at: '2026-07-25T10:02:00.000Z',
+    });
+    return sseBody([{ text: 'Scoped answer.' }]);
+  }]);
+
+  try {
+    const result = await __test.runAgentTurn(
+      { ...AGENT_ROW, mcp_approved: false },
+      {
+        workspaceId: WORKSPACE_ID,
+        sessionId: SESSION_ID,
+        threadParentId: 'msg-human',
+        createdBy: 'user-1',
+      },
+    );
+    assert.deepEqual(result, { ok: true, pending: false });
+    assert.deepEqual(
+      db.receiptAttempts,
+      [[SESSION_ID, AGENT_ROW.id, 'thread-reply', 'msg-human']],
+      'the exact newest inbound row in the delivered thread is the only candidate',
+    );
+    assert.equal(db.receiptWrites[0]?.thread_parent_id, 'msg-human');
+    assert.equal(db.receiptWrites[0]?.last_seen_message_id, 'thread-reply');
+    assert.equal(db.receiptWrites[0]?.read_at, '2026-07-25T10:01:00.000Z');
+  } finally {
+    requests.restore();
+  }
+});
+
+test('a builtin receipt uses message id to order equal-time context rows', async () => {
+  process.env.ANTHROPIC_API_KEY = 'test-key';
+  const db = installTurnDb();
+  db.store.set('msg-zzzz', {
+    id: 'msg-zzzz',
+    session_id: SESSION_ID,
+    role: 'user',
+    content: 'same timestamp, deterministic later tuple',
+    thread_parent_id: null,
+    sender_kind: 'user',
+    sender_id: 'user-2',
+    sender_name: 'Later tuple',
+    broadcast_to_channel: false,
+    created_at: '2026-07-25T10:00:00.000Z',
+  });
+  const requests = installFetch([sseBody([{ text: 'Both equal-time messages were delivered.' }])]);
+
+  try {
+    const result = await __test.runAgentTurn(AGENT_ROW, {
+      workspaceId: WORKSPACE_ID, sessionId: SESSION_ID, createdBy: 'user-1',
+    });
+    assert.deepEqual(result, { ok: true, pending: false });
+    assert.deepEqual(
+      db.receiptAttempts,
+      [[SESSION_ID, AGENT_ROW.id, 'msg-zzzz', 'null']],
+      'the id-desc tie-breaker must agree with the marker tuple comparison',
+    );
+    assert.equal(db.receiptWrites[0]?.last_seen_message_id, 'msg-zzzz');
   } finally {
     requests.restore();
   }

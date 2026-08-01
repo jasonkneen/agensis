@@ -46,18 +46,20 @@ test('HUDDLE transcripts are excluded', () => {
  assert.match(buildThreadInboxSql(), /coalesce\(s\.folder, ''\) <> 'huddle'/);
 });
 
-test('deleted messages and deleted sessions are excluded on every join', () => {
+test('deleted message anchors stay visible but deleted sessions remain excluded', () => {
  const sql = buildThreadInboxSql();
- // Parent, replies, the last-reply lateral, and the session all need it; a
- // thread whose parent was deleted must not appear with a blank title.
- // Five since the reply aggregate gained its own chat_sessions join (F1): the
- // parent, the replies, the reply aggregate's session, the last-reply lateral,
- // and the outer session. Asserted as an exact count deliberately — the CTE's
- // join adds `rs.deleted_at is null` INSIDE the aggregate, which discards a
- // reply in a soft-deleted session earlier than the outer join used to. The
- // result set is unchanged (the outer join already dropped those threads), and
- // pinning the number means a future edit has to notice it is changing this.
- assert.equal(sql.match(/deleted_at is null/g).length, 5, 'every join filters deleted rows');
+ const flat = sql.replace(/\s+/g, ' ');
+ // Deleting a root or reply must not collapse the thread/sub-thread navigation
+ // anchored to its id. Bodies are replaced in SQL, while the canonical session
+ // predicate still removes a closed conversation as a whole.
+ assert.doesNotMatch(flat, /join messages p on p\.id = x\.parent_id and p\.deleted_at is null/);
+ assert.doesNotMatch(flat, /where r\.thread_parent_id is not null and r\.deleted_at is null/);
+ assert.doesNotMatch(flat, /where m\.thread_parent_id = x\.parent_id and m\.deleted_at is null/);
+ assert.match(sql, /when p\.deleted_at is null then coalesce\(p\.content, ''\)/);
+ assert.match(sql, /when m\.deleted_at is null then m\.content/);
+ assert.match(sql, /This message was deleted\./);
+ assert.match(sql, /rs\.deleted_at is null/, 'the aggregate never scans a closed session');
+ assert.match(sql, /s\.deleted_at is null/, 'the canonical read predicate rejects a closed session');
 });
 
 test('the follow rule admits human threads and excludes machine-only ones', () => {

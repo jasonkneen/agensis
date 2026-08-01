@@ -234,7 +234,7 @@ function channelHarness({
  const db = {
   async unsafe(sql, params = []) {
    const q = normalizeSql(sql);
-   if (q.startsWith('select id, workspace_id, participants, conversation_mode')) {
+   if (q.startsWith('select id, workspace_id, title, participants, conversation_mode')) {
     return [state.sessionRow];
    }
    // loadChannelMessages. Three params = the THREAD branch, two = the channel

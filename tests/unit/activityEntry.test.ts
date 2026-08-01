@@ -111,6 +111,19 @@ describe('activityEntryText', () => {
     expect(activityEntryText(row({ metadata: null }))).toBe(row().title);
     expect(activityEntryText(null)).toBe('');
   });
+
+  it('cannot reconstruct a deleted body from the server-owned scrub envelope', () => {
+    const deleted = row({
+      title: 'Message deleted',
+      metadata: {
+        session_id: '924d6df6-5ef9-4263-8729-54f2e0843d68',
+        deleted: true,
+      },
+    });
+    expect(activityEntryText(deleted)).toBe('Message deleted');
+    expect(activityEntryText(deleted)).not.toContain('Bash');
+    expect(activityMetadataText(deleted.metadata)).not.toContain(STEP_LINE);
+  });
 });
 
 describe('activityEntryLabel', () => {

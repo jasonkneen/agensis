@@ -428,6 +428,21 @@ test('M7: app_users selects are projected to a safe column set', () => {
   assert.equal(core.safeSelectColumns('tasks', 'id, title'), 'id, title');
 });
 
+test('agent_jobs generic reads cannot return full prompts, replies, or errors', () => {
+  const projected = core.safeSelectColumns('agent_jobs', '*').split(',').map(value => value.trim());
+  assert.deepEqual(projected, [
+    'id', 'workspace_id', 'session_id', 'agent_id', 'status',
+    'started_at', 'created_at', 'metadata',
+  ]);
+  for (const sensitive of ['prompt', 'response', 'error', 'connection_id', 'created_by']) {
+    assert.equal(projected.includes(sensitive), false);
+    assert.throws(
+      () => core.safeSelectColumns('agent_jobs', `id, ${sensitive}`),
+      { status: 403 },
+    );
+  }
+});
+
 // M7, parity half. The helper above is only a guard if BOTH backends actually
 // call it. During the 2026-07 review fix it was wired into the Netlify mirror
 // only, leaving the scrypt password_hash still selectable on the Fly server —
@@ -439,9 +454,10 @@ test('M7 parity: both backends project db/select through safeSelectColumns', () 
 
   for (const rel of ['server/index.cjs', 'netlify/functions/backend.mjs']) {
     const source = read(rel);
-    assert.ok(
-      source.includes('normalizeColumns(safeSelectColumns(table, columns))'),
-      `${rel} must project /backend/db/select through safeSelectColumns`,
+    assert.match(
+      source,
+      /const safeColumns = safeSelectColumns\(table, columns\);\s*const normalizedColumns = normalizeColumns\(safeColumns\);/,
+      `${rel} must project /backend/db/select through safeSelectColumns before normalizing`,
     );
     assert.ok(
       !/select \$\{normalizeColumns\(columns\)\}/.test(source),

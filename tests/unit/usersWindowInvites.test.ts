@@ -32,12 +32,17 @@ function makeJoinLink(overrides: Partial<WorkspaceJoinLink> = {}): WorkspaceJoin
     workspace_id: 'ws-1',
     label: 'Build agent',
     role: 'editor',
+    grant_kind: 'individual',
     audience: 'both',
     status: 'pending',
     redeemed_as: null,
     redeemed_by: null,
     redeemed_agent_id: null,
+    redeemed_controller_id: null,
     redeemed_at: null,
+    controller_name: '',
+    controller_scopes: [],
+    controller_expires_at: null,
     expires_at: IN_TEN_MINUTES,
     created_by: 'u-owner',
     created_by_email: 'owner@example.test',
@@ -91,6 +96,7 @@ function renderContent(options: {
   members?: WorkspaceMember[];
   joinLinks?: WorkspaceJoinLink[];
   canManage?: boolean;
+  canIssueWorkspaceControl?: boolean;
   onCreateJoinLink?: (input: CreateWorkspaceJoinLinkInput) => Promise<CreatedWorkspaceJoinLink>;
   onRevokeJoinLink?: (linkId: string) => Promise<void>;
 } = {}) {
@@ -105,9 +111,12 @@ function renderContent(options: {
       currentUserEmail: 'owner@example.test',
       members,
       joinLinks: options.joinLinks ?? [],
+      controllers: [],
       canManage: options.canManage ?? true,
+      canIssueWorkspaceControl: options.canIssueWorkspaceControl ?? true,
       onCreateJoinLink: options.onCreateJoinLink ?? (async () => makeCreatedJoinLink()),
       onRevokeJoinLink: options.onRevokeJoinLink ?? (async () => undefined),
+      onRevokeController: async () => undefined,
       onRemoveMember: async () => undefined,
       onChangeMemberRole: async () => undefined,
     }));
@@ -161,7 +170,7 @@ describe('unified workspace join links', () => {
     renderContent({ onCreateJoinLink: create });
 
     expect(container.textContent).toContain('One URL works for people and agents');
-    expect(container.textContent).toContain('expires after 15 minutes');
+    expect(container.textContent).toContain('Individual links last 15 minutes');
     expect(container.textContent).toContain('used once');
 
     act(() => {
@@ -175,9 +184,46 @@ describe('unified workspace join links', () => {
       audience: 'agent',
       role: 'viewer',
       label: 'Remote code handler',
+      grantKind: 'individual',
+      controllerName: undefined,
+      scopes: undefined,
     });
     expect(writeText).toHaveBeenCalledWith('https://agensis.io/join/agj_once');
     expect(container.textContent).toContain('Link copied');
+  });
+
+  it('creates an owner-only workspace controller enrollment with visible fixed scopes', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const create = vi.fn(async (input: CreateWorkspaceJoinLinkInput) => makeCreatedJoinLink({
+      audience: input.audience,
+      grant_kind: 'workspace_control',
+      controller_name: input.controllerName || '',
+      controller_scopes: input.scopes || [],
+      controller_expires_at: new Date(NOW + 90 * 86_400_000).toISOString(),
+      expiresInMs: 5 * 60_000,
+    }));
+    renderContent({ onCreateJoinLink: create, canIssueWorkspaceControl: true });
+
+    act(() => {
+      setSelectValue(container.querySelector('#join-audience') as HTMLSelectElement, 'controller');
+      setInputValue(container.querySelector('#controller-name') as HTMLInputElement, ' Local build farm ');
+    });
+    expect(container.textContent).toContain('cannot read private chats');
+    expect(container.textContent).toContain('agents:register');
+    expect(container.querySelector('#join-role')).toBeNull();
+
+    await click(buttonByText('Create & copy link')!);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      audience: 'controller',
+      grantKind: 'workspace_control',
+      controllerName: 'Local build farm',
+      scopes: expect.arrayContaining(['agents:register', 'resources:create']),
+    }));
+    expect(writeText).toHaveBeenCalledWith('https://agensis.io/join/agj_once');
   });
 
   it('derives expired/redeemed states, shows the redemption lane, and only revokes a live link', async () => {
@@ -214,6 +260,7 @@ describe('unified workspace join links', () => {
   it('keeps a non-manager read-only and removes all join/member management controls', () => {
     renderContent({
       canManage: false,
+      canIssueWorkspaceControl: false,
       members: [
         makeMember({ id: 'me', user_id: 'u-owner', email: 'reader@example.test', role: 'editor' }),
         makeMember(),

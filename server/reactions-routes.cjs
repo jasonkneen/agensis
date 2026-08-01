@@ -14,7 +14,7 @@
 
 const { emitReactionFlowEventsForUpdate } = require('../shared/reaction-events.cjs');
 const {
- REACTION_RETURNING_COLUMNS,
+ REACTION_CURRENT_SQL,
  explainReactionNoop,
  normalizeReactionOp,
  normalizeReactionValue,
@@ -54,9 +54,9 @@ function mountReactionsRoutes(app, deps = {}) {
    // the classic shape of this bug, so the session the check ran against is the
    // session the UPDATE names.
    const rows = await getDb().unsafe(
-    `select m.id, m.session_id, s.workspace_id, s.visibility, s.folder
+    `select m.id, m.session_id, s.workspace_id, s.visibility, s.folder, s.deleted_at
        from messages m join chat_sessions s on s.id = m.session_id
-      where m.id = $1::uuid limit 1`,
+      where m.id = $1::uuid and m.deleted_at is null limit 1`,
     [messageId],
    );
    const found = rows[0];
@@ -82,8 +82,8 @@ function mountReactionsRoutes(app, deps = {}) {
    // decide whether to write.
    if (updated.length === 0) {
     const current = await getDb().unsafe(
-     `select ${REACTION_RETURNING_COLUMNS} from messages where id = $1::uuid limit 1`,
-     [messageId],
+     REACTION_CURRENT_SQL,
+     [messageId, String(found.session_id), String(req.userId)],
     );
     const problem = explainReactionNoop(current[0], { op, reaction, userId: req.userId });
     if (problem) return jsonError(res, problem.status, new Error(problem.message));

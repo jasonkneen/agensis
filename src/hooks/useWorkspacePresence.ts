@@ -52,6 +52,7 @@ export function windowLabel(win: FloatingWindow): string {
   if (win.type === 'tasks') return 'Tasks';
   if (win.type === 'activity') return 'Activity';
   if (win.type === 'agents') return 'AI Agents';
+  if (win.type === 'resources') return 'Shared resources';
   return win.title;
 }
 

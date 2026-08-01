@@ -6,6 +6,8 @@ import {
   Link2,
   LockKeyhole,
   Plus,
+  ServerCog,
+  ShieldCheck,
   Trash2,
   UserRound,
   Users,
@@ -14,6 +16,7 @@ import {
   joinLinkAudienceLabel,
   joinLinkLifecycleState,
   joinLinkRedeemedAsLabel,
+  WORKSPACE_CONTROLLER_SCOPES,
   type CreatedWorkspaceJoinLink,
   type CreateWorkspaceJoinLinkInput,
   type JoinLinkAudience,
@@ -21,6 +24,8 @@ import {
   type WorkspaceConnectionRole,
   type WorkspaceJoinLink,
   type WorkspaceMember,
+  type WorkspaceController,
+  type WorkspaceControllerScope,
 } from '@/features/workspace-connections';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -51,11 +56,21 @@ interface UsersWindowContentProps {
   currentUserEmail?: string;
   members: WorkspaceMember[];
   joinLinks: WorkspaceJoinLink[];
+  /**
+   * Older callers (and the lightweight onboarding/smoke surface) do not have
+   * controller data yet. Treat that as an empty collection rather than letting
+   * the expiry effect crash the whole Members window before it can render the
+   * members it already has.
+   */
+  controllers?: WorkspaceController[];
   canManage: boolean;
+  canIssueWorkspaceControl?: boolean;
   loading?: boolean;
+  controllersLoading?: boolean;
   error?: string;
   onCreateJoinLink: (input: CreateWorkspaceJoinLinkInput) => Promise<CreatedWorkspaceJoinLink>;
   onRevokeJoinLink: (linkId: string) => Promise<void>;
+  onRevokeController?: (controllerId: string) => Promise<void>;
   onRemoveMember: (memberId: string) => Promise<void>;
   onChangeMemberRole: (memberId: string, role: WorkspaceConnectionRole) => Promise<void>;
 }
@@ -66,32 +81,55 @@ export const UsersWindowContent = memo(function UsersWindowContent({
   currentUserEmail,
   members,
   joinLinks,
+  controllers = [],
   canManage,
+  canIssueWorkspaceControl = false,
   loading = false,
+  controllersLoading = false,
   error = '',
   onCreateJoinLink,
   onRevokeJoinLink,
+  onRevokeController,
   onRemoveMember,
   onChangeMemberRole,
 }: UsersWindowContentProps) {
   const [newRole, setNewRole] = useState<WorkspaceConnectionRole>('editor');
   const [newAudience, setNewAudience] = useState<JoinLinkAudience>('both');
   const [newLabel, setNewLabel] = useState('');
+  const [controllerName, setControllerName] = useState('');
+  const [controllerScopes, setControllerScopes] = useState<WorkspaceControllerScope[]>([
+    'agents:register',
+    'agents:manage_own',
+    'resources:create',
+    'resources:manage_own',
+  ]);
   const [creating, setCreating] = useState(false);
   const [copiedCreate, setCopiedCreate] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [revokingControllerId, setRevokingControllerId] = useState<string | null>(null);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [actionError, setActionError] = useState('');
   const [expiryVersion, setExpiryVersion] = useState(0);
+
+  useEffect(() => {
+    if (!canIssueWorkspaceControl && newAudience === 'controller') setNewAudience('both');
+  }, [canIssueWorkspaceControl, newAudience]);
 
   // The status is derived from expires_at, so make the next live row re-render
   // when it crosses that boundary. No polling and no permanently stale
   // "pending" badge if the window stays open for the whole 15-minute lifetime.
   useEffect(() => {
     const now = Date.now();
-    const nextExpiry = joinLinks
-      .filter(link => link.status === 'pending')
-      .map(link => link.expires_at ? new Date(link.expires_at).getTime() : Number.NaN)
+    const nextExpiry = [
+      ...joinLinks
+        .filter(link => link.status === 'pending')
+        .map(link => link.expires_at ? new Date(link.expires_at).getTime() : Number.NaN),
+      ...controllers
+        .filter(controller => controller.status === 'active')
+        .map(controller => controller.expires_at
+          ? new Date(controller.expires_at).getTime()
+          : Number.NaN),
+    ]
       .filter(value => Number.isFinite(value) && value > now)
       .reduce((earliest, value) => Math.min(earliest, value), Number.POSITIVE_INFINITY);
     if (!Number.isFinite(nextExpiry)) return;
@@ -100,7 +138,7 @@ export const UsersWindowContent = memo(function UsersWindowContent({
       Math.min(Math.max(nextExpiry - now + 25, 25), 2_147_483_647),
     );
     return () => window.clearTimeout(timeout);
-  }, [expiryVersion, joinLinks]);
+  }, [controllers, expiryVersion, joinLinks]);
 
   const handleCreateJoinLink = async () => {
     if (creating || !canManage) return;
@@ -112,9 +150,13 @@ export const UsersWindowContent = memo(function UsersWindowContent({
         role: newRole,
         audience: newAudience,
         label: newLabel.trim() || undefined,
+        grantKind: newAudience === 'controller' ? 'workspace_control' : 'individual',
+        controllerName: newAudience === 'controller' ? controllerName.trim() : undefined,
+        scopes: newAudience === 'controller' ? controllerScopes : undefined,
       });
       await copyJoinUrl(created.url);
       setNewLabel('');
+      if (newAudience === 'controller') setControllerName('');
       setCopiedCreate(true);
     } catch (createError) {
       setActionError(
@@ -124,6 +166,19 @@ export const UsersWindowContent = memo(function UsersWindowContent({
       );
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleRevokeController = async (controllerId: string) => {
+    if (revokingControllerId || !canIssueWorkspaceControl) return;
+    setRevokingControllerId(controllerId);
+    setActionError('');
+    try {
+      await onRevokeController?.(controllerId);
+    } catch (revokeError) {
+      setActionError(revokeError instanceof Error ? revokeError.message : 'Failed to revoke workspace controller');
+    } finally {
+      setRevokingControllerId(null);
     }
   };
 
@@ -289,7 +344,8 @@ export const UsersWindowContent = memo(function UsersWindowContent({
           </div>
 
           <p className="text-xs leading-relaxed text-muted-foreground">
-            One URL works for people and agents. Each link expires after 15 minutes and can be used once.
+            One URL works for people and agents. Individual links last 15 minutes; owner-only controller
+            enrollments last five. Every link can be used once.
           </p>
 
           {!canManage && loading && members.length === 0 ? null : !canManage ? (
@@ -312,37 +368,61 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                       value={newAudience}
                       onChange={(event) => {
                         const value = event.target.value;
-                        setNewAudience(value === 'human' || value === 'agent' ? value : 'both');
+                        setNewAudience(
+                          value === 'human' || value === 'agent' || (value === 'controller' && canIssueWorkspaceControl)
+                            ? value
+                            : 'both',
+                        );
                         setCopiedCreate(false);
                       }}
                     >
                       <NativeSelectOption value="both">Person or agent</NativeSelectOption>
                       <NativeSelectOption value="human">Person only</NativeSelectOption>
                       <NativeSelectOption value="agent">Agent only</NativeSelectOption>
+                      {canIssueWorkspaceControl && (
+                        <NativeSelectOption value="controller">Workspace controller</NativeSelectOption>
+                      )}
                     </NativeSelect>
                   </Field>
-                  <Field className="w-auto">
-                    <FieldLabel htmlFor="join-role">Role</FieldLabel>
-                    <NativeSelect
-                      id="join-role"
-                      size="sm"
-                      value={newRole}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setNewRole(
-                          value === 'admin' || value === 'commenter' || value === 'viewer'
-                            ? value
-                            : 'editor',
-                        );
-                        setCopiedCreate(false);
-                      }}
-                    >
-                      <NativeSelectOption value="admin">Admin</NativeSelectOption>
-                      <NativeSelectOption value="editor">Editor</NativeSelectOption>
-                      <NativeSelectOption value="commenter">Commenter</NativeSelectOption>
-                      <NativeSelectOption value="viewer">Viewer</NativeSelectOption>
-                    </NativeSelect>
-                  </Field>
+                  {newAudience !== 'controller' && (
+                    <Field className="w-auto">
+                      <FieldLabel htmlFor="join-role">Role</FieldLabel>
+                      <NativeSelect
+                        id="join-role"
+                        size="sm"
+                        value={newRole}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setNewRole(
+                            value === 'admin' || value === 'commenter' || value === 'viewer'
+                              ? value
+                              : 'editor',
+                          );
+                          setCopiedCreate(false);
+                        }}
+                      >
+                        <NativeSelectOption value="admin">Admin</NativeSelectOption>
+                        <NativeSelectOption value="editor">Editor</NativeSelectOption>
+                        <NativeSelectOption value="commenter">Commenter</NativeSelectOption>
+                        <NativeSelectOption value="viewer">Viewer</NativeSelectOption>
+                      </NativeSelect>
+                    </Field>
+                  )}
+                  {newAudience === 'controller' && (
+                    <Field className="min-w-52 flex-1">
+                      <FieldLabel htmlFor="controller-name">Controller name</FieldLabel>
+                      <Input
+                        id="controller-name"
+                        placeholder="Required, e.g. Local build farm"
+                        maxLength={120}
+                        value={controllerName}
+                        onChange={(event) => {
+                          setControllerName(event.target.value);
+                          setCopiedCreate(false);
+                        }}
+                      />
+                    </Field>
+                  )}
                   <Field className="min-w-48 flex-1">
                     <FieldLabel htmlFor="join-label">Label</FieldLabel>
                     <Input
@@ -360,7 +440,10 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                     type="button"
                     size="sm"
                     onClick={() => void handleCreateJoinLink()}
-                    disabled={creating}
+                    disabled={
+                      creating
+                      || (newAudience === 'controller' && (!controllerName.trim() || controllerScopes.length === 0))
+                    }
                   >
                     {creating ? (
                       <Spinner data-icon="inline-start" />
@@ -372,6 +455,38 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                     {copiedCreate ? 'Link copied' : 'Create & copy link'}
                   </Button>
                 </div>
+                {newAudience === 'controller' && (
+                  <div className="mt-3 space-y-3 border-t pt-3">
+                    <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs leading-relaxed">
+                      <ShieldCheck className="mt-0.5 size-4 shrink-0 text-amber-700 dark:text-amber-400" />
+                      <span>
+                        Owner-only control enrollment. The link lasts five minutes and returns one named,
+                        expiring credential. It cannot read private chats, grant roles, read raw vault values,
+                        or post arbitrary messages.
+                      </span>
+                    </div>
+                    <fieldset>
+                      <legend className="mb-1.5 text-xs font-medium">Controller scopes</legend>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {WORKSPACE_CONTROLLER_SCOPES.map(scope => (
+                          <label key={scope} className="flex items-center gap-2 text-xs">
+                            <input
+                              type="checkbox"
+                              checked={controllerScopes.includes(scope)}
+                              onChange={(event) => {
+                                setControllerScopes(previous => event.target.checked
+                                  ? [...previous, scope]
+                                  : previous.filter(value => value !== scope));
+                                setCopiedCreate(false);
+                              }}
+                            />
+                            <code>{scope}</code>
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                  </div>
+                )}
               </div>
 
               {joinLinks.length === 0 && !loading ? (
@@ -394,10 +509,17 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                           <JoinAudienceIcon audience={link.audience} />
                         </ItemMedia>
                         <ItemContent className="min-w-0">
-                          <ItemTitle className="truncate">{link.label || defaultJoinLinkTitle(link.audience)}</ItemTitle>
+                          <ItemTitle className="truncate">
+                            {link.label || link.controller_name || defaultJoinLinkTitle(link.audience)}
+                          </ItemTitle>
                           <div className="flex flex-wrap items-center gap-1">
-                            <Badge variant={roleBadgeVariant(link.role)}>{link.role}</Badge>
+                            {link.grant_kind === 'individual' && (
+                              <Badge variant={roleBadgeVariant(link.role)}>{link.role}</Badge>
+                            )}
                             <Badge variant="outline">{joinLinkAudienceLabel(link.audience)}</Badge>
+                            {link.grant_kind === 'workspace_control' && link.controller_scopes.map(scope => (
+                              <Badge key={scope} variant="outline">{scope}</Badge>
+                            ))}
                             <JoinLinkStateBadge state={state} />
                             {state === 'redeemed' && (
                               <Badge variant="outline">{joinLinkRedeemedAsLabel(link)}</Badge>
@@ -431,6 +553,89 @@ export const UsersWindowContent = memo(function UsersWindowContent({
             </>
           )}
         </section>
+
+        {canIssueWorkspaceControl && (
+          <section className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <ServerCog className="size-4 text-primary" />
+              <h2 className="text-sm font-semibold">Workspace controllers</h2>
+              <Badge variant="secondary">{controllers.length}</Badge>
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Named control credentials can register their own agents and stewarded resources. Revocation is
+              independent; child records stay attributed for audit.
+            </p>
+            {controllersLoading ? (
+              <div className="flex items-center gap-2 rounded-xl border border-dashed border-border p-4 text-xs text-muted-foreground">
+                <Spinner className="size-3.5" />
+                Loading enrolled controllers…
+              </div>
+            ) : controllers.length === 0 ? (
+              <Empty className="border-0 py-5">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon" className="size-9">
+                    <ServerCog className="size-4" />
+                  </EmptyMedia>
+                  <EmptyTitle className="text-sm">No enrolled controllers</EmptyTitle>
+                  <EmptyDescription>
+                    Choose Workspace controller above to create a five-minute enrollment link.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
+              <ItemGroup className="gap-1">
+                {controllers.map(controller => {
+                  const expired = controller.expires_at
+                    ? new Date(controller.expires_at).getTime() <= Date.now()
+                    : false;
+                  const active = controller.status === 'active' && !expired;
+                  return (
+                    <Item key={controller.id} variant="outline">
+                      <ItemMedia className="size-9 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                        <ServerCog className="size-4" />
+                      </ItemMedia>
+                      <ItemContent className="min-w-0">
+                        <ItemTitle className="truncate">{controller.name}</ItemTitle>
+                        <div className="flex flex-wrap items-center gap-1">
+                          <Badge variant={active ? 'default' : 'outline'}>
+                            {expired ? 'expired' : controller.status}
+                          </Badge>
+                          {controller.scopes.map(scope => (
+                            <Badge key={scope} variant="outline">{scope}</Badge>
+                          ))}
+                        </div>
+                        <ItemDescription>
+                          {controller.last_used_at
+                            ? `Last used ${formatJoinLinkDate(controller.last_used_at)}.`
+                            : 'Not used since enrollment.'}
+                          {' '}
+                          {controller.expires_at
+                            ? `Expires ${formatJoinLinkDate(controller.expires_at)}.`
+                            : ''}
+                        </ItemDescription>
+                      </ItemContent>
+                      {controller.status === 'active' && (
+                        <ItemActions>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            disabled={revokingControllerId === controller.id}
+                            onClick={() => void handleRevokeController(controller.id)}
+                            aria-label={`Revoke workspace controller ${controller.name}`}
+                          >
+                            {revokingControllerId === controller.id && <Spinner data-icon="inline-start" />}
+                            Revoke
+                          </Button>
+                        </ItemActions>
+                      )}
+                    </Item>
+                  );
+                })}
+              </ItemGroup>
+            )}
+          </section>
+        )}
       </div>
     </div>
   );
@@ -459,12 +664,14 @@ async function copyJoinUrl(url: string): Promise<void> {
 }
 
 function JoinAudienceIcon({ audience }: { audience: JoinLinkAudience }) {
+  if (audience === 'controller') return <ServerCog className="size-4" />;
   if (audience === 'agent') return <Bot className="size-4" />;
   if (audience === 'human') return <UserRound className="size-4" />;
   return <Link2 className="size-4" />;
 }
 
 function defaultJoinLinkTitle(audience: JoinLinkAudience): string {
+  if (audience === 'controller') return 'Workspace controller enrollment';
   if (audience === 'human') return 'Person invitation';
   if (audience === 'agent') return 'Agent connection';
   return 'Person or agent connection';
@@ -507,7 +714,13 @@ function joinLinkDescription(link: WorkspaceJoinLink, state: JoinLinkLifecycleSt
   if (state === 'revoked') return 'Revoked. This URL can no longer be used.';
   const expiry = formatJoinLinkDate(link.expires_at);
   const creator = link.created_by_email ? ` Created by ${link.created_by_email}.` : '';
-  return `${expiry ? `Expires ${expiry}.` : 'Expires 15 minutes after creation.'}${creator}`;
+  const fallback = link.grant_kind === 'workspace_control'
+    ? 'Expires five minutes after creation.'
+    : 'Expires 15 minutes after creation.';
+  const credential = link.grant_kind === 'workspace_control' && link.controller_expires_at
+    ? ` Enrolled credential expires ${formatJoinLinkDate(link.controller_expires_at)}.`
+    : '';
+  return `${expiry ? `Expires ${expiry}.` : fallback}${credential}${creator}`;
 }
 
 function formatJoinLinkDate(value?: string | null): string {

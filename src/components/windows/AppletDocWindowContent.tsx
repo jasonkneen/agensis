@@ -68,7 +68,7 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
       setLoadingContent(false);
     });
     return () => { cancelled = true; };
-  }, [doc.id, doc.content, fetchDocumentContent]);
+  }, [doc.id, doc.title, doc.content, fetchDocumentContent]);
 
   const triggerAutoSave = useCallback((newTitle?: string, newContent?: string) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);

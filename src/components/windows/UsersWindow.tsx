@@ -15,11 +15,15 @@ export function UsersWindow({ workspaceId, workspaceName, currentUserId, current
   const {
     members,
     joinLinks,
+    controllers,
     canManage,
+    canIssueWorkspaceControl,
     loading,
+    controllersLoading,
     error,
     createJoinLink,
     revokeJoinLink,
+    revokeController,
     removeMember,
     changeMemberRole,
   } = useWorkspaceConnections(workspaceId || null, currentUserId);
@@ -31,11 +35,15 @@ export function UsersWindow({ workspaceId, workspaceName, currentUserId, current
       currentUserEmail={currentUserEmail}
       members={members}
       joinLinks={joinLinks}
+      controllers={controllers}
       canManage={canManage}
+      canIssueWorkspaceControl={canIssueWorkspaceControl}
       loading={loading}
+      controllersLoading={controllersLoading}
       error={error}
       onCreateJoinLink={createJoinLink}
       onRevokeJoinLink={revokeJoinLink}
+      onRevokeController={revokeController}
       onRemoveMember={removeMember}
       onChangeMemberRole={changeMemberRole}
     />

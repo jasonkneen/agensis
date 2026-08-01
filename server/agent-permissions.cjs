@@ -35,6 +35,10 @@
 //    be broader than what was on screen.
 
 const crypto = require('crypto');
+const {
+ sessionReadableSql: canonicalSessionReadableSql,
+ roleHasWorkspaceCapability: canonicalRoleHasWorkspaceCapability,
+} = require('../shared/backend-core.cjs');
 
 /** `messages.message_kind` for a permission request. Anything else is a real message. */
 const PERMISSION_REQUEST_KIND = 'permission_request';
@@ -52,6 +56,14 @@ const MAX_RESUMED_REQUESTS = 64;
 /** Ceiling on a daemon-proposed park, so a bad `expiresInMs` cannot pin a row open forever. */
 const MAX_REQUEST_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_REQUEST_TTL_MS = 10 * 60 * 1000;
+// A human decision is a two-phase command, not a best-effort websocket send:
+// `allowing|denying` is the durable outbox record, then the daemon ACKs prepare
+// while its tool promise is still parked, and only a post-commit `commit` frame
+// may release it. These strings also appear in session-close.cjs: keep the set
+// identical there so clear wins cleanly against an in-flight prepare.
+const PREPARING_PERMISSION_STATUSES = new Set(['allowing', 'denying']);
+const FINAL_PERMISSION_STATUSES = new Set(['allowed', 'denied']);
+const DEFAULT_PREPARE_ACK_TIMEOUT_MS = 5_000;
 
 async function ensureAgentPermissionsSchema(db) {
  await db.unsafe(`
@@ -88,8 +100,8 @@ async function ensureAgentPermissionsSchema(db) {
       ON agent_permission_requests(workspace_id, status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_agent_permission_requests_job
       ON agent_permission_requests(job_id);
-    -- The transcript anchor. Nullable: a request whose message insert failed is
-    -- still a real pending request, and losing it would wedge the turn.
+    -- The transcript anchor. Nullable for legacy rows; current writes create the
+    -- request and anchor atomically, so neither half can survive alone.
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS permission_request_id uuid;
     CREATE INDEX IF NOT EXISTS idx_messages_permission_request
       ON messages(permission_request_id) WHERE permission_request_id IS NOT NULL;
@@ -145,13 +157,19 @@ function createAgentPermissions(deps = {}) {
   enforceWorkspaceRole,
   normalizeAgentPermissionMode,
   // Deliberately NOT findConnectedAgent: a decision goes to the EXACT connection
-  // that raised the request, never to "some live socket for this agent" — see
-  // deliverDecision.
+  // that raised the request, never to "some live socket for this agent" — the
+  // two-phase helpers below treat that exact connection as protocol identity.
   getConnectedAgents,
   getDb,
   notifyDbSubscribers,
   parseJsonObject,
+  // Default to the canonical shared helpers. Keeping these injectable is useful
+  // for focused factory tests, while the defaults prevent a second spelling of
+  // either private-session access or workspace capability semantics here.
+  sessionReadableSql = canonicalSessionReadableSql,
+  roleHasWorkspaceCapability = canonicalRoleHasWorkspaceCapability,
   sendWs,
+  prepareAckTimeoutMs = DEFAULT_PREPARE_ACK_TIMEOUT_MS,
   // The audit writer (server/index.cjs recordAudit). Never rejects. Optional so
   // the existing unit tests can construct this factory without one.
   recordAudit = async () => null,
@@ -183,19 +201,163 @@ function createAgentPermissions(deps = {}) {
   };
  }
 
- /**
-  * Send a decision to the daemon that raised the request.
-  *
-  * Prefers the exact connection the request came in on. A daemon that
-  * reconnected has a NEW process with no memory of the request id, so falling
-  * back to "any live socket for this agent" would deliver an answer nobody is
-  * waiting for — which is harmless but never useful, and would let the UI claim
-  * a grant took effect when it did not. Hence: exact socket, or nothing.
-  */
- function deliverDecision(row, frame) {
-  const exact = getConnectedAgents().get(row.connection_id);
-  if (!exact || exact.ws?.readyState !== 1 || String(exact.agentId) !== String(row.agent_id)) return false;
+ // HTTP decision calls wait briefly for the daemon's prepare receipt. The map is
+ // only a response rendezvous — correctness lives in the database statuses, so
+ // a server restart loses no decision and reconnect replay can finish it.
+ const decisionWaiters = new Map(); // request row id -> { resolve, reject, timer }
+
+ async function lockPermissionDecisionActor({
+  tx,
+  workspaceId,
+  userId,
+  requiredCapability,
+ }) {
+  const workspaceAccessRows = await tx.unsafe(
+   `with recursive permission_workspace_chain as (
+      select id, parent_id, 0 as depth
+        from workspaces
+       where id = $1
+      union all
+      select parent.id, parent.parent_id, chain.depth + 1
+        from workspaces parent
+        join permission_workspace_chain chain on parent.id = chain.parent_id
+       where chain.depth < 10
+    ),
+    permission_locked_workspaces as materialized (
+      select workspace.id, workspace.user_id
+        from workspaces workspace
+        join permission_workspace_chain chain on chain.id = workspace.id
+       for share of workspace
+    ),
+    permission_locked_memberships as materialized (
+      select membership.workspace_id, membership.role
+        from workspace_members membership
+        join permission_locked_workspaces workspace
+          on workspace.id = membership.workspace_id
+       where membership.user_id = $2
+       for share of membership
+    )
+    select workspace.id, workspace.user_id, membership.role
+      from permission_locked_workspaces workspace
+      left join permission_locked_memberships membership
+        on membership.workspace_id = workspace.id`,
+   [workspaceId, String(userId)],
+  );
+  const currentRoles = new Set();
+  for (const row of workspaceAccessRows) {
+   if (String(row.user_id || '') === String(userId)) currentRoles.add('owner');
+   if (row.role) currentRoles.add(String(row.role));
+  }
+  if (![...currentRoles].some((role) =>
+   roleHasWorkspaceCapability(role, requiredCapability))) {
+   throw forbidden('Workspace access changed before this permission decision completed');
+  }
+ }
+
+ function exactPermissionConnection(row, expectedWs = null) {
+  const exact = getConnectedAgents().get(String(row?.connection_id || ''));
+  if (!exact
+   || exact.ws?.readyState !== 1
+   || String(exact.agentId || '') !== String(row?.agent_id || '')
+   || String(exact.workspaceId || '') !== String(row?.workspace_id || '')
+   || (expectedWs && exact.ws !== expectedWs)) return null;
+  return exact;
+ }
+
+ function connectionSupportsDecisionReceipts(connection) {
+  return connection?.metadata?.permissionDecisionReceipts === true;
+ }
+
+ function permissionPrepareFrame(row) {
+  const allowing = row.status === 'allowing';
+  return {
+   type: 'agent_permission_prepare',
+   requestId: String(row.request_key || ''),
+   behavior: allowing ? 'allow' : 'deny',
+   scope: allowing ? String(row.scope || 'once') : '',
+   decidedBy: String(row.decided_by_name || ''),
+   message: allowing ? '' : `${String(row.decided_by_name || 'The workspace')} denied this tool call.`,
+  };
+ }
+
+ function permissionCommitFrame(row) {
+  return {
+   type: 'agent_permission_commit',
+   requestId: String(row.request_key || ''),
+  };
+ }
+
+ function permissionAbortFrame(row, message) {
+  return {
+   type: 'agent_permission_abort',
+   requestId: String(row.request_key || ''),
+   message: String(message || 'This permission request can no longer be approved.'),
+  };
+ }
+
+ function sendExactPermissionFrame(row, frame, { expectedWs = null, requireReceipts = true } = {}) {
+  const exact = exactPermissionConnection(row, expectedWs);
+  if (!exact || (requireReceipts && !connectionSupportsDecisionReceipts(exact))) return false;
   return sendWs(exact.ws, frame);
+ }
+
+ function sendPermissionAbort(row, message, { expectedWs = null } = {}) {
+  const exact = exactPermissionConnection(row, expectedWs);
+  if (!exact) return false;
+  // Receipt-capable daemons may already have cached an ALLOW prepare. Their
+  // legacy decision handler intentionally refuses to replace that decision, so
+  // only the explicit abort frame can release the parked promise safely. Older
+  // daemons never received PREPARE and retain the one-frame denial fallback.
+  if (connectionSupportsDecisionReceipts(exact)) {
+   return sendWs(exact.ws, permissionAbortFrame(row, message));
+  }
+  return sendWs(exact.ws, {
+   type: 'agent_permission_decision',
+   requestId: String(row.request_key || ''),
+   behavior: 'deny',
+   message: String(message || 'This permission request can no longer be approved.'),
+  });
+ }
+
+ function createDecisionWaiter(requestId) {
+  const key = String(requestId || '');
+  let resolvePromise;
+  let rejectPromise;
+  const promise = new Promise((resolve, reject) => {
+   resolvePromise = resolve;
+   rejectPromise = reject;
+  });
+  const timer = setTimeout(() => {
+   const current = decisionWaiters.get(key);
+   if (!current || current.promise !== promise) return;
+   decisionWaiters.delete(key);
+   current.reject(Object.assign(
+    new Error('The decision was saved, but the agent has not acknowledged it yet'),
+    { status: 409, code: 'permission_prepare_pending' },
+   ));
+  }, Math.max(100, Number(prepareAckTimeoutMs) || DEFAULT_PREPARE_ACK_TIMEOUT_MS));
+  timer.unref?.();
+  const entry = { promise, timer, resolve: resolvePromise, reject: rejectPromise };
+  decisionWaiters.set(key, entry);
+  return entry;
+ }
+
+ function settleDecisionWaiter(requestId, error, row = null) {
+  const key = String(requestId || '');
+  const waiter = decisionWaiters.get(key);
+  if (!waiter) return false;
+  decisionWaiters.delete(key);
+  clearTimeout(waiter.timer);
+  if (error) waiter.reject(error);
+  else waiter.resolve(row);
+  return true;
+ }
+
+ function permissionScopeChanged() {
+  return Object.assign(
+   new Error('This permission request is no longer attached to an active conversation turn'),
+   { status: 409, code: 'permission_scope_changed' },
+  );
  }
 
  /**
@@ -213,34 +375,13 @@ function createAgentPermissions(deps = {}) {
   const jobId = String(message.jobId || '');
   const requestKey = String(message.requestId || '').trim();
   if (!requestKey) throw badRequest('requestId is required');
+  if (requestKey.length > MAX_RULE_LENGTH) throw badRequest('requestId is too long');
 
   const deny = (reason) => {
    sendWs(ws, { type: 'agent_permission_decision', requestId: requestKey, behavior: 'deny', message: reason });
   };
   if (!jobId) {
    deny('This tool call is not attached to a job, so nobody can be asked about it.');
-   return null;
-  }
-
-  const rows = await getDb().unsafe(
-   `select j.*, a.name as agent_name, a.handle as agent_handle
-      from agent_jobs j
-      left join workspace_agents a on a.id = j.agent_id
-      where j.id = $1 and j.agent_id = $2 and j.workspace_id = $3
-      limit 1`,
-   [jobId, auth.agentId, auth.workspaceId],
-  );
-  const job = rows[0];
-  if (!job) throw forbidden('Agent job not found');
-  // Farm / control-plane jobs have no conversation. Denying immediately is the
-  // only honest answer: parking would hold the turn until its own timeout for a
-  // question that could never be displayed.
-  if (!job.session_id) {
-   deny('This job runs outside a conversation, so there is nowhere to ask for approval.');
-   return null;
-  }
-  if (!['queued', 'running'].includes(job.status)) {
-   deny('The job had already finished before this could be approved.');
    return null;
   }
 
@@ -252,56 +393,125 @@ function createAgentPermissions(deps = {}) {
    Math.max(30_000, Number(message.expiresInMs) || DEFAULT_REQUEST_TTL_MS),
   );
 
-  const metadata = parseJsonObject(job.metadata);
-  const responseMessageId = metadata.responseMessageId || null;
-  // Same resolution as handleAgentJobStep, and for the same reason: existence
-  // and parentage are ONE question, because a stale id answered "no parent"
-  // identically to a missing row and was written into a foreign key.
-  let threadParentId = null;
-  if (responseMessageId) {
-   const parentRows = await getDb().unsafe(
-    'select thread_parent_id from messages where id = $1 and session_id = $2 limit 1',
-    [responseMessageId, job.session_id],
+  // The job proof, request row, and transcript anchor are one transaction. The
+  // live session is locked before either insert, so clear cannot close it in the
+  // gap and leave a pending row whose card never existed. Conversely, if clear
+  // already won, the proof returns no row and nothing is parked.
+  const outcome = await getDb().begin(async (tx) => {
+   const rows = await tx.unsafe(
+    `select j.*, a.name as agent_name, a.handle as agent_handle
+       from agent_jobs j
+       join chat_sessions s
+         on s.id = j.session_id
+        and s.workspace_id = j.workspace_id
+        and s.deleted_at is null
+       join workspace_agents a
+         on a.id = j.agent_id
+        and a.workspace_id = j.workspace_id
+        and a.enabled is true
+      where j.id = $1
+        and j.agent_id = $2
+        and j.workspace_id = $3
+        and j.connection_id = $4
+        and j.status = 'running'
+        and exists (
+          select 1
+            from jsonb_array_elements(
+              case when jsonb_typeof(s.participants) = 'array'
+                   then s.participants else '[]'::jsonb end
+            ) participant
+           where participant->>'agent_id' = a.id::text
+        )
+      limit 1
+      for update of j, s, a`,
+    [jobId, auth.agentId, auth.workspaceId, ws.agentConnectionId],
    );
-   if (parentRows[0]) threadParentId = parentRows[0].thread_parent_id || responseMessageId;
+   const job = rows[0];
+   if (!job) {
+    // Explain a failed present-tense proof without letting the diagnostic read
+    // authorize anything. Another agent/workspace remains indistinguishable
+    // from a missing job; a known but no-longer-runnable job gets an immediate
+    // denial down the socket instead of a generic websocket error.
+    const diagnosticRows = await tx.unsafe(
+     `select session_id, status from agent_jobs
+        where id = $1 and agent_id = $2 and workspace_id = $3 limit 1`,
+     [jobId, auth.agentId, auth.workspaceId],
+    );
+    const diagnostic = diagnosticRows[0];
+    if (!diagnostic) throw forbidden('Agent job not found');
+    return {
+     denyReason: !diagnostic.session_id
+      ? 'This job runs outside a conversation, so there is nowhere to ask for approval.'
+      : diagnostic.status !== 'running'
+       ? 'The job had already finished before this could be approved.'
+       : 'This job is no longer active in that conversation, so the tool call was denied.',
+    };
+   }
+
+   const metadata = parseJsonObject(job.metadata);
+   const responseMessageId = metadata.responseMessageId || null;
+   // Same resolution as handleAgentJobStep, and for the same reason: existence
+   // and parentage are ONE question, because a stale id answered "no parent"
+   // identically to a missing row and was written into a foreign key.
+   let threadParentId = null;
+   if (responseMessageId) {
+    const parentRows = await tx.unsafe(
+     'select thread_parent_id from messages where id = $1 and session_id = $2 and deleted_at is null limit 1',
+     [responseMessageId, job.session_id],
+    );
+    if (parentRows[0]) threadParentId = parentRows[0].thread_parent_id || responseMessageId;
+   }
+
+   const requestId = crypto.randomUUID();
+   const messageId = crypto.randomUUID();
+   const requestRows = await tx.unsafe(
+    `insert into agent_permission_requests
+       (id, workspace_id, agent_id, job_id, connection_id, session_id, message_id, request_key,
+        tool_name, tool_detail, title, description, rules, scopes, status, expires_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, 'pending', now() + ($15::text || ' milliseconds')::interval)
+     on conflict (connection_id, request_key) do update
+       set updated_at = now()
+     returning *`,
+    [
+     requestId, auth.workspaceId, auth.agentId, job.id, ws.agentConnectionId, job.session_id, messageId, requestKey,
+     toolName, toolDetail, line(message.title, 200), line(message.description, 300),
+     // Bind the ARRAY, never JSON.stringify — a stringified bind lands as a jsonb
+     // string scalar, which is the bug this repo has shipped twice.
+     rules, allowedScopes(rules),
+     String(ttlMs),
+    ],
+   );
+   const request = requestRows[0];
+   // A redelivered frame updated the existing row; its prompt is already on
+   // screen and must not be posted twice.
+   if (!request || request.id !== requestId) {
+    return { request, requestRows: [], messageRows: [] };
+   }
+
+   const messageRows = await tx.unsafe(
+    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail, permission_request_id)
+       values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7, $8, $9, $10) returning *`,
+    [
+     messageId, job.session_id, requestContent(request), threadParentId,
+     String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent',
+     PERMISSION_REQUEST_KIND, toolName, toolDetail, requestId,
+    ],
+   );
+   if (messageRows.length !== 1) {
+    throw new Error('Permission request anchor message was not created');
+   }
+   return { request, requestRows, messageRows };
+  });
+  if (outcome.denyReason) {
+   deny(outcome.denyReason);
+   return null;
   }
-
-  const requestId = crypto.randomUUID();
-  const messageId = crypto.randomUUID();
-  const requestRows = await getDb().unsafe(
-   `insert into agent_permission_requests
-      (id, workspace_id, agent_id, job_id, connection_id, session_id, message_id, request_key,
-       tool_name, tool_detail, title, description, rules, scopes, status, expires_at)
-    values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, 'pending', now() + ($15::text || ' milliseconds')::interval)
-    on conflict (connection_id, request_key) do update
-      set updated_at = now()
-    returning *`,
-   [
-    requestId, auth.workspaceId, auth.agentId, job.id, ws.agentConnectionId, job.session_id, messageId, requestKey,
-    toolName, toolDetail, line(message.title, 200), line(message.description, 300),
-    // Bind the ARRAY, never JSON.stringify — a stringified bind lands as a jsonb
-    // string scalar, which is the bug this repo has shipped twice.
-    rules, allowedScopes(rules),
-    String(ttlMs),
-   ],
-  );
-  const request = requestRows[0];
-  // A redelivered frame updated the existing row; its prompt is already on
-  // screen and must not be posted twice.
-  if (!request || request.id !== requestId) return publicPermissionRequest(request);
-
-  const messageRows = await getDb().unsafe(
-   `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail, permission_request_id)
-      values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7, $8, $9, $10) returning *`,
-   [
-    messageId, job.session_id, requestContent(request), threadParentId,
-    String(job.agent_id || ''), job.agent_name || auth.name || auth.handle || 'Agent',
-    PERMISSION_REQUEST_KIND, toolName, toolDetail, requestId,
-   ],
-  );
-  notifyDbSubscribers('messages', 'INSERT', messageRows);
-  notifyDbSubscribers('agent_permission_requests', 'INSERT', requestRows);
-  return publicPermissionRequest(request);
+  // Realtime only after commit. Broadcasting either half from inside the
+  // transaction would let a client observe a card whose companion row can
+  // still roll back.
+  if (outcome.messageRows.length) notifyDbSubscribers('messages', 'INSERT', outcome.messageRows);
+  if (outcome.requestRows.length) notifyDbSubscribers('agent_permission_requests', 'INSERT', outcome.requestRows);
+  return publicPermissionRequest(outcome.request);
  }
 
  /**
@@ -311,38 +521,29 @@ function createAgentPermissions(deps = {}) {
   * merged here rather than patched: another key (host_folders, sandbox_skills)
   * living in the same column must survive a permission grant untouched.
   */
- async function grantPermanentRules({ workspaceId, agentId, rules, actorUserId = '' }) {
-  if (!rules.length) return [];
-  const agentRows = await getDb().unsafe(
-   'select metadata from workspace_agents where id = $1 and workspace_id = $2 limit 1',
-   [agentId, workspaceId],
-  );
-  if (!agentRows[0]) throw badRequest('Agent not found');
-  const metadata = parseJsonObject(agentRows[0].metadata);
+ async function grantPermanentRulesLocked({ tx, agent, rules }) {
+  if (!rules.length) return { rows: [], granted: [] };
+  const metadata = parseJsonObject(agent.metadata);
   const existing = Array.isArray(metadata.permission_rules) ? metadata.permission_rules.map(String) : [];
   const merged = [...existing];
   for (const rule of rules) if (!merged.includes(rule)) merged.push(rule);
-  if (merged.length === existing.length) return merged;
-  const updated = await getDb().unsafe(
+  if (merged.length === existing.length) return { rows: [], granted: [] };
+  const updated = await tx.unsafe(
    `update workspace_agents set metadata = $3::jsonb, updated_at = now()
-      where id = $1 and workspace_id = $2 returning *`,
-   [agentId, workspaceId, { ...metadata, permission_rules: merged }],
+      where id = $1 and workspace_id = $2 and enabled is true returning *`,
+   [agent.id, agent.workspace_id, { ...metadata, permission_rules: merged }],
   );
-  notifyDbSubscribers('workspace_agents', 'UPDATE', updated);
-  // The rules NEWLY added, not the whole merged list: the audit answer to "what
-  // did this grant widen" is the delta, and re-listing rules granted months ago
-  // on every row would bury it. The rule strings themselves are recorded because
-  // they ARE the grant — they are the exact strings the human saw on the button.
+  if (updated.length !== 1) {
+   throw Object.assign(new Error('The agent is no longer available for this permission grant'), {
+    status: 409,
+    code: 'permission_scope_changed',
+   });
+  }
+  // Returned to the caller for fanout and audit only AFTER the transaction
+  // commits. Publishing here would expose a permanent grant that can still roll
+  // back if the request settlement fails.
   const granted = merged.filter((rule) => !existing.includes(rule));
-  await recordAudit({
-   workspaceId: String(workspaceId || ''),
-   actor: { userId: String(actorUserId || '') },
-   action: 'agent.permission_rule_granted',
-   target: { type: 'agent', id: String(agentId || ''), label: String(updated[0]?.handle || updated[0]?.name || '') },
-   after: granted.join(', '),
-   detail: { rules: granted, rule_count: granted.length },
-  });
-  return merged;
+  return { rows: updated, granted };
  }
 
  /**
@@ -412,44 +613,427 @@ function createAgentPermissions(deps = {}) {
   const userRows = await getDb().unsafe('select display_name, email from app_users where id = $1 limit 1', [String(userId)]);
   const decidedByName = String(userRows[0]?.display_name || userRows[0]?.email || '').trim() || 'A workspace member';
 
-  // Deliver BEFORE settling the row. The daemon holding the turn is the thing
-  // that actually has to act on this; recording an approval we could not
-  // deliver would show "Approved" under a tool call that never ran.
-  const delivered = deliverDecision(request, {
-   type: 'agent_permission_decision',
-   requestId: request.request_key,
-   behavior: decision,
-   scope: requestedScope,
-   decidedBy: decidedByName,
-   message: decision === 'deny' ? `${decidedByName} denied this tool call.` : '',
-  });
-  if (!delivered) {
+  const requiredCapability = permanent ? 'manage' : 'write';
+  const initialConnection = exactPermissionConnection(request);
+  if (!initialConnection) {
    throw Object.assign(
     new Error('That agent is no longer connected, so this decision could not be delivered'),
     { status: 409, code: 'agent_offline' },
    );
   }
-
-  if (permanent) {
-   await grantPermanentRules({
-    workspaceId: request.workspace_id,
-    agentId: request.agent_id,
-    rules: request.rules.map(String),
-    actorUserId: String(userId || ''),
-   });
+  if (!connectionSupportsDecisionReceipts(initialConnection)) {
+   throw Object.assign(
+    new Error('That agent must be updated before it can receive durable permission decisions'),
+    { status: 409, code: 'permission_receipt_unsupported' },
+   );
   }
 
-  const settled = await getDb().unsafe(
-   `update agent_permission_requests
-      set status = $2, scope = $3, decided_by = $4, decided_by_name = $5, decided_at = now(), updated_at = now()
-      where id = $1 and status = 'pending'
-      returning *`,
-   [request.id, decision === 'allow' ? 'allowed' : 'denied', decision === 'allow' ? requestedScope : '', String(userId), decidedByName],
+  // Global closure order begins with workspace lineage, then session -> job ->
+  // permission request (see server/sessions-routes.cjs and
+  // shared/session-close.cjs). Use that same order here so a clear/revoke and a
+  // click cannot deadlock, and so exactly one can win. This transaction records
+  // only an INTERIM outbox state; no websocket frame and no permanent grant can
+  // happen until that durable intent commits.
+  //
+  //   clear/revoke wins a scope lock -> the fresh authorization proof fails and
+  //   this path sends nothing;
+  //   decision wins every scope lock -> its interim outbox state commits first;
+  //   clear/revoke may then win phase two, which aborts rather than releasing a
+  //   stale allow to the daemon.
+  //
+  // The agent row sits between session and job only to serialize disable/grant;
+  // session closure never locks it, so it introduces no inverse edge.
+  const outcome = await getDb().begin(async (tx) => {
+   // The friendly preflight above is stale the instant it returns. Lock the
+   // entire current -> ancestor lineage and every membership row for THIS human,
+   // then derive the effective capability from those locked rows using the
+   // canonical capability table. A direct role revoke, ancestor-role revoke,
+   // owner transfer, or workspace reparent therefore either commits before this
+   // proof and is observed, or waits until the decision transaction commits.
+   await lockPermissionDecisionActor({
+    tx,
+    workspaceId: request.workspace_id,
+    userId,
+    requiredCapability,
+   });
+
+   const sessionRows = await tx.unsafe(
+    `select s.id, s.workspace_id
+       from chat_sessions s
+      where s.id = $1
+        and s.workspace_id = $2
+        and s.deleted_at is null
+        and exists (
+          select 1
+            from jsonb_array_elements(
+              case when jsonb_typeof(s.participants) = 'array'
+                   then s.participants else '[]'::jsonb end
+            ) participant
+           where participant->>'agent_id' = $3
+        )
+        and ${sessionReadableSql('s', '$4', { lockMembership: true })}
+      for update of s`,
+    [request.session_id, request.workspace_id, String(request.agent_id), String(userId)],
+   );
+   if (sessionRows.length !== 1) throw permissionScopeChanged();
+
+   const agentRows = await tx.unsafe(
+    `select id, workspace_id, name, handle, metadata
+       from workspace_agents
+      where id = $1 and workspace_id = $2 and enabled is true
+      for update`,
+    [request.agent_id, request.workspace_id],
+   );
+   const currentAgent = agentRows[0];
+   if (!currentAgent) throw permissionScopeChanged();
+
+   const jobRows = await tx.unsafe(
+    `select id, workspace_id, agent_id, session_id, connection_id, status
+       from agent_jobs
+      where id = $1
+        and workspace_id = $2
+        and agent_id = $3
+        and session_id = $4
+        and connection_id = $5
+        and status = 'running'
+      for update`,
+    [request.job_id, request.workspace_id, request.agent_id, request.session_id, request.connection_id],
+   );
+   const currentJob = jobRows[0];
+   if (!currentJob) throw permissionScopeChanged();
+
+   const currentRows = await tx.unsafe(
+    `select *, (expires_at is not null and expires_at <= now()) as request_expired
+       from agent_permission_requests
+      where id = $1 and workspace_id = $2
+      for update`,
+    [request.id, request.workspace_id],
+   );
+   const current = currentRows[0];
+   if (!current) throw Object.assign(new Error('Permission request was not found'), { status: 404 });
+   if (current.status !== 'pending') {
+    throw Object.assign(new Error(`This request was already ${current.status}`), { status: 409, code: 'already_decided' });
+   }
+   if (current.request_expired) {
+    throw Object.assign(new Error('This permission request has expired'), { status: 409, code: 'already_decided' });
+   }
+   if (String(current.job_id || '') !== String(currentJob.id)
+    || String(current.session_id || '') !== String(request.session_id)
+    || String(current.agent_id || '') !== String(currentAgent.id)
+    || String(current.connection_id || '') !== String(currentJob.connection_id)) {
+    throw permissionScopeChanged();
+   }
+
+   const preparing = await tx.unsafe(
+    `update agent_permission_requests
+       set status = $2, scope = $3, decided_by = $4, decided_by_name = $5, decided_at = now(), updated_at = now()
+       where id = $1
+         and status = 'pending'
+         and job_id = $6
+         and session_id = $7
+         and agent_id = $8
+         and connection_id = $9
+       returning *`,
+    [
+     current.id,
+     decision === 'allow' ? 'allowing' : 'denying',
+     decision === 'allow' ? requestedScope : '',
+     String(userId),
+     decidedByName,
+     currentJob.id,
+     request.session_id,
+     currentAgent.id,
+     currentJob.connection_id,
+    ],
+   );
+   if (preparing.length !== 1) {
+    throw Object.assign(new Error('This request was already decided'), { status: 409, code: 'already_decided' });
+   }
+   return preparing[0];
+  });
+
+  // Register the waiter BEFORE send: a loopback test daemon can receipt the
+  // prepare in the same event-loop turn. The daemon remains parked after that
+  // receipt; handleAgentPermissionPrepared commits the final row and only then
+  // sends the release frame.
+  const waiter = createDecisionWaiter(outcome.id);
+  if (!sendExactPermissionFrame(outcome, permissionPrepareFrame(outcome))) {
+   const error = Object.assign(
+    new Error('The decision was saved for delivery, but that agent is no longer connected'),
+    { status: 409, code: 'permission_prepare_pending' },
+   );
+   settleDecisionWaiter(outcome.id, error);
+   throw error;
+  }
+  const settled = await waiter.promise;
+  return publicPermissionRequest(settled);
+ }
+
+ async function publishFinalPermissionDecision({ request, grant }) {
+  if (grant.rows.length) notifyDbSubscribers('workspace_agents', 'UPDATE', grant.rows);
+  notifyDbSubscribers('agent_permission_requests', 'UPDATE', [request]);
+  if (grant.granted.length) {
+   const agentRow = grant.rows[0];
+   await recordAudit({
+    workspaceId: String(request.workspace_id || ''),
+    actor: { userId: String(request.decided_by || '') },
+    action: 'agent.permission_rule_granted',
+    target: {
+     type: 'agent',
+     id: String(request.agent_id || ''),
+     label: String(agentRow?.handle || agentRow?.name || ''),
+    },
+    after: grant.granted.join(', '),
+    detail: { rules: grant.granted, rule_count: grant.granted.length },
+   });
+  }
+  await rewriteAnchorMessage(request).catch(() => {});
+ }
+
+ /**
+  * The daemon accepted a PREPARE while the tool promise is still parked.
+  *
+  * Payload identity is deliberately tiny: the request key. Agent/workspace and
+  * connection come from the authenticated socket, then every one is matched
+  * again against the durable row and the still-running job. The daemon does not
+  * get to echo behavior/scope back and thereby change what the human chose.
+  */
+ async function handleAgentPermissionPrepared(ws, message = {}) {
+  const auth = ws?.agentAuth;
+  const connectionId = String(ws?.agentConnectionId || '');
+  const requestKey = String(message.requestId || '').trim();
+  if (!auth || !connectionId || !requestKey || requestKey.length > MAX_RULE_LENGTH) return false;
+
+  const connectionShape = {
+   connection_id: connectionId,
+   agent_id: String(auth.agentId || ''),
+   workspace_id: String(auth.workspaceId || ''),
+  };
+  const exact = exactPermissionConnection(connectionShape, ws);
+  if (!exact || !connectionSupportsDecisionReceipts(exact)) return false;
+
+  const rows = await getDb().unsafe(
+   `select * from agent_permission_requests
+      where request_key = $1
+        and connection_id = $2
+        and workspace_id = $3
+        and agent_id = $4
+      limit 1`,
+   [requestKey, connectionId, String(auth.workspaceId || ''), String(auth.agentId || '')],
   );
-  if (!settled.length) throw Object.assign(new Error('This request was already decided'), { status: 409, code: 'already_decided' });
-  notifyDbSubscribers('agent_permission_requests', 'UPDATE', settled);
-  await rewriteAnchorMessage(settled[0]);
-  return publicPermissionRequest(settled[0]);
+  const snapshot = rows[0];
+  if (!snapshot) return false;
+
+  // Duplicate receipts are idempotent. A final row means the first receipt was
+  // committed but its release frame may have been lost; replay the release on
+  // this same authenticated connection and do nothing else.
+  if (FINAL_PERMISSION_STATUSES.has(snapshot.status)) {
+   sendExactPermissionFrame(snapshot, permissionCommitFrame(snapshot), { expectedWs: ws });
+   settleDecisionWaiter(snapshot.id, null, snapshot);
+   return true;
+  }
+
+  if (message.accepted !== true) {
+   const expired = await getDb().unsafe(
+    `update agent_permission_requests
+        set status = 'expired', updated_at = now()
+      where id = $1
+        and connection_id = $2
+        and status in ('allowing', 'denying')
+      returning *`,
+    [snapshot.id, connectionId],
+   );
+   const error = Object.assign(
+    new Error('The agent no longer holds this permission request'),
+    { status: 409, code: 'permission_prepare_rejected' },
+   );
+   settleDecisionWaiter(snapshot.id, error);
+   if (expired.length) {
+    notifyDbSubscribers('agent_permission_requests', 'UPDATE', expired);
+    await rewriteAnchorMessage(expired[0]).catch(() => {});
+   }
+   return false;
+  }
+  if (!PREPARING_PERMISSION_STATUSES.has(snapshot.status)) {
+   const error = permissionScopeChanged();
+   settleDecisionWaiter(snapshot.id, error);
+   sendPermissionAbort(
+    snapshot,
+    'The conversation changed before this permission decision completed.',
+    { expectedWs: ws },
+   );
+   return false;
+  }
+
+  try {
+   // Same clear-compatible order and same actor proof as phase one: workspace
+   // lineage -> session/private membership -> agent -> job -> request. PREPARE
+   // parks the daemon; it does not release authority. A role or private-member
+   // revoke that commits before this final transaction must therefore win and
+   // abort the parked allow before the tool (or permanent grant) is released.
+   const outcome = await getDb().begin(async (tx) => {
+    const decisionUserId = String(snapshot.decided_by || '');
+    const requiredCapability = snapshot.status === 'allowing' && snapshot.scope === 'always'
+     ? 'manage'
+     : 'write';
+    if (!decisionUserId) throw permissionScopeChanged();
+    await lockPermissionDecisionActor({
+     tx,
+     workspaceId: snapshot.workspace_id,
+     userId: decisionUserId,
+     requiredCapability,
+    });
+
+    const sessionRows = await tx.unsafe(
+     `select s.id, s.workspace_id
+        from chat_sessions s
+       where s.id = $1
+         and s.workspace_id = $2
+         and s.deleted_at is null
+         and exists (
+           select 1
+             from jsonb_array_elements(
+               case when jsonb_typeof(s.participants) = 'array'
+                    then s.participants else '[]'::jsonb end
+             ) participant
+            where participant->>'agent_id' = $3
+         )
+         and ${sessionReadableSql('s', '$4', { lockMembership: true })}
+       for update of s`,
+     [
+      snapshot.session_id,
+      snapshot.workspace_id,
+      String(snapshot.agent_id),
+      decisionUserId,
+     ],
+    );
+    if (sessionRows.length !== 1) throw permissionScopeChanged();
+
+    const agentRows = await tx.unsafe(
+     `select id, workspace_id, name, handle, metadata
+        from workspace_agents
+       where id = $1 and workspace_id = $2 and enabled is true
+       for update`,
+     [snapshot.agent_id, snapshot.workspace_id],
+    );
+    const currentAgent = agentRows[0];
+    if (!currentAgent) throw permissionScopeChanged();
+
+    const jobRows = await tx.unsafe(
+     `select id, workspace_id, agent_id, session_id, connection_id, status
+        from agent_jobs
+       where id = $1
+         and workspace_id = $2
+         and agent_id = $3
+         and session_id = $4
+         and connection_id = $5
+         and status = 'running'
+       for update`,
+     [snapshot.job_id, snapshot.workspace_id, snapshot.agent_id, snapshot.session_id, connectionId],
+    );
+    const currentJob = jobRows[0];
+    if (!currentJob) throw permissionScopeChanged();
+
+    const currentRows = await tx.unsafe(
+     `select * from agent_permission_requests
+        where id = $1 and workspace_id = $2
+        for update`,
+     [snapshot.id, snapshot.workspace_id],
+    );
+    const current = currentRows[0];
+    if (!current
+     || String(current.request_key || '') !== requestKey
+     || String(current.job_id || '') !== String(currentJob.id)
+     || String(current.session_id || '') !== String(snapshot.session_id)
+     || String(current.agent_id || '') !== String(currentAgent.id)
+     || String(current.connection_id || '') !== connectionId) {
+     throw permissionScopeChanged();
+    }
+    // Two receipts can be in flight when the daemon retries a receipt whose
+    // socket write looked lost. If the other receipt finalized while this one
+    // waited on the row lock, replay COMMIT; never turn that harmless duplicate
+    // into an ABORT that could race ahead of the first handler's commit frame.
+    if (FINAL_PERMISSION_STATUSES.has(current.status)) {
+     return { request: current, grant: { rows: [], granted: [] }, duplicate: true };
+    }
+    if (!PREPARING_PERMISSION_STATUSES.has(current.status)) throw permissionScopeChanged();
+
+    const permanent = current.status === 'allowing' && current.scope === 'always';
+    const grant = permanent
+     ? await grantPermanentRulesLocked({
+       tx,
+       agent: currentAgent,
+       rules: Array.isArray(current.rules) ? current.rules.map(String) : [],
+      })
+     : { rows: [], granted: [] };
+
+    const finalStatus = current.status === 'allowing' ? 'allowed' : 'denied';
+    const settled = await tx.unsafe(
+     `update agent_permission_requests
+         set status = $2, updated_at = now()
+       where id = $1
+         and status = $3
+         and job_id = $4
+         and session_id = $5
+         and agent_id = $6
+         and connection_id = $7
+       returning *`,
+     [
+      current.id,
+      finalStatus,
+      current.status,
+      currentJob.id,
+      current.session_id,
+      currentAgent.id,
+      connectionId,
+     ],
+    );
+    if (settled.length !== 1) throw permissionScopeChanged();
+    return { request: settled[0], grant, duplicate: false };
+   });
+
+   // Commit is the ONLY frame that releases the daemon's parked tool promise.
+   // It is sent strictly after the final row (and any permanent grant) commits.
+   // If this socket vanished, the daemon still has the prepared promise and its
+   // reconnect assertion lets replayPermissionDecisions send the commit later.
+   sendExactPermissionFrame(outcome.request, permissionCommitFrame(outcome.request), { expectedWs: ws });
+   if (!outcome.duplicate) await publishFinalPermissionDecision(outcome);
+   settleDecisionWaiter(outcome.request.id, null, outcome.request);
+   return true;
+  } catch (error) {
+   // A clear/disable/cancel that won phase two must unpark the daemon safely.
+   // This MUST be the explicit abort frame: once a daemon has cached PREPARE it
+   // rejects legacy decisions, because letting one overwrite a prepared ALLOW
+   // would make COMMIT ambiguous.
+   let abortRow = snapshot;
+   try {
+    const expired = await getDb().unsafe(
+     `update agent_permission_requests
+         set status = 'expired', updated_at = now()
+       where id = $1
+         and connection_id = $2
+         and status in ('allowing', 'denying')
+       returning *`,
+     [snapshot.id, connectionId],
+    );
+    if (expired.length) {
+     [abortRow] = expired;
+     notifyDbSubscribers('agent_permission_requests', 'UPDATE', expired);
+     await rewriteAnchorMessage(abortRow).catch(() => {});
+    }
+   } catch {
+    // The abort itself is still valuable when the database failure that caused
+    // phase two also prevents cleanup. The durable interim row remains an
+    // outbox for reconnect and the stale sweep will close it later.
+   }
+   sendPermissionAbort(
+    abortRow,
+    'The conversation changed before this permission decision completed.',
+    { expectedWs: ws },
+   );
+   settleDecisionWaiter(snapshot.id, error);
+   return false;
+  }
  }
 
  /**
@@ -475,21 +1059,59 @@ function createAgentPermissions(deps = {}) {
  /**
   * Close out requests nobody answered.
   *
-  * The daemon expires its own park independently and has already told the model
-  * it was refused, so this is about the row and the card, not about the turn: a
-  * prompt left "pending" forever is a button that does nothing.
+  * The daemon owns an independent deadline too, but a human decision may already
+  * be prepared there. Expiring all open phases and sending ABORT closes both
+  * sources of truth; a prompt left open forever is a button that does nothing.
   */
  async function expireStalePermissionRequests() {
   const rows = await getDb().unsafe(
    `update agent_permission_requests
       set status = 'expired', updated_at = now()
-      where status = 'pending' and expires_at is not null and expires_at < now()
+      where status in ('pending', 'allowing', 'denying')
+        and expires_at is not null
+        and expires_at < now()
       returning *`,
   );
   if (!rows.length) return 0;
   notifyDbSubscribers('agent_permission_requests', 'UPDATE', rows);
-  for (const row of rows) await rewriteAnchorMessage(row).catch(() => {});
+  for (const row of rows) {
+   settleDecisionWaiter(row.id, permissionScopeChanged());
+   sendPermissionAbort(row, 'This permission request expired before it could be completed.');
+   await rewriteAnchorMessage(row).catch(() => {});
+  }
   return rows.length;
+ }
+
+ /**
+  * Replay the durable permission outbox after a socket BLIP.
+  *
+  * The daemon names only request keys whose promises this SAME process still
+  * holds. rehomePendingPermissionRequests moves exactly those rows onto the new
+  * connection, then this resumes the phase indicated by durable status:
+  * preparing -> re-send prepare; final -> re-send commit. A restarted daemon
+  * asserts no keys and therefore receives neither.
+  */
+ async function replayPermissionDecisions(ws, rows) {
+  let sent = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+   if (String(row.connection_id || '') !== String(ws?.agentConnectionId || '')
+    || String(row.agent_id || '') !== String(ws?.agentAuth?.agentId || '')
+    || String(row.workspace_id || '') !== String(ws?.agentAuth?.workspaceId || '')) continue;
+
+   if (PREPARING_PERMISSION_STATUSES.has(row.status)) {
+    if (sendExactPermissionFrame(row, permissionPrepareFrame(row), { expectedWs: ws })) sent += 1;
+    continue;
+   }
+   if (!FINAL_PERMISSION_STATUSES.has(row.status)) continue;
+
+   if (sendExactPermissionFrame(row, permissionCommitFrame(row), { expectedWs: ws })) sent += 1;
+   // Recover the narrow server-crash gap after final commit but before the UI
+   // side effects. Rewriting is idempotent; a duplicate UPDATE is preferable to
+   // a transcript that forever says the already-decided request is pending.
+   notifyDbSubscribers('agent_permission_requests', 'UPDATE', [row]);
+   await rewriteAnchorMessage(row).catch(() => {});
+  }
+  return sent;
  }
 
  /**
@@ -509,14 +1131,15 @@ function createAgentPermissions(deps = {}) {
   * re-homing blindly would point the row at a process with no memory of the
   * request. Its `decide()` drops the frame on the floor while the server has
   * already recorded "Allowed" and rewritten the transcript, which is the exact
-  * "approved under a tool call that never ran" failure deliverDecision exists to
-  * prevent. So the daemon has to NAME the requests it is still parked on, and
+  * "approved under a tool call that never ran" failure the receipt protocol
+  * prevents. So the daemon has to NAME the requests it is still parked on, and
   * only those move. A daemon that re-asserts a key is, by construction, one that
   * can still act on the answer.
   *
-  * Fail-closed everywhere: an unknown key matches no row, an old daemon that
-  * re-asserts nothing keeps today's behaviour (everything expires), and a row
-  * already decided or past its TTL is never revived.
+  * Fail-closed everywhere: an unknown key matches no row and an old/restarted
+  * daemon that re-asserts nothing keeps today's behaviour (everything open
+  * expires). Preparing/final rows are included ONLY when this process names
+  * their key, which is the proof needed to replay their prepare/commit phase.
   *
   * No realtime fanout: `connection_id` is not in publicPermissionRequest, so
   * nothing a client can see has changed — the card is still the same open
@@ -538,8 +1161,10 @@ function createAgentPermissions(deps = {}) {
    return await getDb().unsafe(
     `update agent_permission_requests
        set connection_id = $1, updated_at = now()
-       where workspace_id = $2 and agent_id = $3 and status = 'pending'
-         and (expires_at is null or expires_at > now())
+       where workspace_id = $2
+         and agent_id = $3
+         and status in ('pending', 'allowing', 'denying', 'allowed', 'denied')
+         and (status <> 'pending' or expires_at is null or expires_at > now())
          and request_key = any($4::text[])
          and connection_id is distinct from $1
        returning *`,
@@ -568,13 +1193,17 @@ function createAgentPermissions(deps = {}) {
   const rows = await getDb().unsafe(
    `update agent_permission_requests
       set status = 'expired', updated_at = now()
-      where connection_id = $1 and status = 'pending'
+      where connection_id = $1 and status in ('pending', 'allowing', 'denying')
       returning *`,
    [id],
   );
   if (!rows.length) return 0;
   notifyDbSubscribers('agent_permission_requests', 'UPDATE', rows);
-  for (const row of rows) await rewriteAnchorMessage(row).catch(() => {});
+  for (const row of rows) {
+   settleDecisionWaiter(row.id, permissionScopeChanged());
+   sendPermissionAbort(row, 'The agent disconnected before this permission decision completed.');
+   await rewriteAnchorMessage(row).catch(() => {});
+  }
   return rows.length;
  }
 
@@ -634,39 +1263,107 @@ function createAgentPermissions(deps = {}) {
   const target = line(rule, MAX_RULE_LENGTH);
   if (!target) throw badRequest('rule is required');
   await enforceWorkspaceRole(userId, workspaceId, 'manage');
-  const agentRows = await getDb().unsafe(
-   'select metadata from workspace_agents where id = $1 and workspace_id = $2 limit 1',
-   [String(agentId || ''), String(workspaceId || '')],
-  );
-  if (!agentRows[0]) throw Object.assign(new Error('Agent was not found'), { status: 404 });
-  const metadata = parseJsonObject(agentRows[0].metadata);
-  const existing = Array.isArray(metadata.permission_rules) ? metadata.permission_rules.map(String) : [];
-  const next = existing.filter((entry) => entry !== target);
-  if (next.length === existing.length) return existing;
-  const updated = await getDb().unsafe(
-   `update workspace_agents set metadata = $3::jsonb, updated_at = now()
-      where id = $1 and workspace_id = $2 returning *`,
-   [String(agentId), String(workspaceId), { ...metadata, permission_rules: next }],
-  );
-  notifyDbSubscribers('workspace_agents', 'UPDATE', updated);
+  // `metadata` is one jsonb document shared with host_folders, sandbox_skills,
+  // identity hints and permanent permission grants. Read/merge/write without a
+  // row lock loses whichever concurrent change commits first. Permanent grants
+  // already take this same agent lock in grantPermanentRulesLocked's caller;
+  // revocation must join that serialization point rather than racing it.
+  //
+  // The same lock also orders revocation against the two-phase approval path.
+  // PREPARE deliberately does not write the permanent rule, so "the rule is not
+  // in metadata" is NOT a no-op while an `allowing/always` request is parked.
+  // Expire matching prepared grants under this lock. Whichever transaction wins
+  // has a complete result: either finalization adds the rule first and this
+  // transaction removes it, or this transaction expires the request and the
+  // later receipt can only receive ABORT.
+  const outcome = await getDb().begin(async (tx) => {
+   const agentRows = await tx.unsafe(
+    `select id, workspace_id, name, handle, metadata
+       from workspace_agents
+      where id = $1 and workspace_id = $2
+      for update`,
+    [String(agentId || ''), String(workspaceId || '')],
+   );
+   const agent = agentRows[0];
+   if (!agent) throw Object.assign(new Error('Agent was not found'), { status: 404 });
+   const metadata = parseJsonObject(agent.metadata);
+   const existing = Array.isArray(metadata.permission_rules) ? metadata.permission_rules.map(String) : [];
+   const next = existing.filter((entry) => entry !== target);
+   const cancelled = await tx.unsafe(
+    `update agent_permission_requests
+        set status = 'expired', updated_at = now()
+      where workspace_id = $1
+        and agent_id = $2
+        and status = 'allowing'
+        and scope = 'always'
+        and exists (
+          select 1
+            from jsonb_array_elements_text(
+              case when jsonb_typeof(rules) = 'array' then rules else '[]'::jsonb end
+            ) pending_rule
+           where pending_rule = $3
+        )
+      returning *`,
+    [String(workspaceId), String(agentId), target],
+   );
+   let updated = [];
+   if (next.length !== existing.length) {
+    updated = await tx.unsafe(
+     `update workspace_agents set metadata = $3::jsonb, updated_at = now()
+        where id = $1 and workspace_id = $2 returning *`,
+     [String(agentId), String(workspaceId), { ...metadata, permission_rules: next }],
+    );
+    if (updated.length !== 1) {
+     throw Object.assign(new Error('The agent changed before the permission rule could be revoked'), {
+      status: 409,
+      code: 'permission_scope_changed',
+     });
+    }
+   }
+   return {
+    changed: updated.length > 0 || cancelled.length > 0,
+    rules: next,
+    rows: updated,
+    cancelled,
+   };
+  });
+  if (!outcome.changed) return outcome.rules;
+  if (outcome.rows.length > 0) notifyDbSubscribers('workspace_agents', 'UPDATE', outcome.rows);
+  if (outcome.cancelled.length > 0) {
+   notifyDbSubscribers('agent_permission_requests', 'UPDATE', outcome.cancelled);
+   for (const request of outcome.cancelled) {
+    settleDecisionWaiter(request.id, permissionScopeChanged());
+    sendPermissionAbort(
+     request,
+     'This permission rule was revoked before the permanent grant completed.',
+    );
+    await rewriteAnchorMessage(request).catch(() => {});
+   }
+  }
   await recordAudit({
    workspaceId: String(workspaceId || ''),
    actor: { userId: String(userId || '') },
    action: 'agent.permission_rule_revoked',
-   target: { type: 'agent', id: String(agentId || ''), label: String(updated[0]?.handle || updated[0]?.name || '') },
+   target: {
+    type: 'agent',
+    id: String(agentId || ''),
+    label: String(outcome.rows[0]?.handle || outcome.rows[0]?.name || agentId || ''),
+   },
    before: target,
    detail: { rules: [target], rule_count: 1 },
   });
-  return next;
+  return outcome.rules;
  }
 
  return {
   decideAgentPermissionRequest,
   expireConnectionPermissionRequests,
   expireStalePermissionRequests,
+  handleAgentPermissionPrepared,
   handleAgentPermissionRequest,
   listAgentPermissionRequests,
   publicPermissionRequest,
+  replayPermissionDecisions,
   rehomePendingPermissionRequests,
   revokeAgentPermissionRule,
   setAgentPermissionMode,

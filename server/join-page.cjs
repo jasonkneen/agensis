@@ -48,6 +48,7 @@ const MACHINE_END = '--- END AGENSIS JOIN INSTRUCTIONS ---';
 // The literal that stands in for the credential everywhere it is DESCRIBED
 // rather than delivered. Matches server/skills.cjs so the two never drift.
 const TOKEN_PLACEHOLDER = 'aga_YOUR_AGENT_TOKEN';
+const CONTROLLER_TOKEN_PLACEHOLDER = 'agc_YOUR_CONTROLLER_TOKEN';
 
 // The preview's stand-in token. Deliberately not base64url-shaped and carrying
 // the word PREVIEW, so a copy/paste of a preview URL cannot be mistaken for, or
@@ -126,11 +127,19 @@ function joinDescriptor({
   role = 'editor',
   label = '',
   audience = 'both',
+  grantKind = 'individual',
+  controllerName = '',
+  controllerScopes = [],
+  controllerExpiresAt = null,
   expiresAt = null,
   status = 'open',
   preview = false,
 } = {}) {
   const joinUrl = joinUrlFor(publicBaseUrl, token);
+  const resolvedGrantKind = grantKind === 'workspace_control' ? 'workspace_control' : 'individual';
+  const resolvedAudience = resolvedGrantKind === 'workspace_control'
+    ? 'controller'
+    : (audience === 'human' || audience === 'agent' ? audience : 'both');
   return {
     preview: Boolean(preview),
     status: status === 'open' ? 'open' : 'invalid',
@@ -142,7 +151,15 @@ function joinDescriptor({
     workspaceName: String(workspaceName || 'an agensis workspace'),
     role: String(role || 'editor'),
     label: String(label || ''),
-    audience: audience === 'human' || audience === 'agent' ? audience : 'both',
+    grantKind: resolvedGrantKind,
+    audience: resolvedAudience,
+    controllerName: resolvedGrantKind === 'workspace_control' ? String(controllerName || '') : '',
+    controllerScopes: resolvedGrantKind === 'workspace_control' && Array.isArray(controllerScopes)
+      ? controllerScopes.map(String)
+      : [],
+    controllerExpiresAt: resolvedGrantKind === 'workspace_control' && controllerExpiresAt
+      ? new Date(controllerExpiresAt).toISOString()
+      : null,
     expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
   };
 }
@@ -159,6 +176,10 @@ function previewDescriptor({ publicBaseUrl = '', apiBaseUrl = '', mcpEndpoint = 
     role: 'editor',
     label: 'Example invite',
     audience: 'both',
+    grantKind: 'individual',
+    controllerName: '',
+    controllerScopes: [],
+    controllerExpiresAt: null,
     // A fixed instant, not now()+ttl: a preview must render identically every
     // time so it can be diffed, and a moving expiry would imply a live clock is
     // counting down on something that does not exist.
@@ -204,6 +225,16 @@ function agentNextSteps() {
   ];
 }
 
+function controllerNextSteps() {
+  return [
+    `Substitute data.credential.token for ${CONTROLLER_TOKEN_PLACEHOLDER} in data.mcp.config.`,
+    'Write that config to the controller MCP client configuration.',
+    'Store the token as a secret. Do not print it, echo it into a chat, or commit it.',
+    'Connect and call whoami. Only the scopes listed in this enrollment are available.',
+    'Register child agents with register_agent; the server attributes every child to this controller.',
+  ];
+}
+
 function machinePayload(descriptor) {
   if (descriptor.status !== 'open') {
     return {
@@ -218,8 +249,61 @@ function machinePayload(descriptor) {
     };
   }
 
-  const wantsAgent = descriptor.audience !== 'human';
-  const wantsHuman = descriptor.audience !== 'agent';
+  if (descriptor.grantKind === 'workspace_control') {
+    return {
+      service: 'agensis',
+      kind: 'workspace_control_enrollment',
+      status: 'open',
+      preview: Boolean(descriptor.preview),
+      workspace: descriptor.workspaceName,
+      label: descriptor.label,
+      audience: 'controller',
+      expires_at: descriptor.expiresAt,
+      credential_expires_at: descriptor.controllerExpiresAt,
+      single_use: true,
+      join_url: descriptor.joinUrl,
+      summary:
+        `A high-authority, scoped controller enrollment for "${descriptor.workspaceName}". `
+        + 'This does not create a workspace member and does not grant owner, private-session, '
+        + 'raw-vault, role-management, or generic message access.',
+      human: null,
+      agent: null,
+      controller: {
+        name: descriptor.controllerName,
+        scopes: descriptor.controllerScopes,
+        denied_by_design: [
+          'private_sessions:read',
+          'messages:post_anywhere',
+          'vault:read_raw',
+          'roles:grant',
+          'credentials:escalate',
+        ],
+        action:
+          'POST to redeem_url with the exact controller lane. Do not include an Authorization '
+          + 'header. The response contains one named, expiring, revocable controller credential.',
+        method: 'POST',
+        redeem_url: descriptor.redeemUrl,
+        headers: { 'Content-Type': 'application/json' },
+        body: { as: 'controller' },
+        returns: {
+          'data.workspace': '{ id, name }',
+          'data.controller': '{ id, name, scopes, expires_at }',
+          'data.credential.token': 'your scoped controller bearer, shown once',
+          'data.mcp.endpoint': descriptor.mcpEndpoint,
+          'data.mcp.config': `an MCP client config with ${CONTROLLER_TOKEN_PLACEHOLDER} where your token goes`,
+        },
+        then: controllerNextSteps(),
+        notes: [
+          'Single-use: the second redemption fails, including your own retry.',
+          'The controller expires automatically and can be revoked independently.',
+          'Child agents and resources remain attributed after revocation.',
+        ],
+      },
+    };
+  }
+
+  const wantsAgent = descriptor.audience === 'agent' || descriptor.audience === 'both';
+  const wantsHuman = descriptor.audience === 'human' || descriptor.audience === 'both';
 
   return {
     service: 'agensis',
@@ -290,10 +374,13 @@ function jsonLd(descriptor) {
       : 'This agensis join link is no longer valid',
     description: payload.summary || payload.message,
     url: descriptor.joinUrl,
-    potentialAction: descriptor.status === 'open' && descriptor.audience !== 'human'
+    potentialAction: descriptor.status === 'open'
+      && (descriptor.audience === 'agent' || descriptor.audience === 'both' || descriptor.audience === 'controller')
       ? {
         '@type': 'CreateAction',
-        name: 'Redeem this join link as an agent',
+        name: descriptor.audience === 'controller'
+          ? 'Redeem this join link as a workspace controller'
+          : 'Redeem this join link as an agent',
         target: {
           '@type': 'EntryPoint',
           urlTemplate: descriptor.redeemUrl,
@@ -423,8 +510,9 @@ function renderJoinHtml(descriptor) {
   const expires = descriptor.expiresAt
     ? new Date(descriptor.expiresAt).toUTCString()
     : 'shortly';
-  const wantsHuman = descriptor.audience !== 'agent';
-  const wantsAgent = descriptor.audience !== 'human';
+  const wantsHuman = descriptor.audience === 'human' || descriptor.audience === 'both';
+  const wantsAgent = descriptor.audience === 'agent' || descriptor.audience === 'both';
+  const wantsController = descriptor.audience === 'controller';
 
   const parts = [];
   parts.push('<main>');
@@ -439,15 +527,23 @@ function renderJoinHtml(descriptor) {
 
   // --- The human half -------------------------------------------------------
   parts.push('<div class="card">');
-  parts.push(`<h1>You have been invited to join ${workspace}</h1>`);
-  parts.push(
-    '<p>agensis is a shared workspace where people and AI agents work together in channels '
-    + 'and threads. Accepting adds you to this workspace as a member.</p>',
-  );
+  parts.push(wantsController
+    ? `<h1>Workspace control enrollment for ${escapeHtml(descriptor.controllerName)}</h1>`
+    : `<h1>You have been invited to join ${workspace}</h1>`);
+  parts.push(wantsController
+    ? '<p>This is a high-authority but deliberately scoped controller enrollment. It does not add a human member and it does not make the controller a workspace owner.</p>'
+    : '<p>agensis is a shared workspace where people and AI agents work together in channels and threads. Accepting adds you to this workspace as a member.</p>');
   parts.push('<dl>');
   parts.push(`<dt>Workspace</dt><dd>${workspace}</dd>`);
   if (descriptor.label) parts.push(`<dt>Invite</dt><dd>${escapeHtml(descriptor.label)}</dd>`);
   if (wantsHuman) parts.push(`<dt>Your role</dt><dd>${escapeHtml(descriptor.role)}</dd>`);
+  if (wantsController) {
+    parts.push(`<dt>Controller</dt><dd>${escapeHtml(descriptor.controllerName)}</dd>`);
+    parts.push(`<dt>Scopes</dt><dd>${escapeHtml(descriptor.controllerScopes.join(', '))}</dd>`);
+    if (descriptor.controllerExpiresAt) {
+      parts.push(`<dt>Credential expires</dt><dd>${escapeHtml(new Date(descriptor.controllerExpiresAt).toUTCString())}</dd>`);
+    }
+  }
   parts.push(`<dt>Link expires</dt><dd>${escapeHtml(expires)}</dd>`);
   parts.push('<dt>Uses left</dt><dd>1 — this link works exactly once</dd>');
   parts.push('</dl>');
@@ -458,8 +554,13 @@ function renderJoinHtml(descriptor) {
       + `to ${workspace}, and this link stops working. Nothing is charged and no credential is `
       + 'shown to you — your normal sign-in is your access.</p>',
     );
-  } else {
+  } else if (!wantsController) {
     parts.push('<p class="muted">This particular link was issued for an AI agent rather than a person.</p>');
+  } else {
+    parts.push(
+      '<p class="muted">This link can only enroll the named controller. It cannot be redeemed '
+      + 'as a person or an ordinary agent, and its requested scopes are fixed before redemption.</p>',
+    );
   }
   parts.push('</div>');
 
@@ -467,32 +568,36 @@ function renderJoinHtml(descriptor) {
   // Deliberately rendered as ordinary page copy, not hidden metadata: an agent
   // that can only see what a screenshot or a text extraction would show still
   // gets the endpoint, the method, the body and the follow-up steps.
-  if (wantsAgent) {
+  if (wantsAgent || wantsController) {
     parts.push('<div class="card">');
-    parts.push('<h2>If you are an AI agent reading this page</h2>');
+    parts.push(wantsController
+      ? '<h2>If you are the controller reading this page</h2>'
+      : '<h2>If you are an AI agent reading this page</h2>');
     parts.push(
-      '<p>You can join this workspace yourself. You do not need a human to do it for you, '
-      + 'and you do not need any credential you do not already have: holding this URL is '
-      + 'the authorization.</p>',
+      wantsController
+        ? '<p>You can enroll the named controller using only this one-time URL. The response grants exactly the scopes shown above and nothing outside that closed set.</p>'
+        : '<p>You can join this workspace yourself. You do not need a human to do it for you, and you do not need any credential you do not already have: holding this URL is the authorization.</p>',
     );
     parts.push('<p>Send an HTTP POST to this URL, with no Authorization header:</p>');
     parts.push(`<pre>${escapeHtml(descriptor.redeemUrl)}</pre>`);
     parts.push('<p>with the header <code>Content-Type: application/json</code> and this JSON body:</p>');
-    parts.push(`<pre>${escapeHtml(JSON.stringify({
+    parts.push(`<pre>${escapeHtml(JSON.stringify(wantsController ? {
+      as: 'controller',
+    } : {
       as: 'agent',
       name: 'the display name you want in the workspace',
       handle: 'optional-handle',
       description: 'optional one line about what you do',
     }, null, 2))}</pre>`);
     parts.push(
-      '<p>The response contains your workspace, the agent record created for you, and — in '
-      + '<code>data.credential.token</code> — a long-lived bearer token. That token is '
-      + 'returned once and is never recoverable afterwards, so save it before you do '
-      + 'anything else.</p>',
+      wantsController
+        ? '<p>The response contains the named controller and, in <code>data.credential.token</code>, its scoped expiring bearer. It is returned once and is never recoverable afterwards.</p>'
+        : '<p>The response contains your workspace, the agent record created for you, and — in <code>data.credential.token</code> — a long-lived bearer token. That token is returned once and is never recoverable afterwards, so save it before you do anything else.</p>',
     );
     parts.push('<p>Then:</p>');
     parts.push('<ol>');
-    for (const step of payload.agent.then) parts.push(`<li>${escapeHtml(step)}</li>`);
+    const nextSteps = wantsController ? payload.controller.then : payload.agent.then;
+    for (const step of nextSteps) parts.push(`<li>${escapeHtml(step)}</li>`);
     parts.push('</ol>');
     parts.push(
       '<p>This link is single-use. If your POST succeeds, the URL is spent — a retry, '
@@ -528,6 +633,7 @@ module.exports = {
   MACHINE_BEGIN,
   MACHINE_END,
   TOKEN_PLACEHOLDER,
+  CONTROLLER_TOKEN_PLACEHOLDER,
   PREVIEW_TOKEN,
   escapeHtml,
   escapeJsonForScript,
@@ -535,6 +641,7 @@ module.exports = {
   redeemUrlFor,
   acceptUrlFor,
   agentNextSteps,
+  controllerNextSteps,
   joinDescriptor,
   previewDescriptor,
   invalidDescriptor,

@@ -42,6 +42,7 @@ function createRealtime(deps = {}) {
   handleAgentJobSegment,
   handleAgentJobStep,
   handleAgentMemorySync,
+  handleAgentPermissionPrepared,
   handleAgentPermissionRequest,
   handleAgentSkillSync,
   handleBridgeMessage,
@@ -56,6 +57,12 @@ function createRealtime(deps = {}) {
   // Workspace-scoped rows derived from a session inherit that session's
   // audience. Null means the session could not be proven: fail closed.
   sessionRealtimeAudience = async () => null,
+  sessionRealtimeAudiences = async () => new Map(),
+  // Receipt reciprocity is recipient-specific and mutable. Resolve it at bind
+  // time and again at delivery time so an already-open raw socket cannot keep
+  // receiving after the account opts out.
+  readReceiptOptedInUserIds = async () => new Set(),
+  redactDeletedMessageRows = (rows) => rows,
   logMessageActivity,
   markAgentConnectionOffline,
   refreshConnectedAgentConfigs,
@@ -77,12 +84,16 @@ function createRealtime(deps = {}) {
  // resetTestState() calls.
  let websocketClients = new Set();
  const SESSION_AUDIENCE_TABLES = new Set([
+  'messages',
+  'session_read_state',
   'agent_permission_requests',
   'huddles',
   'huddle_events',
   'thread_items',
   'agent_jobs',
   'agent_schedules',
+  'thread_harvests',
+  'agent_schedule_runs',
  ]);
  // Only old permission requests deliberately support no session: they predate
  // the session_id column and remain workspace-visible. Every other table above
@@ -171,9 +182,35 @@ function createRealtime(deps = {}) {
  // When workspace_members changes, re-authorize every affected user's live
  // subscriptions against their CURRENT role and drop the ones that no longer
  // pass — reusing the same authoritative check as the subscribe path.
- async function revokeRealtimeAccessForMember(userId) {
+ async function revokeRealtimeAccessForMember(userId, options = {}) {
+  // Keep the account-wide privacy change distinct from ordinary workspace or
+  // session revocation. Clients may use the former to invalidate every profile
+  // consumer; treating the latter as an account setting would falsely switch
+  // receipts off when access to just one conversation changes.
+  const reason = options?.reason === 'read_receipts_disabled'
+   ? 'read_receipts_disabled'
+   : 'access_revoked';
   for (const ws of websocketClients) {
    if (String(ws.userId || '') !== String(userId)) continue;
+   if (reason === 'read_receipts_disabled') {
+    try {
+     // Account state must reach every live device, including one with no chat
+     // open and therefore no receipt subscription to revoke. The family channel
+     // is an invalidation signal, never a real subscription name.
+     sendWs(ws, {
+      type: 'system',
+      event: 'unsubscribed',
+      channel: 'session_read_state:*',
+      reason,
+     });
+     sendWs(ws, {
+      type: 'system',
+      event: 'read_receipts_preference',
+      userId: String(userId),
+      enabled: false,
+     });
+    } catch { /* socket already closing */ }
+   }
    const subscriptions = ws.subscriptions || [];
    if (subscriptions.length === 0) continue;
    const kept = [];
@@ -183,11 +220,23 @@ function createRealtime(deps = {}) {
      kept.push(subscription);
     } catch {
      try {
-      sendWs(ws, { type: 'system', event: 'unsubscribed', channel: subscription.channel, reason: 'access_revoked' });
+      sendWs(ws, { type: 'system', event: 'unsubscribed', channel: subscription.channel, reason });
      } catch { /* socket already closing */ }
     }
    }
    if (kept.length !== subscriptions.length) ws.subscriptions = kept;
+  }
+ }
+
+ function notifyReadReceiptPreference(userId, enabled) {
+  for (const ws of websocketClients) {
+   if (String(ws.userId || '') !== String(userId)) continue;
+   sendWs(ws, {
+    type: 'system',
+    event: 'read_receipts_preference',
+    userId: String(userId),
+    enabled: enabled === true,
+   });
   }
  }
 
@@ -334,13 +383,27 @@ function createRealtime(deps = {}) {
   }
  }
 
- function notifyDbSubscribers(table, eventType, rows) {
-  const rowList = Array.isArray(rows) ? rows : [];
+ /**
+  * Fan one database change to realtime subscribers and, by default, to the
+  * durable logical-event consumers (Flows and workspace automations).
+  *
+  * `suppressLogicalEvents` is for provisional/transport-only state such as an
+  * AI "Thinking …" reservation. `workflowEventType` lets the later finalized
+  * UPDATE be the one logical message-created event while remaining an UPDATE
+  * on the websocket wire, where clients must replace the reservation by id.
+  */
+ function notifyDbSubscribers(table, eventType, rows, {
+  suppressMessageActivity = false,
+  suppressLogicalEvents = false,
+  workflowEventType = eventType,
+ } = {}) {
+  const sourceRows = Array.isArray(rows) ? rows : [];
+  const rowList = table === 'messages' ? redactDeletedMessageRows(sourceRows) : sourceRows;
   if (rowList.length === 0) return;
 
   // Single chokepoint: every message INSERT spawns a companion activity event.
   // Guard on table === 'messages' so the activity insert above cannot recurse.
-  if (table === 'messages' && eventType === 'INSERT') {
+  if (table === 'messages' && eventType === 'INSERT' && !suppressMessageActivity) {
    void logMessageActivity(rowList);
   }
 
@@ -367,19 +430,21 @@ function createRealtime(deps = {}) {
    void emitAgentStatus(rowList, eventType);
   }
 
-  void enqueueFlowWebhookEvents(table, eventType, rowList).catch((error) => {
-   console.error('[flows] failed to queue webhook event:', error.message || error);
-  });
+  if (!suppressLogicalEvents) {
+   void enqueueFlowWebhookEvents(table, workflowEventType, rowList).catch((error) => {
+    console.error('[flows] failed to queue webhook event:', error.message || error);
+   });
 
-  // Workspace automations, alongside the outbound webhook enqueue and with the
-  // same failure posture: fire-and-forget, caught and logged. An automation that
-  // cannot be queued must never cost the user the write that triggered it.
-  // Enqueue only ever INSERTS a queue row — execution is the bounded 30s drain
-  // in server/automations.cjs, so this chokepoint (every workspace write in the
-  // product passes through it) stays fast.
-  void enqueueAutomationRuns(table, eventType, rowList).catch((error) => {
-   console.error('[automations] failed to queue run:', error.message || error);
-  });
+   // Workspace automations, alongside the outbound webhook enqueue and with the
+   // same failure posture: fire-and-forget, caught and logged. An automation that
+   // cannot be queued must never cost the user the write that triggered it.
+   // Enqueue only ever INSERTS a queue row — execution is the bounded 30s drain
+   // in server/automations.cjs, so this chokepoint (every workspace write in the
+   // product passes through it) stays fast.
+   void enqueueAutomationRuns(table, workflowEventType, rowList).catch((error) => {
+    console.error('[automations] failed to queue run:', error.message || error);
+   });
+  }
 
   if (table === 'workspace_agents') {
    refreshConnectedAgentConfigs(eventType, rowList);
@@ -403,9 +468,13 @@ function createRealtime(deps = {}) {
   // that is how the sidebar stays live — and every row matching that filter is
   // fanned out below. Without this split, opening a DM would push its title and
   // roster to every socket in the workspace, which is the same disclosure the
-  // bootstrap payload was just fixed to withhold. `messages` needs no equivalent:
-  // an unfiltered messages subscription cannot be established at all, so a
-  // message only ever reaches a socket that named its session.
+  // bootstrap payload was just fixed to withhold.
+  //
+  // Messages also resolve their CURRENT session audience on every fanout. The
+  // binding gate proves access only when a socket subscribes; a channel can be
+  // made private later (including through the Netlify process, which cannot
+  // prune this process's sockets). A stored session_id filter is therefore a
+  // routing key, not continuing authorization.
   //
   // Answering "who may see this" needs the DB, and this function is synchronous
   // and holds no handle (see emitAgentStatus above for the same constraint), so
@@ -502,6 +571,61 @@ function createRealtime(deps = {}) {
   * existing workspace-wide behavior.
   */
  async function fanoutSessionAudienceRows(table, rows, eventType, deliver) {
+  if (table === 'session_read_state') {
+   const rowsBySession = new Map();
+   for (const row of rows) {
+    const sessionId = String(row?.session_id || '');
+    if (!sessionId) continue;
+    const group = rowsBySession.get(sessionId) || [];
+    group.push(row);
+    rowsBySession.set(sessionId, group);
+   }
+   const candidatesBySession = new Map();
+   for (const ws of websocketClients) {
+    for (const subscription of ws.subscriptions || []) {
+     if (subscription.type !== 'db_changes') continue;
+     if (subscription.table !== 'session_read_state') continue;
+     if (subscription.schema && subscription.schema !== 'public') continue;
+     if (subscription.event && subscription.event !== '*' && subscription.event !== eventType) continue;
+     const parsed = parseFilter(subscription.filter);
+     if (!parsed || parsed.column !== 'session_id' || !rowsBySession.has(parsed.value)) continue;
+     const candidates = candidatesBySession.get(parsed.value) || new Set();
+     candidates.add(ws);
+     candidatesBySession.set(parsed.value, candidates);
+    }
+   }
+   const candidateSessions = [...candidatesBySession.keys()];
+   if (candidateSessions.length === 0) return;
+   let audiences;
+   let optedIn;
+   try {
+    audiences = await sessionRealtimeAudiences(candidateSessions);
+    const userIds = [...new Set(
+     [...candidatesBySession.values()]
+      .flatMap(sockets => [...sockets].map(ws => String(ws.userId || '')))
+      .filter(Boolean),
+    )];
+    optedIn = await readReceiptOptedInUserIds(userIds);
+   } catch (error) {
+    console.error('session_read_state batched fanout lookup failed', error?.message || error);
+    return;
+   }
+   if (!(audiences instanceof Map) || !(optedIn instanceof Set)) return;
+   for (const sessionId of candidateSessions) {
+    const audience = audiences.get(sessionId);
+    if (!audience) continue;
+    const members = audience.memberUserIds;
+    if (members !== null && !(members instanceof Set)) continue;
+    for (const ws of candidatesBySession.get(sessionId) || []) {
+     const userId = String(ws.userId || '');
+     if (!optedIn.has(userId)) continue;
+     if (members !== null && !members.has(userId)) continue;
+     for (const row of rowsBySession.get(sessionId) || []) deliver(ws, row);
+    }
+   }
+   return;
+  }
+  let receiptRecipients = null;
   for (const row of rows) {
    let audience;
    try {
@@ -515,6 +639,10 @@ function createRealtime(deps = {}) {
    if (members !== null && !(members instanceof Set)) continue;
 
    for (const ws of websocketClients) {
+    if (
+     receiptRecipients
+     && (!ws.userId || !receiptRecipients.has(String(ws.userId)))
+    ) continue;
     if (members !== null && (!ws.userId || !members.has(String(ws.userId)))) continue;
     for (const subscription of ws.subscriptions || []) {
      if (subscription.type !== 'db_changes') continue;
@@ -598,6 +726,17 @@ function createRealtime(deps = {}) {
    }
    const filters = parsed ? [{ column: parsed.column, operator: 'eq', value: parsed.value }] : [];
    await enforceDbOperationAccess(userId, binding.table, 'select', { filters });
+   if (binding.table === 'session_read_state') {
+    // A receipt subscription without one exact session key is not meaningful
+    // and would become dangerous if row filtering ever grew more permissive.
+    if (!parsed || parsed.column !== 'session_id') {
+     throw forbidden('Read receipt subscriptions require a session filter');
+    }
+    const optedIn = await readReceiptOptedInUserIds([userId].filter(Boolean));
+    if (!(optedIn instanceof Set) || !optedIn.has(String(userId))) {
+     throw forbidden('Read receipts are disabled');
+    }
+   }
    return;
   }
 
@@ -820,6 +959,10 @@ function createRealtime(deps = {}) {
       await handleAgentPermissionRequest(ws, message);
       return;
      }
+     if (message.action === 'agent_permission_prepared') {
+      await handleAgentPermissionPrepared(ws, message);
+      return;
+     }
      // The daemon lane's inbound: a WhatsApp/Signal/OpenClaw message the daemon
      // received on the user's machine, relayed up the socket it already holds.
      // Scoped to the connection that sent it (handleBridgeInbound re-checks the
@@ -933,6 +1076,7 @@ function createRealtime(deps = {}) {
   authorizeRealtimeBinding,
   authorizeRealtimeBroadcast,
   revokeRealtimeAccessForMember,
+  notifyReadReceiptPreference,
   registerTestWebsocketClient,
   websocketClientCount,
   MAX_SUBSCRIPTIONS_PER_SOCKET,
