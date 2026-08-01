@@ -111,6 +111,13 @@
   to = "/docs/index.html"
   status = 200
 
+# Desktop download page (public/download/index.html). Same bare-path pattern as
+# /docs — real files use trailing slashes; this only covers hand-typed /download.
+[[redirects]]
+  from = "/download"
+  to = "/download/index.html"
+  status = 200
+
 # Short aliases for the legal pages. The pages themselves are real static files
 # at /legal/privacy.html and /legal/terms.html (that is what the footer links to,
 # and what a build check can assert exists); these two rules only make the bare

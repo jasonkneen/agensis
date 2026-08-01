@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Download agensis — Mac, Windows, Linux</title>
+<meta name="description" content="Download the agensis desktop app for macOS, Windows, and Linux. Same workspace as the web app, in a native window." />
+<link rel="canonical" href="https://agensis.io/download/" />
+<meta property="og:title" content="Download agensis" />
+<meta property="og:description" content="Desktop app for Mac, Windows, and Linux — thin shell over the hosted workspace." />
+<meta property="og:url" content="https://agensis.io/download/" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="agensis" />
+<meta property="og:image" content="https://agensis.io/og-image.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Download agensis" />
+<meta name="twitter:description" content="Desktop app for Mac, Windows, and Linux." />
+<meta name="twitter:image" content="https://agensis.io/og-image.png" />
+<link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #08090b;
+    --bg-2: #0c0e12;
+    --panel: #0f1218;
+    --line: rgba(232, 230, 225, 0.09);
+    --line-soft: rgba(232, 230, 225, 0.05);
+    --text: #e8e6e1;
+    --muted: #8b909c;
+    --dim: #5c6170;
+    --accent: #4f9cf9;
+    --accent-soft: rgba(79, 156, 249, 0.14);
+    --online: #55e6a5;
+    --serif: "Instrument Serif", Georgia, serif;
+    --sans: "Instrument Sans", -apple-system, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  ::selection { background: var(--accent); color: #06070a; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .grid-bg {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image: radial-gradient(rgba(232,230,225,0.055) 1px, transparent 1px);
+    background-size: 28px 28px;
+    mask-image: radial-gradient(ellipse 90% 60% at 50% 0%, black 30%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse 90% 60% at 50% 0%, black 30%, transparent 75%);
+  }
+  .wrap { position: relative; z-index: 1; max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    border-bottom: 1px solid var(--line-soft);
+    background: rgba(8, 9, 11, 0.82);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+  .nav-inner {
+    max-width: 960px; margin: 0 auto; padding: 0 24px;
+    height: 60px; display: flex; align-items: center; gap: 28px;
+  }
+  .wordmark {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 15px; font-weight: 500;
+    color: var(--text); text-decoration: none; letter-spacing: -0.02em;
+  }
+  .nav-links { margin-left: auto; display: flex; align-items: center; gap: 22px; }
+  .nav-links a {
+    color: var(--muted); text-decoration: none;
+    font-size: 13.5px; font-weight: 500;
+  }
+  .nav-links a:hover { color: var(--text); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 12.5px; font-weight: 500;
+    padding: 9px 18px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text); text-decoration: none;
+    background: transparent;
+    transition: border-color 0.2s, background 0.2s, transform 0.15s;
+    cursor: pointer;
+  }
+  .btn:hover { border-color: rgba(79,156,249,0.5); background: var(--accent-soft); text-decoration: none; }
+  .btn.primary {
+    background: var(--accent); color: #06070a; border-color: var(--accent);
+  }
+  .btn.primary:hover { background: #6cadfa; transform: translateY(-1px); }
+  .btn:disabled, .btn.is-disabled {
+    opacity: 0.45; pointer-events: none; transform: none;
+  }
+  .btn.block { width: 100%; justify-content: center; padding: 14px 20px; font-size: 13.5px; }
+
+  header.hero { padding: 72px 0 40px; text-align: center; }
+  .kicker {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--accent);
+    margin-bottom: 22px;
+  }
+  .kicker::before { content: ""; width: 24px; height: 1px; background: var(--accent); opacity: 0.6; }
+  h1 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: clamp(2.4rem, 5vw, 3.6rem);
+    line-height: 1.08;
+    letter-spacing: -0.015em;
+    margin-bottom: 16px;
+  }
+  h1 em { font-style: italic; color: var(--accent); }
+  .lede {
+    color: var(--muted); font-size: 17px; max-width: 520px;
+    margin: 0 auto 12px;
+  }
+  .meta {
+    font-family: var(--mono); font-size: 11px; color: var(--dim);
+    letter-spacing: 0.06em;
+  }
+  .meta a { color: var(--muted); }
+
+  .primary-dl {
+    margin: 36px auto 8px;
+    max-width: 420px;
+  }
+  .primary-dl .hint {
+    margin-top: 12px;
+    font-size: 13px; color: var(--dim);
+  }
+
+  .platforms {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin: 48px 0 24px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 22px 20px 20px;
+    display: flex; flex-direction: column; gap: 12px;
+    min-height: 220px;
+  }
+  .card.detected {
+    border-color: rgba(79,156,249,0.45);
+    box-shadow: 0 0 0 1px rgba(79,156,249,0.12);
+  }
+  .card-top {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .os-name {
+    font-family: var(--serif); font-size: 1.45rem; letter-spacing: -0.01em;
+  }
+  .badge {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--online);
+    border: 1px solid rgba(85,230,165,0.35);
+    padding: 3px 8px; border-radius: 999px;
+  }
+  .card p { color: var(--muted); font-size: 13.5px; flex: 1; }
+  .links { display: flex; flex-direction: column; gap: 8px; }
+  .links a.asset {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 7px;
+    border: 1px solid var(--line);
+    color: var(--text);
+    font-size: 13px;
+    text-decoration: none;
+    background: rgba(0,0,0,0.2);
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .links a.asset:hover {
+    border-color: rgba(79,156,249,0.5);
+    background: var(--accent-soft);
+    text-decoration: none;
+  }
+  .links a.asset .label { font-weight: 500; }
+  .links a.asset .size {
+    font-family: var(--mono); font-size: 10.5px; color: var(--dim);
+    letter-spacing: 0.04em; white-space: nowrap;
+  }
+  .empty {
+    font-size: 13px; color: var(--dim);
+    padding: 8px 0;
+  }
+
+  .notes {
+    margin: 40px 0 80px;
+    border-top: 1px solid var(--line-soft);
+    padding-top: 32px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 28px;
+  }
+  .notes h2 {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent);
+    margin-bottom: 10px; font-weight: 500;
+  }
+  .notes p, .notes li { color: var(--muted); font-size: 14px; }
+  .notes ul { padding-left: 1.1em; }
+  .notes li { margin: 6px 0; }
+
+  footer {
+    border-top: 1px solid var(--line-soft);
+    padding: 28px 0 40px;
+  }
+  .foot {
+    display: flex; flex-wrap: wrap; gap: 16px 22px;
+    align-items: center;
+    font-size: 13px; color: var(--dim);
+  }
+  .foot a { color: var(--muted); }
+  .foot .spacer { flex: 1; }
+
+  .status {
+    margin: 20px auto 0;
+    max-width: 520px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+  .status.error { border-color: rgba(242,185,75,0.4); color: #f2b94b; }
+  .status.ok { border-color: rgba(85,230,165,0.3); }
+
+  @media (max-width: 780px) {
+    .platforms { grid-template-columns: 1fr; }
+    .notes { grid-template-columns: 1fr; }
+    .nav-links a.hide-m { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="grid-bg" aria-hidden="true"></div>
+
+<nav>
+  <div class="nav-inner">
+    <a class="wordmark" href="/">
+      <svg width="22" height="22" viewBox="0 0 192 192" fill="none" aria-hidden="true">
+        <rect width="192" height="192" rx="40" fill="#0c0c0c"/>
+        <rect x="4" y="4" width="184" height="184" rx="36" stroke="#2a2a2a" stroke-width="2" fill="none"/>
+        <path d="M58 72C58 62 66 56 76 56h0c10 0 20 8 20 20v44c0 12 10 20 20 20h0c10 0 18-6 18-16" stroke="#4f9cf9" stroke-width="10" stroke-linecap="round" fill="none"/>
+        <circle cx="76" cy="56" r="8" fill="#4f9cf9"/>
+        <circle cx="134" cy="120" r="8" fill="#4f9cf9"/>
+        <path d="M50 96h92" stroke="#4f9cf9" stroke-width="6" stroke-linecap="round" opacity="0.3"/>
+      </svg>
+      agensis
+    </a>
+    <div class="nav-links">
+      <a href="/" class="hide-m">Home</a>
+      <a href="/docs/" class="hide-m">Docs</a>
+      <a href="/app" class="btn primary">Open in browser</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="kicker">Desktop app</div>
+    <h1>Install agensis<br /><em>on your machine.</em></h1>
+    <p class="lede">
+      A native window onto the same workspace as the web app — channels, agents,
+      canvas, and huddles. Your data stays on the hosted backend; nothing to
+      self-host just to try the desktop shell.
+    </p>
+    <p class="meta" id="release-meta">Looking up the latest release…</p>
+
+    <div class="primary-dl">
+      <a id="primary-btn" class="btn primary block is-disabled" href="#" aria-disabled="true">Detecting your platform…</a>
+      <p class="hint" id="primary-hint">Prefer the web? <a href="/app">Open agensis in the browser</a>.</p>
+    </div>
+    <div id="status" class="status" hidden></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="platforms" id="platforms">
+    <article class="card" data-os="mac" id="card-mac">
+      <div class="card-top">
+        <span class="os-name">macOS</span>
+        <span class="badge" hidden data-badge>Your device</span>
+      </div>
+      <p>Apple Silicon and Intel. Drag the app from the disk image into Applications.</p>
+      <div class="links" data-assets="mac">
+        <p class="empty">Loading…</p>
+      </div>
+    </article>
+    <article class="card" data-os="win" id="card-win">
+      <div class="card-top">
+        <span class="os-name">Windows</span>
+        <span class="badge" hidden data-badge>Your device</span>
+      </div>
+      <p>64-bit installer. Run the setup wizard; portable build available when published.</p>
+      <div class="links" data-assets="win">
+        <p class="empty">Loading…</p>
+      </div>
+    </article>
+    <article class="card" data-os="linux" id="card-linux">
+      <div class="card-top">
+        <span class="os-name">Linux</span>
+        <span class="badge" hidden data-badge>Your device</span>
+      </div>
+      <p>AppImage (run anywhere) and .deb for Debian/Ubuntu-family distros.</p>
+      <div class="links" data-assets="linux">
+        <p class="empty">Loading…</p>
+      </div>
+    </article>
+  </div>
+
+  <div class="notes">
+    <div>
+      <h2>What you get</h2>
+      <ul>
+        <li>Same account and workspaces as <a href="/app">agensis.io/app</a></li>
+        <li>Native window chrome (traffic lights on Mac)</li>
+        <li>Embedded browser panel that can open sites that refuse iframes</li>
+        <li>Microphone and camera prompts for huddles</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Notes</h2>
+      <ul>
+        <li>macOS builds are currently <strong>unsigned</strong> — open via Right-click → Open the first time, or System Settings → Privacy &amp; Security.</li>
+        <li>Windows SmartScreen may warn on first run for the same reason.</li>
+        <li>Installers are published from <a href="https://github.com/jasonkneen/agensis/releases">GitHub Releases</a>.</li>
+        <li>The open-source agent daemon is separate: <a href="https://www.npmjs.com/package/@agensis/agensis-agent">@agensis/agensis-agent</a>.</li>
+      </ul>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <span>agensis © 2026</span>
+      <a href="/">Home</a>
+      <a href="/docs/">Docs</a>
+      <a href="/app">Open the app</a>
+      <a href="https://github.com/jasonkneen/agensis/releases">All releases</a>
+      <span class="spacer"></span>
+      <span>Mac · Windows · Linux</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var REPO = 'jasonkneen/agensis';
+  var API = 'https://api.github.com/repos/' + REPO + '/releases/latest';
+  var ALL = 'https://github.com/' + REPO + '/releases';
+
+  var primaryBtn = document.getElementById('primary-btn');
+  var primaryHint = document.getElementById('primary-hint');
+  var releaseMeta = document.getElementById('release-meta');
+  var statusEl = document.getElementById('status');
+
+  function showStatus(msg, kind) {
+    statusEl.hidden = !msg;
+    statusEl.textContent = msg || '';
+    statusEl.className = 'status' + (kind ? ' ' + kind : '');
+  }
+
+  function formatBytes(n) {
+    if (!n || n < 1) return '';
+    if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function detectPlatform() {
+    var ua = navigator.userAgent || '';
+    var platform = navigator.platform || '';
+    var uaData = navigator.userAgentData;
+    var os = 'mac';
+    var arch = 'arm64';
+
+    if (uaData && uaData.platform) {
+      var p = String(uaData.platform).toLowerCase();
+      if (p.indexOf('win') >= 0) os = 'win';
+      else if (p.indexOf('linux') >= 0) os = 'linux';
+      else if (p.indexOf('mac') >= 0) os = 'mac';
+    } else {
+      if (/Win/i.test(platform) || /Windows/i.test(ua)) os = 'win';
+      else if (/Linux/i.test(platform) || /Linux/i.test(ua)) os = 'linux';
+      else os = 'mac';
+    }
+
+    // Arch guess — imperfect in browsers, good enough for a primary CTA.
+    if (os === 'win' || os === 'linux') {
+      arch = 'x64';
+    } else {
+      // Apple Silicon is the default for new Macs; Intel still offered below.
+      arch = 'arm64';
+      if (/Intel/i.test(ua) || (platform === 'MacIntel' && !navigator.maxTouchPoints)) {
+        // Cannot reliably distinguish Rosetta; keep arm64 primary, list both.
+        arch = 'arm64';
+      }
+    }
+    return { os: os, arch: arch };
+  }
+
+  // Classify an asset from electron-builder artifactName:
+  //   agensis-${version}-${os}-${arch}.${ext}
+  // Also accept legacy "Open Hatch-..." names if any remain.
+  function classify(name) {
+    var n = String(name || '').toLowerCase();
+    var os = null;
+    var arch = null;
+    var kind = null;
+
+    if (/\.dmg$/.test(n)) kind = 'dmg';
+    else if (/\.exe$/.test(n)) kind = /portable/i.test(n) ? 'portable' : 'installer';
+    else if (/\.appimage$/.test(n)) kind = 'AppImage';
+    else if (/\.deb$/.test(n)) kind = 'deb';
+    else if (/\.zip$/.test(n) && /mac|darwin/.test(n)) kind = 'zip';
+    else return null;
+
+    if (/mac|darwin/.test(n) || kind === 'dmg') os = 'mac';
+    else if (/win|windows|\.exe$/.test(n)) os = 'win';
+    else if (/linux|appimage|\.deb$/.test(n)) os = 'linux';
+
+    if (/arm64|aarch64/.test(n)) arch = 'arm64';
+    else if (/x64|amd64|x86_64|win32-x64/.test(n)) arch = 'x64';
+    else if (os === 'win' || os === 'linux') arch = 'x64';
+
+    if (!os) return null;
+    return { os: os, arch: arch || 'x64', kind: kind };
+  }
+
+  function labelFor(info, name) {
+    if (info.os === 'mac') {
+      var chip = info.arch === 'arm64' ? 'Apple Silicon' : 'Intel';
+      if (info.kind === 'dmg') return 'macOS · ' + chip + ' · .dmg';
+      if (info.kind === 'zip') return 'macOS · ' + chip + ' · .zip';
+    }
+    if (info.os === 'win') {
+      if (info.kind === 'portable') return 'Windows · portable .exe';
+      return 'Windows · installer .exe';
+    }
+    if (info.os === 'linux') {
+      if (info.kind === 'AppImage') return 'Linux · AppImage';
+      if (info.kind === 'deb') return 'Linux · .deb';
+    }
+    return name;
+  }
+
+  function preferScore(info, want) {
+    var s = 0;
+    if (info.os === want.os) s += 100;
+    if (info.arch === want.arch) s += 40;
+    if (info.os === 'mac' && info.kind === 'dmg') s += 20;
+    if (info.os === 'win' && info.kind === 'installer') s += 20;
+    if (info.os === 'linux' && info.kind === 'AppImage') s += 20;
+    return s;
+  }
+
+  function fillGroup(os, assets) {
+    var el = document.querySelector('[data-assets="' + os + '"]');
+    if (!el) return;
+    el.innerHTML = '';
+    if (!assets.length) {
+      el.innerHTML = '<p class="empty">No build for this platform in the latest release yet. Check <a href="' + ALL + '">all releases</a>.</p>';
+      return;
+    }
+    // Prefer dmg/installer/AppImage first in display order
+    assets.sort(function (a, b) {
+      var order = { dmg: 0, installer: 0, AppImage: 0, deb: 1, portable: 2, zip: 3 };
+      return (order[a.info.kind] ?? 9) - (order[b.info.kind] ?? 9)
+        || String(a.info.arch).localeCompare(String(b.info.arch));
+    });
+    assets.forEach(function (a) {
+      var link = document.createElement('a');
+      link.className = 'asset';
+      link.href = a.url;
+      link.rel = 'noopener';
+      link.innerHTML =
+        '<span class="label">' + labelFor(a.info, a.name) + '</span>' +
+        '<span class="size">' + formatBytes(a.size) + '</span>';
+      el.appendChild(link);
+    });
+  }
+
+  function setPrimary(asset, detected) {
+    if (!asset) {
+      primaryBtn.classList.add('is-disabled');
+      primaryBtn.setAttribute('aria-disabled', 'true');
+      primaryBtn.href = ALL;
+      primaryBtn.textContent = 'View releases on GitHub →';
+      primaryBtn.classList.remove('is-disabled');
+      primaryBtn.removeAttribute('aria-disabled');
+      primaryHint.innerHTML = 'Installers are published with each desktop release. You can also <a href="/app">use the browser app</a>.';
+      return;
+    }
+    primaryBtn.classList.remove('is-disabled');
+    primaryBtn.removeAttribute('aria-disabled');
+    primaryBtn.href = asset.url;
+    var platformLabel =
+      detected.os === 'mac' ? 'macOS' :
+      detected.os === 'win' ? 'Windows' : 'Linux';
+    primaryBtn.textContent = 'Download for ' + platformLabel + ' →';
+    primaryHint.innerHTML =
+      labelFor(asset.info, asset.name) +
+      (asset.size ? ' · ' + formatBytes(asset.size) : '') +
+      ' · or pick another platform below. Prefer the web? <a href="/app">Open in browser</a>.';
+  }
+
+  function markDetected(os) {
+    document.querySelectorAll('.card').forEach(function (card) {
+      var match = card.getAttribute('data-os') === os;
+      card.classList.toggle('detected', match);
+      var badge = card.querySelector('[data-badge]');
+      if (badge) badge.hidden = !match;
+    });
+  }
+
+  var detected = detectPlatform();
+  markDetected(detected.os);
+
+  fetch(API, {
+    headers: { Accept: 'application/vnd.github+json' },
+  })
+    .then(function (res) {
+      if (res.status === 404) throw new Error('no-release');
+      if (!res.ok) throw new Error('http-' + res.status);
+      return res.json();
+    })
+    .then(function (release) {
+      var tag = release.tag_name || release.name || '';
+      var when = release.published_at
+        ? new Date(release.published_at).toLocaleDateString(undefined, {
+            year: 'numeric', month: 'short', day: 'numeric',
+          })
+        : '';
+      releaseMeta.innerHTML =
+        'Latest: <strong style="color:var(--text);font-weight:500">' + tag + '</strong>' +
+        (when ? ' · ' + when : '') +
+        ' · <a href="' + (release.html_url || ALL) + '">release notes</a>';
+
+      var groups = { mac: [], win: [], linux: [] };
+      var candidates = [];
+      (release.assets || []).forEach(function (asset) {
+        var info = classify(asset.name);
+        if (!info || !groups[info.os]) return;
+        var row = {
+          name: asset.name,
+          url: asset.browser_download_url,
+          size: asset.size,
+          info: info,
+        };
+        groups[info.os].push(row);
+        candidates.push(row);
+      });
+
+      fillGroup('mac', groups.mac);
+      fillGroup('win', groups.win);
+      fillGroup('linux', groups.linux);
+
+      candidates.sort(function (a, b) {
+        return preferScore(b.info, detected) - preferScore(a.info, detected);
+      });
+      setPrimary(candidates[0] || null, detected);
+
+      if (!candidates.length) {
+        showStatus('A release exists but has no installers yet. Builds may still be uploading — check back in a few minutes.', 'error');
+      } else {
+        showStatus('', null);
+      }
+    })
+    .catch(function (err) {
+      releaseMeta.innerHTML =
+        'No published desktop release yet. Builds ship from the <a href="' + ALL + '">GitHub Releases</a> pipeline.';
+      fillGroup('mac', []);
+      fillGroup('win', []);
+      fillGroup('linux', []);
+      setPrimary(null, detected);
+      if (err && err.message === 'no-release') {
+        showStatus('Desktop installers are not published yet. Trigger a version tag (v*) to build Mac, Windows, and Linux.', 'error');
+      } else {
+        showStatus('Could not reach GitHub Releases from this browser. Open the releases page directly.', 'error');
+      }
+    });
+})();
+</script>
+</body>
+</html>

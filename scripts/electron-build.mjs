@@ -41,7 +41,9 @@ console.log(`[electron:build] baking VITE_BACKEND_BASE_URL=${BACKEND_URL} into t
 
 // 1. app icon  2. web bundle w/ backend URL baked in  3. package with electron-builder
 run(npmCmd, ['run', 'icon']);
-run(npxCmd, ['vite', 'build'], { VITE_BACKEND_BASE_URL: BACKEND_URL });
+// AGENSIS_DESKTOP_BUILD=1 forces relative asset URLs so file:// loads work
+// inside the Electron window (see vite.config.ts base).
+run(npxCmd, ['vite', 'build'], { VITE_BACKEND_BASE_URL: BACKEND_URL, AGENSIS_DESKTOP_BUILD: '1' });
 run(npxCmd, ['electron-builder', ...passthrough]);
 
 console.log('\n[electron:build] done — output in release/');

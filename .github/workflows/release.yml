@@ -7,6 +7,8 @@ name: Release Desktop App
 #     git push origin v0.1.2
 #
 # The workflow can also be kicked off manually from the Actions tab.
+# Manual runs build installers as artifacts only (no GitHub Release) unless
+# you also push a matching version tag.
 on:
   push:
     tags:
@@ -18,6 +20,10 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Thin shell: bake the hosted backend into the desktop renderer.
+  # Never set this on the Netlify web build — web stays same-origin.
+  VITE_BACKEND_BASE_URL: https://agensis-backend.fly.dev
+  AGENSIS_DESKTOP_BUILD: '1'
 
 jobs:
   build:
@@ -41,25 +47,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Generate app icon from SVG
-        run: npm run icon
-
-      - name: Build web bundle
-        run: npm run build
-
-      - name: Build Electron installers
-        # Publish to a GitHub release only when the workflow was triggered by
-        # a version tag. Manual `workflow_dispatch` runs build the same
-        # installers but leave them as workflow artifacts only, so you can
-        # smoke-test the pipeline on a branch without creating a release.
-        run: npx --no-install electron-builder --publish ${{ startsWith(github.ref, 'refs/tags/') && 'always' || 'never' }}
+      # Icon + desktop vite bundle (relative base + backend URL) + electron-builder.
+      # desktop-build.mjs is the single path that matches a local `npm run desktop:dist`.
+      - name: Build desktop installers
+        run: node scripts/desktop-build.mjs --publish ${{ startsWith(github.ref, 'refs/tags/') && 'always' || 'never' }}
         env:
-          # GH_TOKEN is required by electron-builder to upload assets to the
-          # release that matches the pushed tag.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Skip code signing on macOS and Windows when no certificates are
-          # configured. Override these by adding signing secrets later.
+          # Skip code signing when no certificates are configured.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
       - name: Upload build artifacts

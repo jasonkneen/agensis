@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Realtime collaborative workspace for chat, documents, memory, files, and shared canvas.",
   "homepage": "https://agensis.io",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jasonkneen/agensis.git"
+  },
   "license": "AGPL-3.0-only",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
@@ -136,8 +140,8 @@
     "mac": {
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
+      "entitlements": "electron/entitlements.mac.plist",
+      "entitlementsInherit": "electron/entitlements.mac.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "agensis uses your microphone for voice huddles.",
         "NSCameraUsageDescription": "agensis uses your camera for video in huddles."
