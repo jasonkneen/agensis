@@ -59,6 +59,9 @@ fi
 echo "Notary profile: $NOTARY_PROFILE"
 
 echo "Building signed desktop installers (electron-builder)…"
+# Drop stale arch folders so desktop-verify-sign never inspects an old unsigned
+# release/mac leftover from a previous dual-arch or unsigned build.
+rm -rf release/mac release/mac-arm64 release/mac-universal
 # Keychain identity; do not force CSC_IDENTITY_AUTO_DISCOVERY=false.
 # electron-builder notarize skips without APPLE_* — we notarize below.
 export CSC_IDENTITY_AUTO_DISCOVERY=true
