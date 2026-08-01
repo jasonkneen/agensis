@@ -2,36 +2,56 @@
 
 **Review date:** 2026-07-31
 
-**Audited snapshot:** `84987556` (`fix(ui): remove inert composer controls`)
+**Initial audited snapshot:** `84987556` (`fix(ui): remove inert composer controls`)
+
+**Current implementation snapshot:** main `62f0b8d` plus the uncommitted
+`enterprise-controller-resources` and `enterprise-message-integrity` worktrees.
+This is a staged review state, not a release snapshot.
 
 **Baseline before this overhaul:** `e6788ffb`
 
-**Disposition:** Not ready for an enterprise release at this snapshot
+**Disposition:** Materially hardened, but not ready for an enterprise release
 
 ## Executive outcome
 
-The overhaul has materially improved the application. The audited branch now has
-a single audience-bound join URL, owner-only workspace control credential
-minting, private-session-aware status and huddle fanout, safer Electron IPC,
-better offline account isolation, selected-agent sub-thread routing, and a
-cleaner composer. Those are substantive product and security changes rather
-than cosmetic refactoring.
+The overhaul has materially improved the application. The staged implementation
+now
+has a single audience-bound join URL, server-owned human message attribution,
+author-only message edits and soft deletion, private-session-aware derived data,
+safe generic mutation projections, atomic legacy invite acceptance, no
+request-time Netlify DDL, collaborator/resource agent classification, safer
+Electron IPC, better offline account isolation, selected-agent sub-thread
+routing, and a cleaner composer. The companion `agensis-agent` branch also adds
+operating-system service commands, and this application surfaces those commands
+in onboarding and agent setup. These are substantive product and security
+changes rather than cosmetic refactoring.
 
-The snapshot is not yet enterprise-ready. Three release-blocking areas remain:
+The three critical findings from the initial snapshot are addressed in the
+staged implementation, subject to the final composite verification recorded
+below. Across all 22 findings, the current disposition is:
 
-1. Client-authored messages and generic message mutations do not establish
-   trustworthy authorship or author-only edit/delete semantics.
-2. Several session-derived tables are workspace-scoped but not private-session
-   scoped on every REST and realtime path.
-3. Generic database mutations can return a broader row than the corresponding
-   safe generic read projection, including privileged columns on affected
-   tables.
+| Status | Count |
+| --- | ---: |
+| Fixed | 6 |
+| Partly fixed | 2 |
+| Open | 14 |
 
-Separate branches were addressing the first two findings while this document
-was written. They are intentionally recorded as **pending**, not treated as
-fixed merely because code exists elsewhere. Agent-purpose/resource taxonomy and
-persistent-service integration were also in parallel. The final integration
-branch must refresh this document and rerun all release gates.
+The application is still not enterprise-release-ready. The most important
+remaining gaps are:
+
+1. Fly and Netlify still do not share one transactional conversation-lifecycle
+   implementation.
+2. Prompt/context assembly has no enforceable per-section budget or strong
+   untrusted-content boundary.
+3. Workspace control remains one broad credential rather than named,
+   independently revocable, scoped controllers.
+4. The persistent supervisor is implemented and surfaced, but desktop-quit,
+   reboot, reconnect, upgrade, rollback, and ACP acceptance are not proven.
+5. There is no deployed two-human plus real-daemon E2E matrix, uniform
+   cancellation contract, or accepted load/fault envelope.
+
+This is a current implementation and risk report, not a declaration that every
+release gate has passed.
 
 The product direction is sound if five concepts remain independent:
 
@@ -55,12 +75,13 @@ This review combined:
   lifecycle, and desktop IPC;
 - focused semantic review of the highest-risk backend, shared-policy, frontend
   conversation, connection, Electron, and daemon paths;
-- review of the commits delivered between `e6788ffb` and `84987556`;
+- review of the commits delivered between `e6788ffb` and the current main
+  snapshot, plus the two named dirty worktrees;
 - targeted unit, integration, type/build, and browser evidence supplied by the
   parallel overhaul work;
 - an end-to-end browser pass over onboarding, channels, messages, threads,
   sub-threads, agent routing, join redemption, and the Users window;
-- a behavioural comparison with the sibling Buzz checkout;
+- a behavioural comparison with the sibling reference desktop checkout;
 - review of the sibling persistent-service implementation in
   `agensis-agent`.
 
@@ -70,29 +91,31 @@ equal manual semantic scrutiny, that every conditional branch executed, or that
 every visible control was clicked. Those would be false assurances. The release
 gates below turn the remaining uncertainty into explicit work.
 
-### Snapshot size
+### Current main-tree size
 
-The live count at `84987556` was:
+The current main-tree count is recorded below. Dirty worktrees contain
+additional uncommitted files and are intentionally not folded into these
+numbers:
 
 | Measure | Count |
 | --- | ---: |
-| Tracked files | 1,100 |
-| TypeScript, TSX, CJS, and MJS files | 848 |
-| Lines in those files, including tests | 223,920 |
-| Lines in those files, excluding test paths | 147,160 |
+| Tracked files | 1,138 |
+| TypeScript, TSX, CJS, and MJS files | 877 |
+| Lines in those files, including tests | 229,938 |
+| Lines in those files, excluding test paths | 150,136 |
 
 The largest implementation files were:
 
 | File | Lines |
 | --- | ---: |
-| `server/index.cjs` | 8,925 |
+| `server/index.cjs` | 9,087 |
 | `src/components/windows/ChatWindowContent.tsx` | 4,740 |
 | `src/App.tsx` | 4,151 |
-| `src/components/windows/AgentsWindowContent.tsx` | 3,608 |
-| `netlify/functions/backend.mjs` | 3,025 |
-| `shared/backend-core.cjs` | 2,579 |
+| `src/components/windows/AgentsWindowContent.tsx` | 3,721 |
+| `netlify/functions/backend.mjs` | 2,880 |
+| `shared/backend-core.cjs` | 2,772 |
 | `src/components/windows/TasksWindowContent.tsx` | 2,416 |
-| `src/components/Sidebar.tsx` | 2,132 |
+| `src/components/layout/Sidebar.tsx` | 2,132 |
 | `server/mcp.cjs` | 2,082 |
 
 Size is not itself a defect, but these files combine enough policy, persistence,
@@ -101,9 +124,9 @@ targets for feature-slice extraction.
 
 ## Delivered change ledger
 
-This ledger records what is present in the audited snapshot. “Delivered” means
-the change is committed here; it does not waive the final composite release
-gates.
+This ledger records what is present on the integrated branches. “Delivered”
+means the change is committed on the named branch; it does not waive the final
+composite release gates.
 
 | Commit | Delivered change | Main evidence |
 | --- | --- | --- |
@@ -118,24 +141,28 @@ gates.
 | `4c791289` | Updated invitation/realtime documentation | Product and operational contract updates |
 | `0494d8e1` | Isolated offline data between accounts | `prepareOfflineDataForUser` and `clearOfflineData` in [`src/lib/offlineDb.ts`](../src/lib/offlineDb.ts) |
 | `84987556` | Removed inert composer controls | Removed visible voice/attachment affordances that had no working action |
-
-### Parallel work not credited as fixed in this snapshot
-
-- **Session-derived private scoping:** separate commit `3a5df6c8` existed on a
-  parallel worktree and requires integration plus composite verification.
-- **Message integrity and author-only mutations:** parallel work was in progress
-  and uncommitted when this snapshot was reviewed.
-- **Collaborator/resource taxonomy:** parallel work was in progress, including
-  purpose fields, templates, and three-place schema updates.
-- **Persistent service:** sibling `agensis-agent` commit `de59da2` implemented
-  service commands. Desktop surfacing and clean-host lifecycle proof were not
-  part of `84987556`.
+| `f67a4ec` | Surfaced persistent supervisor setup | Service commands in onboarding and the Agents window; lifecycle proof remains open |
+| `e2a6bc3` | Scoped session-derived workspace data | Shared REST/realtime resolution for the eight declared derived table shapes |
+| `7ad078c`, `0915328`, `d437231` | Reconciled known schema drift | Runtime, canonical, and migration definitions aligned for audited surfaces |
+| `17072a9` | Added collaborator/resource agent purpose | Purpose, resource facets, templates, Code Handler, and ambient-off resource default |
+| `f1ebb97` | Projected generic mutation responses safely | Fly and Netlify now use the same safe return projection |
+| `c94ac6a` | Removed the unauthenticated legacy AI edge | Independent model-spend boundary deleted |
+| `2e1f9ca` | Made legacy invite claims atomic | Claim-first transaction with replay, expiry, revoke, and rollback coverage |
+| `e0ae2b9`, `8885d04` | Hardened dependency boundaries | Runtime audit set separated from build-only PWA/compiler dependencies |
+| `2198534` | Removed request-time Netlify DDL | Schema dependencies moved to canonical schema and migration paths |
+| `6535daa` | Rejected heterogeneous batch inserts | Exact shared row-shape validation on Fly and Netlify |
+| `enterprise-message-integrity` (uncommitted) | Staged message authorship and deletion integrity | Server attribution, race-safe ownership, durable AI replies, redacted tombstones, bounded quoted provenance, and deterministic offline routing |
+| `de59da2` in `agensis-agent` | Added persistent service commands | macOS LaunchAgent and Linux systemd user-service install/status/logs/uninstall |
 
 ## End-to-end product evidence
 
 ### What was exercised
 
-| Journey or control | Result at the audited snapshot | Evidence/limit |
+The journeys below were exercised at the initial audited snapshot and informed
+the integrated fixes. They remain valid historical evidence, but the final-head
+regression result is recorded separately.
+
+| Journey or control | Historical result | Evidence/limit |
 | --- | --- | --- |
 | Sign-up and onboarding | Passed for the built-in flow | Browser run; not a deployed multi-region test |
 | Open/create a channel and send a message | Passed | Browser run |
@@ -191,57 +218,64 @@ regression baseline.
 - 3 Electron security tests passed.
 - A full `npm run ci` passed at an intermediate permission-scoping checkpoint.
 
-The last item is not a substitute for a full final run after all parallel
-branches are integrated.
+### Integrated verification record
+
+| Gate | Final result |
+| --- | --- |
+| Clean dependency install | Not run on the staged release snapshot |
+| Full `npm run ci` | Not complete; route tests requiring loopback are blocked by sandbox `listen EPERM` |
+| Production build | Pass on controller and message worktrees; not merged |
+| Fly/Netlify/shared syntax | Pass on the verified lanes |
+| Runtime dependency audit | Zero known vulnerabilities |
+| Full dependency audit | 22 high advisories in build/development toolchains; no runtime advisories |
+| Focused message-integrity matrix | 2,774 frontend unit tests + 11 offline replay tests + 25 Node segment/hygiene tests pass; loopback route tests blocked |
+| Focused schema/no-DDL/projection/batch matrix | Controller/resource suite: 51 pass, 1 optional PostgreSQL skip |
+| Final browser regression | Not run after the staged work; no current visual/E2E release proof |
+| Companion supervisor verification | 178 Node tests, 127 Vitest tests, build, and packed smoke passed on `de59da2` |
+
+Passing source/build gates does not close the deployment, clean-database,
+multi-principal, accessibility, lifecycle, or performance gates listed later.
 
 ## Findings
 
-Severity reflects the impact at `84987556`, before parallel fixes are merged.
+Severity reflects the impact found during the initial review. Status reflects
+the integrated implementation snapshot.
 
 ### Critical: release blockers
 
 #### C-01 — Message identity and ownership are client-authoritative
 
-**Status:** Open at this snapshot; parallel fix in progress.
+**Status:** Fixed on the integrated branch.
 
-[`src/hooks/useChat.ts`](../src/hooks/useChat.ts) `insertUserMessage` sends
-message role and display identity from the browser. The generic insert path
-accepts client values after generic column filtering rather than deriving the
-human sender identity from the authenticated principal. The same generic path
-can therefore create semantically privileged-looking sender kinds unless every
-caller behaves.
+Browser-authenticated inserts now load the verified `app_users` row and
+server-stamp `role`, `sender_kind`, `sender_id`, and `sender_name`.
+Agent/assistant output is persisted only by server execution routes. Content and
+attachment edits and soft deletion require exact message/session filters,
+original human authorship, live session readability, and a matching predicate
+inside the mutating SQL statement. Message deletion is a server-timestamped
+soft delete; a client cannot set, clear, or forge `deleted_at` through generic
+updates.
 
-Editing and deletion are also exposed as broad conversation callbacks:
-`handleSaveEdit` and `handleConfirmDeleteMessage` in
-[`src/components/windows/ChatWindowContent.tsx`](../src/components/windows/ChatWindowContent.tsx)
-are supplied to message bubbles without a server-established author-only
-mutation contract. In
-[`shared/backend-core.cjs`](../shared/backend-core.cjs),
-`enforceDbOperationAccess` applies the session predicate to selects, but generic
-updates/deletes rely on workspace capability and table filters.
+Retained deleted rows are projected as payload-free tombstones across generic
+reads, paginated transcript routes, mutation responses, realtime, huddles,
+threads, and sub-threads. This keeps root anchors and replies navigable without
+returning deleted content or attachments. Direct AI replies are reserved before
+provider work begins, finalized durably on success or failure, and use a
+server-verified participating agent identity when one is selected. Split and
+escalate context is represented by one bounded, explicitly quoted,
+human-authored provenance marker rather than cloned source rows.
 
-This is more than attribution polish. `sender_kind` changes downstream meaning:
-agent, automation, and system messages take different execution, display, and
-cycle-prevention paths.
-
-**Required remediation**
-
-- Server-stamp human `sender_id`, `sender_name`, `sender_kind`, and role from the
-  authenticated session.
-- Keep agent, automation, and system inserts on server-owned routes only.
-- Add dedicated edit/delete commands that require original authorship.
-- Add a separate, audited moderator override requiring `manage`.
-- Reject identity fields on generic message inserts and remove generic message
-  update/delete access.
-- Test forged sender kinds, another human’s message, private sessions, deleted
-  members, automation markers, and both Fly and Netlify surfaces.
+The focused Fly, Netlify, TypeScript, and consumer tests cover forged
+attribution, cross-user edits/deletes, private membership, clear/send
+serialization, durable pre-stream failures, selected-agent identity, and
+tombstone retention. An audited moderator override was deliberately not added;
+managers have no silent right to rewrite another human’s speech.
 
 #### C-02 — Session-derived data is not uniformly private-session scoped
 
-**Status:** Open at this snapshot; a separate scoping commit is pending
-integration.
+**Status:** Fixed for the eight declared session-derived table shapes.
 
-The documented private-session contract is strong for `chat_sessions`,
+At the initial snapshot, the documented private-session contract was strong for `chat_sessions`,
 `messages`, permission requests, huddles, and huddle events. It is not yet
 uniform for all tables derived from a session.
 
@@ -261,23 +295,18 @@ At the snapshot:
   schedules at workspace granularity even when a schedule targets a private
   conversation.
 
-**Required remediation**
-
-- Merge and review the pending session-scope branch.
-- Define a declared session-resolution strategy for every subscribable or
-  readable session-derived table.
-- Apply the same fail-closed audience decision to REST, MCP, realtime, dedicated
-  routes, and both backend deployments.
-- Hide prompt/response bodies from generic `agent_jobs` projection.
-- Add negative two-user tests for each table and each transport.
-- Keep the realtime allowlist test as a structural gate; do not fix failures by
-  broadly allowlisting a sensitive table.
+The integrated resolution declares the session resolver and safe generic
+projection for each known derived shape and uses the same audience decision for
+REST and realtime. Focused negative tests cover the named tables, including
+schedules and jobs. This is not an automatic guarantee for future tables: any
+new session-derived table still needs an explicit resolver, projection, and
+fanout decision.
 
 #### C-03 — Generic mutation responses can bypass safe read projections
 
-**Status:** Open.
+**Status:** Fixed.
 
-The generic insert/update handlers in
+At the initial snapshot, the generic insert/update handlers in
 [`server/index.cjs`](../server/index.cjs) and
 [`netlify/functions/backend.mjs`](../netlify/functions/backend.mjs) construct
 their `RETURNING` clause from the request, commonly `*`. Safe generic selects
@@ -290,19 +319,16 @@ reads, such as connection hashes, encrypted API-key material, or sensitive
 configuration. Realtime sanitisation is not relevant to the direct HTTP
 response.
 
-**Required remediation**
-
-- Force insert/update/delete responses through
-  `SELECTABLE_COLUMNS_BY_TABLE` or a stricter mutation-specific projection.
-- Default to the smallest stable acknowledgement shape, not `returning *`.
-- Move sensitive table mutation to dedicated routes where practical.
-- Add tests proving a write cannot reveal any column a generic read cannot
-  reveal at the same capability.
-- Apply the same helper in Fly and Netlify rather than maintaining two copies.
+Fly and Netlify now derive generic mutation return columns through the same
+table-specific safe projection used by generic reads. Tests prove that insert,
+update, and delete cannot reveal hidden token hashes, encrypted key material, or
+privileged configuration by requesting `returning *`.
 
 ### High priority
 
 #### H-01 — Fly and Netlify conversation lifecycle parity can drift
+
+**Status:** Open.
 
 The Fly generic insert path in [`server/index.cjs`](../server/index.cjs) invokes
 `resolveInheritedSessionVisibility`, `addSessionParticipant`, and
@@ -319,33 +345,38 @@ for channel, DM, thread, split, fork, merge, and huddle transcript creation.
 
 #### H-02 — A legacy unauthenticated AI edge function remains in the tree
 
-[`supabase/functions/ai-chat/index.ts`](../supabase/functions/ai-chat/index.ts)
-directly invokes a provider key without the application’s current auth, RBAC,
-rate-limit, audit, and workspace-context controls. It also contains an
-independent model mapping that can drift from the active execution system.
+**Status:** Fixed.
+
+The initial snapshot contained `supabase/functions/ai-chat/index.ts`, which
+directly invoked a provider key without the application’s current auth, RBAC,
+rate-limit, audit, and workspace-context controls. It also contained an
+independent model mapping that could drift from the active execution system.
 
 This finding does not assert that any named model is invalid. The problem is an
 independent spend and trust boundary.
 
-**Remediation:** prove the function is undeployed and remove it, or bring it
-behind the same authenticated server-owned execution contract and deployment
-gates.
+The legacy function was removed and a structural test prevents that independent
+unauthenticated model-spend boundary from returning.
 
 #### H-03 — Runtime DDL, canonical schema, and migrations are not fully aligned
 
-`agent_jobs` is created through `ensureRuntimeSchema` in
-[`server/index.cjs`](../server/index.cjs), but the complete definition is not
-represented consistently in both
-[`database/neon-schema.sql`](../database/neon-schema.sql) and a migration.
+**Status:** Partly fixed.
 
-The repository’s three-place schema rule is necessary today, but it remains a
-manual drift hazard.
+The initial snapshot had known differences between runtime bootstrap,
+[`database/neon-schema.sql`](../database/neon-schema.sql), and migrations,
+including the complete `agent_jobs` definition. The repository’s three-place
+schema rule remains a manual drift hazard even after the known differences were
+reconciled.
 
-**Remediation:** reconcile the table in all three places immediately. Longer
-term, generate or verify runtime bootstrap from the canonical migration state
-and run a fresh-database schema diff in CI.
+The known audited schema surfaces now agree structurally across runtime
+bootstrap, canonical schema, and migrations, and Netlify performs no
+request-time DDL. Structural parity tests pass. A real empty-database apply,
+production-like upgrade, schema diff, idempotency run, and rollback exercise
+remain release gates.
 
 #### H-04 — Prompt context has no enforceable section budgets or trust boundary
+
+**Status:** Open.
 
 `buildSystemPrompt` and `normalizeAiChatMessages` in
 [`server/index.cjs`](../server/index.cjs) assemble workspace instructions,
@@ -357,11 +388,18 @@ Large histories increase cost and latency. More importantly, user/workspace
 content can be visually placed next to trusted system instructions without a
 strong server-owned untrusted-content boundary.
 
+A focused construction probe produced roughly a 20.9 KB system prompt plus a
+20 KB message and more than 1,000 injectable context items without hitting a
+section budget. This is a cost, availability, and prompt-injection boundary,
+not only a performance optimisation.
+
 **Remediation:** define per-section byte/token budgets, explicit truncation and
 summarisation policy, server-owned context assembly, nonce-fenced untrusted
 content, pagination, and observability for discarded context.
 
 #### H-05 — Split, escalate, and merge are non-transactional browser workflows
+
+**Status:** Open; attribution copying is fixed, transactionality is not.
 
 The conversation operations in [`src/hooks/useChat.ts`](../src/hooks/useChat.ts)
 perform several client-visible inserts/copies in sequence. A network failure or
@@ -373,15 +411,21 @@ policy, and retry-safe response.
 
 #### H-06 — The legacy invite acceptance path is not an atomic claim
 
-[`server/members-invites-routes.cjs`](../server/members-invites-routes.cjs)
-reads an invite, inserts membership, then updates the invite in separate
-operations. The newer unified join path uses a conditional claim, but the legacy
-route remains a race surface.
+**Status:** Fixed.
 
-**Remediation:** retire the legacy path or wrap it in the same transaction and
-conditional status/expiry/audience claim used by unified join.
+At the initial snapshot,
+[`server/members-invites-routes.cjs`](../server/members-invites-routes.cjs)
+read an invite, inserted membership, then updated the invite in separate
+operations. The newer unified join path already used a conditional claim, but
+the legacy route remained a race surface.
+
+The legacy path now uses a claim-first transaction with conditional
+status/expiry checks and rollback. Focused tests cover concurrent claims,
+replay, expiry, revocation, rollback, and idempotent recovery.
 
 #### H-07 — Workspace control is still a broad, singleton credential
+
+**Status:** Open.
 
 The delivered owner-only guard is an important fix. The current `agw_` style
 workspace credential is nevertheless a long-lived, broad control-plane token
@@ -396,19 +440,25 @@ impersonation by implication.
 
 #### H-08 — Persistent local execution is not yet an integrated product
 
-The sibling `agensis-agent` branch implements a credible service layer, but at
-this snapshot:
+**Status:** Partly fixed.
 
-- it is not part of this branch’s release evidence;
+The companion `agensis-agent` branch now implements service install, status,
+logs, and uninstall commands for a macOS LaunchAgent and Linux systemd user
+service. Agensis surfaces the setup commands in onboarding and the Agents
+window. The remaining gap is product and lifecycle integration:
+
+- the service branch has not been released and proven from a clean host;
 - the desktop has no complete local supervisor control socket/proxy contract;
 - ACP is not an implemented adapter;
-- clean-host install, reboot, desktop-quit, reconnect, upgrade, and uninstall
-  behaviour has not been proven.
+- reboot, desktop-quit, reconnect, upgrade, rollback, and uninstall behaviour
+  has not been proven end to end.
 
 The desktop must be a client of the supervisor, never the lifetime parent of
 agent processes.
 
 #### H-09 — There is no deployed, automated, multi-principal E2E matrix
+
+**Status:** Open.
 
 The browser pass used one signed-in human and targeted machine-contract tests.
 It did not run two independent human accounts plus a real agent daemon against
@@ -421,6 +471,8 @@ Fly WebSocket/HTTP and Netlify HTTP paths where applicable.
 
 #### H-10 — Running agent work lacks a complete user-facing cancellation path
 
+**Status:** Open.
+
 The code has abort/cleanup mechanics in limited contexts, but the reviewed chat
 surface does not provide a consistent Stop action that propagates to built-in
 and daemon runtimes and records a structured cancellation reason.
@@ -432,6 +484,8 @@ visible state transition, timeout fallback, and audit/activity evidence.
 
 #### M-01 — Fatal process handling can accumulate and continue unsafely
 
+**Status:** Open.
+
 `startBackendServer` in [`server/index.cjs`](../server/index.cjs) installs
 process-level exception handlers. Repeated embedded starts can accumulate
 listeners, and continuing after an unknown `uncaughtException` risks corrupted
@@ -442,6 +496,8 @@ exception, stop admission, drain if safe, and exit for supervisor restart.
 
 #### M-02 — A global 50 MB JSON parser runs before route-specific need
 
+**Status:** Open.
+
 [`server/index.cjs`](../server/index.cjs) enables a large `express.json` limit
 globally. Most authenticated control and chat routes need far less.
 
@@ -449,6 +505,8 @@ Use small defaults and opt in only on routes that demonstrably require larger
 bodies, after the earliest practical authentication/rate-limit checks.
 
 #### M-03 — Realtime subscription failure is not observable enough
+
+**Status:** Open.
 
 [`src/lib/backendClient.ts`](../src/lib/backendClient.ts) marks subscriptions
 active before a server acknowledgement and does not surface every server error
@@ -460,14 +518,16 @@ failure, retry/backoff metrics, and tests that cross the actual wire grammar.
 
 #### M-04 — Batch inserts derive shape from the first row
 
-Both backend generic insert paths derive columns from `Object.keys(rows[0])`.
-Later rows with extra keys can lose data; missing keys can produce ambiguous
-binding.
+**Status:** Fixed.
 
-Reject heterogeneous row shapes or normalise against an explicit validated
-column set. Do not silently drop keys.
+Both backend generic insert paths now call the same exact-own-key validator
+before normalization can spread an unsafe value and again before SQL binding.
+Reordered equal keys are accepted; empty, non-plain, missing, extra, and
+same-cardinality substituted keys are rejected rather than dropped.
 
 #### M-05 — Inherited workspace access is not fully discoverable
+
+**Status:** Open.
 
 Authorization can inherit a role from a parent workspace through
 `getInheritedWorkspaceRoles` in
@@ -480,13 +540,19 @@ source so the UI can explain why access exists.
 
 #### M-06 — Sub-thread and agent-context history can grow without a bound
 
+**Status:** Open.
+
 [`src/hooks/useSubThreads.ts`](../src/hooks/useSubThreads.ts) loads complete
 sub-thread message sets, and several merge/context paths load full histories.
 
 Add cursor pagination and a deliberate recent-window/summary strategy for model
 context. The transcript UI and agent context need not share the same query.
+Treat this together with H-04: unbounded model context is a cost and trust
+boundary, not merely a transcript-loading concern.
 
 #### M-07 — Loading and layout states need regression coverage
+
+**Status:** Open.
 
 The Get Started overlap and transient blank rail show that otherwise correct
 features can be temporarily unreachable or appear broken.
@@ -496,6 +562,8 @@ keyboard reachability, responsive screenshots, and reduced-motion coverage.
 
 #### M-08 — Large cross-cutting modules impede isolation
 
+**Status:** Open; the workspace-connections slice is partial progress.
+
 The largest files mix route composition, SQL, authorization, realtime,
 orchestration, and UI state. This raises review cost and makes backend parity
 harder to prove.
@@ -504,6 +572,8 @@ Use the feature-slice target below. Do not perform a platform rewrite or a
 single big-bang file split.
 
 #### M-09 — Performance and failure behaviour are not characterised
+
+**Status:** Open.
 
 There is no accepted load envelope for large workspaces, large transcripts,
 WebSocket reconnect storms, agent fanout, queue saturation, or database
@@ -760,9 +830,9 @@ Execution hosts and placements should be first-class:
 That model permits a thinking agent and a code handler on different boxes
 without giving the thinking agent the code host’s filesystem authority.
 
-## Behavioural comparison with Buzz
+## Behavioural comparison with the sibling reference desktop
 
-The sibling Buzz repository was studied only for behaviour and lifecycle
+The sibling reference repository was studied only for behaviour and lifecycle
 concepts. No source should be copied.
 
 Useful concepts:
@@ -772,14 +842,14 @@ Useful concepts:
 - use an adapter layer for agent protocols, including ACP;
 - make agent-owned credentials and actions inspectable.
 
-The important non-example is shutdown behaviour. Buzz’s desktop shutdown path
-explicitly stops managed agents. Agensis has the opposite product requirement:
-agent work must survive desktop quit. That makes the persistent supervisor the
-lifetime owner and the desktop a control client.
+The important non-example is shutdown behaviour. The reference desktop’s
+shutdown path explicitly stops managed agents. Agensis has the opposite product
+requirement: agent work must survive desktop quit. That makes the persistent
+supervisor the lifetime owner and the desktop a control client.
 
 Agensis should retain its existing React/Vite, Express/WebSocket, Netlify,
 Neon, and Electron platform. This is a behavioural reference, not a request to
-adopt Buzz’s Tauri, protocol, or persistence architecture.
+adopt the reference product’s Tauri, protocol, or persistence architecture.
 
 ## Feature/package target
 
@@ -838,11 +908,14 @@ own schema; runtime bootstrap should be generated from or checked against them.
 
 ### Phase 0 — Close the current release blockers
 
-1. Integrate and review message integrity.
-2. Integrate and review session-derived private scoping.
-3. Fix safe projections on generic mutation responses.
-4. Reconcile schema parity and Fly/Netlify conversation lifecycle.
-5. Rerun the full composite CI and negative privacy matrix.
+1. **Delivered:** integrate and independently review message integrity.
+2. **Delivered:** integrate and review session-derived private scoping.
+3. **Delivered:** fix safe projections on generic mutation responses.
+4. **Partial:** known schema definitions are structurally reconciled; a shared
+   transactional Fly/Netlify conversation lifecycle and live database apply
+   proof remain open.
+5. **Final branch gate:** rerun the full composite CI and focused negative
+   privacy matrix.
 
 **Acceptance:** no critical finding above remains open; forged authorship,
 cross-user private reads, private realtime fanout, and mutation-return secret
@@ -850,11 +923,12 @@ exposure all fail in automated tests on both backends.
 
 ### Phase 1 — Complete purpose taxonomy without authority coupling
 
-1. Add `purpose` and `resource_facets` in runtime schema, canonical schema, and
-   migration.
-2. Add collaborator and resource templates, including a Code Handler.
-3. Expose purpose in create/edit/detail surfaces.
-4. Keep resource agents out of ambient auto-reply by default.
+1. **Delivered:** add `purpose` and `resource_facets` in runtime schema,
+   canonical schema, and migration.
+2. **Delivered:** add collaborator and resource templates, including a Code
+   Handler.
+3. **Delivered:** expose purpose in create/edit/detail surfaces.
+4. **Delivered:** keep resource agents out of ambient auto-reply by default.
 
 **Acceptance:** purpose round-trips across fresh and upgraded databases;
 templates cannot carry authority fields; changing purpose changes no permission;
@@ -885,7 +959,8 @@ delegated child agents/resources are attributable to the controller.
 
 ### Phase 4 — Productise persistent execution
 
-1. Integrate the `agensis service` branch.
+1. **Implemented on companion branch and surfaced here:** `agensis service`
+   install/status/logs/uninstall.
 2. Add an authenticated versioned local control protocol.
 3. Make desktop connect/status/log/start/stop operations use the supervisor.
 4. Add hosts, placements, runtime instances, and fenced leases.
@@ -999,7 +1074,7 @@ expiry date.
 - Fly and Netlify canary with matching build identity, schema state, secrets,
   public join origin, rollback, and smoke tests.
 
-## Explicitly not proven at this snapshot
+## Explicitly not proven on the integrated branch
 
 The audit does not claim:
 
@@ -1008,13 +1083,19 @@ The audit does not claim:
 - all accessibility or visual states are correct;
 - agent invitation was redeemed by a real daemon in the browser run;
 - Fly and Netlify have complete behavioural parity;
-- the parallel message/session/taxonomy branches are integrated;
+- empty and production-like upgraded databases were applied, diffed, rolled
+  back, and re-applied;
+- the broad workspace-control credential was replaced by named scoped
+  controller credentials;
 - the persistent service survives real reboot/desktop-quit scenarios;
 - ACP is implemented;
 - Windows service support exists;
 - large-workspace performance, fault tolerance, or multi-region deployment is
   acceptable;
-- a final composite CI run has passed after every overhaul commit.
+- two independent humans and a real daemon passed the deployed E2E matrix;
+- every build/development dependency advisory has been remediated or accepted;
+- publication provenance, source-history, asset ownership, licensing, or legal
+  clearance has been established.
 
 Those are release work, not caveats to hide. The architecture and phased plan
 above provide a path to prove each one without changing the application’s
