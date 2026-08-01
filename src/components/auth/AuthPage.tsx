@@ -272,66 +272,66 @@ export function AuthPage({
                     gap: '10px',
                   }}
                 >
-                  {googleAvailable && (
-                    <button
-                      type="button"
-                      onClick={() => handleOAuth('google')}
-                      disabled={submitting || oauthProvider !== null}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '8px',
-                        minHeight: '42px',
-                        padding: '10px 12px',
-                        background: 'var(--canvas-elevated)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 'var(--radius-md)',
-                        color: 'var(--text-primary)',
-                        fontSize: '14px',
-                        fontWeight: 600,
-                        cursor: submitting || oauthProvider !== null ? 'not-allowed' : 'pointer',
-                        fontFamily: 'inherit',
-                      }}
-                    >
-                      {oauthProvider === 'google' ? (
-                        <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
-                      ) : (
-                        <span style={{ fontWeight: 700, fontSize: '16px', lineHeight: 1 }}>G</span>
-                      )}
-                      Google
-                    </button>
-                  )}
-                  {githubAvailable && (
-                    <button
-                      type="button"
-                      onClick={() => handleOAuth('github')}
-                      disabled={submitting || oauthProvider !== null}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '8px',
-                        minHeight: '42px',
-                        padding: '10px 12px',
-                        background: 'var(--canvas-elevated)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 'var(--radius-md)',
-                        color: 'var(--text-primary)',
-                        fontSize: '14px',
-                        fontWeight: 600,
-                        cursor: submitting || oauthProvider !== null ? 'not-allowed' : 'pointer',
-                        fontFamily: 'inherit',
-                      }}
-                    >
-                      {oauthProvider === 'github' ? (
-                        <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
-                      ) : (
-                        <GitBranch size={16} />
-                      )}
-                      GitHub
-                    </button>
-                  )}
+              {googleAvailable && (
+                <button
+                type="button"
+                onClick={() => handleOAuth('google')}
+                disabled={submitting || oauthProvider !== null}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  minHeight: '42px',
+                  padding: '10px 12px',
+                  background: 'var(--canvas-elevated)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-md)',
+                  color: 'var(--text-primary)',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: submitting || oauthProvider !== null ? 'not-allowed' : 'pointer',
+                  fontFamily: 'inherit',
+                }}
+              >
+                {oauthProvider === 'google' ? (
+                  <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
+                ) : (
+                  <span style={{ fontWeight: 700, fontSize: '16px', lineHeight: 1 }}>G</span>
+                )}
+                Google
+                </button>
+              )}
+              {githubAvailable && (
+                <button
+                type="button"
+                onClick={() => handleOAuth('github')}
+                disabled={submitting || oauthProvider !== null}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  minHeight: '42px',
+                  padding: '10px 12px',
+                  background: 'var(--canvas-elevated)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-md)',
+                  color: 'var(--text-primary)',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: submitting || oauthProvider !== null ? 'not-allowed' : 'pointer',
+                  fontFamily: 'inherit',
+                }}
+              >
+                {oauthProvider === 'github' ? (
+                  <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
+                ) : (
+                  <GitBranch size={16} />
+                )}
+                GitHub
+                </button>
+              )}
                 </div>
 
                 <div
@@ -428,7 +428,7 @@ export function AuthPage({
                   </Alert>
                 )}
 
-                {/* Lockout disables only this email/password submit. */}
+                {/* Lockout disables only this email/password submit — OAuth stays available. */}
                 <Button type="submit" disabled={submitting || (mode === 'signin' && locked)} className="w-full">
                   {submitting ? (
                     <Spinner className="size-4" />

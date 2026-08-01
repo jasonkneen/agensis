@@ -733,6 +733,16 @@ preventing an explicit Netlify backend base from becoming a route 404. A
 deployed Netlify runtime must set `AGENSIS_DAEMON_BASE_URL`; the forwarder fails
 closed with 503 when it is missing.
 
+The same explicit forwarder covers the other Fly-owned HTTP surfaces that the
+browser can reach through an explicit Netlify backend: workspace bootstrap,
+session messages/access, huddles, gateways, skills, schedules, Nostr,
+permission requests, files, project-git, TTS, bridge administration and
+delivery, Farm device/job operations, link previews, the public MCP skill door,
+Flow connections, workspace MCP and agent-registration controls, and Agensis
+setup enrollment. These are deliberately not reimplemented in the serverless
+function; the route contract is pinned by
+`tests/netlify-join-forwarding.test.cjs`.
+
 ### Workspace control enrollment is a different grant
 
 Workspace control is intentionally not an ordinary member/agent invitation. It

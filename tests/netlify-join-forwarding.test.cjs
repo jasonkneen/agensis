@@ -231,6 +231,11 @@ test('Netlify forwards the remaining Fly-owned workspace and conversation surfac
   ['POST', 'https://app.example.test/backend/bridges', { sessionId: 'session-1', provider: 'slack' }],
   ['POST', 'https://app.example.test/backend/integrations/farm/device/approve', { code: 'abc' }],
   ['GET', 'https://app.example.test/backend/skill?format=json', undefined],
+  ['POST', 'https://app.example.test/backend/workspaces/ws-1/flow-connections', { targetUrl: 'https://example.test/hook' }],
+  ['POST', 'https://app.example.test/backend/workspaces/ws-1/mcp-token', { label: 'desktop' }],
+  ['GET', 'https://app.example.test/backend/workspaces/ws-1/agent-registrations?status=pending', undefined],
+  ['POST', 'https://app.example.test/backend/agent-registrations/registration-1/approve', {}],
+  ['POST', 'https://app.example.test/backend/agensis/setup/connect', { workspaceId: 'ws-1' }],
 ];
  for (const [method, url, body] of cases) {
   requests.length = 0;

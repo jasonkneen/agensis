@@ -2,6 +2,13 @@
 
 Snapshot: 2026-08-01
 
+The intended branch is `enterprise-overhaul-2026-07-31` at integration commit
+`c9092a3`. A shared-agent checkout/pull briefly moved the root HEAD to `main`
+while this pass was running. The files are restored from `c9092a3`, but the
+sandbox cannot write `.git` lock files, so branch/index metadata may remain
+misaligned until reboot on a normal host. Run `git checkout
+enterprise-overhaul-2026-07-31` before continuing; do not reset or clean.
+
 - Active branch: `enterprise-overhaul-2026-07-31`.
 - The root checkout is intentionally dirty and not deployed. Do not reset,
   clean, rebase, or discard changes.
@@ -23,7 +30,8 @@ Snapshot: 2026-08-01
   CORS, and join security headers are preserved;
   `tests/netlify-join-forwarding.test.cjs` covers the contract (9/9), including
   bootstrap/messages/access, huddles, gateways, skills, schedules, Nostr,
-  permissions, files, and project-git forwarding.
+  permissions, files, project-git, TTS, bridge, Farm, link-preview, MCP skill,
+  Flow, workspace-MCP, agent-registration, and Agensis setup forwarding.
 - The latest UI hardening wires the Sidebar Upload files affordance to the real
   `useFiles.uploadFiles` picker, exposes earlier pagination inside ordinary
   thread panels, makes embedded sketch Clear a native keyboard button, and
