@@ -63,12 +63,14 @@ function mountAgentsRoutes(app, deps = {}) {
     || normalizeAgentBackendBaseUrl(req.body?.baseUrl)
     || normalizeAgentBackendBaseUrl(requestBaseUrl(req));
    // Shared with the MCP `get_connect_command` tool so the two never drift.
+   // manage was enforced above — mode override is allowed for this path only.
    const payload = await buildAgentConnectionCommand({
     agentId,
     workspaceId: agent.workspace_id,
     handle: req.body?.handle,
     model: req.body?.model,
     permissionMode: req.body?.permissionMode || req.body?.permission_mode,
+    allowPermissionModeChange: true,
     baseUrl,
     actorUserId: req.userId,
    });

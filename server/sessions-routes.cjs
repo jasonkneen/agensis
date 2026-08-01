@@ -447,6 +447,9 @@ function mountSessionsRoutes(app, deps = {}) {
     handle: req.body?.handle || agent.handle || agent.name,
     model: req.body?.model || agent.model,
     permissionMode: req.body?.permissionMode || req.body?.permission_mode || agent.permission_mode,
+    // Authenticated setup for a workspace the user can act in — mode override
+    // only via allowPermissionModeChange, never actorUserId alone.
+    allowPermissionModeChange: true,
     baseUrl,
     profile: false,
     actorUserId: req.userId,

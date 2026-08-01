@@ -85,6 +85,16 @@ function makeDb({ rows = {}, recentRuns = 0 } = {}) {
    if (q.startsWith('select count(*)::int as count from automation_runs')) {
     return [{ count: recentRuns }];
    }
+   // Default for create/update post_message target checks: a live workspace channel.
+   if (q.startsWith('select id, workspace_id, visibility, folder, deleted_at from chat_sessions')) {
+    return [{
+     id: params[0] || TARGET_CHANNEL,
+     workspace_id: WORKSPACE,
+     visibility: 'workspace',
+     folder: 'Channels',
+     deleted_at: null,
+    }];
+   }
    return [];
   },
  };
@@ -261,7 +271,9 @@ test('the posted message carries the automation sender kind', async () => {
  // this fails.
  const db = makeDb({
   rows: {
-   'select id, workspace_id from chat_sessions': [{ id: TARGET_CHANNEL, workspace_id: WORKSPACE }],
+   'select id, workspace_id, visibility, folder, deleted_at from chat_sessions': [{
+    id: TARGET_CHANNEL, workspace_id: WORKSPACE, visibility: 'workspace', folder: 'Channels', deleted_at: null,
+   }],
    'insert into messages': [{ id: 'm-out' }],
   },
  });
@@ -275,6 +287,76 @@ test('the posted message carries the automation sender kind', async () => {
  const insert = db.queries.find((entry) => entry.sql.toLowerCase().startsWith('insert into messages'));
  assert.equal(insert.params[2], AUTOMATION_SENDER_KIND);
  assert.equal(insert.params[1], 'hi Jason', 'the text is interpolated');
+});
+
+test('post_message permanently refuses private sessions', async () => {
+ // A manage-authored automation must not inject into members-only DMs.
+ // MUTATION: drop isPrivateSessionRow check in resolvePostMessageTarget -> fails.
+ const db = makeDb({
+  rows: {
+   'select id, workspace_id, visibility, folder, deleted_at from chat_sessions': [{
+    id: TARGET_CHANNEL, workspace_id: WORKSPACE, visibility: 'private', folder: 'Direct messages', deleted_at: null,
+   }],
+  },
+ });
+ const engine = build(db);
+ const result = await engine.__internals.runPostMessageStep(
+  { action: 'post_message', channelId: TARGET_CHANNEL, text: 'secret leak' },
+  { automation_id: 'auto-1', workspace_id: WORKSPACE },
+  { data: {} },
+ );
+ assert.equal(result.ok, false);
+ assert.equal(result.permanent, true);
+ assert.match(result.error, /private/i);
+ assert.equal(
+  db.queries.some((entry) => entry.sql.toLowerCase().startsWith('insert into messages')),
+  false,
+  'must not insert into a private session',
+ );
+});
+
+test('post_message permanently refuses soft-deleted sessions', async () => {
+ const db = makeDb({
+  rows: {
+   'select id, workspace_id, visibility, folder, deleted_at from chat_sessions': [{
+    id: TARGET_CHANNEL, workspace_id: WORKSPACE, visibility: 'workspace', folder: 'Channels',
+    deleted_at: '2026-01-01T00:00:00.000Z',
+   }],
+  },
+ });
+ const engine = build(db);
+ const result = await engine.__internals.runPostMessageStep(
+  { action: 'post_message', channelId: TARGET_CHANNEL, text: 'ghost' },
+  { automation_id: 'auto-1', workspace_id: WORKSPACE },
+  { data: {} },
+ );
+ assert.equal(result.ok, false);
+ assert.equal(result.permanent, true);
+ assert.match(result.error, /deleted/i);
+});
+
+test('createAutomation refuses a definition that posts into a private channel', async () => {
+ const db = makeDb({
+  rows: {
+   'select id, workspace_id, visibility, folder, deleted_at from chat_sessions': [{
+    id: TARGET_CHANNEL, workspace_id: WORKSPACE, visibility: 'private', folder: 'Direct messages', deleted_at: null,
+   }],
+  },
+ });
+ const engine = build(db);
+ await assert.rejects(
+  () => engine.createAutomation({
+   userId: USER,
+   workspaceId: WORKSPACE,
+   name: 'Bad DM post',
+   definition: goodDefinition(),
+  }),
+  /private/i,
+ );
+ assert.equal(
+  db.queries.some((entry) => entry.sql.toLowerCase().startsWith('insert into automations')),
+  false,
+ );
 });
 
 // --- create_task -------------------------------------------------------------
@@ -494,7 +576,9 @@ test('a run posts the message and settles done', async () => {
     payload: { data: { senderName: 'Jason', content: 'the deploy failed' } },
    }],
    'select * from automations where id': [automationRow()],
-   'select id, workspace_id from chat_sessions': [{ id: TARGET_CHANNEL, workspace_id: WORKSPACE }],
+   'select id, workspace_id, visibility, folder, deleted_at from chat_sessions': [{
+    id: TARGET_CHANNEL, workspace_id: WORKSPACE, visibility: 'workspace', folder: 'Channels', deleted_at: null,
+   }],
    'insert into messages': [{ id: 'm-out' }],
    'update automation_runs set status = $2': (params) => [{ id: 'run-1', status: params[1] }],
   },
@@ -517,7 +601,9 @@ test('a step targeting a channel in another workspace fails PERMANENTLY', async 
     id: 'run-1', automation_id: 'auto-1', workspace_id: WORKSPACE, attempt_count: 1, payload: { data: {} },
    }],
    'select * from automations where id': [automationRow()],
-   'select id, workspace_id from chat_sessions': [{ id: TARGET_CHANNEL, workspace_id: 'someone-elses-workspace' }],
+   'select id, workspace_id, visibility, folder, deleted_at from chat_sessions': [{
+    id: TARGET_CHANNEL, workspace_id: 'someone-elses-workspace', visibility: 'workspace', folder: 'Channels', deleted_at: null,
+   }],
    'update automation_runs set status = $2': (params) => [{ id: 'run-1', status: params[1] }],
   },
  });
@@ -534,7 +620,8 @@ test('a missing channel dead-letters rather than retrying to the cap', async () 
     id: 'run-1', automation_id: 'auto-1', workspace_id: WORKSPACE, attempt_count: 1, payload: { data: {} },
    }],
    'select * from automations where id': [automationRow()],
-   'select id, workspace_id from chat_sessions': [],
+   // Explicit empty: override the default workspace-channel fixture in makeDb.
+   'select id, workspace_id, visibility, folder, deleted_at from chat_sessions': [],
    'update automation_runs set status = $2': (params) => [{ id: 'run-1', status: params[1] }],
   },
  });

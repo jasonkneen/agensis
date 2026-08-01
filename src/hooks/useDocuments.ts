@@ -24,6 +24,29 @@ function toListDocument(doc: Document): Document {
   return stripContent(doc as unknown as Record<string, unknown>);
 }
 
+/**
+ * Keep the per-doc body cache coherent with a realtime fanout row.
+ * When content is present, refresh; when stripped (heavy-field fanout), delete
+ * so the next editor open re-fetches instead of serving a stale body.
+ */
+export function applyDocumentRealtimeToContentCache(
+  cache: Map<string, string>,
+  eventType: string,
+  nextDoc: { id?: string; content?: string } | null | undefined,
+  oldDoc?: { id?: string } | null,
+): void {
+  if (eventType === 'DELETE') {
+    if (oldDoc?.id) cache.delete(oldDoc.id);
+    return;
+  }
+  if (!nextDoc?.id) return;
+  if (nextDoc.content !== undefined) {
+    cache.set(nextDoc.id, nextDoc.content);
+  } else if (eventType === 'UPDATE' || eventType === 'INSERT') {
+    cache.delete(nextDoc.id);
+  }
+}
+
 export function useDocuments(workspaceId: string | null, seed?: Document[] | null) {
   const [documents, setDocuments] = useState<Document[]>(() => (seed || []).map(toListDocument));
   const [loading, setLoading] = useState(!seed?.length);
@@ -87,8 +110,8 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
       const eventType = payload.eventType;
       if (eventType === 'DELETE') {
         const oldDoc = payload.old;
+        applyDocumentRealtimeToContentCache(contentCache.current, eventType, null, oldDoc);
         if (oldDoc?.id) {
-          contentCache.current.delete(oldDoc.id);
           setDocuments(prev => prev.filter(doc => doc.id !== oldDoc.id));
         }
         return;
@@ -96,9 +119,7 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
 
       const nextDoc = payload.new;
       if (!nextDoc?.id) return;
-      // A doc's body may have changed — drop any cached content so the next
-      // fetchDocumentContent re-reads it. Keep the LIST metadata-only.
-      if (nextDoc.content !== undefined) contentCache.current.set(nextDoc.id, nextDoc.content);
+      applyDocumentRealtimeToContentCache(contentCache.current, eventType, nextDoc);
       const listDoc = toListDocument(nextDoc);
       setDocuments(prev => {
         const existingIndex = prev.findIndex(doc => doc.id === listDoc.id);

@@ -258,9 +258,24 @@ function createRealtime(deps = {}) {
  // is the third layer, and the one that survives someone later passing a full row:
  // a secret riding a broadcast into every subscribed browser is the worst outcome
  // this feature has, so it is stripped structurally rather than by convention.
+ // Cap for agent-status broadcast bodies. The sidebar only needs a short
+ // completion / Thinking line (~80 chars in the UI); multi-KB stream text on a
+ // workspace-wide channel is pure bandwidth waste and a privacy surface.
+ const AGENT_STATUS_CONTENT_MAX = 120;
+
+ function truncateAgentStatusContent(content) {
+  if (typeof content !== 'string' || !content) return '';
+  if (content.length <= AGENT_STATUS_CONTENT_MAX) return content;
+  return `${content.slice(0, AGENT_STATUS_CONTENT_MAX - 1)}…`;
+ }
+
  const REALTIME_HEAVY_FIELDS = {
   agent_memory_files: ['content_cache'],
   agent_jobs: ['prompt', 'response'],
+  // Document HTML bodies: list clients drop content after arrival, but
+  // notifyDbSubscribers was still fanning full `returning *` rows workspace-wide
+  // (autosave ~800ms). Strip at the chokepoint; REST still fetches bodies on demand.
+  documents: ['content'],
   // Server-owned routing provenance for queued agent task work. It identifies
   // the human whose private per-human agent DM receives the eventual run.
   // Task mention paths broadcast raw `returning *` rows, so the generic REST
@@ -371,7 +386,7 @@ function createRealtime(deps = {}) {
      id: row.id,
      agentId: row.sender_id,
      senderName: row.sender_name || null,
-     content: typeof row.content === 'string' ? row.content : '',
+     content: truncateAgentStatusContent(typeof row.content === 'string' ? row.content : ''),
      eventType,
     };
     const channel = `agent-status:${context.workspaceId}`;
@@ -1093,6 +1108,9 @@ function createRealtime(deps = {}) {
   sendWs,
   notifyDbSubscribers,
   sanitizeRealtimeRow,
+  truncateAgentStatusContent,
+  AGENT_STATUS_CONTENT_MAX,
+  REALTIME_HEAVY_FIELDS,
   relayBroadcast,
   broadcastGlobal,
   attachRealtime,

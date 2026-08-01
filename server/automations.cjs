@@ -62,6 +62,11 @@ const {
  AUTOMATION_TASK_SOURCE_TYPE,
  MAX_TASK_TITLE_LENGTH,
 } = require('../shared/automation-rules.cjs');
+// Same private-session predicate as REST/MCP (visibility + DM folder backstop).
+// Automations must not post into members-only sessions: they are a standing
+// manage grant, not a membership grant, and schedules already re-check the
+// same shape at run time.
+const { isPrivateSessionRow } = require('../shared/backend-core.cjs');
 
 /**
  * How many runs one 30s tick may drain.
@@ -368,20 +373,47 @@ function createAutomations(deps = {}) {
   return rows[0] || null;
  }
 
+ /**
+  * Live workspace-visible channel required for post_message.
+  * Soft-deleted and private/DM sessions are permanent failures (no retries).
+  */
+ async function resolvePostMessageTarget(channelId, workspaceId) {
+  const sessions = await getDb().unsafe(
+   `select id, workspace_id, visibility, folder, deleted_at
+      from chat_sessions where id = $1 limit 1`,
+   [String(channelId || '').trim()],
+  );
+  const session = sessions[0];
+  if (!session) return { ok: false, error: 'channel not found' };
+  if (String(session.workspace_id) !== String(workspaceId)) {
+   return { ok: false, error: 'channel is not in this workspace' };
+  }
+  if (session.deleted_at) return { ok: false, error: 'channel is deleted' };
+  if (isPrivateSessionRow(session)) {
+   return { ok: false, error: 'channel is private; automations cannot post into private conversations' };
+  }
+  return { ok: true, session };
+ }
+
+ /** Create/update-time gate: refuse definitions that target bad channels. */
+ async function assertPostMessageTargets(workspaceId, definition) {
+  const steps = Array.isArray(definition?.steps) ? definition.steps : [];
+  for (const step of steps) {
+   if (String(step?.action || '') !== 'post_message') continue;
+   const result = await resolvePostMessageTarget(step.channelId, workspaceId);
+   if (!result.ok) throw badRequest(result.error);
+  }
+ }
+
  /** Insert the message an automation posts. No agent is woken; see the header. */
  async function runPostMessageStep(step, run, payload) {
   const channelId = String(step.channelId || '').trim();
-  const sessions = await getDb().unsafe(
-   'select id, workspace_id from chat_sessions where id = $1 limit 1',
-   [channelId],
-  );
-  const session = sessions[0];
-  // A channel that has gone, or one in another workspace, is a PERMANENT
-  // failure: retrying it three times cannot make it succeed, and an automation
-  // must never be able to write into a workspace it does not belong to.
-  if (!session) return { action: step.action, ok: false, permanent: true, error: 'channel not found' };
-  if (String(session.workspace_id) !== String(run.workspace_id)) {
-   return { action: step.action, ok: false, permanent: true, error: 'channel is not in this workspace' };
+  // A channel that has gone, is private, or is in another workspace is a
+  // PERMANENT failure: retrying cannot make it succeed, and an automation must
+  // never write into a DM or a foreign workspace.
+  const target = await resolvePostMessageTarget(channelId, run.workspace_id);
+  if (!target.ok) {
+   return { action: step.action, ok: false, permanent: true, error: target.error };
   }
 
   const text = interpolate(String(step.text || ''), payload);
@@ -621,6 +653,7 @@ function createAutomations(deps = {}) {
   if (!id) throw badRequest('workspace id is required');
   await enforceWorkspaceRole(userId, id, 'manage');
   const validated = definitionOrThrow(definition);
+  await assertPostMessageTargets(id, validated);
   const rows = await getDb().unsafe(
    `insert into automations (workspace_id, name, description, enabled, trigger_event, definition, created_by)
       values ($1, $2, $3, $4, $5, $6::jsonb, $7)
@@ -663,6 +696,10 @@ function createAutomations(deps = {}) {
   const validated = patch.definition === undefined
    ? parseDefinition(existing.definition)
    : definitionOrThrow(patch.definition);
+  // Re-check targets whenever the definition is stored or re-enabled path might
+  // run an old private channel — create already gated, update re-gates always so
+  // a session that went private after authoring cannot stay scheduled forever.
+  await assertPostMessageTargets(id, validated);
   const name = patch.name === undefined ? existing.name : String(patch.name || '').slice(0, 160);
   const description = patch.description === undefined ? existing.description : String(patch.description || '').slice(0, 500);
   const enabled = patch.enabled === undefined ? existing.enabled === true : patch.enabled === true;
@@ -745,7 +782,15 @@ function createAutomations(deps = {}) {
   updateAutomation,
   deleteAutomation,
   publicAutomation,
-  __internals: { parseDefinition, disableRunaway, recentRunCount, runPostMessageStep, runCreateTaskStep },
+  __internals: {
+   parseDefinition,
+   disableRunaway,
+   recentRunCount,
+   runPostMessageStep,
+   runCreateTaskStep,
+   resolvePostMessageTarget,
+   assertPostMessageTargets,
+  },
  };
 }
 

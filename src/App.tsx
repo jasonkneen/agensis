@@ -1943,30 +1943,47 @@ function AppContent() {
     toast.success('Merged — reconciling both branches into the parent', { id: pending });
   }, [mergeSession, handleSessionOpen]);
 
-  const handleDeleteSession = useCallback(async (id: string) => {
+  const handleDeleteSession = useCallback((id: string) => {
     const session = sessions.find(item => item.id === id);
-    const pending = toast.loading(`Closing “${session?.title || 'conversation'}”…`);
-    if (!await deleteSession(id)) {
-      toast.error('Close failed — your access may have changed', { id: pending });
-      return;
-    }
-    toast.success('Conversation closed', { id: pending });
+    const title = session?.title || 'conversation';
+    setConfirmAction({
+      title: `Close “${title}”?`,
+      description: 'The conversation leaves your sidebar. You can open it again from history if it is still available.',
+      actionLabel: 'Close conversation',
+      onConfirm: async () => {
+        const pending = toast.loading(`Closing “${title}”…`);
+        if (!await deleteSession(id)) {
+          toast.error('Close failed — your access may have changed', { id: pending });
+          return;
+        }
+        toast.success('Conversation closed', { id: pending });
+      },
+    });
   }, [deleteSession, sessions]);
 
   // Delete a DM conversation: soft-delete all its messages, close (soft-delete)
   // the session, and close any open chat window pointing at it — "close the
   // thread" has to shut the actual window, not just drop the sidebar row, or the
   // user is left staring at a dead/empty chat pane. Everything is soft-deleted;
-  // the data is retained for later use.
-  const handleDeleteDm = useCallback(async (session: ChatSession) => {
-    const pending = toast.loading(`Deleting “${session.title || 'conversation'}”…`);
-    const deleted = await closeAndClearSession(session.id);
-    if (!deleted) {
-      toast.error('Delete failed — workspace manager permission is required', { id: pending });
-      return;
-    }
-    windows.filter(w => w.sessionId === session.id).forEach(w => closeWindow(w.id));
-    toast.success('Conversation deleted and closed', { id: pending });
+  // the data is retained for later use. Confirm first — one-click was too easy
+  // to mis-tap on the highest-traffic chrome.
+  const handleDeleteDm = useCallback((session: ChatSession) => {
+    const title = session.title || 'conversation';
+    setConfirmAction({
+      title: `Delete “${title}”?`,
+      description: 'This removes the conversation from your view and closes any open window for it. The data is soft-deleted, not hard-wiped.',
+      actionLabel: 'Delete conversation',
+      onConfirm: async () => {
+        const pending = toast.loading(`Deleting “${title}”…`);
+        const deleted = await closeAndClearSession(session.id);
+        if (!deleted) {
+          toast.error('Delete failed — workspace manager permission is required', { id: pending });
+          return;
+        }
+        windows.filter(w => w.sessionId === session.id).forEach(w => closeWindow(w.id));
+        toast.success('Conversation deleted and closed', { id: pending });
+      },
+    });
   }, [closeAndClearSession, windows, closeWindow]);
 
   const handleAgentDirectMessage = useCallback(async (agent: { id: string; agentId?: string | null; name: string; handle: string | null }) => {

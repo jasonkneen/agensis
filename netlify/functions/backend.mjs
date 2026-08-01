@@ -118,6 +118,19 @@ import {
  reservedAgentHandleMessage,
  slugMentionHandle,
 } from '../../shared/channelMentions.cjs';
+// Shared pure SQL builders — same module Fly uses. Host-specific jsonb binding
+// stays local (normalizeJsonParam below stringifies for @netlify/database).
+import {
+ quoteIdent,
+ ensureTable,
+ normalizeColumns,
+ isJsonColumn,
+ invalidJsonValue,
+ createBindDbParam,
+ buildWhereClause,
+ buildOrderClause,
+ mapDbError,
+} from '../../server/lib/db-sql.cjs';
 import { voiceCapabilities, unavailableReason, mintCartesiaToken, scrubError } from '../../shared/voice-core.cjs';
 // Reaction flow events. This lane can write `messages.reactions` through the
 // same generic /backend/db/update route the Fly lane serves, so it queues the
@@ -342,17 +355,7 @@ function dbPool() {
  return database.pool;
 }
 
-function mapDbError(error) {
- // Never return Postgres `detail` to clients — it can leak stored values and
- // schema internals. Log it server-side, expose only message + code (L2).
- if (error?.detail) {
-  console.error('[db-error]', { code: error.code, detail: error.detail, message: error.message });
- }
- return {
-  message: error?.message || 'Database error',
-  code: error?.code || null,
- };
-}
+// mapDbError: imported from server/lib/db-sql.cjs (same as Fly).
 
 const CORS_HEADERS = {
  'Access-Control-Allow-Origin': '*',
@@ -776,37 +779,8 @@ async function requireUserId(req) {
  return userId;
 }
 
-function quoteIdent(value) {
- if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(value)) {
-  throw new Error(`Invalid identifier: ${value}`);
- }
- return `"${value}"`;
-}
-
-function ensureTable(table) {
- if (!ALLOWED_TABLES.has(table)) {
-  throw new Error(`Table not allowed: ${table}`);
- }
- return quoteIdent(table);
-}
-
-function normalizeColumns(columns) {
- if (!columns || columns === '*') return '*';
- const list = String(columns).split(',').map((column) => column.trim()).filter(Boolean);
- if (list.length === 0) return '*';
- return list.map(quoteIdent).join(', ');
-}
-
-function isJsonColumn(table, column) {
- return Boolean(JSON_COLUMNS_BY_TABLE[table]?.has(column));
-}
-
-function invalidJsonValue(table, column) {
- const err = new Error(`${table}.${column} must be valid JSON`);
- err.status = 400;
- return err;
-}
-
+// Netlify driver: stringify jsonb params (opposite of Fly's object bind).
+// Do not "unify" with server/lib/db-sql.cjs normalizeJsonParam — the drivers disagree.
 function normalizeJsonParam(table, column, value) {
  if (value == null) return null;
  if (typeof value === 'string') {
@@ -820,58 +794,7 @@ function normalizeJsonParam(table, column, value) {
  return JSON.stringify(value);
 }
 
-function bindDbParam(params, table, column, value) {
- const jsonColumn = isJsonColumn(table, column);
- if (jsonColumn) {
-  params.push(normalizeJsonParam(table, column, value));
-  return `$${params.length}::jsonb`;
- }
- const elemType = arrayColumnElemType(table, column);
- if (elemType) {
-  params.push(toPgArrayLiteral(value));
-  return `$${params.length}::${elemType}[]`;
- }
- params.push(value ?? null);
- return `$${params.length}`;
-}
-
-function buildWhereClause(filters = [], params = []) {
- if (!Array.isArray(filters) || filters.length === 0) {
-  return { clause: '', params };
- }
-
- const clauses = [];
- for (const filter of filters) {
-  if (!filter || typeof filter !== 'object') continue;
-  const operator = filter.operator || 'eq';
-  if (operator === 'eq') {
-   params.push(filter.value ?? null);
-   clauses.push(`${quoteIdent(filter.column)} = $${params.length}`);
-   continue;
-  }
-  // F5: mirror server/index.cjs — the only supported `not` is `.not(col,'is',null)`
-  // → IS NOT NULL (sub-threads query). Anything else is rejected, not silently run.
-  if (operator === 'not') {
-   if (filter.subOperator !== 'is' || filter.value !== null) {
-    throw new Error(`Unsupported not filter: ${filter.subOperator} ${filter.value}`);
-   }
-   clauses.push(`${quoteIdent(filter.column)} IS NOT NULL`);
-   continue;
-  }
-  throw new Error(`Unsupported filter operator: ${operator}`);
- }
-
- return {
-  clause: clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '',
-  params,
- };
-}
-
-function buildOrderClause(orderBy) {
- if (!orderBy || !orderBy.column) return '';
- const direction = orderBy.ascending === false ? 'DESC' : 'ASC';
- return ` ORDER BY ${quoteIdent(orderBy.column)} ${direction}`;
-}
+const bindDbParam = createBindDbParam(normalizeJsonParam);
 
 function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
  const sections = [];

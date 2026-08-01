@@ -1428,6 +1428,21 @@ function createAgentJobs(deps = {}) {
    elapsedMs: Number(message.elapsedMs || 0),
   };
   if (deltaText) nextMetadata.lastContentAt = nextMetadata.lastDeltaAt;
+  // Content-free ticks are pure liveness (lastDeltaAt above). Rewriting
+  // messages.content every second as "Thinking Ns" forced full-row fanout +
+  // agent-status at ~1 Hz for a clock digit. Throttle display rewrites to 10s;
+  // text deltas still apply immediately. lastClockAt rides the job metadata
+  // write so the throttle survives restarts without a second UPDATE.
+  const CLOCK_MESSAGE_THROTTLE_MS = 10_000;
+  let skipClockMessageUpdate = false;
+  if (!deltaText && responseMessageId) {
+   const lastClockMs = Date.parse(String(metadata.lastClockAt || '')) || 0;
+   if (Date.now() - lastClockMs < CLOCK_MESSAGE_THROTTLE_MS) {
+    skipClockMessageUpdate = true;
+   } else {
+    nextMetadata.lastClockAt = nextMetadata.lastDeltaAt;
+   }
+  }
   const deltaRows = await tx.unsafe(
    `update agent_jobs
       set response = $2,
@@ -1470,7 +1485,7 @@ function createAgentJobs(deps = {}) {
   // Either the job already finished, or a segment moved the placeholder on between
   // the read above and this write. Everything below is stale either way.
   if (deltaRows.length === 0) return false;
-  if (responseMessageId) {
+  if (responseMessageId && !skipClockMessageUpdate) {
    const content = agentLiveMessageContent(message);
    const updatedRows = await tx.unsafe(
     `update messages

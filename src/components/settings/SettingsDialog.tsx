@@ -934,6 +934,7 @@ function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
   const [gwModel, setGwModel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [busy, setBusy] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const add = async () => {
     if (!name.trim() || !baseUrl.trim() || busy) return;
@@ -974,7 +975,21 @@ function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
               >
                 <KeyRound />
               </Button>
-              <Button type="button" variant="ghost" size="icon-xs" onClick={() => void deleteGateway(gateway.id)} aria-label={`Delete ${gateway.name}`}>
+              <Button
+                type="button"
+                variant={confirmDeleteId === gateway.id ? 'destructive' : 'ghost'}
+                size="icon-xs"
+                onClick={() => {
+                  if (confirmDeleteId !== gateway.id) {
+                    setConfirmDeleteId(gateway.id);
+                    return;
+                  }
+                  setConfirmDeleteId(null);
+                  void deleteGateway(gateway.id);
+                }}
+                aria-label={confirmDeleteId === gateway.id ? `Confirm delete ${gateway.name}` : `Delete ${gateway.name}`}
+                title={confirmDeleteId === gateway.id ? 'Click again to confirm delete' : `Delete ${gateway.name}`}
+              >
                 <Trash2 />
               </Button>
             </div>

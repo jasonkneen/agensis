@@ -94,20 +94,34 @@ function normalizeJsonParam(table, column, value) {
  return value;
 }
 
-function bindDbParam(params, table, column, value) {
- const jsonColumn = isJsonColumn(table, column);
- if (jsonColumn) {
-  params.push(normalizeJsonParam(table, column, value));
-  return `$${params.length}::jsonb`;
+/**
+ * Build a bind helper for a specific JSON normalizer. Fly and Netlify disagree
+ * on whether jsonb params should be objects or strings; each host passes the
+ * normalizer that matches its driver. Pure identifier/filter builders stay
+ * shared so a new table stamp cannot land on one host only.
+ */
+function createBindDbParam(normalizeJson) {
+ if (typeof normalizeJson !== 'function') {
+  throw new Error('createBindDbParam requires a normalizeJson function');
  }
- const elemType = arrayColumnElemType(table, column);
- if (elemType) {
-  params.push(toPgArrayLiteral(value));
-  return `$${params.length}::${elemType}[]`;
- }
- params.push(value ?? null);
- return `$${params.length}`;
+ return function bindDbParam(params, table, column, value) {
+  const jsonColumn = isJsonColumn(table, column);
+  if (jsonColumn) {
+   params.push(normalizeJson(table, column, value));
+   return `$${params.length}::jsonb`;
+  }
+  const elemType = arrayColumnElemType(table, column);
+  if (elemType) {
+   params.push(toPgArrayLiteral(value));
+   return `$${params.length}::${elemType}[]`;
+  }
+  params.push(value ?? null);
+  return `$${params.length}`;
+ };
 }
+
+// Fly / porsager default: bind jsonb as objects.
+const bindDbParam = createBindDbParam(normalizeJsonParam);
 
 function buildWhereClause(filters = [], params = []) {
  if (!Array.isArray(filters) || filters.length === 0) {
@@ -179,6 +193,7 @@ module.exports = {
  isJsonColumn,
  invalidJsonValue,
  normalizeJsonParam,
+ createBindDbParam,
  bindDbParam,
  buildWhereClause,
  appendWorkspaceAccessClause,

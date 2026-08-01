@@ -4016,7 +4016,22 @@ function publicAgentConnectionCommandAgent(row) {
  };
 }
 
-async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle = null, model = null, permissionMode = null, baseUrl = null, profile = null, actorUserId = null, actorControllerId = null } = {}) {
+async function buildAgentConnectionCommand({
+ agentId,
+ workspaceId = null,
+ handle = null,
+ model = null,
+ permissionMode = null,
+ baseUrl = null,
+ profile = null,
+ actorUserId = null,
+ actorControllerId = null,
+ // True only when the caller already proved manage (HTTP connection-command,
+ // MCP user/workspace after role check). Without this, an explicit
+ // permissionMode is IGNORED and the stored agent mode is kept — so a
+ // compromised agent connect token cannot escalate itself to yolo by re-minting.
+ allowPermissionModeChange = false,
+} = {}) {
  const id = String(agentId || '').trim();
  if (!id) throw new Error('agentId is required');
  const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [id]);
@@ -4028,10 +4043,16 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
  const resolvedHandle = slugHandle(handle || agent.handle || agent.name);
  const resolvedRuntime = normalizeExecutionRuntime(parseJsonObject(agent.metadata).runtime);
  const resolvedModel = resolveExecutionModel(model || agent.model, resolvedRuntime);
- // F7: do NOT silently escalate. An unspecified mode stays 'default' (least
- // privilege), matching the Netlify connect path (normalizeAgentPermissionMode).
- // A caller wanting full host access must pass permission_mode: 'yolo' explicitly.
- const resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode || agent.permission_mode);
+ // Mode changes are manage-gated. Minting a connect token is NOT by itself a
+ // mode grant: only an explicit override when allowPermissionModeChange is true
+ // (caller already proved manage) may change permission_mode. actorUserId is for
+ // audit attribution only — it must NEVER open the mode gate by itself (a
+ // cursorbuddy key minter id or setup session is not a mode grant).
+ const modeOverrideAllowed = allowPermissionModeChange === true;
+ const wantsMode = typeof permissionMode === 'string' && permissionMode.trim();
+ const resolvedPermissionMode = (modeOverrideAllowed && wantsMode)
+  ? normalizeAgentPermissionMode(permissionMode)
+  : normalizeAgentPermissionMode(agent.permission_mode);
  const updateRows = await getDb().unsafe(
   `update workspace_agents
      set handle = $2,
@@ -4048,9 +4069,9 @@ async function buildAgentConnectionCommand({ agentId, workspaceId = null, handle
  const updatedAgent = updateRows[0];
  if (!updatedAgent) throw new Error('Agent could not be updated for connection');
  notifyDbSubscribers('workspace_agents', 'UPDATE', updateRows);
- // A connect token is a real credential: it is the daemon's whole identity, and
- // this UPDATE also (re)sets permission_mode, so a mint is how an agent can end
- // up in 'yolo'. Recorded: the agent, its handle, and the RESULTING mode.
+ // A connect token is a real credential: it is the daemon's whole identity.
+ // permission_mode is rewritten to the resolved mode (stored, or manage-proven
+ // override). Recorded: the agent, its handle, and the RESULTING mode.
  // Never recorded: the token, and never its hash either.
  await recordAudit({
   workspaceId: agent.workspace_id ? String(agent.workspace_id) : null,
@@ -8803,6 +8824,7 @@ const {
  authorizeRealtimeBroadcast, revokeRealtimeAccessForMember,
  notifyReadReceiptPreference,
  registerTestWebsocketClient, workspaceIdFromRealtimeChannel, resourceOperationFromRealtimeChannel,
+ truncateAgentStatusContent, AGENT_STATUS_CONTENT_MAX, REALTIME_HEAVY_FIELDS,
 } = realtime;
 
 resourceProgressRelay = ({ workspaceId, operationId, status, progress, progressSeq, updatedAt } = {}) => {
@@ -10335,6 +10357,9 @@ module.exports = {
   resolveWorkThreadParent,
   loadChannelMessages,
   sanitizeRealtimeRow,
+  truncateAgentStatusContent,
+  AGENT_STATUS_CONTENT_MAX,
+  REALTIME_HEAVY_FIELDS,
   // The vault: encryption at rest, the legacy-plaintext backfill, and the
   // managed-key state shape (which must never carry a preview again).
   encryptVaultSecret,

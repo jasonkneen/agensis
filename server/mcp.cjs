@@ -2288,7 +2288,7 @@ function buildTools() {
    properties: {
     as: { type: 'string', description: 'Handle of the agent to connect (e.g. "claude"). Required for a workspace or user token; ignored for a per-agent token (which targets itself).' },
     model: { type: 'string', description: 'Override the model the daemon runs (default: the agent\'s configured model).' },
-    permission_mode: { type: 'string', description: 'Daemon permission mode: "yolo" (full access, default), "accept_edits", or "default".' },
+    permission_mode: { type: 'string', description: 'Daemon permission mode override: "yolo", "accept_edits", or "default". Only workspace/user (manage) callers may set this; agents and controllers cannot escalate mode through this tool — the stored agent mode is used.' },
     base_url: { type: 'string', description: 'Override the backend --url the daemon connects to (default: the server\'s configured daemon base URL).' },
    },
    additionalProperties: false,
@@ -2324,16 +2324,25 @@ function buildTools() {
      }
      agentId = agent.id;
     }
-    if (identity.kind === 'controller' && args?.permission_mode) {
-     throw new ToolError('A controller cannot change an agent permission mode through get_connect_command');
+    // permission_mode is MANAGE-gated everywhere else (setAgentPermissionMode,
+    // PRIVILEGED_DB_COLUMNS). Agents and controllers must not escalate to yolo
+    // (or any other mode) by minting a connect token — only user/workspace
+    // control-plane callers may override, and buildAgentConnectionCommand will
+    // still refuse an unproven override as a second layer.
+    const wantsMode = typeof args?.permission_mode === 'string' && args.permission_mode.trim();
+    if (wantsMode && (identity.kind === 'agent' || identity.kind === 'controller')) {
+     throw new ToolError('Only a manage-level caller can change an agent permission mode through get_connect_command');
     }
+    const modeOverrideAllowed = identity.kind === 'user' || identity.kind === 'workspace';
     const payload = await deps.getAgentConnectionCommand({
      agentId,
      workspaceId: identity.workspaceId,
      handle: targetHandle,
      model: (typeof args?.model === 'string' && args.model.trim()) ? args.model.trim() : null,
-     permissionMode: (typeof args?.permission_mode === 'string' && args.permission_mode.trim()) ? args.permission_mode.trim() : null,
+     permissionMode: (modeOverrideAllowed && wantsMode) ? args.permission_mode.trim() : null,
+     allowPermissionModeChange: modeOverrideAllowed,
      baseUrl: (typeof args?.base_url === 'string' && args.base_url.trim()) ? args.base_url.trim() : null,
+     actorUserId: identity.kind === 'user' ? identity.userId : null,
      actorControllerId: identity.kind === 'controller' ? identity.controllerId : null,
     });
     return {

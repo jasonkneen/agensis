@@ -238,7 +238,10 @@ function mountCursorbuddyRoutes(app, deps = {}) {
     workspaceId: record.workspace_id,
     handle: agent.handle || agent.name,
     model: req.body?.model || agent.model,
-    permissionMode: claim.permissionMode || agent.permission_mode,
+    // Unauthenticated claim path must not escalate permission_mode from the
+    // request body. Stored agent mode only; manage sets mode before mint.
+    permissionMode: null,
+    allowPermissionModeChange: false,
     baseUrl,
     // This route is deliberately unauthenticated — the connection key IS the
     // credential — so there is no req.userId to attribute the mint to. The

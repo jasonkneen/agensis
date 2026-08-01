@@ -43,6 +43,7 @@ function relativeTime(iso: string | null): string {
 
 export function SchedulesWindow({ workspaceId, agents, sessions }: SchedulesWindowProps) {
   const { schedules, createSchedule, updateSchedule, runSchedule, deleteSchedule } = useSchedules(workspaceId || null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [agentId, setAgentId] = useState('');
@@ -213,7 +214,21 @@ export function SchedulesWindow({ workspaceId, agents, sessions }: SchedulesWind
                   <Button type="button" variant="ghost" size="icon-xs" title={schedule.enabled ? 'Pause' : 'Resume'} disabled={busyId === schedule.id} onClick={() => void toggleEnabled(schedule)}>
                     {schedule.enabled ? <Pause className="size-4" /> : <Play className="size-4" />}
                   </Button>
-                  <Button type="button" variant="ghost" size="icon-xs" title="Delete" onClick={() => void deleteSchedule(schedule.id)}>
+                  <Button
+                    type="button"
+                    variant={confirmDeleteId === schedule.id ? 'destructive' : 'ghost'}
+                    size="icon-xs"
+                    title={confirmDeleteId === schedule.id ? 'Click again to confirm delete' : 'Delete'}
+                    aria-label={confirmDeleteId === schedule.id ? `Confirm delete ${schedule.name || 'schedule'}` : `Delete ${schedule.name || 'schedule'}`}
+                    onClick={() => {
+                      if (confirmDeleteId !== schedule.id) {
+                        setConfirmDeleteId(schedule.id);
+                        return;
+                      }
+                      setConfirmDeleteId(null);
+                      void deleteSchedule(schedule.id);
+                    }}
+                  >
                     <Trash2 className="size-4" />
                   </Button>
                 </div>

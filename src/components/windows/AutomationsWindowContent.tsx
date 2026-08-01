@@ -174,7 +174,15 @@ export function AutomationsWindowContent({ workspaceId, sessions }: AutomationsW
     if (failure) setFormError(failure);
   };
 
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
   const handleDelete = async (automation: Automation) => {
+    // Two-click confirm (same pattern as Agents): first click arms, second deletes.
+    if (confirmDeleteId !== automation.id) {
+      setConfirmDeleteId(automation.id);
+      return;
+    }
+    setConfirmDeleteId(null);
     setBusyId(automation.id);
     const failure = await deleteAutomation(automation.id);
     setBusyId(null);
@@ -391,14 +399,18 @@ export function AutomationsWindowContent({ workspaceId, sessions }: AutomationsW
                   </Button>
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant={confirmDeleteId === automation.id ? 'destructive' : 'ghost'}
                     size="sm"
                     onClick={() => { void handleDelete(automation); }}
                     disabled={busyId === automation.id}
-                    aria-label={`Delete ${automation.name || 'automation'}`}
-                    title={`Delete ${automation.name || 'automation'}`}
+                    aria-label={confirmDeleteId === automation.id
+                      ? `Confirm delete ${automation.name || 'automation'}`
+                      : `Delete ${automation.name || 'automation'}`}
+                    title={confirmDeleteId === automation.id
+                      ? 'Click again to confirm delete'
+                      : `Delete ${automation.name || 'automation'}`}
                   >
-                    <Trash2 />
+                    {confirmDeleteId === automation.id ? 'Confirm' : <Trash2 />}
                   </Button>
                 </div>
               </div>
