@@ -20,7 +20,7 @@ import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { apiAuthHeaders, apiBaseUrl, apiUrl } from '@/lib/backendClient';
-import { AGENT_TEMPLATES, dedupeHandle, type AgentTemplate } from '@/lib/agentTemplates';
+import { AGENT_TEMPLATES, agentMetadataWithRuntime, dedupeHandle, type AgentTemplate } from '@/lib/agentTemplates';
 import type { WorkspaceReadiness } from '@/lib/workspaceReadiness';
 import type { CreateAgentInput, CreateAgentResult } from '@/hooks/useAgents';
 import type { AgentConnection, WorkspaceAgent } from '../../types';
@@ -113,6 +113,7 @@ const CONNECT_CLIS = [
   { id: 'codex', name: 'Codex CLI', note: 'Uses your logged-in OpenAI account' },
 ] as const;
 
+type ConnectCliId = (typeof CONNECT_CLIS)[number]['id'];
 type KeyStatus = 'unknown' | 'configured' | 'missing';
 
 /**
@@ -280,7 +281,7 @@ export function OnboardingTour({
     }
   };
 
-  const handleConnect = async (cliId: string) => {
+  const handleConnect = async (cliId: ConnectCliId) => {
     if (connectBusy) return;
     // The connect step creates an agent too, so it dead-ends the same way.
     if (!workspaceReady) {
@@ -300,11 +301,12 @@ export function OnboardingTour({
         system_prompt: CODER_TEMPLATE?.systemPrompt || '',
         tools: [],
         skills: [],
+        metadata: agentMetadataWithRuntime({}, cliId, 'daemon'),
         model: 'auto',
-        run_mode: 'builtin',
+        run_mode: 'daemon',
       });
       if (!agent) throw new Error(failure?.reason ?? 'The agent could not be created.');
-      // The server flips run_mode to 'daemon' and rotates the connect token here.
+      // The server rotates the connect token and returns the runtime-locked command here.
       const response = await fetch(apiUrl(`/backend/agents/${agent.id}/connection-command`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
