@@ -29,6 +29,13 @@
 
 # Headers only — build/publish settings stay in the Netlify UI (no [build]
 # section here so we don't override them).
+
+[functions]
+  # server/nostr-community.cjs is statically bundled into the mirror, but its
+  # CommonJS adapter requires nostr-tools at runtime. Keep that package in the
+  # Lambda archive instead of relying on the bundler to infer a nested require.
+  external_node_modules = ["nostr-tools"]
+
 #
 # The update flow reads /version.json and /release-notes.json to detect a new
 # deploy. They must never be served stale, so tell the CDN + browser not to

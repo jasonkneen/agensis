@@ -134,6 +134,10 @@ import {
 } from '../../shared/session-lineage.cjs';
 import { createNostrProtocol } from '../../server/nostr-community.cjs';
 import { assertSafeOutboundUrl } from '../../server/lib/net-guard.cjs';
+// Keep the adapter's nested CommonJS require resolvable in Netlify's nft
+// archive. The explicit side-effect import makes the package part of the
+// function trace; the adapter still owns the actual protocol calls.
+import 'nostr-tools';
 
 // Nostr invite preview is intentionally shared with the Fly protocol adapter.
 // The preview performs the remote metadata fetch, so this mirror must carry the
