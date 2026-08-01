@@ -2,9 +2,12 @@
 
 Snapshot: 2026-08-01
 
-Current release: the root checkout is `main` at `1d9c7fc`, pushed to
+Current release: the root checkout is `main` at `c096ebd`, pushed to
 `origin/main`, with Neon current through the resource soft-delete migration.
-Fly release **v155** and the Netlify production deploy are live. The earlier
+Fly release **v155** and the Netlify production deploy are live and healthy.
+The automatic main deploy for this commit is
+`6a6ddd4cf7097d0008f774eb`; the final manual function-packaging deploy was
+`6a6ddd51bb695706dfd5421b`. The earlier
 `pre-main` details below describe the reboot handoff before the merge and are
 historical. See the current release section in `status.md` for verification
 counts and deployment URLs.

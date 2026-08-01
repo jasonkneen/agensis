@@ -2,17 +2,28 @@
 
 Snapshot: 2026-08-01. The release is committed on `main` and deployed. Do not reset, clean, rebase, or discard the historical worktrees below.
 
-## Current release (2026-08-01 12:36)
+## Current release (2026-08-01 12:52)
 
-`main` is at `1d9c7fc` (`Fix receipt migration for thread-scoped rows`) and
+`main` is at `c096ebd` (`Pin Nostr runtime to CommonJS-compatible release`) and
 matches `origin/main`. Neon migration tracking is current through
 `20260801090000_workspace_resources_soft_delete.sql`.
 
 - Fly backend: release **v155**, healthy at `https://agensis-backend.fly.dev`.
-- Netlify production: live at `https://agensis.io`; deploy
-  `6a6dd9f040083d24f31c7165`.
+- Netlify production: live at `https://agensis.io`; the automatic main deploy
+  for `c096ebd` is `6a6ddd4cf7097d0008f774eb` (the final manual packaging
+  deploy was `6a6ddd51bb695706dfd5421b`).
 - The `requestText` resource-operation contract is now present in the
-  deployed frontend, Fly backend, and Netlify function mirror.
+  deployed frontend, Fly backend, and Netlify function mirror. The production
+  lazy resource chunk contains the plain-language `requestText` field and
+  “Ask the steward” surface.
+- Coordinated live checks returned HTTP 200 from both Fly and the same-origin
+  Netlify `/backend/health` route. The unauthenticated resource-operation
+  contract returned the expected HTTP 401 JSON response rather than a 404,
+  502, or unsupported-field error.
+- Netlify’s mirror now statically imports the shared Nostr adapter and pins
+  `nostr-tools` to the CommonJS-compatible `2.20.0` release. This keeps the
+  Fly CJS runtime and Netlify’s Node 22 function on the same loadable crypto
+  dependency graph.
 - The migration runner initially found an existing-data edge case in the
   agent read-receipt transition. The migration now skips its temporary
   session-wide index when the newer thread-scoped shape is already present;
