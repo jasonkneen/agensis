@@ -22,18 +22,21 @@
 //   node scripts/desktop-build.mjs --publish never   → build, don't publish
 // Override the backend for staging: VITE_BACKEND_BASE_URL=... node scripts/desktop-build.mjs
 import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const BACKEND_URL = process.env.VITE_BACKEND_BASE_URL || 'https://agensis-backend.fly.dev';
 const passthrough = process.argv.slice(2); // e.g. --publish never
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const node = process.execPath;
 
-const isWindows = process.platform === 'win32';
-const npmCmd = isWindows ? 'npm.cmd' : 'npm';
-const npxCmd = isWindows ? 'npx.cmd' : 'npx';
-
-function run(cmd, args, extraEnv = {}) {
-  const label = `${cmd} ${args.join(' ')}`;
+// Call node entrypoints directly. `npm.cmd` / `npx.cmd` with shell:false fails
+// on Windows GitHub runners (ENOENT / empty status) before any script runs.
+function run(args, extraEnv = {}) {
+  const label = `node ${args.join(' ')}`;
   console.log(`\n[desktop:build] ${label}`);
-  const result = spawnSync(cmd, args, {
+  const result = spawnSync(node, args, {
+    cwd: root,
     stdio: 'inherit',
     env: { ...process.env, ...extraEnv },
     shell: false,
@@ -47,8 +50,11 @@ function run(cmd, args, extraEnv = {}) {
 console.log(`[desktop:build] baking VITE_BACKEND_BASE_URL=${BACKEND_URL} into the desktop bundle`);
 
 // 1. app icon  2. web bundle w/ backend URL baked in  3. package with electron-builder
-run(npmCmd, ['run', 'icon']);
-run(npxCmd, ['vite', 'build'], { VITE_BACKEND_BASE_URL: BACKEND_URL, AGENSIS_DESKTOP_BUILD: '1' });
-run(npxCmd, ['electron-builder', ...passthrough]);
+run([path.join(root, 'scripts', 'generate-icon.cjs')]);
+run(
+  [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'), 'build'],
+  { VITE_BACKEND_BASE_URL: BACKEND_URL, AGENSIS_DESKTOP_BUILD: '1' },
+);
+run([path.join(root, 'node_modules', 'electron-builder', 'cli.js'), ...passthrough]);
 
 console.log('\n[desktop:build] done — output in release/');

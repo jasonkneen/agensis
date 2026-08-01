@@ -1,8 +1,12 @@
 {
   "name": "agensis",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Realtime collaborative workspace for chat, documents, memory, files, and shared canvas.",
+  "author": {
+    "name": "Jason Kneen",
+    "email": "hello@agensis.io"
+  },
   "homepage": "https://agensis.io",
   "repository": {
     "type": "git",
@@ -189,6 +193,13 @@
     },
     "linux": {
       "category": "Office",
+      "maintainer": "agensis <hello@agensis.io>",
+      "desktop": {
+        "Name": "agensis",
+        "Comment": "Shared workspace for humans and AI agents",
+        "Categories": "Office;Network;"
+      },
+      "executableName": "agensis",
       "target": [
         {
           "target": "AppImage",
