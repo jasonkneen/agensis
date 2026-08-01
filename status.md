@@ -4,14 +4,16 @@ Snapshot: 2026-08-01. The release is committed on `main` and deployed. Do not re
 
 ## Current release (2026-08-01 12:52)
 
-`main` is at `c096ebd` (`Pin Nostr runtime to CommonJS-compatible release`) and
-matches `origin/main`. Neon migration tracking is current through
+The application release is `c096ebd` (`Pin Nostr runtime to
+CommonJS-compatible release`); the final handoff snapshot is `96bee3d`, and
+both are pushed on `main`/`origin/main`. Neon migration tracking is current through
 `20260801090000_workspace_resources_soft_delete.sql`.
 
 - Fly backend: release **v155**, healthy at `https://agensis-backend.fly.dev`.
 - Netlify production: live at `https://agensis.io`; the automatic main deploy
   for `c096ebd` is `6a6ddd4cf7097d0008f774eb` (the final manual packaging
-  deploy was `6a6ddd51bb695706dfd5421b`).
+  deploy was `6a6ddd51bb695706dfd5421b`). The handoff-only `96bee3d` build is
+  also ready as deploy `6a6dddfaa0a42c0008742f65`.
 - The `requestText` resource-operation contract is now present in the
   deployed frontend, Fly backend, and Netlify function mirror. The production
   lazy resource chunk contains the plain-language `requestText` field and
