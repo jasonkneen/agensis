@@ -4,11 +4,12 @@ Snapshot: 2026-08-01. The release is committed on `main` and deployed. Do not re
 
 ## Current deployed follow-up (2026-08-01 14:05 BST)
 
-The checkout is clean on `main` at `642f857`, also pushed to `origin/main`. The
-stewarded-resource workflow implementation is deployed to Fly as release
-**v157**, running image `deployment-01KYYPSPHNQCAZHGT0SSBCVF45`; the Fly health
-check is passing at `https://agensis-backend.fly.dev/backend/health`. The
-pre-existing `deno.lock` edit is preserved unchanged. This follow-up adds:
+The checkout is clean on `main` at `a7aafec` (a documentation-only handoff
+commit on top of runtime commit `642f857`, both pushed to `origin/main`). The
+stewarded-resource workflow runtime is deployed to Fly as release **v157**,
+running image `deployment-01KYYPSPHNQCAZHGT0SSBCVF45`; the Fly health check is
+passing at `https://agensis-backend.fly.dev/backend/health`. The pre-existing
+`deno.lock` edit is preserved unchanged. This follow-up adds:
 
 - bounded dependency-ordered operation steps (`steps`, `dependsOn`, `stopOnError`)
   to the shared resource-operation contract and MCP request tool;

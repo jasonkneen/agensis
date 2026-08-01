@@ -4,10 +4,11 @@ Snapshot: 2026-08-01
 
 ## Current follow-up: stewarded resource workflows (2026-08-01 14:05 BST)
 
-Root is clean on `main` at `642f857`, pushed to `origin/main` and deployed to
-Fly release **v157** (`deployment-01KYYPSPHNQCAZHGT0SSBCVF45`). The Fly health
-check is passing. Keep the existing `deno.lock` change; it predates this
-follow-up and is preserved in the deployed commit.
+Root is clean on `main` at `a7aafec`, a documentation-only handoff commit on
+top of runtime commit `642f857`; both are pushed to `origin/main`. The runtime
+is deployed to Fly release **v157** (`deployment-01KYYPSPHNQCAZHGT0SSBCVF45`)
+and its health check is passing. Keep the existing `deno.lock` change; it
+predates this follow-up and is preserved in the deployed runtime commit.
 
 The implementation is in the root checkout, not the historical controller or
 message-integrity worktrees. It adds dependency-checked operation plans,
@@ -23,7 +24,7 @@ Checks completed: typecheck, production build, 2,828 frontend unit tests,
 24 pre-existing failures; `npm run ci` stops there, and full lint still has
 the known generated Netlify edge-function `no-var` errors.
 
-Current application release: `642f857` is pushed on `main`/`origin/main`, with
+Current application runtime release: `642f857` is pushed on `main`/`origin/main`, with
 the final handoff snapshot at `96bee3d` and Neon current through the resource
 soft-delete migration.
 Fly release **v157** and the Netlify production deploy are live and healthy.
