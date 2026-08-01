@@ -18,8 +18,12 @@ http://localhost:3142
 ```
 
 Create an account on that page — the first sign-up is a normal one, there is no
-seeded user. The database schema is applied on boot, so there is no separate
-migration step.
+seeded user. Use email and password. This creates a local account in the
+deployment's Postgres database and does not require an account with Agensis,
+Netlify, Google, or GitHub. Social sign-in is shown only when the site reports a
+configured Netlify Identity provider, so those buttons are absent from the
+self-hosted image. The database schema is applied on boot, so there is no
+separate migration step.
 
 Every value in `.env.docker.example` has a working default. Two are worth
 reading before you expose this to anyone else: `POSTGRES_PASSWORD`, and

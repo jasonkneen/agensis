@@ -2,14 +2,45 @@ import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { AuthError, handleAuthCallback, MissingIdentityError, oauthLogin } from '@netlify/identity';
 import { backendClient } from '../lib/backendClient';
 import { clearAuthNotice, getAuthNotice, setAuthNotice, subscribeAuthNotice } from '../lib/authNotice';
+import {
+  getSocialAuthProviders,
+  hasSocialAuthProvider,
+  type SocialAuthProvider,
+} from '../lib/socialAuth';
 
 type User = { id: string; email?: string | null };
 type Session = { access_token: string; user: User };
+
+export async function startSocialSignIn(
+  provider: SocialAuthProvider,
+  providerAvailable: (candidate: SocialAuthProvider) => Promise<boolean> = hasSocialAuthProvider,
+  startOAuth: (candidate: SocialAuthProvider) => void = oauthLogin,
+) {
+  if (!(await providerAvailable(provider))) {
+    const providerName = provider === 'github' ? 'GitHub' : 'Google';
+    return {
+      error: `${providerName} sign-in is not configured for this site. On a self-hosted instance, use email and password instead.`,
+    };
+  }
+  try {
+    startOAuth(provider);
+    return { error: null };
+  } catch (error) {
+    if (error instanceof MissingIdentityError) {
+      return { error: 'Social login is not configured for this site.' };
+    }
+    if (error instanceof AuthError) {
+      return { error: error.message };
+    }
+    return { error: error instanceof Error ? error.message : 'Unable to start social login.' };
+  }
+}
 
 export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [socialAuthProviders, setSocialAuthProviders] = useState<SocialAuthProvider[]>([]);
   // The message the sign-in screen must show (expired session, failed social
   // login). Lives outside React because backendClient writes it from a 401.
   const authNotice = useSyncExternalStore(subscribeAuthNotice, getAuthNotice, getAuthNotice);
@@ -61,6 +92,9 @@ export function useAuth() {
       }
     }
 
+    void getSocialAuthProviders().then(providers => {
+      if (active) setSocialAuthProviders(providers);
+    });
     initializeAuth();
     const { data: { subscription } } = backendClient.auth.onAuthStateChange((_event: string, s: Session | null) => {
       setSession(s);
@@ -96,26 +130,27 @@ export function useAuth() {
     await backendClient.auth.signOut();
   }, []);
 
-  const signInWithOAuth = useCallback(async (provider: 'google' | 'github') => {
-    try {
-      oauthLogin(provider);
-      return { error: null };
-    } catch (error) {
-      if (error instanceof MissingIdentityError) {
-        return { error: 'Social login is not configured for this site.' };
-      }
-      if (error instanceof AuthError) {
-        return { error: error.message };
-      }
-      return { error: error instanceof Error ? error.message : 'Unable to start social login.' };
-    }
-  }, []);
+  const signInWithOAuth = useCallback(
+    (provider: SocialAuthProvider) => startSocialSignIn(provider),
+    [],
+  );
 
   const dismissAuthNotice = useCallback(() => {
     clearAuthNotice();
   }, []);
 
-  return { user, session, loading, signUp, signIn, signOut, signInWithOAuth, authNotice, dismissAuthNotice };
+  return {
+    user,
+    session,
+    loading,
+    signUp,
+    signIn,
+    signOut,
+    signInWithOAuth,
+    socialAuthProviders,
+    authNotice,
+    dismissAuthNotice,
+  };
 }
 
 function consumeOAuthRedirectStatus() {

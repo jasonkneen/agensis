@@ -7,11 +7,13 @@ import { Field, FieldGroup } from '@/components/ui/field';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
 import { Spinner } from '@/components/ui/spinner';
 import { evaluatePassword, PASSWORD_MIN_CLASSES, PASSWORD_MIN_LENGTH } from '../../lib/passwordPolicy';
+import type { SocialAuthProvider } from '../../lib/socialAuth';
 
 interface AuthPageProps {
   onSignIn: (email: string, password: string) => Promise<{ error: string | null }>;
   onSignUp: (email: string, password: string) => Promise<{ error: string | null }>;
   onOAuthSignIn: (provider: 'google' | 'github') => Promise<{ error: string | null }>;
+  socialAuthProviders?: readonly SocialAuthProvider[];
   /**
    * Why the user is looking at this screen rather than their workspace — an
    * expired/revoked session, or a social login that did not complete. Rendered
@@ -89,7 +91,14 @@ function nextLockUntil(attempts: number): number {
   return Date.now() + seconds * 1000;
 }
 
-export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn, notice, onDismissNotice }: AuthPageProps) {
+export function AuthPage({
+  onSignIn,
+  onSignUp,
+  onOAuthSignIn,
+  socialAuthProviders = [],
+  notice,
+  onDismissNotice,
+}: AuthPageProps) {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -105,6 +114,9 @@ export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn, notice, onDismissN
   const lockRemainingMs = Math.max(0, lockUntil - now);
   const locked = lockRemainingMs > 0;
   const lockRemainingSeconds = Math.ceil(lockRemainingMs / 1000);
+  const googleAvailable = socialAuthProviders.includes('google');
+  const githubAvailable = socialAuthProviders.includes('github');
+  const socialProviderCount = Number(googleAvailable) + Number(githubAvailable);
 
   // Hydrate lockout for the entered email (sign-in only) whenever it changes.
   useEffect(() => {
@@ -251,79 +263,93 @@ export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn, notice, onDismissN
             <CardTitle>{mode === 'signin' ? 'Sign in' : 'Sign up'}</CardTitle>
           </CardHeader>
           <CardContent>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <button
-                type="button"
-                onClick={() => handleOAuth('google')}
-                disabled={submitting || oauthProvider !== null}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  minHeight: '42px',
-                  padding: '10px 12px',
-                  background: 'var(--canvas-elevated)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-md)',
-                  color: 'var(--text-primary)',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  cursor: submitting || oauthProvider !== null ? 'not-allowed' : 'pointer',
-                  fontFamily: 'inherit',
-                }}
-              >
-                {oauthProvider === 'google' ? (
-                  <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
-                ) : (
-                  <span style={{ fontWeight: 700, fontSize: '16px', lineHeight: 1 }}>G</span>
-                )}
-                Google
-              </button>
-              <button
-                type="button"
-                onClick={() => handleOAuth('github')}
-                disabled={submitting || oauthProvider !== null}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  minHeight: '42px',
-                  padding: '10px 12px',
-                  background: 'var(--canvas-elevated)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-md)',
-                  color: 'var(--text-primary)',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  cursor: submitting || oauthProvider !== null ? 'not-allowed' : 'pointer',
-                  fontFamily: 'inherit',
-                }}
-              >
-                {oauthProvider === 'github' ? (
-                  <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
-                ) : (
-                  <GitBranch size={16} />
-                )}
-                GitHub
-              </button>
-            </div>
+            {socialProviderCount > 0 && (
+              <>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: `repeat(${socialProviderCount}, minmax(0, 1fr))`,
+                    gap: '10px',
+                  }}
+                >
+                  {googleAvailable && (
+                    <button
+                      type="button"
+                      onClick={() => handleOAuth('google')}
+                      disabled={submitting || oauthProvider !== null}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        minHeight: '42px',
+                        padding: '10px 12px',
+                        background: 'var(--canvas-elevated)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-md)',
+                        color: 'var(--text-primary)',
+                        fontSize: '14px',
+                        fontWeight: 600,
+                        cursor: submitting || oauthProvider !== null ? 'not-allowed' : 'pointer',
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      {oauthProvider === 'google' ? (
+                        <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
+                      ) : (
+                        <span style={{ fontWeight: 700, fontSize: '16px', lineHeight: 1 }}>G</span>
+                      )}
+                      Google
+                    </button>
+                  )}
+                  {githubAvailable && (
+                    <button
+                      type="button"
+                      onClick={() => handleOAuth('github')}
+                      disabled={submitting || oauthProvider !== null}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        minHeight: '42px',
+                        padding: '10px 12px',
+                        background: 'var(--canvas-elevated)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-md)',
+                        color: 'var(--text-primary)',
+                        fontSize: '14px',
+                        fontWeight: 600,
+                        cursor: submitting || oauthProvider !== null ? 'not-allowed' : 'pointer',
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      {oauthProvider === 'github' ? (
+                        <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
+                      ) : (
+                        <GitBranch size={16} />
+                      )}
+                      GitHub
+                    </button>
+                  )}
+                </div>
 
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr auto 1fr',
-                alignItems: 'center',
-                gap: '12px',
-                color: 'var(--text-muted)',
-                fontSize: '12px',
-              }}
-            >
-              <span style={{ height: '1px', background: 'var(--border)' }} />
-              <span>or</span>
-              <span style={{ height: '1px', background: 'var(--border)' }} />
-            </div>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr auto 1fr',
+                    alignItems: 'center',
+                    gap: '12px',
+                    color: 'var(--text-muted)',
+                    fontSize: '12px',
+                  }}
+                >
+                  <span style={{ height: '1px', background: 'var(--border)' }} />
+                  <span>or</span>
+                  <span style={{ height: '1px', background: 'var(--border)' }} />
+                </div>
+              </>
+            )}
 
             <form onSubmit={handleSubmit}>
               <FieldGroup>
@@ -402,7 +428,7 @@ export function AuthPage({ onSignIn, onSignUp, onOAuthSignIn, notice, onDismissN
                   </Alert>
                 )}
 
-                {/* Lockout disables only this email/password submit — OAuth stays available. */}
+                {/* Lockout disables only this email/password submit. */}
                 <Button type="submit" disabled={submitting || (mode === 'signin' && locked)} className="w-full">
                   {submitting ? (
                     <Spinner className="size-4" />
