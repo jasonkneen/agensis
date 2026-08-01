@@ -9,6 +9,7 @@ import {
   Plus,
   RefreshCw,
   Send,
+  Wrench,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -21,6 +22,7 @@ import { cn } from '@/lib/utils';
 import type { WorkspaceAgent } from '@/types';
 import {
   RESOURCE_FACETS,
+  RESOURCE_OPERATION_KINDS,
   RESOURCE_OPERATION_LABELS,
   RESOURCE_OPERATION_STATUS_LABELS,
   isLiveResourceOperation,
@@ -29,6 +31,7 @@ import {
   parseResourceJsonObject,
   resourceAgentFacetSummary,
   resourceFacetLabel,
+  resourceOperationToolName,
   resourceStewardCandidates,
   useWorkspaceResources,
   type ResourceFacet,
@@ -430,6 +433,24 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                     <dd className="mt-0.5 font-medium">{timestampLabel(selected.updated_at)}</dd>
                   </div>
                 </dl>
+              </section>
+
+              <section className="rounded-xl border border-border bg-card/35 p-4">
+                <div className="flex items-center gap-2">
+                  <Wrench size={15} />
+                  <h3 className="text-sm font-semibold">Operation tool names</h3>
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Every agent's calls to this resource still route through the steward below — direct-call
+                  permissions aren't wired up yet, so these are the names a future grant would unlock.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {RESOURCE_OPERATION_KINDS.map(kind => (
+                    <Badge key={kind} variant="outline" className="font-mono text-[11px] font-normal">
+                      {resourceOperationToolName(selected.name, kind)}
+                    </Badge>
+                  ))}
+                </div>
               </section>
 
               <section className="rounded-xl border border-border bg-card/35 p-4">

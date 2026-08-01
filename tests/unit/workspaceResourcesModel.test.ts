@@ -5,7 +5,9 @@ import {
   mergeResourceOperationDetails,
   operationsForResource,
   parseResourceJsonObject,
+  resourceOperationToolName,
   resourceStewardCandidates,
+  resourceToolSlug,
   type WorkspaceResourceOperation,
 } from '../../src/features/workspace-resources';
 
@@ -67,6 +69,18 @@ describe('workspace resource view model', () => {
     ];
     expect(operationsForResource(rows, 'resource-1').map(entry => entry.id)).toEqual(['new', 'old']);
     expect(operationsForResource(rows, null)).toEqual([]);
+  });
+
+  it('slugifies a resource name into a tool-name-safe token', () => {
+    expect(resourceToolSlug('Repository index')).toBe('repository_index');
+    expect(resourceToolSlug('  test  ')).toBe('test');
+    expect(resourceToolSlug('acme/product-v2')).toBe('acme_product_v2');
+    expect(resourceToolSlug('!!!')).toBe('resource');
+  });
+
+  it('derives the per-verb tool name from a resource name', () => {
+    expect(resourceOperationToolName('test', 'read')).toBe('test_read');
+    expect(resourceOperationToolName('Repository index', 'apply')).toBe('repository_index_apply');
   });
 
   it('polls only genuinely live operations', () => {

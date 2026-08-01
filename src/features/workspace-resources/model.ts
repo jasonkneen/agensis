@@ -91,6 +91,40 @@ export function resourceFacetLabel(facet: ResourceFacet): string {
   return RESOURCE_FACET_LABELS[facet] ?? facet;
 }
 
+export const RESOURCE_OPERATION_KINDS: WorkspaceResourceOperationKind[] = [
+  'read',
+  'propose',
+  'apply',
+  'publish',
+];
+
+/**
+ * Tool-name slug for a resource: lowercase, non-alphanumeric runs collapsed to
+ * a single underscore, leading/trailing underscores trimmed. Falls back to
+ * "resource" so a name of only punctuation still produces a usable tool name.
+ */
+export function resourceToolSlug(name: string): string {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return slug || 'resource';
+}
+
+/**
+ * The tool name a `{verb}` operation on this resource would surface as, e.g.
+ * "repository_index_read". Purely derived from the naming convention agreed
+ * for per-resource tools — no server-side tool actually exists at this name
+ * yet, so this is discovery/preview only.
+ */
+export function resourceOperationToolName(
+  resourceName: string,
+  operation: WorkspaceResourceOperationKind,
+): string {
+  return `${resourceToolSlug(resourceName)}_${operation}`;
+}
+
 export function resourceStewardCandidates(
   agents: WorkspaceAgent[],
   facet?: ResourceFacet | null,
