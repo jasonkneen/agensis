@@ -2,11 +2,12 @@
 
 Snapshot: 2026-08-01
 
-## Current follow-up: stewarded resource workflows (2026-08-01 13:45 BST)
+## Current follow-up: stewarded resource workflows (2026-08-01 14:05 BST)
 
-Root is currently on `main` at `054b9d1`. The resource-workflow follow-up is
-uncommitted by design and has not been pushed. Keep the existing `deno.lock`
-change; it predates this follow-up and is not part of the resource work.
+Root is clean on `main` at `642f857`, pushed to `origin/main` and deployed to
+Fly release **v157** (`deployment-01KYYPSPHNQCAZHGT0SSBCVF45`). The Fly health
+check is passing. Keep the existing `deno.lock` change; it predates this
+follow-up and is preserved in the deployed commit.
 
 The implementation is in the root checkout, not the historical controller or
 message-integrity worktrees. It adds dependency-checked operation plans,
@@ -20,14 +21,13 @@ Checks completed: typecheck, production build, 2,828 frontend unit tests,
 19 smoke tests, focused resource/MCP/dispatch/realtime/schema tests, and
 `git diff --check`. The repository-wide Node suite remains at 2,481 passing /
 24 pre-existing failures; `npm run ci` stops there, and full lint still has
-the known generated Netlify edge-function `no-var` errors. Do not deploy or
-push this follow-up until the owner reviews the diff.
+the known generated Netlify edge-function `no-var` errors.
 
-Current application release: `c096ebd` is pushed on `main`/`origin/main`, with
+Current application release: `642f857` is pushed on `main`/`origin/main`, with
 the final handoff snapshot at `96bee3d` and Neon current through the resource
 soft-delete migration.
-Fly release **v156** and the Netlify production deploy are live and healthy.
-Fly is running image `deployment-01KYYJXKDK1TWFHE49W83H4P88`.
+Fly release **v157** and the Netlify production deploy are live and healthy.
+Fly is running image `deployment-01KYYPSPHNQCAZHGT0SSBCVF45`.
 The automatic main deploy for this commit is
 `6a6ddd4cf7097d0008f774eb`; the final manual function-packaging deploy was
 `6a6ddd51bb695706dfd5421b`. The earlier
@@ -42,7 +42,7 @@ not reset, clean, rebase, or discard the preserved worktrees.
 - Historical active branch at the time of this handoff: `pre-main` (`eb55dbe`).
 - The current root checkout is the deployed `main` release described above.
 - Git metadata is shared with the other local worktrees; verify `git status`
-  before staging any follow-up. No remote push has been performed.
+  before staging any follow-up. The working tree is currently clean.
 - See [`status.md`](status.md) for the verified gates, browser evidence, and
   remaining stop-ship work.
 - Latest local gates include typecheck/build/smoke/lint, plus **2,824 unit

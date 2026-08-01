@@ -2,11 +2,13 @@
 
 Snapshot: 2026-08-01. The release is committed on `main` and deployed. Do not reset, clean, rebase, or discard the historical worktrees below.
 
-## Current uncommitted follow-up (2026-08-01 13:45 BST)
+## Current deployed follow-up (2026-08-01 14:05 BST)
 
-The checkout is on `main` at `054b9d1`, with the stewarded-resource workflow
-implementation intentionally uncommitted and not pushed. The pre-existing
-`deno.lock` edit is preserved unchanged. This follow-up adds:
+The checkout is clean on `main` at `642f857`, also pushed to `origin/main`. The
+stewarded-resource workflow implementation is deployed to Fly as release
+**v157**, running image `deployment-01KYYPSPHNQCAZHGT0SSBCVF45`; the Fly health
+check is passing at `https://agensis-backend.fly.dev/backend/health`. The
+pre-existing `deno.lock` edit is preserved unchanged. This follow-up adds:
 
 - bounded dependency-ordered operation steps (`steps`, `dependsOn`, `stopOnError`)
   to the shared resource-operation contract and MCP request tool;
@@ -38,8 +40,12 @@ Verification for this follow-up:
 `npm run ci` is not green because the existing Node suite still reports 24
 unrelated session/huddle/message/schedule/source-hygiene failures; it reaches
 2,481 passing and 24 failing tests before lint. Full lint also retains the
-pre-existing generated Netlify edge-function `no-var` errors. No deployment or
-push was performed for this follow-up.
+pre-existing generated Netlify edge-function `no-var` errors.
+
+Npm verification: the root `agensis@0.1.2` package is intentionally private, so
+there is no root package to publish. `npm install --package-lock-only` is clean.
+The separate `@agensis/agensis-agent` package is already at the registry's
+latest `0.1.46`; no daemon release is required for this server-only change.
 
 ## Current release (2026-08-01 12:52)
 
