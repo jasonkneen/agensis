@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { getDatabase } from '@netlify/database';
 import { getUser } from '@netlify/identity';
 import {
@@ -97,6 +98,16 @@ import { voiceCapabilities, unavailableReason, mintCartesiaToken, scrubError } f
 // other is this repo's most repeated bug. Shared implementation; the ONLY
 // difference is the jsonb bind (see encodeJsonb at the call site).
 import { emitReactionFlowEventsForUpdate } from '../../shared/reaction-events.cjs';
+
+// Nostr invite preview is intentionally shared with the Fly protocol adapter.
+// The preview performs the remote metadata fetch, so this mirror must carry the
+// same HTTPS/SSRF guard and must strip the opaque invite code before responding.
+// Without this route the UI's Check button falls through to the Netlify 404
+// even though the long-running backend has the route.
+const requireCjs = createRequire(import.meta.url);
+const { createNostrProtocol } = requireCjs('../../server/nostr-community.cjs');
+const { assertSafeOutboundUrl } = requireCjs('../../server/lib/net-guard.cjs');
+const netlifyNostrProtocol = createNostrProtocol({ assertSafeOutboundUrl });
 
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
 // createTokenVersionCache doc comments for the full rationale.
@@ -2308,6 +2319,16 @@ async function route(req) {
  if (pathname === '/backend/health') {
   await query('select 1');
   return json({ ok: true });
+ }
+ if (req.method === 'POST' && pathname === '/backend/nostr-communities/preview') {
+  await requireUserId(req);
+  const body = await readBody(req);
+  const preview = await netlifyNostrProtocol.previewInvite(body?.inviteUrl);
+  // The invite code and canonical URL are bearer material. The browser already
+  // retains the submitted URL for the later connect request; do not echo either
+  // field in a preview response, matching server/nostr-community-manager.cjs.
+  const { code: _code, inviteUrl: _inviteUrl, ...safePreview } = preview;
+  return json({ data: safePreview, error: null });
  }
  if (req.method === 'GET' && pathname === '/backend/openpets/catalog') {
   try {
