@@ -3,20 +3,21 @@
 Snapshot: 2026-08-01
 
 The enterprise overhaul is merged on `main` at `4235d6a`. This review is now
-on the local `pre-main` branch at `1733fe7`, which contains the forwarding and
-conflict-resolution follow-ups. The working tree is clean, with no unmerged
-paths or conflict markers. Do not reset, clean, rebase, or discard it. The
-branch is intentionally not pushed.
+on the local `pre-main` branch at `eb55dbe`, which contains the forwarding and
+conflict-resolution follow-ups. The source tree is clean with no unmerged
+paths or conflict markers; only these handoff notes remain modified locally.
+Do not reset, clean, rebase, or discard them. The branch is intentionally not
+pushed.
 
-- Active branch: `pre-main` (`1733fe7`).
+- Active branch: `pre-main` (`eb55dbe`).
 - The root checkout is not deployed. Do not reset, clean, rebase, or discard
   changes.
 - Git metadata is shared with the other local worktrees; verify `git status`
   before staging any follow-up. No remote push has been performed.
 - See [`status.md`](status.md) for the verified gates, browser evidence, and
   remaining stop-ship work.
-- Latest local gates include typecheck/build/smoke/lint, plus **2,814 unit
-  tests across 198 files**; lint is 0 errors with 27 remaining structural
+- Latest local gates include typecheck/build/smoke/lint, plus **2,824 unit
+  tests across 202 files**; lint is 0 errors with 27 remaining structural
   warnings, and `git diff --check` is clean.
 - The Playwright local fixture has exercised channel/private history, a
   sub-thread panel, the mobile drawer at 390px, and the Users invite/controller
@@ -50,12 +51,14 @@ remote branch was changed and nothing was pushed.
   `enterprise-conversation-foundation-2026-07-31`,
   `enterprise-generic-db-projections`, `enterprise-integration-2026-07-31`,
   `enterprise-legacy-invite-atomic`, `enterprise-netlify-no-ddl`,
-  `enterprise-overhaul-2026-07-31`, `enterprise-review-context`,
+  `enterprise-review-context`,
   `enterprise-review-size`, `enterprise-session-derived-scope`,
   `enterprise-uniform-batch-insert`, `feat/agent-read-receipts`,
   `feat/cross-instance-fanout`, `fix/channels-dm-threads-receipts`,
   `fix/connection-reliability`, `fix/deploy-guard`, and the three UI
   worktree branches. Their clean worktrees are candidates for local removal.
+- Retain `enterprise-overhaul-2026-07-31` as the audit/review anchor even
+  though it is fully merged.
 - Retain for explicit review: `docs/readme-rewrite` and `feat/docker` have a
   separate four-commit history with Docker/README work; `enterprise-review-testing`
   has a unique permission-protocol commit that is not patch-equivalent and

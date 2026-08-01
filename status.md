@@ -3,7 +3,7 @@
 Snapshot: 2026-08-01. The working tree is **not committed or deployed**. Do not reset, clean, rebase, or discard it.
 
 The enterprise overhaul is merged on `main` at `4235d6a`. This review is on
-the local `pre-main` branch at `1733fe7`, with the forwarding and
+the local `pre-main` branch at `eb55dbe`, with the forwarding and
 conflict-resolution follow-ups applied. No remote push has been performed; the
 branch has no unmerged paths or conflict markers.
 
@@ -22,7 +22,9 @@ patch-equivalent branches are candidates for removal: the old enterprise
 feature/review refs, `chore/drop-visual-editor`, `chore/publish-fixes`,
 `feat/agent-read-receipts`, `feat/cross-instance-fanout`,
 `fix/channels-dm-threads-receipts`, `fix/connection-reliability`,
-`fix/deploy-guard`, and the three clean UI worktree refs.
+`fix/deploy-guard`, and the three clean UI worktree refs. Keep
+`enterprise-overhaul-2026-07-31` as the audit/review anchor even though it is
+fully merged.
 
 Retain `docs/readme-rewrite`, `feat/docker`, and `enterprise-review-testing`
 until their separate/unique commits receive an explicit decision. Preserve
@@ -54,7 +56,7 @@ candidates and never use `--force` on a dirty worktree.
   stale-closure warnings in the touched app surfaces were fixed in this
   continuation. The remaining warnings are primarily Fast Refresh export
   boundaries plus one unused server/test suppression.
-- `npm run test:unit`: **2,814/2,814 passing (198 files)** after the latest
+- `npm run test:unit`: **2,824/2,824 passing (202 files)** after the latest
   thread-pagination, sidebar upload, document-control, desktop-chooser,
   icon-only accessibility, and participant-menu keyboard tests.
 - Netlify parity/auth suite: **56/56 passing**.
@@ -76,7 +78,7 @@ candidates and never use `--force` on a dirty worktree.
 
 Latest continuation verification (2026-08-01):
 
-- Re-ran `npm run typecheck`, `npm run build`, `npm run test:unit` (**2,814/2,814 across 198 files**), `npm run smoke` (**19/19**), `npm run lint` (0 errors, 27 warnings), and `git diff --check`; all passed. The build still emits only the existing Vite `__dirname`/large-chunk warnings.
+- Re-ran `npm run typecheck`, `npm run build`, `npm run test:unit` (**2,824/2,824 across 202 files**), `npm run smoke` (**19/19**), `npm run lint` (0 errors, 27 warnings), and `git diff --check`; all passed. The build still emits only the existing Vite `__dirname`/large-chunk warnings.
 - Re-ran the focused session-lineage/security tests with Node's module-mock flag: **16/17 passed**. The only failure is the generic-route test blocked at `listen(127.0.0.1)` `EPERM`; the six Netlify lineage tests and all pure session-scope tests pass.
 - Re-ran the combined no-listener security/parity/resource matrix with the required Node module-mock flag: **165 passing, 1 environment-blocked listener test, 2 optional PostgreSQL skips**. No application assertion failed.
 - Added Fly and Netlify pre-transaction `sessionLineageKind` validation so a malformed request containing both parent forms is rejected before `BEGIN`, and updated the Netlify contract tests to the current query shape.
@@ -93,6 +95,9 @@ Latest continuation verification (2026-08-01):
   files, project-git, TTS, bridge, Farm, link-preview, MCP skill, Flow,
   workspace-MCP, agent-registration, Agensis setup, and agent connection-
   command operations.
+- Resolved two merge-resolution TypeScript errors (duplicate onboarding
+  metadata and duplicate wireframe scene keys) and kept the release gallery to
+  six highlights so it remains a highlight reel rather than a changelog.
 - Closed three concrete UI interaction gaps: sidebar file upload now opens a
   real picker and calls `useFiles.uploadFiles`, ordinary thread panels expose
   the owning session's earlier-history pagination, and embedded sketch Clear
