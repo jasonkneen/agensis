@@ -11,6 +11,31 @@ import {
 type User = { id: string; email?: string | null };
 type Session = { access_token: string; user: User };
 
+export async function startSocialSignIn(
+  provider: SocialAuthProvider,
+  providerAvailable: (candidate: SocialAuthProvider) => Promise<boolean> = hasSocialAuthProvider,
+  startOAuth: (candidate: SocialAuthProvider) => void = oauthLogin,
+) {
+  if (!(await providerAvailable(provider))) {
+    const providerName = provider === 'github' ? 'GitHub' : 'Google';
+    return {
+      error: `${providerName} sign-in is not configured for this site. On a self-hosted instance, use email and password instead.`,
+    };
+  }
+  try {
+    startOAuth(provider);
+    return { error: null };
+  } catch (error) {
+    if (error instanceof MissingIdentityError) {
+      return { error: 'Social login is not configured for this site.' };
+    }
+    if (error instanceof AuthError) {
+      return { error: error.message };
+    }
+    return { error: error instanceof Error ? error.message : 'Unable to start social login.' };
+  }
+}
+
 export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -105,26 +130,10 @@ export function useAuth() {
     await backendClient.auth.signOut();
   }, []);
 
-  const signInWithOAuth = useCallback(async (provider: 'google' | 'github') => {
-    if (!(await hasSocialAuthProvider(provider))) {
-      const providerName = provider === 'github' ? 'GitHub' : 'Google';
-      return {
-        error: `${providerName} sign-in is not configured for this site. On a self-hosted instance, use email and password instead.`,
-      };
-    }
-    try {
-      oauthLogin(provider);
-      return { error: null };
-    } catch (error) {
-      if (error instanceof MissingIdentityError) {
-        return { error: 'Social login is not configured for this site.' };
-      }
-      if (error instanceof AuthError) {
-        return { error: error.message };
-      }
-      return { error: error instanceof Error ? error.message : 'Unable to start social login.' };
-    }
-  }, []);
+  const signInWithOAuth = useCallback(
+    (provider: SocialAuthProvider) => startSocialSignIn(provider),
+    [],
+  );
 
   const dismissAuthNotice = useCallback(() => {
     clearAuthNotice();
