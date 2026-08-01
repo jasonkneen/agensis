@@ -2,7 +2,6 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { getDatabase } from '@netlify/database';
 import { getUser } from '@netlify/identity';
 import {
@@ -133,15 +132,14 @@ import {
  projectSessionCreateRows,
  sessionLineageKind,
 } from '../../shared/session-lineage.cjs';
+import { createNostrProtocol } from '../../server/nostr-community.cjs';
+import { assertSafeOutboundUrl } from '../../server/lib/net-guard.cjs';
 
 // Nostr invite preview is intentionally shared with the Fly protocol adapter.
 // The preview performs the remote metadata fetch, so this mirror must carry the
 // same HTTPS/SSRF guard and must strip the opaque invite code before responding.
 // Without this route the UI's Check button falls through to the Netlify 404
 // even though the long-running backend has the route.
-const requireCjs = createRequire(import.meta.url);
-const { createNostrProtocol } = requireCjs('../../server/nostr-community.cjs');
-const { assertSafeOutboundUrl } = requireCjs('../../server/lib/net-guard.cjs');
 const netlifyNostrProtocol = createNostrProtocol({ assertSafeOutboundUrl });
 
 const READ_RECEIPT_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
