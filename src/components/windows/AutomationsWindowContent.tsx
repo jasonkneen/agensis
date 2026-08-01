@@ -395,6 +395,8 @@ export function AutomationsWindowContent({ workspaceId, sessions }: AutomationsW
                     size="sm"
                     onClick={() => { void handleDelete(automation); }}
                     disabled={busyId === automation.id}
+                    aria-label={`Delete ${automation.name || 'automation'}`}
+                    title={`Delete ${automation.name || 'automation'}`}
                   >
                     <Trash2 />
                   </Button>

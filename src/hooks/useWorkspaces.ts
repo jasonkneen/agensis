@@ -133,7 +133,7 @@ export function useWorkspaces(userId: string | undefined) {
     seedAttemptedForRef.current = userId;
     markSeeded();
     void seedStarterWorkspaces();
-  }, [userId, readiness.shouldRepair, seedStarterWorkspaces]);
+  }, [hasSeededBefore, markSeeded, readiness.shouldRepair, seedStarterWorkspaces, userId]);
 
   /** Re-run the setup the user just watched fail. */
   const retryWorkspaceSetup = useCallback(async () => {

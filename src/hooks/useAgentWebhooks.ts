@@ -49,7 +49,10 @@ export function useAgentWebhooks(workspaceId: string | null) {
       .eq('id', id)
       .select()
       .single();
-    if (data) setWebhooks(prev => prev.map(webhook => webhook.id === id ? data : webhook));
+    // Keep a one-time plaintext token in memory for the rest of this page
+    // session. Generic UPDATE responses deliberately omit it; replacing the row
+    // would make the copy button disappear immediately after an enable toggle.
+    if (data) setWebhooks(prev => prev.map(webhook => webhook.id === id ? { ...webhook, ...data } : webhook));
     return data as AgentWebhook | null;
   }, []);
 

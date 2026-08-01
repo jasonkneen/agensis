@@ -7,7 +7,7 @@
 // Written with createElement so it stays a .ts file inside the existing
 // `tests/unit/**/*.test.ts` glob.
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Sidebar } from '../../src/components/layout/Sidebar';
@@ -167,5 +167,21 @@ describe('Desktop row', () => {
   it('is absent when the app does not pass a handler', () => {
     mount();
     expect(findRow('Desktop')).toBeUndefined();
+  });
+
+  it('exposes a working file upload action in expanded and collapsed sidebars', () => {
+    const onUploadFile = vi.fn();
+    mount({ onUploadFile });
+    expect(findRow('Upload files')).toBeDefined();
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(input?.multiple).toBe(true);
+    const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+    Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+    act(() => input?.dispatchEvent(new Event('change', { bubbles: true })));
+    expect(onUploadFile).toHaveBeenCalledWith([file]);
+
+    act(() => root.unmount());
+    mount({ collapsed: true, onUploadFile });
+    expect(findRow('Upload files')).toBeDefined();
   });
 });

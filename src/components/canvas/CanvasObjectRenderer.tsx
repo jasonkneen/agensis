@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, FileText, RotateCw, X } from 'lucide-react';
 import type { CanvasObject, Task, WorkspaceAgent, Document } from '../../types';
 import type { CreateTaskInput } from '../../hooks/useTasks';
@@ -200,7 +200,7 @@ function AppletObject({
   const appletHtml = docBackedHtml || appDefinition?.buildHtml() || obj.src || '<!doctype html><html><body>Empty applet</body></html>';
   const themedAppletHtml = injectAppletHostTheme(appletHtml, readAppletTheme());
 
-  const sendInit = () => {
+  const sendInit = useCallback(() => {
     iframeRef.current?.contentWindow?.postMessage({
       type: 'agensis:init',
       payload: {
@@ -210,11 +210,11 @@ function AppletObject({
         theme: readAppletTheme(),
       },
     }, '*');
-  };
+  }, [agents, parsed.state, tasks]);
 
   useEffect(() => {
     sendInit();
-  }, [obj.text_content, tasks, agents, reloadKey]);
+  }, [reloadKey, sendInit]);
 
   useEffect(() => {
     if (typeof MutationObserver === 'undefined') return;
@@ -224,7 +224,7 @@ function AppletObject({
       attributeFilter: ['data-theme', 'data-ui-theme', 'style'],
     });
     return () => observer.disconnect();
-  }, [obj.text_content, tasks, agents, reloadKey]);
+  }, [sendInit]);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -279,7 +279,7 @@ function AppletObject({
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [appId, obj.id, onAppletCreateTask, onAppletStateChange, onAppletUpdateTask, parsed.state, tasks, agents]);
+  }, [appId, obj.id, onAppletCreateTask, onAppletStateChange, onAppletUpdateTask, parsed.docId, parsed.state, sendInit]);
 
   return (
     <div

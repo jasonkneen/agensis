@@ -158,9 +158,16 @@ function makeDb({ owners = {}, roles = {}, rowWorkspaces = {}, workspaceSecrets 
       }
 
       if (normalized.startsWith('update app_users set token_version = token_version + 1 where id = $1')) {
-        const row = getUserRow(params[0]);
-        row.token_version = String(Number(row.token_version) + 1);
-        return [{ token_version: row.token_version }];
+       const row = getUserRow(params[0]);
+       row.token_version = String(Number(row.token_version) + 1);
+       return [{ token_version: row.token_version }];
+      }
+
+      if (normalized.startsWith('select id, visibility, folder, deleted_at from chat_sessions where id = $1')) {
+        const workspaceId = rowWorkspaces.chat_sessions?.[params[0]];
+        return workspaceId
+          ? [{ id: params[0], visibility: 'workspace', folder: 'Channels', deleted_at: null }]
+          : [];
       }
 
       const workspaceLookup = normalized.match(/^select workspace_id from "?([a-z_]+)"? where id = \$1 limit 1/);

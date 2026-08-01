@@ -31,7 +31,13 @@ export function useTableSubscription<T = unknown>(
   const { enabled = true, channelName, table, event, schema, filter } = options;
 
   const cbRef = useRef(callback);
-  cbRef.current = callback;
+  // Do not replace this during render. On a scope change the old binding lives
+  // until passive-effect cleanup; swapping early lets its final frame invoke
+  // the NEW scope's reducer. React runs the old effect cleanup before these new
+  // effect bodies, so updating here closes that render-to-cleanup window.
+  useEffect(() => {
+    cbRef.current = callback;
+  });
 
   useEffect(() => {
     if (!enabled) return;

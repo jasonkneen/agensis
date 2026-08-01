@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Copy, Expand, Eye, EyeOff, Lock, Maximize2, Minimize2, Minus, MoreHorizontal, Share2, Shrink, Trash2, Unlock, X } from 'lucide-react';
+import { Expand, Eye, EyeOff, Lock, Maximize2, Minimize2, Minus, MoreHorizontal, Share2, Shrink, Trash2, Unlock, X } from 'lucide-react';
 import type { FloatingWindow, PresenceVisibilityMode } from '../../types';
 import { Button } from '@/components/ui/button';
 import {
@@ -163,7 +163,7 @@ function groupSiblingShells(shell: HTMLElement | null, groupId: string | null | 
   if (!shell || !groupId) return [];
   const root = shell.closest('[data-workspace-viewport]') || document;
   return Array.from(root.querySelectorAll<HTMLElement>(`[data-window-group="${CSS.escape(groupId)}"]`))
-    .filter(el => el.dataset.floatingWindowId !== ownId);
+    .filter(el => el.dataset.floatingWindowId !== ownId && el.dataset.windowHidden !== 'true');
 }
 
 function splitBounds(bounds: WindowBounds, edge: 'left' | 'right' | 'top' | 'bottom'): WindowBounds {
@@ -203,7 +203,10 @@ function getOtherWindowBounds(shell: HTMLElement | null, viewportRect: ViewportR
   if (!shell || !viewportRect) return [];
   const currentId = shell.dataset.floatingWindowId;
   return Array.from(document.querySelectorAll<HTMLElement>('[data-floating-window]'))
-    .filter(element => element.dataset.floatingWindowId !== currentId)
+    .filter(element => (
+      element.dataset.floatingWindowId !== currentId
+      && element.dataset.windowHidden !== 'true'
+    ))
     .map(element => {
       // Prefer the window's LOGICAL bounds over its painted rect. The painted
       // rect is not the window: it is inflated by up to 8px per full-bleed edge
@@ -331,13 +334,26 @@ interface FloatingWindowShellProps {
   presenceMode?: PresenceVisibilityMode;
   currentUserId?: string;
   canControl?: boolean;
+  /**
+   * A non-owner window normally disables pointer input for its body so an
+   * untrusted collaborator cannot edit a shared document or task. Some bodies
+   * have their own read-only contract (notably shared chat), so they still
+   * need scrolling, selection, links, and transcript controls.
+   */
+  bodyInteractive?: boolean;
   titleIcon?: React.ReactNode;
   breadcrumb?: string;
   children: React.ReactNode;
   isSelected?: boolean;
   adjacentEdges?: Set<'left' | 'right' | 'top' | 'bottom'>;
+  /**
+   * Keep the subtree mounted while removing the window from paint, focus, and
+   * hit-testing. Chat windows use this for minimized/full-expand/mobile states
+   * so composer drafts survive visibility switches.
+   */
+  hidden?: boolean;
   // Phone layout mode: the window fills the viewport, drag/resize are disabled,
-  // and only the active window is mounted (see CanvasLayerScene). The switcher
+  // and only the active window is visible (see CanvasLayerScene). The switcher
   // bar handles moving between windows instead of the free-floating canvas.
   isMobile?: boolean;
   // Full-expand (focus) mode: this window fills the whole workspace viewport as
@@ -358,11 +374,13 @@ export function FloatingWindowShell({
   presenceMode = 'visible',
   currentUserId,
   canControl = true,
+  bodyInteractive = false,
   titleIcon,
   breadcrumb,
   children,
   isSelected = false,
   adjacentEdges,
+  hidden = false,
   isMobile = false,
   isFullExpand = false,
   onToggleFullExpand,
@@ -373,6 +391,7 @@ export function FloatingWindowShell({
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [snapPreview, setSnapPreview] = useState<WindowBounds | null>(null);
+  const isHidden = hidden || win.minimized;
   const isMaximized = Boolean(win.maximized);
   // On phones the window always fills the viewport (edge-to-edge, one at a time),
   // so it renders with the same geometry as a maximized window regardless of the
@@ -463,6 +482,18 @@ export function FloatingWindowShell({
     observer.observe(viewport);
     return () => observer.disconnect();
   }, [win, fullViewport, isDragging, isResizing, paintOffsets]);
+
+  // CSS-hidden descendants can otherwise retain DOM focus in some browsers and
+  // continue consuming keyboard events despite not being visible. Explicitly
+  // blur before marking the shell inert; component state (including drafts)
+  // remains mounted.
+  useEffect(() => {
+    if (!isHidden || typeof document === 'undefined') return;
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement && shellRef.current?.contains(activeElement)) {
+      activeElement.blur();
+    }
+  }, [isHidden]);
 
   const handleDragStart = useCallback((e: React.PointerEvent) => {
     if (!canControl || isMobile || isFullExpand) return;
@@ -652,7 +683,7 @@ export function FloatingWindowShell({
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
     window.addEventListener('blur', onCancel);
-  }, [win.id, win.x, win.y, win.width, win.height, onFocus, onUpdate, canControl, isMaximized, isMobile, isFullExpand, paintOffsets]);
+  }, [win, onFocus, onUpdate, canControl, isMaximized, isMobile, isFullExpand, paintOffsets]);
 
   const handleMaximize = useCallback(() => {
     if (!canControl) return;
@@ -677,9 +708,7 @@ export function FloatingWindowShell({
       maximized: true,
       restoreBounds: currentBounds,
     });
-  }, [win.id, win.x, win.y, win.width, win.height, win.maximized, win.restoreBounds, onFocus, onUpdate, canControl]);
-
-  if (win.minimized) return null;
+  }, [win, onFocus, onUpdate, canControl]);
 
   const isDimmed = presenceMode === 'dimmed' || presenceMode === 'hidden';
   const dimmedOpacity = presenceMode === 'hidden' ? 0.22 : 0.35;
@@ -699,6 +728,7 @@ export function FloatingWindowShell({
       filter: isDimmed ? 'saturate(0.55)' : undefined,
       userSelect: isDragging || isResizing ? 'none' : 'auto',
       transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
+      display: isHidden ? 'none' : undefined,
     }
     : {
       position: 'absolute',
@@ -711,6 +741,7 @@ export function FloatingWindowShell({
       filter: isDimmed ? 'saturate(0.55)' : undefined,
       userSelect: isDragging || isResizing ? 'none' : 'auto',
       transition: isDragging || isResizing ? 'none' : 'box-shadow 0.2s ease',
+      display: isHidden ? 'none' : undefined,
     };
 
   // Corner rounding via Tailwind CLASSES, not an inline `var(--radius-xl)`.
@@ -733,7 +764,7 @@ export function FloatingWindowShell({
 
   return (
     <>
-      {isDragging && snapPreview && (
+      {!isHidden && isDragging && snapPreview && (
         <div
           className="pointer-events-none absolute rounded-xl border-2 border-primary/80 bg-primary/15 shadow-[inset_0_0_0_1px_hsl(var(--background)/0.6),0_12px_30px_hsl(var(--foreground)/0.16)]"
           style={{
@@ -749,12 +780,16 @@ export function FloatingWindowShell({
         ref={shellRef}
         data-floating-window
         data-floating-window-id={win.id}
+        data-window-hidden={isHidden ? 'true' : undefined}
         data-window-group={win.groupId || undefined}
         // The window's LOGICAL box, before bleed inflation and before the group
         // gutter. getOtherWindowBounds reads this instead of measuring, so
         // snapping always works against the same numbers useWindows stores.
         data-window-bounds={`${Math.round(displayBounds.x)},${Math.round(displayBounds.y)},${Math.round(displayBounds.width)},${Math.round(displayBounds.height)}`}
         data-window-view-mode={isFullSurface ? 'full' : 'floating'}
+        hidden={isHidden}
+        inert={isHidden ? true : undefined}
+        aria-hidden={isHidden || undefined}
         onPointerDown={() => onFocus(win.id)}
         onDragOver={e => e.stopPropagation()}
         onDragEnter={e => e.stopPropagation()}
@@ -830,10 +865,10 @@ export function FloatingWindowShell({
                       <Share2 />
                       Share
                     </DropdownMenuItem>
-                    <DropdownMenuItem>
-                      <Copy />
-                      Duplicate
-                    </DropdownMenuItem>
+                    {/* There is no safe generic duplicate operation: chat
+                        windows are session-keyed and documents/tasks carry
+                        ownership and identity semantics. Do not expose a
+                        menu item that cannot perform a real action. */}
                     <DropdownMenuItem
                       disabled={!canControl}
                       onSelect={() => onUpdate(win.id, { shared: !win.shared })}
@@ -920,7 +955,10 @@ export function FloatingWindowShell({
             )}
           </div>
 
-          <div className={cn('relative min-h-0 flex-1 overflow-hidden', !canControl && 'pointer-events-none')}>
+          <div className={cn(
+            'relative min-h-0 flex-1 overflow-hidden',
+            !canControl && !bodyInteractive && 'pointer-events-none',
+          )}>
             {privacyBlanked ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 bg-muted/40 p-6 text-center">
                 <EyeOff className="size-6 text-muted-foreground" />

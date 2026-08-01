@@ -1,4 +1,4 @@
-import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
+import { useWorkspaceConnections } from '@/features/workspace-connections';
 import { UsersWindowContent } from './UsersWindowContent';
 
 interface UsersWindowProps {
@@ -8,37 +8,42 @@ interface UsersWindowProps {
   currentUserEmail?: string;
 }
 
-// Data wrapper: owns the members/invites state for one workspace so the window
-// render path stays free of prop drilling. The presentational UI is in
-// UsersWindowContent.
+// Data wrapper: owns the members/join-links state for one workspace so the
+// render path stays free of prop drilling. The feature hook deliberately loads
+// members first and never calls the manage-only join-link API for a non-manager.
 export function UsersWindow({ workspaceId, workspaceName, currentUserId, currentUserEmail }: UsersWindowProps) {
   const {
     members,
-    invites,
+    joinLinks,
+    controllers,
+    canManage,
+    canIssueWorkspaceControl,
     loading,
-    createInvite,
-    revokeInvite,
-    setInviteDismissed,
-    dismissSpentInvites,
+    controllersLoading,
+    error,
+    createJoinLink,
+    revokeJoinLink,
+    revokeController,
     removeMember,
     changeMemberRole,
-  } = useWorkspaceUsers(workspaceId || null);
-  const inviteOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  } = useWorkspaceConnections(workspaceId || null, currentUserId);
 
   return (
     <UsersWindowContent
-      workspaceId={workspaceId || null}
       workspaceName={workspaceName}
       currentUserId={currentUserId}
       currentUserEmail={currentUserEmail}
-      inviteOrigin={inviteOrigin}
       members={members}
-      invites={invites}
+      joinLinks={joinLinks}
+      controllers={controllers}
+      canManage={canManage}
+      canIssueWorkspaceControl={canIssueWorkspaceControl}
       loading={loading}
-      onCreateInvite={createInvite}
-      onRevokeInvite={revokeInvite}
-      onSetInviteDismissed={setInviteDismissed}
-      onDismissSpentInvites={dismissSpentInvites}
+      controllersLoading={controllersLoading}
+      error={error}
+      onCreateJoinLink={createJoinLink}
+      onRevokeJoinLink={revokeJoinLink}
+      onRevokeController={revokeController}
       onRemoveMember={removeMember}
       onChangeMemberRole={changeMemberRole}
     />

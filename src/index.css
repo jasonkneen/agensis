@@ -3621,8 +3621,15 @@ body {
  color: var(--text-secondary);
  font: inherit;
  font-size: 11px;
+ appearance: none;
+ line-height: 1.2;
  cursor: pointer;
  box-shadow: var(--shadow-sm);
+}
+
+.doc-sketch-clear:focus-visible {
+ outline: 2px solid var(--accent-border);
+ outline-offset: 2px;
 }
 
 .doc-image-resize-handle {

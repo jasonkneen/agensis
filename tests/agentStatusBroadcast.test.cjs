@@ -21,8 +21,8 @@
 // adding `workspace_id` to a fixture now throws.
 //
 // The workspace is resolved from the row's session through the injected
-// resolveWorkspaceIdForSession, driven here by a fake db so the REAL resolver
-// (and its real LRU) runs, rather than a stub that would just restate it.
+// resolveSessionActivityContext, driven here by a fake db so the REAL resolver
+// and canonical privacy helper run, rather than a stub that would restate them.
 // ============================================================================
 
 const test = require('node:test');
@@ -54,16 +54,16 @@ function messageRow(fields) {
  return fields;
 }
 
-function fakeClient(subscriptions) {
+function fakeClient(subscriptions, userId = 'user-1') {
  const sent = [];
- return { userId: 'user-1', readyState: 1, subscriptions, sent, send: (str) => sent.push(JSON.parse(str)) };
+ return { userId, readyState: 1, subscriptions, sent, send: (str) => sent.push(JSON.parse(str)) };
 }
 
 /**
- * Fake db backing the REAL resolveWorkspaceIdForSession. Counts lookups so the
+ * Fake db backing the REAL resolveSessionActivityContext. Counts lookups so the
  * "one per session per batch" claim is measured rather than asserted.
  */
-function sessionDb(sessionToWorkspace, { fail = false } = {}) {
+function sessionDb(sessionToWorkspace, { fail = false, failMembers = false } = {}) {
  const lookups = [];
  __test.setTestDb({
   async unsafe(sql, params) {
@@ -76,8 +76,24 @@ function sessionDb(sessionToWorkspace, { fail = false } = {}) {
    if (n.startsWith('select workspace_id') && n.includes('from chat_sessions')) {
     lookups.push(params[0]);
     if (fail) throw new Error('chat_sessions lookup exploded');
-    const ws = sessionToWorkspace[params[0]];
-    return ws ? [{ workspace_id: ws, visibility: 'workspace', folder: 'Channels' }] : [];
+    const context = sessionToWorkspace[params[0]];
+    if (!context) return [];
+    if (typeof context === 'string') {
+     return [{ workspace_id: context, visibility: 'workspace', folder: 'Channels' }];
+    }
+    return [{
+     workspace_id: context.workspaceId,
+     visibility: context.visibility ?? 'workspace',
+     folder: context.folder ?? 'Channels',
+    }];
+   }
+   if (n.startsWith('select user_id from chat_session_members')) {
+    if (failMembers) throw new Error('chat_session_members lookup exploded');
+    const context = sessionToWorkspace[params[0]];
+    const members = context && typeof context === 'object' && Array.isArray(context.members)
+     ? context.members
+     : [];
+    return members.map((userId) => ({ user_id: userId }));
    }
    return [];
   },
@@ -131,6 +147,111 @@ test('a row with only REAL message columns still broadcasts', async () => {
  assert.ok(lookups.includes('sess-a'), 'the workspace came from the row session, not the row');
 });
 
+test('a private-session status reaches members only, never another workspace reader', async () => {
+ sessionDb({
+  'sess-private': {
+   workspaceId: 'ws-1',
+   visibility: 'private',
+   folder: 'Direct messages',
+   members: ['member-1'],
+  },
+ });
+ const subscription = [
+  { type: 'broadcast', channel: 'agent-status:ws-1', event: 'agent_status' },
+ ];
+ const member = __test.registerTestWebsocketClient(fakeClient(subscription, 'member-1'));
+ const outsider = __test.registerTestWebsocketClient(fakeClient(subscription, 'workspace-reader'));
+
+ __test.notifyDbSubscribers('messages', 'UPDATE', [messageRow({
+  id: 'msg-private',
+  session_id: 'sess-private',
+  sender_kind: 'agent',
+  sender_id: 'agent-1',
+  sender_name: 'Coder',
+  content: 'Reading a private file',
+ })]);
+ await settle();
+
+ const memberFrame = member.sent.find((message) => message.type === 'broadcast');
+ assert.ok(memberFrame, 'a private-session member still receives agent status');
+ assert.equal(memberFrame.payload.content, 'Reading a private file');
+ assert.equal(
+  outsider.sent.length,
+  0,
+  'a workspace reader outside the private session receives no frame or session metadata',
+ );
+});
+
+test('a private-session status fails closed when membership cannot be resolved', async () => {
+ sessionDb({
+  'sess-private-db-failure': {
+   workspaceId: 'ws-1',
+   visibility: 'private',
+   members: ['member-1'],
+  },
+ }, { failMembers: true });
+ const subscription = [
+  { type: 'broadcast', channel: 'agent-status:ws-1', event: 'agent_status' },
+ ];
+ const member = __test.registerTestWebsocketClient(fakeClient(subscription, 'member-1'));
+ const outsider = __test.registerTestWebsocketClient(fakeClient(subscription, 'workspace-reader'));
+
+ __test.notifyDbSubscribers('messages', 'UPDATE', [messageRow({
+  id: 'msg-private-db-failure',
+  session_id: 'sess-private-db-failure',
+  sender_kind: 'agent',
+  sender_id: 'agent-1',
+  content: 'Never guess who may read this',
+ })]);
+ await settle();
+
+ assert.equal(member.sent.length, 0, 'a missed update is safer than guessing membership');
+ assert.equal(outsider.sent.length, 0, 'membership failure cannot fall back to workspace fanout');
+});
+
+test('a cross-process visibility change cannot reuse a public session classification', async () => {
+ const context = {
+  workspaceId: 'ws-1',
+  visibility: 'workspace',
+  folder: 'Channels',
+  members: ['member-1'],
+ };
+ sessionDb({ 'sess-visibility-change': context });
+ const subscription = [
+  { type: 'broadcast', channel: 'agent-status:ws-1', event: 'agent_status' },
+ ];
+ const member = __test.registerTestWebsocketClient(fakeClient(subscription, 'member-1'));
+ const outsider = __test.registerTestWebsocketClient(fakeClient(subscription, 'workspace-reader'));
+
+ __test.notifyDbSubscribers('messages', 'UPDATE', [messageRow({
+  id: 'msg-before-private',
+  session_id: 'sess-visibility-change',
+  sender_kind: 'agent',
+  sender_id: 'agent-1',
+  content: 'Visible while this is a channel',
+ })]);
+ await settle();
+ assert.equal(outsider.sent.length, 1, 'workspace-visible behavior is unchanged');
+
+ member.sent.length = 0;
+ outsider.sent.length = 0;
+ context.visibility = 'private';
+ context.folder = 'Direct messages';
+ // Deliberately no local chat_sessions notification: the Netlify mirror can
+ // update the shared database without sending a frame through this Fly process.
+ __test.notifyDbSubscribers('messages', 'UPDATE', [messageRow({
+  id: 'msg-after-private',
+  session_id: 'sess-visibility-change',
+  sender_kind: 'agent',
+  sender_id: 'agent-1',
+  content: 'Private after the visibility change',
+ })]);
+ await settle();
+
+ assert.equal(member.sent.filter((message) => message.type === 'broadcast').length, 1);
+ assert.equal(outsider.sent.length, 0, 'agent status bypasses the stale public cache');
+});
+
 test('the payload stays lean — a heavy column never rides along', async () => {
  sessionDb({ 'sess-lean': 'ws-1' });
  const client = __test.registerTestWebsocketClient(fakeClient([
@@ -178,12 +299,9 @@ test('one workspace lookup per SESSION per batch, not per row', async () => {
  assert.equal(client.sent.filter((m) => m.type === 'broadcast').length, 4, 'every row still broadcasts');
 });
 
-test('the de-duplication is real, not just the resolver cache masking it', async () => {
- // The previous test cannot actually distinguish per-row from per-session
- // resolution: resolveWorkspaceIdForSession memoises SUCCESSES, so rows 2 and 3
- // would hit the LRU and never reach the db either way. An UNRESOLVABLE session
- // is never cached, so it is the one case where the difference is observable —
- // per-row would issue three lookups here, per-session issues one.
+test('an unresolvable session is also looked up once per batch', async () => {
+ // A failed/missing context must not cause one retry per row. The batch resolves
+ // each distinct session once, then withholds every row it could not place.
  const lookups = sessionDb({}); // nothing resolves
  __test.registerTestWebsocketClient(fakeClient([
   { type: 'broadcast', channel: 'agent-status:ws-1', event: 'agent_status' },
@@ -196,7 +314,7 @@ test('the de-duplication is real, not just the resolver cache masking it', async
  ]);
  await settle();
 
- assert.deepEqual(lookups, ['sess-miss'], 'an uncacheable session must still be resolved once, not once per row');
+ assert.deepEqual(lookups, ['sess-miss'], 'a missing session must still be resolved once, not once per row');
 });
 
 test('a human (non-agent) message row does NOT broadcast, and costs no lookup', async () => {
@@ -260,14 +378,12 @@ test('an unresolvable session broadcasts nothing rather than guessing', async ()
  assert.equal(client.sent.some((m) => m.type === 'broadcast'), false);
 });
 
-// The reachable failure mode: the DB query throws, resolveWorkspaceIdForSession
-// catches it and returns null, and the emitter broadcasts nothing. What matters
-// is that the ORDINARY fanout on the same batch is untouched — the agent-status
-// emitter is a side effect, not a gate.
-test('a resolver failure does not break the rest of the fanout', async () => {
+// The reachable failure mode: the DB query throws, resolveSessionActivityContext
+// catches it and returns null, and the emitter broadcasts nothing. Message
+// fanout now re-resolves the SAME current audience independently: if privacy
+// cannot be proven, both lanes fail closed rather than trusting a stale binding.
+test('a resolver failure fails both message lanes closed without throwing', async () => {
  sessionDb({ 'sess-g': 'ws-1' }, { fail: true });
- // A plain db_changes subscriber on the same batch must still get its row: the
- // agent-status emitter is a side effect, not a gate.
  const client = __test.registerTestWebsocketClient(fakeClient([
   { type: 'broadcast', channel: 'agent-status:ws-1', event: 'agent_status' },
   { type: 'db_changes', table: 'messages', filter: 'session_id=eq.sess-g' },
@@ -281,9 +397,10 @@ test('a resolver failure does not break the rest of the fanout', async () => {
  await settle();
 
  assert.equal(client.sent.some((m) => m.type === 'broadcast'), false, 'no workspace, no broadcast');
- assert.ok(
+ assert.equal(
   client.sent.some((m) => m.table === 'messages' || m.type === 'db_changes'),
-  'the ordinary db_changes fanout is unaffected by the failed lookup',
+  false,
+  'an unproven current session audience receives no transcript row',
  );
 });
 

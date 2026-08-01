@@ -34,10 +34,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
 const { createApp, __test } = require('../server/index.cjs');
 const {
   ADVANCE_READ_MARKER_SQL,
   ADVANCE_AGENT_READ_MARKER_SQL,
+  DELETE_HUMAN_READ_MARKERS_SQL,
   SESSION_READ_STATE_SQL,
   SESSION_READ_STATE_DDL,
   SESSION_READ_STATE_UPGRADE_STEPS,
@@ -57,6 +60,8 @@ const CHANNEL = 'chan-1';
 const DM = 'dm-1';
 const MESSAGE = 'msg-1';
 const OTHER_SESSION_MESSAGE = 'msg-elsewhere';
+const THREAD_ROOT = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const THREAD_REPLY = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 
 test.afterEach(() => __test.resetTestState());
 
@@ -75,6 +80,10 @@ function makeDb({ roles = {}, dmMembers = [], markers = [], optedOut = [] } = {}
         return params[0] === 'AUTH_SECRET' ? [{ value: 'receipts-secret' }] : [];
       }
       if (q.startsWith('select token_version from app_users')) return [{ token_version: '1' }];
+      if (q.startsWith('select id from app_users where id = any')) {
+        const ids = String(params[0]).match(/"([^"]+)"/g)?.map(value => value.slice(1, -1)) || [];
+        return ids.filter(id => !optedOut.includes(id)).map(id => ({ id }));
+      }
       if (q.includes('union all') && q.includes('workspace_members where workspace_id = $1 and user_id = $2')) {
         const uid = String(params[1]);
         return uid === OWNER || roles[uid] ? [{ ok: 1 }] : [];
@@ -98,13 +107,13 @@ function makeDb({ roles = {}, dmMembers = [], markers = [], optedOut = [] } = {}
       // the routes select the workspace too (one query, both gates), while
       // enforceSessionReadAccess loads only what the privacy rule reads. Both
       // must answer, or a gate silently passes on a session it never found.
-      if (q.startsWith('select id, workspace_id, visibility, folder from chat_sessions')
-        || q.startsWith('select id, visibility, folder from chat_sessions')) {
+      if (q.startsWith('select id, workspace_id, visibility, folder, deleted_at from chat_sessions')
+        || q.startsWith('select id, visibility, folder, deleted_at from chat_sessions')) {
         if (String(params[0]) === CHANNEL) {
-          return [{ id: CHANNEL, workspace_id: WORKSPACE, visibility: 'workspace', folder: 'General' }];
+          return [{ id: CHANNEL, workspace_id: WORKSPACE, visibility: 'workspace', folder: 'General', deleted_at: null }];
         }
         if (String(params[0]) === DM) {
-          return [{ id: DM, workspace_id: WORKSPACE, visibility: 'private', folder: 'Direct messages' }];
+          return [{ id: DM, workspace_id: WORKSPACE, visibility: 'private', folder: 'Direct messages', deleted_at: null }];
         }
         return [];
       }
@@ -116,30 +125,59 @@ function makeDb({ roles = {}, dmMembers = [], markers = [], optedOut = [] } = {}
       // the message must belong to the named session, and the writer must not
       // have opted out. Both are in the statement's own WHERE, so this is
       // reporting what the parameters make true, not inventing a rule.
-      if (q.startsWith('insert into session_read_state (session_id, user_id, read_at)')) {
-        const [sessionId, userId, messageId] = params.map(String);
+      if (q.includes('insert into session_read_state')
+        && q.includes('session_id, user_id, thread_parent_id, last_seen_message_id, read_at')) {
+        const [rawSessionId, rawUserId, rawMessageId, rawThreadParentId] = params;
+        const sessionId = String(rawSessionId);
+        const userId = String(rawUserId);
+        const messageId = String(rawMessageId);
+        const threadParentId = rawThreadParentId == null ? null : String(rawThreadParentId);
         if (optedOut.includes(userId)) return [];
-        if (messageId !== MESSAGE) return [];           // `m.id = $3`
+        const messageThread = messageId === MESSAGE ? null
+          : messageId === THREAD_ROOT ? THREAD_ROOT
+            : messageId === THREAD_REPLY ? THREAD_ROOT
+              : undefined;
+        if (messageThread === undefined) return [];     // `m.id = $3`
         if (sessionId !== CHANNEL && sessionId !== DM) return [];
-        written.push({ sessionId, userId, messageId });
-        return [{ session_id: sessionId, user_id: userId, agent_id: null, read_at: '2026-07-01T00:00:00.000Z' }];
+        if (threadParentId === null && messageThread !== null) return [];
+        if (threadParentId !== null && messageId !== threadParentId && messageThread !== threadParentId) return [];
+        written.push({ sessionId, userId, messageId, threadParentId });
+        return [{
+          marker_id: `marker-${sessionId}-${userId}-${threadParentId || 'channel'}`,
+          event_version: String(written.length),
+          session_id: sessionId,
+          user_id: userId,
+          agent_id: null,
+          thread_parent_id: threadParentId,
+          last_seen_message_id: messageId,
+          read_at: '2026-07-01T00:00:00.000Z',
+        }];
       }
 
       // The read projects a unified reader_id/reader_kind across human + agent
       // markers. The mock stores markers keyed by user_id (its fixtures predate
       // agents) and returns them in the route's projected shape.
-      if (q.startsWith('select r.session_id,')) {
-        const [sessionId, callerId] = params.map(String);
+      if (q.includes('from session_read_state r')) {
+        const [rawSessionId, rawCallerId, rawThreadParentId] = params;
+        const sessionId = String(rawSessionId);
+        const callerId = String(rawCallerId);
+        const threadParentId = rawThreadParentId == null ? null : String(rawThreadParentId);
         // Reciprocity and the omission of opted-out readers are BOTH in the
         // statement's WHERE; the mock applies the caller's own flag and each
         // row's flag exactly as those predicates would.
         if (optedOut.includes(callerId)) return [];
         return markers
-          .filter(marker => marker.session_id === sessionId && !optedOut.includes(marker.user_id))
-          .map(marker => ({
+          .filter(marker => marker.session_id === sessionId)
+          .filter(marker => (marker.thread_parent_id ?? null) === threadParentId)
+          .filter(marker => marker.agent_id != null || !optedOut.includes(marker.user_id))
+          .map((marker, index) => ({
+            marker_id: marker.marker_id || `fixture-marker-${index}`,
+            event_version: String(marker.event_version || index + 1),
             session_id: marker.session_id,
-            reader_id: marker.user_id,
-            reader_kind: 'human',
+            reader_id: marker.user_id ?? marker.agent_id,
+            reader_kind: marker.agent_id != null ? 'agent' : 'human',
+            thread_parent_id: marker.thread_parent_id ?? null,
+            last_seen_message_id: marker.last_seen_message_id || MESSAGE,
             read_at: marker.read_at,
           }));
       }
@@ -167,11 +205,15 @@ const markRead = (baseUrl, token, sessionId, body) => fetch(`${baseUrl}/backend/
   body: JSON.stringify(body),
 });
 
-const readState = (baseUrl, token, sessionId) => fetch(`${baseUrl}/backend/sessions/${sessionId}/read-state`, {
-  headers: { Authorization: `Bearer ${token}` },
-});
+const readState = (baseUrl, token, sessionId, threadParentId = null) => {
+  const url = new URL(`${baseUrl}/backend/sessions/${sessionId}/read-state`);
+  if (threadParentId) url.searchParams.set('thread_parent_id', threadParentId);
+  return fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+};
 
-const upserts = db => db.sql.filter(entry => entry.q.startsWith('insert into session_read_state'));
+const upserts = db => db.sql.filter(entry =>
+  entry.q.includes('insert into session_read_state')
+  && entry.q.includes('session_id, user_id, thread_parent_id, last_seen_message_id, read_at'));
 
 // ---------------------------------------------------------------------------
 // The clock
@@ -197,12 +239,41 @@ test('the marker is stamped from the MESSAGE, and a client-supplied time is igno
   });
 
   const [upsert] = upserts(db);
-  assert.deepEqual(upsert.params.map(String), [CHANNEL, OWNER, MESSAGE], 'three params: session, user, message');
+  assert.deepEqual(
+    upsert.params,
+    [CHANNEL, OWNER, MESSAGE, null],
+    'four params: session, user, exact message, and channel/thread scope',
+  );
   assert.ok(
     !upsert.params.some(param => String(param).includes('2099')),
     'no client timestamp reaches the statement',
   );
-  assert.match(upsert.sql, /select \$1::uuid, \$2::uuid, m\.created_at/, 'the time comes from the message row');
+  assert.match(
+    upsert.sql,
+    /select \$1::uuid, \$2::uuid, \$4::uuid, marker\.id, marker\.created_at/,
+    'the message identity and time both come from the visible message row',
+  );
+});
+
+test('channel and thread markers are separate scopes, and the fourth bind carries the thread root', async () => {
+  const db = makeDb();
+  __test.setTestDb(db);
+  const token = await __test.issueToken(OWNER, '1');
+
+  await withServer(async (baseUrl) => {
+    assert.equal((await markRead(baseUrl, token, CHANNEL, {
+      lastSeenMessageId: MESSAGE,
+    })).status, 200);
+    assert.equal((await markRead(baseUrl, token, CHANNEL, {
+      lastSeenMessageId: THREAD_REPLY,
+      threadParentId: THREAD_ROOT,
+    })).status, 200);
+  });
+
+  assert.deepEqual(db.written, [
+    { sessionId: CHANNEL, userId: OWNER, messageId: MESSAGE, threadParentId: null },
+    { sessionId: CHANNEL, userId: OWNER, messageId: THREAD_REPLY, threadParentId: THREAD_ROOT },
+  ]);
 });
 
 test('the statement resolves the time from messages and pins the message to the session', () => {
@@ -212,7 +283,10 @@ test('the statement resolves the time from messages and pins the message to the 
   // arbitrary point in time — including one far in the future, which would mark
   // everything in this session as read.
   assert.match(ADVANCE_READ_MARKER_SQL, /from messages m/);
-  assert.match(ADVANCE_READ_MARKER_SQL, /where m\.id = \$3::uuid\s+and m\.session_id = \$1::uuid/);
+  assert.match(ADVANCE_READ_MARKER_SQL, /where m\.id = \$3::uuid\s+and m\.deleted_at is null/);
+  assert.match(ADVANCE_READ_MARKER_SQL, /read_marker_session\.id = \$1::uuid/);
+  assert.match(ADVANCE_READ_MARKER_SQL, /join readable_marker_session readable on readable\.id = m\.session_id/);
+  assert.match(ADVANCE_READ_MARKER_SQL, /chat_session_members[\s\S]*for share/);
 });
 
 test('a message from another session cannot plant a marker', async () => {
@@ -242,8 +316,21 @@ test('the marker can only ever move FORWARD', () => {
   // into an un-read, which is the failure inbox_read_state was built to avoid.
   assert.match(
     ADVANCE_READ_MARKER_SQL,
-    /on conflict \(session_id, user_id\) where user_id is not null\s+do update set read_at = excluded\.read_at, updated_at = now\(\)\s+where session_read_state\.read_at < excluded\.read_at/,
+    /on conflict \(session_id, user_id, thread_parent_id\) where user_id is not null[\s\S]*where \(session_read_state\.read_at, session_read_state\.last_seen_message_id\)\s*< \(excluded\.read_at, excluded\.last_seen_message_id\)/,
   );
+});
+
+test('equal-time messages advance deterministically by the message-id tuple', () => {
+  // Postgres timestamps need not be unique. Comparing read_at alone would drop a
+  // later marker when two messages share the same timestamp, so both reader lanes
+  // use the message id as the deterministic second tuple element.
+  for (const sql of [ADVANCE_READ_MARKER_SQL, ADVANCE_AGENT_READ_MARKER_SQL]) {
+    assert.match(
+      sql,
+      /where \(session_read_state\.read_at, session_read_state\.last_seen_message_id\)\s*< \(excluded\.read_at, excluded\.last_seen_message_id\)/,
+    );
+    assert.match(sql, /last_seen_message_id = excluded\.last_seen_message_id/);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -269,8 +356,17 @@ test("an opted-out reader's marker is never STORED", async () => {
   assert.deepEqual(db.written, []);
   assert.match(
     ADVANCE_READ_MARKER_SQL,
-    /join app_users u on u\.id = \$2::uuid[\s\S]*coalesce\(u\.share_read_receipts, true\)/,
-    'the opt-out is a predicate on the write, not a branch in one route',
+    /receipt_sharing_user[\s\S]*coalesce\(sharing_user\.share_read_receipts, true\)[\s\S]*for share of sharing_user/,
+    'the opt-out is a locked predicate on the write, not a branch in one route',
+  );
+});
+
+test('disabling receipts deletes human markers but preserves agent markers', () => {
+  assert.match(DELETE_HUMAN_READ_MARKERS_SQL, /where user_id = \$1::uuid/);
+  assert.match(DELETE_HUMAN_READ_MARKERS_SQL, /agent_id is null/);
+  assert.match(
+    DELETE_HUMAN_READ_MARKERS_SQL,
+    /returning marker_id, event_version, session_id, user_id, agent_id, thread_parent_id,\s+last_seen_message_id, read_at/,
   );
 });
 
@@ -322,7 +418,10 @@ test('updated_at is never projected', () => {
   // It records when a marker last MOVED — a second, finer clock than "read up to
   // this point", and not a disclosure this feature makes.
   assert.doesNotMatch(SESSION_READ_STATE_SQL, /updated_at/);
-  assert.deepEqual(SELECTABLE_COLUMNS_BY_TABLE.session_read_state, ['session_id', 'user_id', 'agent_id', 'read_at']);
+  assert.deepEqual(SELECTABLE_COLUMNS_BY_TABLE.session_read_state, [
+    'marker_id', 'event_version', 'session_id', 'user_id', 'agent_id',
+    'thread_parent_id', 'last_seen_message_id', 'read_at',
+  ]);
 });
 
 // ---------------------------------------------------------------------------
@@ -358,7 +457,9 @@ test('a member OF the DM can both mark and read its receipts', async () => {
     assert.equal(res.status, 200);
     assert.deepEqual((await res.json()).data.markers.map(m => m.reader_id), [OWNER]);
   });
-  assert.deepEqual(db.written, [{ sessionId: DM, userId: OUTSIDER, messageId: MESSAGE }]);
+  assert.deepEqual(db.written, [{
+    sessionId: DM, userId: OUTSIDER, messageId: MESSAGE, threadParentId: null,
+  }]);
 });
 
 test('a non-member of the WORKSPACE is refused before anything else', async () => {
@@ -404,21 +505,32 @@ test('an agent marker is keyed by agent_id, not user_id, and skips the human opt
   // no share_read_receipts row to honour, and joining would drop every agent
   // marker. The conflict target is the agent partial index, mirroring the human
   // path's forward-only guard.
-  assert.match(ADVANCE_AGENT_READ_MARKER_SQL, /insert into session_read_state \(session_id, agent_id, read_at\)/);
+  assert.match(
+    ADVANCE_AGENT_READ_MARKER_SQL,
+    /insert into session_read_state \(\s*session_id, agent_id, thread_parent_id, last_seen_message_id, read_at\s*\)/,
+  );
   assert.doesNotMatch(ADVANCE_AGENT_READ_MARKER_SQL, /app_users/);
   assert.match(
     ADVANCE_AGENT_READ_MARKER_SQL,
-    /on conflict \(session_id, agent_id\) where agent_id is not null\s+do update set read_at = excluded\.read_at, updated_at = now\(\)\s+where session_read_state\.read_at < excluded\.read_at/,
+    /on conflict \(session_id, agent_id, thread_parent_id\) where agent_id is not null[\s\S]*where \(session_read_state\.read_at, session_read_state\.last_seen_message_id\)\s*< \(excluded\.read_at, excluded\.last_seen_message_id\)/,
   );
 });
 
-test("an agent's marker resolves to the newest message it did NOT author", () => {
-  // "Seen" for an agent is the latest inbound message, resolved server-side (the
-  // daemon feeds it the conversation out of band, so there is no client-supplied
-  // id). Excluding its own posts keeps it from marking its own replies as read.
-  assert.match(ADVANCE_AGENT_READ_MARKER_SQL, /from messages m\s+where m\.session_id = \$1::uuid/);
-  assert.match(ADVANCE_AGENT_READ_MARKER_SQL, /coalesce\(m\.sender_id::text, ''\) <> \$2::text/);
-  assert.match(ADVANCE_AGENT_READ_MARKER_SQL, /order by m\.created_at desc, m\.id desc\s+limit 1/);
+test("an agent's marker resolves the exact delivered message and never scans for latest", () => {
+  // The server captures this id with the bounded context/claimed prompt. Looking
+  // up "latest" here would include messages arriving during a long run or rows
+  // outside a thread-scoped prompt.
+  assert.match(ADVANCE_AGENT_READ_MARKER_SQL, /from messages m\s+join readable_agent_session readable on readable\.id = m\.session_id/);
+  assert.match(ADVANCE_AGENT_READ_MARKER_SQL, /marker_agent\.enabled is not false/);
+  assert.doesNotMatch(
+    ADVANCE_AGENT_READ_MARKER_SQL,
+    /marker_agent\.mcp_approved/,
+    'MCP approval is unrelated to a builtin turn that already read its own session',
+  );
+  assert.match(ADVANCE_AGENT_READ_MARKER_SQL, /jsonb_array_elements/);
+  assert.match(ADVANCE_AGENT_READ_MARKER_SQL, /m\.id = \$3::uuid/);
+  assert.match(ADVANCE_AGENT_READ_MARKER_SQL, /coalesce\(m\.sender_kind, ''\) = 'agent'/);
+  assert.doesNotMatch(ADVANCE_AGENT_READ_MARKER_SQL, /order by m\.created_at desc/);
 });
 
 test('the read projection unifies human and agent markers into reader_id + reader_kind', () => {
@@ -445,54 +557,72 @@ test('the table is allowlisted AND workspace-scoped — the pair, not either hal
   assert.ok(WORKSPACE_SCOPED_TABLES.has('session_read_state'), 'otherwise there is no row scoping AT ALL');
 });
 
-test('every generic WRITE is gated to manage, so the dedicated route is the only writer', () => {
+test('every generic WRITE keeps a manage fallback beneath the explicit dedicated-route refusal', () => {
   assert.deepEqual(DB_TABLE_ACCESS.session_read_state, {
     select: 'read', insert: 'manage', update: 'manage', delete: 'manage',
   });
 });
 
-test('a generic insert into session_read_state is refused, even for an owner', async () => {
-  // The behavioural half of the entry above, and it is refused TWICE OVER.
-  //
-  // The 'manage' gate is the declared rule. Underneath it the insert is refused
-  // for a structural reason as well: resolveOperationWorkspace derives a tenant
-  // for an INSERT from `values.workspace_id` (or, for `messages` alone, from a
-  // session), and this table has neither — so a forged row cannot resolve a
-  // workspace and is rejected before capability is even considered.
-  //
-  // OWNER is used deliberately: they hold 'manage', so a test that only refused
-  // an editor would pass against a build where the highest role could forge a
-  // claim that somebody else read something at a time of the forger's choosing.
+test('generic receipt insert, update, and delete are refused even for an owner', async () => {
+  // OWNER is deliberate: the shared refusal is a server-authority boundary,
+  // not merely an RBAC threshold. INSERT/UPDATE could fabricate who read what
+  // and when; DELETE could erase a real social signal.
   const db = makeDb();
   __test.setTestDb(db);
   const token = await __test.issueToken(OWNER, '1');
 
   await withServer(async (baseUrl) => {
-    const res = await fetch(`${baseUrl}/backend/db/insert`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        table: 'session_read_state',
-        values: { session_id: CHANNEL, user_id: MEMBER, read_at: '2099-01-01T00:00:00.000Z' },
-      }),
-    });
-    assert.equal(res.status, 400, 'a workspace reference is required, and this table cannot carry one');
+    const attempts = [
+      {
+        route: 'insert',
+        body: {
+          table: 'session_read_state',
+          values: { session_id: CHANNEL, user_id: MEMBER, read_at: '2099-01-01T00:00:00.000Z' },
+        },
+      },
+      {
+        route: 'update',
+        body: {
+          table: 'session_read_state',
+          values: { read_at: '2099-01-01T00:00:00.000Z' },
+          filters: [{ column: 'session_id', operator: 'eq', value: CHANNEL }],
+        },
+      },
+      {
+        route: 'delete',
+        body: {
+          table: 'session_read_state',
+          filters: [{ column: 'session_id', operator: 'eq', value: CHANNEL }],
+        },
+      },
+    ];
+
+    for (const attempt of attempts) {
+      const res = await fetch(`${baseUrl}/backend/db/${attempt.route}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(attempt.body),
+      });
+      assert.equal(res.status, 403, `${attempt.route} must be unreachable to an owner`);
+      assert.match((await res.json()).error.message, /dedicated read receipt route/i);
+    }
   });
   assert.deepEqual(db.written, []);
+  const bootstrapStatements = new Set(SESSION_READ_STATE_UPGRADE_STEPS.map(statement =>
+    String(statement).replace(/\s+/g, ' ').trim().toLowerCase()));
   assert.deepEqual(
-    db.sql.filter(entry => entry.q.startsWith('insert into session_read_state')),
+    db.sql.filter(entry =>
+      /^(insert into|update|delete from) session_read_state/i.test(entry.q)
+      && !bootstrapStatements.has(entry.q)),
     [],
-    'and no insert ever reached the database',
+    'no generic receipt mutation reaches Postgres',
   );
 });
 
-test('a select filtered by a session the caller cannot read is refused', async () => {
-  // This is also the REALTIME gate: authorizeRealtimeBinding authorizes a
-  // db_changes binding by calling enforceDbOperationAccess with op 'select', so
-  // the same refusal stops a non-member SUBSCRIBING to a DM's read state.
-  const db = makeDb({ roles: { [OUTSIDER]: 'editor' }, dmMembers: [OWNER] });
+test('the generic select cannot bypass the dedicated reciprocal projection', async () => {
+  const db = makeDb();
   __test.setTestDb(db);
-  const token = await __test.issueToken(OUTSIDER, '1');
+  const token = await __test.issueToken(OWNER, '1');
 
   await withServer(async (baseUrl) => {
     const res = await fetch(`${baseUrl}/backend/db/select`, {
@@ -500,11 +630,17 @@ test('a select filtered by a session the caller cannot read is refused', async (
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         table: 'session_read_state',
-        filters: [{ column: 'session_id', operator: 'eq', value: DM }],
+        filters: [{ column: 'session_id', operator: 'eq', value: CHANNEL }],
       }),
     });
     assert.equal(res.status, 403);
+    assert.match((await res.json()).error.message, /dedicated route/i);
   });
+  assert.equal(
+    db.sql.some(entry => /^select .* from session_read_state/i.test(entry.q)),
+    false,
+    'no raw marker query reaches Postgres',
+  );
 });
 
 test('an UNFILTERED select cannot be expressed, because the table has no workspace column', async () => {
@@ -523,7 +659,7 @@ test('an UNFILTERED select cannot be expressed, because the table has no workspa
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ table: 'session_read_state', filters: [] }),
     });
-    assert.equal(res.status, 400, 'a workspace filter is required, and there is no column to give one');
+    assert.equal(res.status, 403, 'the dedicated route is the only snapshot read surface');
   });
 });
 
@@ -545,4 +681,30 @@ test('the upgrade steps drop the primary key BEFORE dropping user_id NOT NULL', 
   // And the CREATE itself must be a single statement — no ALTER smuggled in, or
   // ensureRuntimeSchema's single db.unsafe() would throw on the extended protocol.
   assert.ok(!/;\s*\S/.test(SESSION_READ_STATE_DDL.trim().replace(/;\s*$/, '')), 'the CREATE DDL is one statement');
+});
+
+test('the opt-out reverse lookup has the same partial user index in all three schema authorities', () => {
+  const lookupIndex =
+    /create index if not exists session_read_state_user_lookup_idx\s+on session_read_state\s*\(user_id\)\s+where user_id is not null/i;
+  const runtime = SESSION_READ_STATE_UPGRADE_STEPS.join('\n');
+  const canonical = fs.readFileSync(
+    path.resolve(__dirname, '../database/neon-schema.sql'),
+    'utf8',
+  );
+  const migration = fs.readFileSync(
+    path.resolve(
+      __dirname,
+      '../supabase/migrations/20260731180000_session_read_state_user_lookup.sql',
+    ),
+    'utf8',
+  );
+
+  assert.match(DELETE_HUMAN_READ_MARKERS_SQL, /where user_id = \$1::uuid/);
+  for (const [label, source] of [
+    ['runtime bootstrap', runtime],
+    ['canonical schema', canonical],
+    ['migration', migration],
+  ]) {
+    assert.match(source, lookupIndex, `${label} is missing the opt-out lookup index`);
+  }
 });

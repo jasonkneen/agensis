@@ -16,15 +16,35 @@
 
 function mountWorkspaceMcpRoutes(app, deps = {}) {
  const {
-  requireAuth, jsonError, enforceWorkspaceRole, getDb, claudeMcpAddCommand,
+  requireAuth, jsonError, forbidden, enforceWorkspaceRole, getDb, claudeMcpAddCommand,
   configBlock, createWorkspaceMcpToken, decideAgentRegistration,
   hashAgentToken, mcpEndpoint, normalizeBaseUrl, requestBaseUrl, recordAudit,
  } = deps;
 
+ async function requireWorkspaceOwner(userId, workspaceId) {
+  const rows = await getDb().unsafe(
+   'select id, user_id from workspaces where id = $1 limit 1',
+   [workspaceId],
+  );
+  if (!rows[0]) {
+   const error = new Error('Workspace not found');
+   error.status = 404;
+   throw error;
+  }
+  if (!userId || String(rows[0].user_id || '') !== String(userId)) {
+   throw forbidden('Only the workspace owner can manage the workspace MCP credential');
+  }
+  return rows[0];
+ }
+
  app.post('/backend/workspaces/:id/mcp-token', requireAuth, async (req, res) => {
   try {
    const workspaceId = String(req.params.id || '').trim();
-   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   // This is the workspace control-plane credential, not an ordinary
+   // manage-capability setting. An admin may manage members and agents, but may
+   // not mint a bearer with workspace-wide creation authority or rotate every
+   // existing MCP client off the workspace.
+   await requireWorkspaceOwner(req.userId, workspaceId);
    const token = createWorkspaceMcpToken();
    const rows = await getDb().unsafe(
     'update workspaces set mcp_token_hash = $2, updated_at = now() where id = $1 returning id, mcp_auto_approve',
@@ -79,7 +99,10 @@ function mountWorkspaceMcpRoutes(app, deps = {}) {
  app.patch('/backend/workspaces/:id/mcp-auto-approve', requireAuth, async (req, res) => {
   try {
    const workspaceId = String(req.params.id || '').trim();
-   await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
+   // Auto-approve turns possession of the workspace credential into immediate
+   // agent-creation authority, so it has the same owner-only boundary as mint
+   // and rotation above.
+   await requireWorkspaceOwner(req.userId, workspaceId);
    const autoApprove = req.body?.autoApprove === true || req.body?.auto_approve === true;
    const rows = await getDb().unsafe(
     'update workspaces set mcp_auto_approve = $2, updated_at = now() where id = $1 returning id, mcp_auto_approve',

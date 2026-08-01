@@ -7,6 +7,9 @@ const { __test } = require('../server/index.cjs');
 function makeDb(handlers = []) {
   const db = {
     calls: [],
+    async begin(callback) {
+      return callback(db);
+    },
     async unsafe(sql, params = []) {
       const normalized = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
       db.calls.push({ sql: normalized, params });
@@ -86,7 +89,7 @@ test('Farm cancellation marks the job and asks the daemon to abort the exact job
 
 test('Farm job deltas update the pollable job without requiring a chat placeholder', async () => {
   const db = makeDb([
-    { match: /select j\.\*, a\.name as agent_name/, rows: [{ id: 'job-1', workspace_id: 'workspace-1', agent_id: 'agent-1', session_id: null, metadata: JSON.stringify({ mode: 'farm' }) }] },
+    { match: /select j\.\*, a\.name as agent_name[\s\S]*j\.session_id is null/, rows: [{ id: 'job-1', workspace_id: 'workspace-1', agent_id: 'agent-1', connection_id: 'connection-1', session_id: null, status: 'running', metadata: JSON.stringify({ mode: 'farm' }) }] },
     { match: /update agent_jobs set response/, rows: [] },
   ]);
   __test.setTestDb(db);
@@ -157,16 +160,16 @@ test('Farm jobs use a long stale-progress timeout instead of the four-minute cha
 
 test('late Farm deltas are ignored after cancellation wins the status transition', async () => {
   const db = makeDb([
-    { match: /select j\.\*, a\.name as agent_name/, rows: [{ id: 'job-1', workspace_id: 'workspace-1', agent_id: 'agent-1', session_id: null, metadata: JSON.stringify({ mode: 'farm', responseMessageId: 'message-1' }) }] },
-    { match: /update agent_jobs set response/, rows: [] },
+    { match: /select status from agent_jobs/, rows: [{ status: 'cancelled' }] },
   ]);
   __test.setTestDb(db);
   await __test.handleAgentJobDelta(
     { agentAuth: { workspaceId: 'workspace-1', agentId: 'agent-1', name: 'Coder' }, agentConnectionId: 'connection-1' },
     { jobId: 'job-1', content: 'too late' },
   );
-  const update = db.calls.find((call) => /update agent_jobs set response/.test(call.sql));
-  assert.match(update.sql, /status in \('queued', 'running'\)/);
+  assert.equal(db.calls.some((call) => /update agent_jobs set response/.test(call.sql)), false);
+  const diagnostic = db.calls.find((call) => /select status from agent_jobs/.test(call.sql));
+  assert.deepEqual(diagnostic.params, ['job-1', 'agent-1', 'workspace-1', 'connection-1']);
   assert.equal(db.calls.some((call) => /update messages/.test(call.sql)), false);
 });
 

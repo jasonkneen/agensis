@@ -8,11 +8,11 @@
 // Agent operations: connections, the connect command, disconnect, memory and
 // capability refresh, and dispatch.
 //
-// Dispatch is the interesting one. It resolves who was addressed
-// (parseAgentMentions / mentionsChannel), decides which thread the turn belongs
-// to (resolveDispatchThreadParent / verifyThreadParent), makes sure the
-// mentioned agents are participants, and then hands off to the live daemon
-// (findConnectedAgent) or the builtin loop. @channel addresses every agent in a
+// Dispatch is the interesting one. The browser first persists a human message,
+// then sends only its id here. This route locks that exact caller-owned message
+// and its live/readable session, derives mentions and thread routing from the
+// STORED content, atomically extends the roster when needed, and only then hands
+// off to the live daemon or builtin loop. @channel addresses every agent in a
 // channel and therefore spends a paid model turn per member, which is why the
 // mention parsing is single-sourced in shared/channelMentions.cjs.
 //
@@ -26,10 +26,10 @@ function mountAgentsRoutes(app, deps = {}) {
   sendWs, isAgentEnabled, dbRateLimitBlocked, clientIpFromReq,
   allowsUnpromptedReply, buildAgentConnectionCommand, connectedAgents,
   continueConversation, directAgentParticipantFromSession, disconnectAgentDaemons,
-  dispatchDbRateLimiter, dispatchRateLimiter, ensureMentionedParticipants,
-  findConnectedAgent, inferThreadAgentTarget, mentionsChannel,
-  normalizeAgentBackendBaseUrl, parseAgentMentions, publicAgentConnection,
-  requestBaseUrl, resolveDispatchThreadParent, verifyThreadParent,
+  dispatchDbRateLimiter, dispatchRateLimiter, enforceSessionRead, findConnectedAgent,
+  forbidden, mentionsChannel, normalizeAgentBackendBaseUrl, parseAgentMentions,
+  parseJsonArray, publicAgentConnection, requestBaseUrl, resolveDispatchThreadParent,
+  sessionReadableSql, slugHandle,
  } = deps;
 
  app.delete('/backend/agents/connections/:id', requireAuth, async (req, res) => {
@@ -131,91 +131,283 @@ function mountAgentsRoutes(app, deps = {}) {
  app.post('/backend/agents/dispatch', requireAuth, async (req, res) => {
   try {
    if (await dbRateLimitBlocked(res, dispatchRateLimiter, dispatchDbRateLimiter, req.userId || clientIpFromReq(req))) return;
-   const { workspaceId, sessionId, content, threadParentId, messageId, autoThread } = req.body || {};
-   if (!workspaceId || !sessionId || !content) {
-    return jsonError(res, 400, new Error('workspaceId, sessionId, and content are required'));
+   const { workspaceId, sessionId, threadParentId, messageId, autoThread } = req.body || {};
+   if (!workspaceId || !sessionId || !messageId) {
+    return jsonError(res, 400, new Error('workspaceId, sessionId, and messageId are required'));
    }
    await enforceWorkspaceRole(req.userId, workspaceId, 'run_agents');
-   // `folder` is in the projection because the mode gate below needs it to
-   // recognise a legacy 'Direct messages' DM. An explicit column list that omits
-   // a column a decision reads is this repo's blank-column trap — the value
-   // arrives as undefined and the decision silently takes the other branch.
-   const sessionRows = await getDb().unsafe(
-    'select id, workspace_id, participants, conversation_mode, folder from chat_sessions where id = $1 limit 1',
-    [sessionId],
+   const db = getDb();
+   // Friendly preflight only. The transaction below repeats every condition and
+   // is the authorization boundary; this read exists so a missing conversation
+   // remains a 404 rather than becoming an opaque access-change error.
+   const sessionRows = await db.unsafe(
+    `select id, workspace_id, visibility, folder, deleted_at
+       from chat_sessions
+      where id = $1 and workspace_id = $2
+      limit 1`,
+    [sessionId, workspaceId],
    );
-   if (!sessionRows[0] || String(sessionRows[0].workspace_id) !== String(workspaceId)) {
+   if (!sessionRows[0] || sessionRows[0].deleted_at) {
     return jsonError(res, 404, new Error('Channel not found'));
    }
-   // The user message is already persisted by the client before dispatch, so
-   // the orchestrator reconstructs all context (mentions, history, budget)
-   // straight from the database. We only decide here whether to kick it off.
-   const mentions = parseAgentMentions(content);
-   const directTarget = directAgentParticipantFromSession(sessionRows[0]);
-   // A human @mentioning an agent that isn't a channel participant yet adds it
-   // to the roster (awaited so continueConversation re-reads the updated set).
-   // No-op for 1:1 DMs and for mentions of already-present agents.
-   if (mentions.length > 0) {
-    await ensureMentionedParticipants(workspaceId, sessionRows[0], content);
+   await enforceSessionRead(req.userId, sessionId, sessionRows[0]);
+
+   const explicitThreadParentId = threadParentId == null || String(threadParentId).trim() === ''
+    ? null
+    : String(threadParentId).trim();
+   const outcome = await db.begin(async (tx) => {
+    // Lock every row that proves this dispatch: the session, caller-owned seed,
+    // private membership (inside sessionReadableSql), and direct/inherited
+    // workspace role. A clear, revoke, workspace move, role downgrade, seed edit
+    // or seed delete therefore either wins BEFORE this statement and is seen, or
+    // waits until this authorization has committed. There is no stale middle.
+    const locked = await tx.unsafe(
+     `with recursive dispatch_workspace_chain as (
+        select id, parent_id, 0 as depth
+          from workspaces
+         where id = $2
+        union all
+        select parent.id, parent.parent_id, chain.depth + 1
+          from workspaces parent
+          join dispatch_workspace_chain chain on parent.id = chain.parent_id
+         where chain.depth < 10
+      ),
+      dispatch_locked_workspaces as materialized (
+        select workspace.id, workspace.user_id
+          from workspaces workspace
+          join dispatch_workspace_chain chain on chain.id = workspace.id
+         for share of workspace
+      ),
+      dispatch_locked_memberships as materialized (
+        select membership.workspace_id, membership.role
+          from workspace_members membership
+          join dispatch_locked_workspaces workspace
+            on workspace.id = membership.workspace_id
+         where membership.user_id = $3
+         for share of membership
+      )
+      select dispatch_session.id,
+             dispatch_session.workspace_id,
+             dispatch_session.participants,
+             dispatch_session.conversation_mode,
+             dispatch_session.visibility,
+             dispatch_session.folder,
+             dispatch_seed.id as seed_id,
+             dispatch_seed.content as seed_content,
+             dispatch_seed.thread_parent_id as seed_thread_parent_id
+        from chat_sessions dispatch_session
+        join messages dispatch_seed
+          on dispatch_seed.id = $4
+         and dispatch_seed.session_id = dispatch_session.id
+       where dispatch_session.id = $1
+         and dispatch_session.workspace_id = $2
+         and dispatch_session.deleted_at is null
+         and ${sessionReadableSql('dispatch_session', '$3', { lockMembership: true })}
+         and (
+           exists (
+             select 1 from dispatch_locked_workspaces workspace
+              where workspace.user_id = $3
+           )
+           or exists (
+             select 1 from dispatch_locked_memberships membership
+              where membership.role in ('owner', 'admin', 'editor')
+           )
+         )
+         and dispatch_seed.deleted_at is null
+         and dispatch_seed.role = 'user'
+         and dispatch_seed.sender_kind = 'user'
+         and dispatch_seed.sender_id::text = $3::text
+         and length(btrim(coalesce(dispatch_seed.content, ''))) > 0
+         and (
+           ($5::text is null and dispatch_seed.thread_parent_id is null)
+           or dispatch_seed.thread_parent_id::text = $5::text
+         )
+       for update of dispatch_session
+       for share of dispatch_seed`,
+     [sessionId, workspaceId, req.userId, messageId, explicitThreadParentId],
+    );
+    const session = locked[0];
+    if (!session) {
+     throw forbidden('Dispatch access changed before the agent run could start');
+    }
+
+    // An explicit thread reply must name the same live root the stored seed
+    // names. The seed's thread_parent_id is immutable for browser writers, but
+    // the root can be deleted; lock it so that cannot happen between validation
+    // and commit. A forged cross-session parent is rejected, never flattened.
+    if (explicitThreadParentId) {
+     const parentRows = await tx.unsafe(
+      `select id
+         from messages
+        where id = $1
+          and session_id = $2
+          and deleted_at is null
+        for share`,
+      [explicitThreadParentId, sessionId],
+     );
+     if (parentRows.length !== 1) {
+      throw forbidden('Dispatch thread changed before the agent run could start');
+     }
+    }
+
+    const storedContent = String(session.seed_content || '');
+    const mentions = parseAgentMentions(storedContent);
+    const directTarget = directAgentParticipantFromSession(session);
+    const isDirectMessage = Boolean(directTarget && directTarget.direct);
+    const dmForModeGate = isDirectMessage || session.folder === 'Direct messages';
+
+    // Preserve the existing thread-continuation rule, but derive it from rows
+    // locked in this transaction rather than a second unscoped read.
+    let threadTarget = null;
+    if (mentions.length === 0 && explicitThreadParentId) {
+     const threadRows = await tx.unsafe(
+      `select id, sender_kind, sender_id, sender_name, content,
+              message_kind, tool_name, tool_detail, broadcast_to_channel,
+              created_at
+         from messages
+        where session_id = $1
+          and deleted_at is null
+          and (id = $2 or thread_parent_id = $2)
+        order by created_at desc
+        for share`,
+      [sessionId, explicitThreadParentId],
+     );
+     const agentRow = threadRows.find((row) => (
+      row.sender_kind === 'agent'
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(row.sender_id || ''))
+     ));
+     if (agentRow) {
+      threadTarget = { agentId: String(agentRow.sender_id), handle: slugHandle(agentRow.sender_name || '') };
+     } else {
+      for (const row of threadRows) {
+       const handle = parseAgentMentions(row.content)[0] || '';
+       if (handle) {
+        threadTarget = { agentId: '', handle };
+        break;
+       }
+      }
+     }
+    }
+
+    // A mentioned non-participant becomes part of a channel in the SAME locked
+    // transaction. DMs stay isolated. This replaces the old best-effort helper:
+    // an access or roster race now refuses dispatch instead of silently running
+    // with a stale participant set or overwriting somebody else's roster edit.
+    let updatedSession = null;
+    if (mentions.length > 0 && !(directTarget && directTarget.direct)) {
+     const existing = parseJsonArray(session.participants);
+     const existingAgentIds = new Set(
+      existing
+       .filter((participant) => participant && participant.kind === 'agent')
+       .map((participant) => String(participant.agent_id || participant.id || '').replace(/^agent:/, ''))
+       .filter(Boolean),
+     );
+     const agents = await tx.unsafe(
+      `select id, name, handle, enabled
+         from workspace_agents
+        where workspace_id = $1
+        for share`,
+      [workspaceId],
+     );
+     const byHandle = new Map();
+     for (const agent of agents) {
+      if (!isAgentEnabled(agent)) continue;
+      byHandle.set(slugHandle(agent.handle || agent.name), agent);
+      const nameHandle = slugHandle(agent.name);
+      if (!byHandle.has(nameHandle)) byHandle.set(nameHandle, agent);
+     }
+     const additions = [];
+     const seen = new Set();
+     for (const handle of mentions) {
+      const agent = byHandle.get(handle);
+      if (!agent) continue;
+      const agentId = String(agent.id);
+      if (existingAgentIds.has(agentId) || seen.has(agentId)) continue;
+      seen.add(agentId);
+      additions.push({
+       id: `agent:${agentId}`,
+       kind: 'agent',
+       agent_id: agentId,
+       user_id: null,
+       name: agent.name,
+       handle: slugHandle(agent.handle || agent.name),
+       status: null,
+       direct: false,
+       added_at: new Date().toISOString(),
+      });
+     }
+     if (additions.length > 0) {
+      const merged = [...existing, ...additions];
+      const updated = await tx.unsafe(
+       `update chat_sessions
+           set participants = $1::jsonb,
+               updated_at = now()
+         where id = $2
+           and workspace_id = $3
+           and deleted_at is null
+           and participants is not distinct from $4::jsonb
+         returning id, workspace_id, participants, conversation_mode, visibility, folder, deleted_at, updated_at`,
+       [merged, sessionId, workspaceId, session.participants],
+      );
+      if (updated.length !== 1) {
+       throw forbidden('Channel roster changed before the agent run could start');
+      }
+      [updatedSession] = updated;
+     }
+    }
+
+    const addressesChannel = mentionsChannel(storedContent);
+    const addressed = mentions.length > 0 || addressesChannel || Boolean(threadTarget)
+     || (Boolean(directTarget) && dmForModeGate);
+    if (!addressed && !allowsUnpromptedReply({
+     conversationMode: session.conversation_mode,
+     isDirectMessage: dmForModeGate,
+    })) {
+     return {
+      dispatched: false,
+      reason: 'channel_replies_on_mention_only',
+      mentions,
+      updatedSession,
+     };
+    }
+    if (!(addressed || !isDirectMessage)) {
+     return {
+      dispatched: false,
+      reason: 'no_agent_mention_or_direct_target',
+      mentions,
+      updatedSession,
+     };
+    }
+
+    const effectiveThreadParentId = resolveDispatchThreadParent({
+     threadParentId: session.seed_thread_parent_id,
+     autoThread,
+     messageId: session.seed_id,
+    });
+    const mode = addressesChannel
+     ? 'channel'
+     : (mentions.length > 0 || threadTarget ? 'mention' : (directTarget ? 'direct' : 'auto'));
+    return {
+     dispatched: true,
+     effectiveThreadParentId,
+     mentions,
+     mode,
+     updatedSession,
+    };
+   });
+
+   if (outcome.updatedSession) {
+    notifyDbSubscribers('chat_sessions', 'UPDATE', [outcome.updatedSession]);
    }
-   const threadTarget = mentions.length === 0 && threadParentId
-    ? await inferThreadAgentTarget(sessionId, threadParentId)
-    : null;
-   // A true 1:1 DM (a participant flagged direct:true) only routes to its own agent.
-   const isDirectMessage = Boolean(directTarget && directTarget.direct);
-   // The DM test the MODE GATE uses has to be continueConversation's, not the
-   // narrow one above: it also counts the legacy 'Direct messages' folder, whose
-   // rows never got a direct-flagged participant. Kept separate so the branch
-   // below stays keyed on exactly what it always was.
-   const dmForModeGate = isDirectMessage || sessionRows[0].folder === 'Direct messages';
-   // `@channel` addresses the roster rather than a handle, so it counts as being
-   // addressed even though `mentions` (individual handles) is empty.
-   const addressesChannel = mentionsChannel(content);
-   // A directTarget only counts as ADDRESSED in a DM. In a channel it is the
-   // sole-agent-participant fallback, which is the un-addressed case the mode
-   // governs — see the matching gate in continueConversation.
-   const addressed = mentions.length > 0 || addressesChannel || Boolean(threadTarget)
-    || (Boolean(directTarget) && dmForModeGate);
-   // Nothing and nobody was addressed. Whether that still wakes an agent is the
-   // channel's conversation_mode — the SAME decision continueConversation makes
-   // (allowsUnpromptedReply), asked here only so the client is told the truth
-   // rather than being handed dispatched:true for a post nobody will answer.
-   if (!addressed && !allowsUnpromptedReply({
-    conversationMode: sessionRows[0].conversation_mode,
-    isDirectMessage: dmForModeGate,
-   })) {
-    return res.json({ data: { dispatched: false, reason: 'channel_replies_on_mention_only' }, error: null });
+   if (!outcome.dispatched) {
+    return res.json({ data: { dispatched: false, reason: outcome.reason }, error: null });
    }
-   const willDispatch = addressed || !isDirectMessage;
-   if (!willDispatch) {
-    return res.json({ data: { dispatched: false, reason: 'no_agent_mention_or_direct_target' }, error: null });
-   }
-   // Option A auto-threading: thread the agent's reply under the human's main-box
-   // message when the UI asks for it (see resolveDispatchThreadParent). Follow-ups
-   // already carry threadParentId; sub-thread/MCP/legacy callers stay flat.
-   const requestedThreadParentId = resolveDispatchThreadParent({ threadParentId, autoThread, messageId });
-   // VERIFY THE PARENT EXISTS before threading under it. messageId arrives from
-   // the client and was previously trusted straight into a foreign key, so an
-   // optimistic id — or one whose own insert failed — made EVERY agent reply in
-   // the job die on messages_thread_parent_id_fkey. The turn is not the place to
-   // discover that: a reply that cannot be threaded should land flat, not vanish.
-   //
-   // Scoped to this session as well as existence, so a caller cannot thread a
-   // reply under a message in a conversation they are not in.
-   const effectiveThreadParentId = await verifyThreadParent(requestedThreadParentId, sessionId);
    // Fire and forget: the conversation advances in the background as each agent
    // message lands and is streamed to clients over realtime. Holding the POST
    // open for the whole multi-turn chain would block the user's UI.
-   void continueConversation({ workspaceId, sessionId, threadParentId: effectiveThreadParentId })
+   void continueConversation({ workspaceId, sessionId, threadParentId: outcome.effectiveThreadParentId })
     .catch((error) => console.error('continueConversation (dispatch) failed', error));
-   // Diagnostic only (nothing branches on it), but ordered the way
-   // pickMentionNextAgent actually decides: an explicit mention outranks the
-   // sole-agent direct fallback, so reporting 'direct' for "@coder look" in a
-   // one-agent channel was simply describing the wrong reason.
-   const dispatchMode = addressesChannel
-    ? 'channel'
-    : (mentions.length > 0 || threadTarget ? 'mention' : (directTarget ? 'direct' : 'auto'));
-   return res.json({ data: { dispatched: true, mode: dispatchMode, mentions }, error: null });
+   return res.json({ data: { dispatched: true, mode: outcome.mode, mentions: outcome.mentions }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }

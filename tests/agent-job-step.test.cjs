@@ -24,6 +24,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { __test } = require('../server/index.cjs');
+const { createAgentJobs } = require('../server/agent-jobs.cjs');
 
 const AUTH = { agentId: 'agent-1', workspaceId: 'ws-1', name: 'Coder', handle: 'coder' };
 
@@ -36,6 +37,8 @@ const JOB = {
   agent_id: 'agent-1',
   workspace_id: 'ws-1',
   session_id: 'session-1',
+  connection_id: 'conn-1',
+  status: 'running',
   agent_name: 'Coder',
   agent_handle: 'coder',
   metadata: { mode: 'daemon', responseMessageId: 'msg-placeholder' },
@@ -43,18 +46,46 @@ const JOB = {
 
 // Records every query so a test can assert on the SQL and the binds, and hands
 // back the row shape each statement's caller expects.
-function installDb({ job = JOB, existingMessageIds = ['msg-placeholder', 'msg-work-thread'] } = {}) {
+function installDb({
+  job = JOB,
+  existingMessageIds = ['msg-placeholder', 'msg-work-thread'],
+  agentEnabled = true,
+  sessionDeleted = false,
+  participates = true,
+} = {}) {
   const calls = [];
-  __test.setTestDb({
+  const db = {
+    async begin(callback) {
+      return callback(db);
+    },
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
       calls.push({ n, params });
       if (n.startsWith('select j.*, a.name as agent_name')) {
-        // Mirror the real WHERE clause: a mismatched agent or workspace matches nothing.
-        if (!job || params[0] !== job.id || params[1] !== job.agent_id || params[2] !== job.workspace_id) return [];
+        // Mirror the complete current-scope proof, not merely the immutable ids.
+        if (!job
+          || params[0] !== job.id
+          || params[1] !== job.agent_id
+          || params[2] !== job.workspace_id
+          || params[3] !== job.connection_id
+          || job.status !== 'running'
+          || !agentEnabled
+          || sessionDeleted
+          || !participates) return [];
         return [job];
       }
-      if (n.startsWith('update agent_jobs set updated_at')) return [{ id: params[0] }];
+      if (n.startsWith('select status from agent_jobs')) {
+        if (!job
+          || params[0] !== job.id
+          || params[1] !== job.agent_id
+          || params[2] !== job.workspace_id
+          || params[3] !== job.connection_id) return [];
+        return [{ status: job.status }];
+      }
+      if (n.startsWith('update agent_jobs set updated_at')) {
+        if (job.status !== 'running' || params[3] !== job.connection_id) return [];
+        return [{ id: params[0] }];
+      }
       // The reply bubble the step threads under. The mock previously answered
       // NOTHING here, so the code fell through to the unverified id and the
       // test passed because of the bug it was meant to catch — a responseMessageId
@@ -84,7 +115,9 @@ function installDb({ job = JOB, existingMessageIds = ['msg-placeholder', 'msg-wo
       }
       return [];
     },
-  });
+  };
+  __test.setTestDb(db);
+  Object.defineProperty(calls, 'db', { value: db });
   return calls;
 }
 
@@ -109,8 +142,12 @@ test('a step for another agent is rejected and writes nothing', async () => {
 
   const lookup = calls.find((c) => c.n.startsWith('select j.*, a.name as agent_name'));
   assert.ok(lookup, 'the job is loaded before anything is written');
-  assert.match(lookup.n, /where j\.id = \$1 and j\.agent_id = \$2 and j\.workspace_id = \$3/);
-  assert.deepEqual(lookup.params, ['job-1', 'agent-2', 'ws-1']);
+  assert.match(lookup.n, /where j\.id = \$1 and j\.agent_id = \$2 and j\.workspace_id = \$3 and j\.connection_id = \$4 and j\.status = 'running'/);
+  assert.match(lookup.n, /s\.deleted_at is null/);
+  assert.match(lookup.n, /a\.enabled is true/);
+  assert.match(lookup.n, /jsonb_array_elements/);
+  assert.match(lookup.n, /for update of j, s, a/);
+  assert.deepEqual(lookup.params, ['job-1', 'agent-2', 'ws-1', 'conn-1']);
   assert.ok(!calls.some((c) => c.n.startsWith('insert into messages')), 'no message row was inserted');
   assert.ok(!calls.some((c) => c.n.startsWith('update agent_jobs')), 'the job was not touched');
 });
@@ -125,8 +162,111 @@ test('a step for another workspace is rejected and writes nothing', async () => 
   );
 
   const lookup = calls.find((c) => c.n.startsWith('select j.*, a.name as agent_name'));
-  assert.deepEqual(lookup.params, ['job-1', 'agent-1', 'ws-other']);
+  assert.deepEqual(lookup.params, ['job-1', 'agent-1', 'ws-other', 'conn-1']);
   assert.ok(!calls.some((c) => c.n.startsWith('insert into messages')), 'no message row was inserted');
+});
+
+test('a running daemon cannot write after its live session or agent scope is revoked', async (t) => {
+  const revokedScopes = [
+    ['disabled agent', { agentEnabled: false }],
+    ['deleted session', { sessionDeleted: true }],
+    ['removed participant', { participates: false }],
+    ['replaced connection', { job: { ...JOB, connection_id: 'conn-old' } }],
+  ];
+
+  for (const [label, options] of revokedScopes) {
+    await t.test(label, async () => {
+      const calls = installDb(options);
+      await assert.rejects(
+        () => __test.handleAgentJobStep(agentWs(), {
+          jobId: 'job-1', kind: 'tool', name: 'Read', detail: 'secrets.ts',
+        }),
+        /Agent job not found/,
+      );
+      assert.ok(!calls.some((c) => c.n.startsWith('insert into messages')), 'no transcript write');
+      assert.ok(!calls.some((c) => c.n.startsWith('update agent_jobs')), 'no progress write');
+    });
+  }
+});
+
+test('every daemon-originated write path shares the current live-scope gate', async (t) => {
+  const frames = [
+    ['delta', (ws) => __test.handleAgentJobDelta(ws, { jobId: 'job-1', content: 'leak' })],
+    ['step', (ws) => __test.handleAgentJobStep(ws, { jobId: 'job-1', kind: 'tool', name: 'Read', detail: 'secret.ts' })],
+    ['segment', (ws) => __test.handleAgentJobSegment(ws, { jobId: 'job-1', text: 'leak' })],
+    ['result', (ws, calls) => createAgentJobs({
+      getDb: () => calls.db,
+      forbidden: (message) => Object.assign(new Error(message), { status: 403 }),
+      badRequest: (message) => Object.assign(new Error(message), { status: 400 }),
+    }).handleAgentJobResult(ws, { jobId: 'job-1', response: 'leak' })],
+  ];
+
+  for (const [label, sendFrame] of frames) {
+    await t.test(label, async () => {
+      const calls = installDb({ agentEnabled: false });
+      await assert.rejects(() => sendFrame(agentWs(), calls), /Agent job not found/);
+      assert.ok(!calls.some((c) => c.n.startsWith('insert into messages')), 'no transcript insert');
+      assert.ok(!calls.some((c) => c.n.startsWith('update messages')), 'no transcript update');
+      assert.ok(!calls.some((c) => c.n.startsWith('update agent_jobs')), 'no progress or terminal write');
+    });
+  }
+});
+
+test('daemon result side effects run only after its locked transcript transaction commits', async () => {
+  const events = [];
+  let inTransaction = false;
+  const job = {
+    ...JOB,
+    started_at: null,
+    metadata: { mode: 'daemon', responseMessageId: 'msg-placeholder' },
+  };
+  const db = {
+    async begin(callback) {
+      events.push('begin');
+      inTransaction = true;
+      const value = await callback(db);
+      inTransaction = false;
+      events.push('commit');
+      return value;
+    },
+    async unsafe(sql, params = []) {
+      const n = String(sql).replace(/\s+/g, ' ').trim();
+      if (n.startsWith('select status from agent_jobs')) return [{ status: 'running' }];
+      if (n.startsWith('select j.*, a.name as agent_name')) return [job];
+      if (n.startsWith('update agent_jobs set status = $2')) {
+        events.push('terminal-write');
+        return [{ ...job, status: params[1] }];
+      }
+      if (n.startsWith('update messages set content = $2')) {
+        events.push('transcript-write');
+        return [{ id: 'msg-placeholder', session_id: 'session-1', content: params[1] }];
+      }
+      return [];
+    },
+  };
+  const jobs = createAgentJobs({
+    getDb: () => db,
+    forbidden: (message) => Object.assign(new Error(message), { status: 403 }),
+    badRequest: (message) => Object.assign(new Error(message), { status: 400 }),
+    parseJsonObject: (value) => (value && typeof value === 'object' ? value : {}),
+    textFromValue: (value) => String(value ?? ''),
+    slugHandle: (value) => String(value || '').toLowerCase(),
+    notifyDbSubscribers: (table) => events.push(`fanout:${table}:${inTransaction}`),
+    scheduleTaskQueueDrain: () => events.push(`drain:${inTransaction}`),
+    logMessageActivity: async () => events.push(`activity:${inTransaction}`),
+    mirrorAgentReplyToTaskComment: async () => events.push(`mirror:${inTransaction}`),
+    continueConversation: async () => events.push(`continue:${inTransaction}`),
+    updateAgentHeartbeat: async () => {},
+  });
+
+  await jobs.handleAgentJobResult(agentWs(), { jobId: 'job-1', response: 'done' });
+
+  assert.ok(events.indexOf('terminal-write') < events.indexOf('commit'));
+  assert.ok(events.indexOf('transcript-write') < events.indexOf('commit'));
+  for (const effect of ['fanout:agent_jobs:false', 'fanout:messages:false', 'drain:false', 'activity:false', 'mirror:false', 'continue:false']) {
+    assert.ok(events.includes(effect), `${effect} must observe committed state: ${events.join(', ')}`);
+  }
+  assert.ok(!events.some((event) => /:(true)$/.test(event)), `no external effect escaped before commit: ${events.join(', ')}`);
 });
 
 test('a valid step inserts a new message threaded under the job responseMessageId', async () => {
@@ -192,15 +332,7 @@ test('a step counts as progress and binds metadata as an object', async () => {
 });
 
 test('a step arriving after the job finished inserts nothing', async () => {
-  const calls = [];
-  __test.setTestDb({
-    async unsafe(sql, params = []) {
-      const n = String(sql).replace(/\s+/g, ' ').trim();
-      calls.push({ n, params });
-      if (n.startsWith('select j.*, a.name as agent_name')) return [JOB];
-      return []; // the status guard matched no row: the job is already done
-    },
-  });
+  const calls = installDb({ job: { ...JOB, status: 'done' } });
 
   await __test.handleAgentJobStep(agentWs(), { jobId: 'job-1', kind: 'tool', name: 'Read', detail: 'a.ts' });
   assert.ok(!calls.some((c) => c.n.startsWith('insert into messages')), 'a stale step is not posted');

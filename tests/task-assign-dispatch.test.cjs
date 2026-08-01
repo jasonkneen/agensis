@@ -43,9 +43,15 @@ function dispatchDb({ task, agent = AGENT, session = { id: 'dm-1', workspace_id:
     db: {
       async unsafe(sql, params) {
         const n = String(sql).replace(/\s+/g, ' ').trim();
-        if (n.startsWith('select id, workspace_id, title, description, status, assignee_id, source_type, source_id from tasks')) {
+        if (n.startsWith('select id, workspace_id, title, description, status, assignee_id, source_type, source_id')) {
           return task ? [task] : [];
         }
+        if (n.startsWith('select 1 from workspaces where id = $1 and user_id = $2')) {
+          return task?.dispatch_requested_by && String(params[1]) === String(task.dispatch_requested_by)
+            ? [{ ok: 1 }]
+            : [];
+        }
+        if (n.startsWith('select role from workspace_members')) return [];
         if (n.startsWith('select * from workspace_agents where id')) {
           return agent && String(agent.id) === String(params[0]) ? [agent] : [];
         }
@@ -129,6 +135,31 @@ test('the dispatch message names the task so the agent knows what to do', async 
   assert.ok(content, 'the seed message addresses the agent');
   assert.ok(content.includes('Ship the thing'), 'it carries the task title');
   assert.ok(content.includes('agensis://task/t-1'), 'it links back to the task');
+});
+
+test('the atomic stored requester wins over a stale racing call-site actor', async () => {
+  // The compatibility transaction adapter recognizes this deterministic owner
+  // id, which also gives the authoritative requester run_agents capability.
+  const authoritative = '00000000-0000-4000-8000-000000000099';
+  const staleRacer = 'human-second';
+  const { db, writes } = dispatchDb({
+    task: taskRow({ dispatch_requested_by: authoritative }),
+  });
+  __test.setTestDb(db);
+  const { run } = recorder();
+
+  const out = await __test.dispatchTaskAssignment({
+    workspaceId: 'w1',
+    taskId: 't-1',
+    agentId: AGENT.id,
+    actorUserId: staleRacer,
+    run,
+  });
+
+  assert.equal(out.dispatched, true);
+  const message = writes.messageInserts[0];
+  assert.ok(message.params.includes(authoritative), 'the real transition owner authors the DM seed');
+  assert.ok(!message.params.includes(staleRacer), 'a stale pre-read callback cannot steal the private route');
 });
 
 // --- (2) idempotency: nothing else may re-run the agent ---------------------

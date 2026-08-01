@@ -27,6 +27,9 @@ function makeDb(handlers = []) {
       const handler = handlers.find((item) => item.match.test(normalized));
       return handler ? (typeof handler.rows === 'function' ? handler.rows(params) : handler.rows) : [];
     },
+    async begin(work) {
+      return work(db);
+    },
   };
   return db;
 }
@@ -58,6 +61,18 @@ test('a delta with a chat placeholder streams live content into the message row'
         workspace_id: 'ws-1',
       }],
     },
+    {
+      match: /select id, visibility, folder, deleted_at from chat_sessions/,
+      rows: [{ id: 'session-1', visibility: 'workspace', folder: 'General', deleted_at: null }],
+    },
+    {
+      match: /select workspace_id, visibility, folder, deleted_at from chat_sessions/,
+      rows: [{ workspace_id: 'ws-1', visibility: 'workspace', folder: 'General', deleted_at: null }],
+    },
+    {
+      match: /select id, visibility, folder from chat_sessions/,
+      rows: [{ id: 'session-1', visibility: 'workspace', folder: 'General' }],
+    },
   ]);
   __test.setTestDb(db);
 
@@ -73,6 +88,7 @@ test('a delta with a chat placeholder streams live content into the message row'
     { agentAuth: { workspaceId: 'ws-1', agentId: 'agent-1', name: 'Coder' }, agentConnectionId: 'connection-1' },
     { jobId: 'job-1', content: 'Hello, streaming world', elapsedMs: 800 },
   );
+  await new Promise(resolve => setTimeout(resolve, 20));
 
   // 1. job response updated
   assert.equal(db.calls.some((c) => /update agent_jobs set response/.test(c.sql)), true);

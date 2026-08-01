@@ -20,7 +20,13 @@ import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { apiAuthHeaders, apiBaseUrl, apiUrl } from '@/lib/backendClient';
-import { AGENT_TEMPLATES, agentMetadataWithRuntime, dedupeHandle, type AgentTemplate } from '@/lib/agentTemplates';
+import {
+  AGENT_TEMPLATES,
+  agentMetadataWithRuntime,
+  dedupeHandle,
+  type AgentExecutionRuntime,
+  type AgentTemplate,
+} from '@/lib/agentTemplates';
 import type { WorkspaceReadiness } from '@/lib/workspaceReadiness';
 import type { CreateAgentInput, CreateAgentResult } from '@/hooks/useAgents';
 import type { AgentConnection, WorkspaceAgent } from '../../types';
@@ -88,8 +94,8 @@ const STEPS: StepMeta[] = [
     icon: Users,
     accent: 'from-emerald-500/25 to-emerald-500/5 text-emerald-500 ring-emerald-500/20',
     eyebrow: 'Step 3',
-    title: 'Invite your people.',
-    body: 'Agents are better with a team around them. Invite the humans you work with so everyone shares the same channels, history, and agents.',
+    title: 'Invite a person or agent.',
+    body: 'Create one short-lived link. A person gets the sign-in flow; an agent gets machine-readable connection instructions from that same URL.',
   },
   {
     id: 'done',
@@ -293,6 +299,7 @@ export function OnboardingTour({
     try {
       const baseHandle = cliId === 'codex' ? 'codex-cli' : 'coder-cli';
       const handle = dedupeHandle(baseHandle, agents.map(a => a.handle || ''));
+      const runtime: AgentExecutionRuntime = cliId === 'codex' ? 'codex' : 'claude';
       const { agent, failure } = await createAgent({
         name: cliId === 'codex' ? 'Codex' : (CODER_TEMPLATE?.name || 'Coder'),
         handle,
@@ -303,7 +310,12 @@ export function OnboardingTour({
         skills: [],
         metadata: agentMetadataWithRuntime({}, cliId, 'daemon'),
         model: 'auto',
+        // The connection-command route reads the execution runtime from agent
+        // metadata before it builds CLI flags. Storing this as a built-in agent
+        // made the Codex button silently fall back to Claude and emit a Claude
+        // model in the command.
         run_mode: 'daemon',
+        metadata: agentMetadataWithRuntime({}, runtime, 'daemon'),
       });
       if (!agent) throw new Error(failure?.reason ?? 'The agent could not be created.');
       // The server rotates the connect token and returns the runtime-locked command here.
@@ -501,6 +513,13 @@ export function OnboardingTour({
                     >
                       {commandCopied ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
                     </Button>
+                  </div>
+                  <div className="mt-2 rounded-md border border-border bg-muted/30 p-2 text-[11px] leading-snug text-muted-foreground">
+                    Once connected, keep it alive after this shell or the desktop app closes with{' '}
+                    <code className="rounded bg-muted px-1 py-0.5">
+                      agensis service install --profile {connectAgent?.handle}
+                    </code>
+                    . The service stores only the profile name, never the token.
                   </div>
                   <div className={cn('mt-2 text-[11px] font-medium', connected ? 'text-emerald-500' : 'text-muted-foreground')}>
                     {connected

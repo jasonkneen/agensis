@@ -114,7 +114,16 @@ import {
 } from '../../lib/agentTemplateTransfer';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { SkillChipsInput } from '../agents/SkillChipsInput';
+import { AgentPurposeFields } from '../agents/AgentPurposeFields';
 import { buildSkillEntries, type SkillEntry } from '../../lib/skillsView';
+import {
+  defaultAmbientRepliesForPurpose,
+  normalizeAgentPurpose,
+  normalizeResourceFacets,
+  resourceFacetSummary,
+  type AgentPurpose,
+  type ResourceFacet,
+} from '../../lib/agentPurpose';
 import {
   buildSkillSuggestions,
   parseSkillTokens,
@@ -173,6 +182,9 @@ interface AgentsWindowContentProps {
     instructions?: string;
     tools?: string[];
     skills?: string[];
+    purpose?: AgentPurpose;
+    resource_facets?: ResourceFacet[];
+    ambient_replies?: boolean;
     metadata?: Record<string, unknown>;
     handle?: string;
     model?: string;
@@ -188,6 +200,9 @@ interface AgentsWindowContentProps {
   onDisconnectAgent: (id: string) => Promise<unknown>;
   onCreateWebhook: (input: { agent_id?: string | null; name: string }) => Promise<AgentWebhook | null>;
   onUpdateWebhook: (id: string, updates: Partial<AgentWebhook>) => Promise<AgentWebhook | null>;
+  /** Opens the single-use person/agent join-link surface. */
+  onInviteAgent: () => void;
+  /** Opens the owner-issued whole-workspace control credential surface. */
   onOpenConnections: () => void;
 }
 
@@ -212,6 +227,8 @@ interface AgentEditForm {
   instructions: string;
   tools: string;
   skills: string;
+  purpose: AgentPurpose;
+  resourceFacets: ResourceFacet[];
   model: string;
   runMode: 'builtin' | 'daemon' | 'sandbox';
   runtime: AgentExecutionRuntime;
@@ -236,6 +253,8 @@ function agentFormUpdates(form: AgentEditForm): Partial<WorkspaceAgent> {
     instructions: form.instructions.trim(),
     tools: splitList(form.tools),
     skills: splitList(form.skills),
+    purpose: normalizeAgentPurpose(form.purpose),
+    resource_facets: form.purpose === 'resource' ? normalizeResourceFacets(form.resourceFacets) : [],
     model: form.model,
     run_mode: form.runMode,
     metadata: agentMetadataWithRuntime(form.metadata, form.runtime, form.runMode),
@@ -324,6 +343,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   onDisconnectAgent,
   onCreateWebhook,
   onUpdateWebhook,
+  onInviteAgent,
   onOpenConnections,
 }: AgentsWindowContentProps) {
   // Creation flow: null = not creating, 'choose' = Template/Custom/BYO picker,
@@ -343,6 +363,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [newInstructions, setNewInstructions] = useState('');
   const [newTools, setNewTools] = useState('');
   const [newSkills, setNewSkills] = useState('');
+  const [newPurpose, setNewPurpose] = useState<AgentPurpose>('collaborator');
+  const [newResourceFacets, setNewResourceFacets] = useState<ResourceFacet[]>([]);
   const [newModel, setNewModel] = useState('auto');
   const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
   const [newRuntime, setNewRuntime] = useState<AgentExecutionRuntime>('claude');
@@ -525,6 +547,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     setNewInstructions('');
     setNewTools('');
     setNewSkills('');
+    setNewPurpose('collaborator');
+    setNewResourceFacets([]);
     setNewModel('auto');
     setNewRunMode('builtin');
     setNewRuntime('claude');
@@ -551,6 +575,12 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         instructions: newInstructions.trim(),
         tools: splitList(newTools),
         skills: splitList(newSkills),
+        purpose: newPurpose,
+        resource_facets: newPurpose === 'resource' ? newResourceFacets : [],
+        // Resource agents are explicit-use infrastructure by default. This is
+        // set only at creation; reclassifying an existing row never changes its
+        // ambient behaviour.
+        ambient_replies: defaultAmbientRepliesForPurpose(newPurpose),
         model: newModel,
         run_mode: newRunMode,
         metadata: agentMetadataWithRuntime(newMetadata, newRuntime, newRunMode),
@@ -586,6 +616,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     setNewSystemPrompt(tpl.systemPrompt);
     setNewTools(tpl.tools.join(', '));
     setNewSkills(tpl.skills.join(', '));
+    setNewPurpose(normalizeAgentPurpose(tpl.purpose));
+    setNewResourceFacets(
+      tpl.purpose === 'resource' ? normalizeResourceFacets(tpl.resourceFacets) : [],
+    );
     const stored = 'stored' in tpl ? tpl.stored : undefined;
     setNewModel(stored?.model || 'auto');
     setNewRunMode(tpl.runMode);
@@ -688,7 +722,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
             type="button"
             size="sm"
             variant="outline"
-            onClick={onOpenConnections}
+            onClick={onInviteAgent}
           >
             <Plug data-icon="inline-start" />
             Invite an Agent
@@ -739,8 +773,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   onClick={onOpenConnections}
                   className="group flex min-h-[104px] flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
                   <span className="grid size-9 place-items-center rounded-lg bg-muted"><Plug className="size-5" /></span>
-                  <span className="text-sm font-semibold">Bring your own</span>
-                  <span className="text-xs text-muted-foreground">Connect a local CLI or MCP client as an agent.</span>
+                  <span className="text-sm font-semibold">Workspace control</span>
+                  <span className="text-xs text-muted-foreground">Connect a trusted MCP client that may register agents and create shared resources.</span>
                 </button>
               </div>
 
@@ -833,7 +867,11 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                             <span className="text-sm font-semibold">{tpl.name}</span>
                             <span className="line-clamp-2 text-xs text-muted-foreground">{tpl.description}</span>
                             <span className="mt-auto text-[11px] text-muted-foreground opacity-70">
-                              {tpl.category} · {tpl.runMode === 'daemon' ? `Remote · ${runtimeChoices.find(choice => choice.id === tpl.runtime)?.label || 'Claude'}` : 'Built-in'}
+                              {tpl.purpose === 'resource'
+                                ? `Shared resource · ${resourceFacetSummary(tpl.resourceFacets)}`
+                                : 'Collaborator'}
+                              {' · '}
+                              {tpl.runMode === 'daemon' ? `Remote · ${runtimeChoices.find(choice => choice.id === tpl.runtime)?.label || 'Claude'}` : 'Built-in'}
                             </span>
                           </button>
                           {stored && (
@@ -875,6 +913,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 instructions={newInstructions}
                 tools={newTools}
                 skills={newSkills}
+                purpose={newPurpose}
+                resourceFacets={newResourceFacets}
                 model={newModel}
                 runMode={newRunMode}
                 runtime={newRuntime}
@@ -899,6 +939,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 onInstructionsChange={setNewInstructions}
                 onToolsChange={setNewTools}
                 onSkillsChange={setNewSkills}
+                onPurposeChange={setNewPurpose}
+                onResourceFacetsChange={setNewResourceFacets}
                 onModelChange={setNewModel}
                 onRunModeChange={setNewRunMode}
                 onRuntimeChange={setNewRuntime}
@@ -1105,6 +1147,11 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                           </div>
                           <span className="block truncate text-[11px] text-muted-foreground opacity-70">@{agent.handle || agentHandle(agent.name)}</span>
                           <span className="mt-0.5 block truncate text-[11px] text-muted-foreground opacity-80">{displayModel(agent.model)}</span>
+                          {normalizeAgentPurpose(agent.purpose) === 'resource' && (
+                            <span className="mt-0.5 block truncate text-[11px] font-medium text-primary">
+                              Shared resource · {resourceFacetSummary(agent.resource_facets)}
+                            </span>
+                          )}
                         </div>
                       </button>
                     );
@@ -1395,6 +1442,8 @@ function AgentForm({
   instructions,
   tools,
   skills,
+  purpose,
+  resourceFacets,
   model,
   runMode,
   runtime,
@@ -1413,6 +1462,8 @@ function AgentForm({
   onInstructionsChange,
   onToolsChange,
   onSkillsChange,
+  onPurposeChange,
+  onResourceFacetsChange,
   onModelChange,
   onRunModeChange,
   onRuntimeChange,
@@ -1438,6 +1489,8 @@ function AgentForm({
   instructions: string;
   tools: string;
   skills: string;
+  purpose: AgentPurpose;
+  resourceFacets: ResourceFacet[];
   model: string;
   runMode: 'builtin' | 'daemon' | 'sandbox';
   runtime: AgentExecutionRuntime;
@@ -1460,6 +1513,8 @@ function AgentForm({
   onInstructionsChange: (value: string) => void;
   onToolsChange: (value: string) => void;
   onSkillsChange: (value: string) => void;
+  onPurposeChange: (value: AgentPurpose) => void;
+  onResourceFacetsChange: (value: ResourceFacet[]) => void;
   onModelChange: (value: string) => void;
   onRunModeChange: (value: 'builtin' | 'daemon' | 'sandbox') => void;
   onRuntimeChange: (value: AgentExecutionRuntime) => void;
@@ -1479,7 +1534,9 @@ function AgentForm({
   extraSections?: React.ReactNode;
 }) {
   const options = modelOptionsForRuntime(model, runMode, runtime);
-  const canSubmit = Boolean(name.trim());
+  const canSubmit = Boolean(
+    name.trim() && (purpose === 'collaborator' || resourceFacets.length > 0),
+  );
   const paneRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
@@ -1720,6 +1777,13 @@ function AgentForm({
         />
       </Field>
 
+      <AgentPurposeFields
+        purpose={purpose}
+        resourceFacets={resourceFacets}
+        onPurposeChange={onPurposeChange}
+        onResourceFacetsChange={onResourceFacetsChange}
+      />
+
       <Field>
         <FieldLabel htmlFor="agent-system-prompt">System Prompt</FieldLabel>
         <Textarea
@@ -1911,6 +1975,8 @@ function AgentDetailPane({
   const [editInstructions, setEditInstructions] = useState('');
   const [editTools, setEditTools] = useState('');
   const [editSkills, setEditSkills] = useState('');
+  const [editPurpose, setEditPurpose] = useState<AgentPurpose>('collaborator');
+  const [editResourceFacets, setEditResourceFacets] = useState<ResourceFacet[]>([]);
   const [editModel, setEditModel] = useState('auto');
   const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon' | 'sandbox'>('builtin');
   const [editRuntime, setEditRuntime] = useState<AgentExecutionRuntime>('claude');
@@ -1944,6 +2010,10 @@ function AgentDetailPane({
       instructions: agent.instructions || '',
       tools: joinList(agent.tools),
       skills: joinList(agent.skills),
+      purpose: normalizeAgentPurpose(agent.purpose),
+      resourceFacets: agent.purpose === 'resource'
+        ? normalizeResourceFacets(agent.resource_facets)
+        : [],
       model: agent.model || 'auto',
       runMode: (agent.run_mode === 'daemon' ? 'daemon' : agent.run_mode === 'sandbox' ? 'sandbox' : 'builtin') as 'builtin' | 'daemon' | 'sandbox',
       runtime: agentExecutionRuntime(agent),
@@ -1962,6 +2032,8 @@ function AgentDetailPane({
     setEditInstructions(seed.instructions);
     setEditTools(seed.tools);
     setEditSkills(seed.skills);
+    setEditPurpose(seed.purpose);
+    setEditResourceFacets(seed.resourceFacets);
     setEditModel(seed.model);
     setEditRunMode(seed.runMode);
     setEditRuntime(seed.runtime);
@@ -1973,6 +2045,9 @@ function AgentDetailPane({
     voiceBaseline.current = seedVoice;
     setDisconnecting(false);
     editBaseline.current = agentFormUpdates(seed);
+  // Key this reset by identity only: a live row refresh must not overwrite an
+  // edit already in progress for the same agent.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent?.id]);
 
   if (!agent) {
@@ -2023,6 +2098,8 @@ function AgentDetailPane({
       instructions: editInstructions,
       tools: editTools,
       skills: editSkills,
+      purpose: editPurpose,
+      resourceFacets: editResourceFacets,
       model: editModel,
       runMode: editRunMode,
       runtime: editRuntime,
@@ -2083,6 +2160,8 @@ function AgentDetailPane({
             instructions={editInstructions}
             tools={editTools}
             skills={editSkills}
+            purpose={editPurpose}
+            resourceFacets={editResourceFacets}
             model={editModel}
             runMode={editRunMode}
             runtime={editRuntime}
@@ -2107,6 +2186,8 @@ function AgentDetailPane({
             onInstructionsChange={setEditInstructions}
             onToolsChange={setEditTools}
             onSkillsChange={setEditSkills}
+            onPurposeChange={setEditPurpose}
+            onResourceFacetsChange={setEditResourceFacets}
             onModelChange={setEditModel}
             onRunModeChange={(value) => {
               setEditRunMode(value);
@@ -2169,6 +2250,9 @@ function AgentDetailPane({
             <div className="mt-2 flex flex-wrap gap-1">
               <Badge variant={agent.run_mode === 'daemon' ? 'default' : 'outline'}>
                 {agentTransportLabel(agent.run_mode)}
+              </Badge>
+              <Badge variant={agent.purpose === 'resource' ? 'default' : 'outline'}>
+                {agent.purpose === 'resource' ? 'Shared resource' : 'Collaborator'}
               </Badge>
               {agent.run_mode === 'daemon' && <Badge variant="outline">{agentExecutionRuntime(agent)}</Badge>}
               <Badge variant="outline">{displayModel(agent.model)}</Badge>
@@ -2241,6 +2325,22 @@ function AgentDetailPane({
         </div>
 
         <div className="mt-3 grid gap-3">
+          <AgentDetailSection title="Purpose">
+            <AgentDetailField
+              label="Type"
+              value={agent.purpose === 'resource' ? 'Shared resource' : 'Collaborator'}
+            />
+            {agent.purpose === 'resource' && (
+              <AgentDetailField
+                label="Facets"
+                value={resourceFacetSummary(agent.resource_facets) || 'Not classified'}
+              />
+            )}
+            <div className="text-xs text-muted-foreground">
+              Purpose is descriptive. Permissions, tools, folders, runtime, and placement are configured separately.
+            </div>
+          </AgentDetailSection>
+
           <AgentDetailSection title="Runtime">
             <AgentDetailField label="Location" value={agentTransportLabel(agent.run_mode)} />
             {agent.run_mode === 'daemon' && <AgentDetailField label="Runtime" value={agentExecutionRuntime(agent) === 'amp' ? 'Amp (managed orb)' : agentExecutionRuntime(agent)} />}
@@ -2391,14 +2491,16 @@ function AgentDetailPane({
             <AgentDetailSection title="Webhooks">
               <div className="space-y-1.5">
                 {webhooks.map(webhook => {
-                  const url = webhookUrl(webhook.token);
+                  const url = webhook.token ? webhookUrl(webhook.token) : '';
                   return (
                     <div key={webhook.id} className="flex min-w-0 items-center gap-1.5 rounded-md border bg-muted/35 px-2 py-1 text-xs">
                       <Link2 className="size-3 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate" title={url}>{webhook.name}</span>
-                      <Button type="button" variant="ghost" size="icon-xs" onClick={() => void navigator.clipboard?.writeText(url)} aria-label={`Copy webhook for ${agent.name}`}>
-                        <Copy />
-                      </Button>
+                      <span className="min-w-0 flex-1 truncate" title={url || 'Secret URL is shown only when created'}>{webhook.name}</span>
+                      {url && (
+                        <Button type="button" variant="ghost" size="icon-xs" onClick={() => void navigator.clipboard?.writeText(url)} aria-label={`Copy webhook for ${agent.name}`}>
+                          <Copy />
+                        </Button>
+                      )}
                       <Button
                         type="button"
                         variant={webhook.enabled ? 'secondary' : 'ghost'}
@@ -2497,10 +2599,13 @@ function AgentConnectDialog({
   }, [open, agent?.id]);
 
   // Load the MCP skill manifest once the dialog is open for an agent.
+  const agentId = agent?.id ?? '';
+  const agentName = agent?.name ?? '';
+
   useEffect(() => {
-    if (!open || !agent) return;
+    if (!open || !agentId || !agentName) return;
     let cancelled = false;
-    const params = new URLSearchParams({ name: agent.name, handle });
+    const params = new URLSearchParams({ name: agentName, handle });
     fetch(apiUrl(`/backend/skill?${params.toString()}`), { headers: { ...apiAuthHeaders() } })
       .then(async (res) => {
         const payload = await res.json().catch(() => null);
@@ -2517,7 +2622,7 @@ function AgentConnectDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, agent?.id, agent?.name, handle]);
+  }, [open, agentId, agentName, handle]);
 
   if (!agent) return null;
 
@@ -2609,7 +2714,7 @@ function AgentConnectDialog({
             <TabsContent value="cli" className="mt-0 space-y-4">
               <ConnectExplainer
                 benefit={`Full power. Runs @${handle} on your machine with real tools — edit files, run shells, local MCP. Best for coding agents.`}
-                note="Needs the agensis CLI installed, and the agent only runs while your daemon is up."
+                note="Needs the agensis CLI installed. Run it in this shell, or install its saved profile as an OS-supervised service so it survives closing the desktop app."
               />
               <div>
                 <p className="mb-2 text-xs font-medium text-muted-foreground">Supported coding agents your daemon can run</p>
@@ -2643,6 +2748,17 @@ function AgentConnectDialog({
                   {cliCommand ? 'Regenerate command' : 'Generate connect command'}
                 </Button>
                 {cliCommand && <CopyBlock value={cliCommand} className="mt-2" />}
+                {cliCommand && (
+                  <div className="mt-3 space-y-2 rounded-md border bg-muted/30 p-3">
+                    <p className="text-xs text-muted-foreground">
+                      After the connect command has saved this profile, keep it running at login and restart it after a crash:
+                    </p>
+                    <CopyBlock value={`agensis service install --profile ${handle}`} />
+                    <p className="text-[11px] text-muted-foreground">
+                      macOS uses a per-user LaunchAgent; Linux uses a systemd user service. The service definition names only the profile — it never contains the token.
+                    </p>
+                  </div>
+                )}
                 {cliError && <div className="mt-2 text-xs text-destructive">{cliError}</div>}
               </McpDialogSection>
             </TabsContent>
@@ -2741,21 +2857,23 @@ function AgentConnectDialog({
                 {webhooks.length > 0 ? (
                   <div className="space-y-1.5">
                     {webhooks.map(webhook => {
-                      const url = webhookUrl(webhook.token);
+                      const url = webhook.token ? webhookUrl(webhook.token) : '';
                       return (
                         <div key={webhook.id} className="space-y-1.5 rounded-md border bg-background px-2 py-1.5">
                           <div className="flex min-w-0 items-center gap-1.5 text-xs">
                             <Link2 className="size-3 shrink-0" />
-                            <span className="min-w-0 flex-1 truncate" title={url}>{webhook.name}</span>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-xs"
-                              onClick={() => void navigator.clipboard?.writeText(url)}
-                              aria-label={`Copy webhook for ${agent.name}`}
-                            >
-                              <Copy />
-                            </Button>
+                            <span className="min-w-0 flex-1 truncate" title={url || 'Secret URL is shown only when created'}>{webhook.name}</span>
+                            {url && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-xs"
+                                onClick={() => void navigator.clipboard?.writeText(url)}
+                                aria-label={`Copy webhook for ${agent.name}`}
+                              >
+                                <Copy />
+                              </Button>
+                            )}
                             <Button
                               type="button"
                               variant={webhook.enabled ? 'secondary' : 'ghost'}
@@ -2767,6 +2885,11 @@ function AgentConnectDialog({
                               <Power />
                             </Button>
                           </div>
+                          {!url && (
+                            <p className="text-[11px] text-muted-foreground">
+                              Secret URL hidden after creation. Create a replacement to receive a new URL.
+                            </p>
+                          )}
                         </div>
                       );
                     })}

@@ -47,9 +47,13 @@ import { SkillsWindowContent } from '../../src/components/windows/SkillsWindowCo
 import { ActivityWindowContent } from '../../src/components/windows/ActivityWindowContent';
 import { UsersWindowContent } from '../../src/components/windows/UsersWindowContent';
 import { ChatWindowContent } from '../../src/components/windows/ChatWindowContent';
+import { SubThreadPanel } from '../../src/components/chat/SubThreadPanel';
+import { ChatThreadPanel } from '../../src/components/chat/ChatThreadPanel';
 import { InboxWindowContent } from '../../src/components/inbox/InboxWindowContent';
 import { TenantsWindowContent } from '../../src/components/tenants/TenantsWindowContent';
 import { AgentMemoryBrowser } from '../../src/components/memory/AgentMemoryBrowser';
+import { ResourcesWindowContent } from '../../src/components/windows/ResourcesWindowContent';
+import type { ChatSession } from '../../src/types';
 
 let mounted: Mounted | null = null;
 
@@ -141,17 +145,14 @@ describe('smoke: every surface shows its data', () => {
 
   it('Members lists every member', async () => {
     mounted = await mount(createElement(UsersWindowContent, {
-      workspaceId: WORKSPACE_ID,
       workspaceName: 'Smoke',
       currentUserId: CURRENT_USER_ID,
       currentUserEmail: CURRENT_USER_EMAIL,
-      inviteOrigin: 'https://smoke.test',
       members: seedMembers(),
-      invites: [],
-      onCreateInvite: asyncNull,
-      onRevokeInvite: asyncNoop,
-      onSetInviteDismissed: asyncNoop,
-      onDismissSpentInvites: asyncNoop,
+      joinLinks: [],
+      canManage: true,
+      onCreateJoinLink: async () => { throw new Error('not called'); },
+      onRevokeJoinLink: asyncNoop,
       onRemoveMember: asyncNoop,
       onChangeMemberRole: asyncNoop,
     }));
@@ -178,6 +179,83 @@ describe('smoke: every surface shows its data', () => {
       surface: 'Channel',
       seeded: MESSAGE_MARKERS,
       emptyStates: ['Channel is open', 'Direct message is open'],
+    });
+  });
+
+  it('Resources shows a stewarded shared resource', async () => {
+    const resourceAgent = seedAgents({ purpose: 'resource', resource_facets: ['context'] });
+    const resource = {
+      id: 'resource-smoke-01',
+      workspace_id: WORKSPACE_ID,
+      steward_agent_id: resourceAgent[0].id,
+      controller_id: null,
+      name: 'Smoke shared context',
+      description: 'Seeded resource for the surface gate.',
+      facet: 'context',
+      descriptor: {},
+      version: 1,
+      visibility: 'workspace',
+      status: 'active',
+      created_by: CURRENT_USER_ID,
+      created_at: '2026-07-27T05:00:00.000Z',
+      updated_at: '2026-07-27T05:00:00.000Z',
+    };
+    backend.routes.set(`/backend/workspaces/${WORKSPACE_ID}/resources?status=all&limit=200`, [resource]);
+    backend.routes.set(`/backend/workspaces/${WORKSPACE_ID}/resource-operations?status=all&limit=100`, []);
+    mounted = await mount(createElement(ResourcesWindowContent, {
+      workspaceId: WORKSPACE_ID,
+      agents: resourceAgent,
+    }));
+    assertPopulated(mounted, {
+      surface: 'Resources',
+      seeded: ['Smoke shared context'],
+      emptyStates: ['No shared resources yet'],
+    });
+  });
+
+  it('Sub-thread shows its transcript and not the empty composer state', async () => {
+    const session: ChatSession = {
+      id: 'subthread-smoke-01',
+      workspace_id: WORKSPACE_ID,
+      title: 'Smoke sub-thread',
+      model: 'auto',
+      participants: [],
+      created_at: '2026-07-27T05:00:00.000Z',
+      updated_at: '2026-07-27T05:00:00.000Z',
+    };
+    mounted = await mount(createElement(SubThreadPanel, {
+      session,
+      messages: seedMessages().map(message => ({ ...message, session_id: session.id })),
+      streaming: false,
+      onSendMessage: noop,
+      onClose: noop,
+      currentUserId: CURRENT_USER_ID,
+    }));
+    assertPopulated(mounted, {
+      surface: 'Sub-thread',
+      seeded: MESSAGE_MARKERS,
+      emptyStates: ['Start the conversation'],
+    });
+  });
+
+  it('Thread shows its parent and replies', async () => {
+    const messages = seedMessages().map((message, index) => ({
+      ...message,
+      thread_parent_id: index === 0 ? null : 'msg-01',
+    }));
+    mounted = await mount(createElement(ChatThreadPanel, {
+      parentMessage: messages[0],
+      threadMessages: messages,
+      streaming: false,
+      onSendReply: noop,
+      onClose: noop,
+      workspaceId: WORKSPACE_ID,
+      currentUserId: CURRENT_USER_ID,
+    }));
+    assertPopulated(mounted, {
+      surface: 'Thread',
+      seeded: MESSAGE_MARKERS,
+      emptyStates: ['No replies yet'],
     });
   });
 

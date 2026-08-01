@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { Bot, CornerDownRight, Send, User, X } from 'lucide-react';
+import { useRef, useState, type CSSProperties } from 'react';
+import { Bot, Check, CornerDownRight, Pencil, Send, Trash2, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { ThreadWorkBadge } from './AgentWorkBadge';
 import { MarkdownContent } from './MarkdownContent';
@@ -9,48 +9,14 @@ import { usePermissionRequests } from '../../hooks/usePermissionRequests';
 import { resolvePermissionRequest } from './permissionRequests';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { validAgentAccentColor } from '../../lib/agentAccent';
-import type { AIModel, Document, Message as ChatMessage, WorkspaceAgent } from '../../types';
-import { ModelSelector } from './ModelSelector';
-import { availableChatModelId } from '../../lib/sharedModels';
+import type { Document, Message as ChatMessage, WorkspaceAgent } from '../../types';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { clipToBlockBoundary } from '../../lib/threadParentPreview';
 
 /** Roughly how much of the thread parent to show before offering "Show more". */
 const PARENT_PREVIEW_CHARS = 220;
 
-/**
- * Clip to the last whole markdown block that fits, so a preview can never end
- * inside a table row or a code fence. Returns the full text when it already fits
- * (callers use length equality to decide whether "Show more" is needed).
- *
- * Blocks are separated by blank lines. A fenced block is kept whole or dropped
- * entirely — half a fence renders as an unterminated code block and swallows
- * everything after it.
- */
-function clipToBlockBoundary(text: string, budget: number) {
-  if (text.length <= budget) return text;
-
-  const blocks = text.split(/\n{2,}/);
-  const kept: string[] = [];
-  let used = 0;
-  let insideFence = false;
-
-  for (const block of blocks) {
-    const fenceCount = (block.match(/```/g) || []).length;
-    const opensFence = fenceCount % 2 === 1;
-    // Never stop while a fence is open — finish it or drop it with the rest.
-    if (used + block.length > budget && kept.length > 0 && !insideFence) break;
-    kept.push(block);
-    used += block.length + 2;
-    if (opensFence) insideFence = !insideFence;
-    if (used >= budget && !insideFence) break;
-  }
-
-  // A single opening block longer than the budget would otherwise render whole;
-  // fall back to a hard cut, but only when there is no block boundary to use.
-  if (kept.length === 0) return `${text.slice(0, budget)}…`;
-  return kept.join('\n\n');
-}
 import {
   Empty,
   EmptyDescription,
@@ -76,41 +42,50 @@ import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
 import { THREAD_COMPOSER_PLACEHOLDER } from '@/lib/composerPlaceholder';
 import { useComposerAutosize } from '@/hooks/useComposerAutosize';
+import { useOwnMessageMutation } from '../../hooks/useOwnMessageMutation';
 import type { SendOutcome } from '@/lib/writeFeedback';
 
 interface ChatThreadPanelProps {
-  parentMessage: ChatMessage;
-  threadMessages: ChatMessage[];
-  streaming: boolean;
+ parentMessage: ChatMessage;
+ threadMessages: ChatMessage[];
+ /** Whether the owning session has older rows that can still be fetched. */
+ hasMoreMessages?: boolean;
+ loadingEarlier?: boolean;
+ onLoadEarlier?: () => void;
+ streaming: boolean;
   resolveMessageAccent?: (message: ChatMessage) => string;
   // May resolve `{ delivered: false }` — the reply was rejected and rolled back.
-  onSendReply: (content: string, model: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
+  onSendReply?: (content: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   onClose: () => void;
   embedded?: boolean;
-  models?: AIModel[];
   agents?: WorkspaceAgent[];
   documents?: Document[];
   workspaceId?: string | null;
+  currentUserId?: string | null;
+  readOnly?: boolean;
 }
 
 export function ChatThreadPanel({
-  parentMessage,
-  threadMessages,
-  streaming,
+ parentMessage,
+ threadMessages,
+ hasMoreMessages = false,
+ loadingEarlier = false,
+ onLoadEarlier,
+ streaming,
   resolveMessageAccent,
   onSendReply,
   onAgentProfile,
   onClose,
   embedded = false,
-  models,
   agents,
   documents,
   workspaceId,
+  currentUserId,
+  readOnly = false,
 }: ChatThreadPanelProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const m = useComposerMentions({ agents, documents, workspaceId, inputRef });
-  const [model, setModel] = useState('auto');
   const [autoScroll, setAutoScroll] = useState(true);
   // "Send to channel": a thread reply stays in the thread but is ALSO shown in
   // the channel. Off by default — a thread exists
@@ -129,14 +104,10 @@ export function ChatThreadPanel({
     resolvePermissionRequest(message, permissionRequestsById),
   );
 
-  useEffect(() => {
-    if (models) setModel(current => availableChatModelId(current, models));
-  }, [models]);
-
   useComposerAutosize(inputRef, m.input);
 
   const handleSend = async () => {
-    if (streaming) return;
+    if (readOnly || streaming || !onSendReply) return;
     const content = m.buildContent();
     if (!content) return;
     // Same contract as the channel composer: clear now, but keep the draft so a
@@ -147,7 +118,7 @@ export function ChatThreadPanel({
     setBroadcastToChannel(false);
     inputRef.current?.focus();
 
-    const outcome = await onSendReply(content, model, previousBroadcast);
+    const outcome = await onSendReply(content, previousBroadcast);
     if (outcome && outcome.delivered === false) {
       m.restore(draft);
       setBroadcastToChannel(previousBroadcast);
@@ -178,13 +149,33 @@ export function ChatThreadPanel({
       </div>
 
       <div className="border-b border-border p-3">
-        <ThreadBubble msg={parentMessage} accent={resolveMessageAccent?.(parentMessage)} onAgentProfile={onAgentProfile} isParent />
+        <ThreadBubble
+          msg={parentMessage}
+          accent={resolveMessageAccent?.(parentMessage)}
+          onAgentProfile={onAgentProfile}
+          currentUserId={readOnly ? null : currentUserId}
+          isParent
+        />
       </div>
 
       <MessageScrollerProvider autoScroll={autoScroll}>
         <MessageScroller className="channel-message-surface flex-1">
           <MessageScrollerViewport onScroll={handleScrollerScroll}>
             <MessageScrollerContent className="min-h-full gap-3 p-3">
+              {hasMoreMessages && onLoadEarlier && (
+                <div className="flex justify-center py-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-muted-foreground"
+                    disabled={loadingEarlier}
+                    onClick={onLoadEarlier}
+                  >
+                    {loadingEarlier ? 'Loading…' : 'Load earlier messages'}
+                  </Button>
+                </div>
+              )}
               {replies.length === 0 ? (
                 <Empty className="min-h-full border-0 p-4">
                   <EmptyHeader>
@@ -209,6 +200,7 @@ export function ChatThreadPanel({
                           msg={row.message}
                           accent={resolveMessageAccent?.(row.message)}
                           onAgentProfile={onAgentProfile}
+                          currentUserId={readOnly ? null : currentUserId}
                           isStreaming={streaming && isLastRow && row.message.role === 'assistant'}
                         />
                       </MessageScrollerItem>
@@ -222,7 +214,7 @@ export function ChatThreadPanel({
         </MessageScroller>
       </MessageScrollerProvider>
 
-      <div className={`${COMPOSER_SHELL_CLASS} shrink-0`}>
+      {!readOnly && <div className={`${COMPOSER_SHELL_CLASS} shrink-0`}>
         <div className="relative">
           <ComposerMentionPicker m={m} />
           <ComposerMentionChips m={m} />
@@ -249,7 +241,6 @@ export function ChatThreadPanel({
             />
             <InputGroupAddon align="block-end" className={COMPOSER_ADDON_CLASS}>
               <div className="flex min-w-0 items-center gap-2">
-                <ModelSelector value={model} onChange={setModel} models={models} />
                 <label className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
                   <Checkbox
                     checked={broadcastToChannel}
@@ -272,35 +263,38 @@ export function ChatThreadPanel({
             </InputGroupAddon>
           </InputGroup>
         </div>
-      </div>
+      </div>}
     </aside>
   );
 }
 
-function ThreadBubble({
+export function ThreadBubble({
   msg,
   accent,
   onAgentProfile,
   isStreaming,
   isParent,
+  currentUserId,
 }: {
   msg: ChatMessage;
   accent?: string;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   isStreaming?: boolean;
   isParent?: boolean;
+  currentUserId?: string | null;
 }) {
   const isUser = msg.role === 'user';
   const rawContent = safeMessageText(msg.content);
+  const ownMutation = useOwnMessageMutation(msg, currentUserId, rawContent);
   // The thread parent is shown as a compact header, but a blind character cut
   // lands mid-markdown — a 1355-char reply got sliced 16 chars into a table row
   // and rendered as "| Control |...", which reads as a broken/incomplete message.
   // A real user reported it as one and burned a round trip asking the agent why.
   // So: clip on a BLOCK boundary, never inside a table or fence, and let it expand.
   const [expanded, setExpanded] = useState(false);
-  const clipped = isParent ? clipToBlockBoundary(rawContent, PARENT_PREVIEW_CHARS) : null;
-  const canExpand = !!clipped && clipped.length < rawContent.length;
-  const content = isParent && clipped && !expanded ? clipped : rawContent;
+  const clipped = isParent ? clipToBlockBoundary(ownMutation.content, PARENT_PREVIEW_CHARS) : null;
+  const canExpand = !!clipped && clipped.length < ownMutation.content.length;
+  const content = isParent && clipped && !expanded ? clipped : ownMutation.content;
   const artifact = !isParent && content ? extractHtmlArtifact(content) : null;
   const displayContent = artifact ? artifact.remainingText : content;
   const senderName = msg.sender_name || (isUser ? 'You' : 'Assistant');
@@ -339,9 +333,55 @@ function ThreadBubble({
             <span className="truncate text-xs font-semibold text-foreground" style={accentStyle ? { color: 'var(--agent-accent)' } : undefined}>{senderName}</span>
           )}
           {timeLabel && <span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel}</span>}
+          {ownMutation.mutable && (
+            <span className="ml-auto flex shrink-0 items-center gap-0.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Edit post"
+                title="Edit post"
+                disabled={ownMutation.busy}
+                onClick={ownMutation.startEdit}
+              >
+                <Pencil />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Delete post"
+                title="Delete post"
+                disabled={ownMutation.busy}
+                onClick={() => void ownMutation.deleteMessage()}
+              >
+                <Trash2 />
+              </Button>
+            </span>
+          )}
         </div>
         <div className="mt-0.5 text-sm leading-relaxed text-foreground">
-          {displayContent ? (
+          {ownMutation.editing ? (
+            <div className="space-y-1.5">
+              <textarea
+                value={ownMutation.draft}
+                onChange={event => ownMutation.setDraft(event.target.value)}
+                className="min-h-20 w-full resize-y rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                aria-label="Edit message"
+                disabled={ownMutation.busy}
+              />
+              <div className="flex justify-end gap-1">
+                <Button type="button" variant="ghost" size="sm" onClick={ownMutation.cancelEdit} disabled={ownMutation.busy}>
+                  <X />
+                  Cancel
+                </Button>
+                <Button type="button" size="sm" onClick={() => void ownMutation.saveEdit()} disabled={ownMutation.busy || !ownMutation.draft.trim()}>
+                  <Check />
+                  Save
+                </Button>
+              </div>
+            </div>
+          ) : displayContent ? (
             <>
               <MarkdownContent content={displayContent} />
               {canExpand && (

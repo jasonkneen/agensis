@@ -78,6 +78,9 @@ function installDb({ messages = [humanMessage()] } = {}) {
     calls,
     store,
     jobs,
+    async begin(callback) {
+      return callback(db);
+    },
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
       calls.push({ n, params });
@@ -189,11 +192,29 @@ function installDb({ messages = [humanMessage()] } = {}) {
       }
 
       // --- job reads/writes --------------------------------------------------
+      if (n.startsWith('select s.id from chat_sessions s join workspace_agents a')) {
+        return params[0] === WORKSPACE_ID && params[1] === AGENT.id && params[2] === SESSION_ID
+          ? [{ id: SESSION_ID }]
+          : [];
+      }
       if (n.startsWith('select j.*, a.name as agent_name')) {
-        // Mirror the real WHERE clause: a mismatched agent or workspace matches nothing.
+        // Mirror the exact current daemon scope. The query itself additionally
+        // proves the live session, enabled agent and current roster membership.
         const job = jobs.get(params[0]);
-        if (!job || job.agent_id !== params[1] || job.workspace_id !== params[2]) return [];
+        if (!job
+          || job.agent_id !== params[1]
+          || job.workspace_id !== params[2]
+          || job.connection_id !== params[3]
+          || job.status !== 'running') return [];
         return [{ ...job }];
+      }
+      if (n.startsWith('select status from agent_jobs')) {
+        const job = jobs.get(params[0]);
+        if (!job
+          || job.agent_id !== params[1]
+          || job.workspace_id !== params[2]
+          || job.connection_id !== params[3]) return [];
+        return [{ status: job.status }];
       }
       if (n.startsWith('insert into agent_jobs')) {
         const metadata = params[params.length - 1];
@@ -213,7 +234,7 @@ function installDb({ messages = [humanMessage()] } = {}) {
       }
       if (n.startsWith('update agent_jobs set updated_at = now(), metadata = $2::jsonb')) {
         const job = jobs.get(params[0]);
-        if (!job || !['queued', 'running'].includes(job.status)) return [];
+        if (!job || job.status !== 'running' || params.at(-1) !== job.connection_id) return [];
         job.metadata = params[1];
         return [{ id: job.id }];
       }
@@ -331,6 +352,25 @@ test('a channel turn puts its placeholder inside the thread on the human message
   assert.equal(job.metadata.responseMessageId, placeholder.id);
   assert.equal(typeof job.metadata, 'object', 'metadata is bound as an object, never JSON.stringify');
   assert.equal(sent.length, 1, 'the daemon was handed the job');
+});
+
+test('a backpressured daemon is not credited with reading an undelivered prompt', async () => {
+  const db = installDb();
+  const { ws, sent } = connectDaemon();
+  ws.bufferedAmount = (4 * 1024 * 1024) + 1;
+
+  const result = await __test.runAgentTurn(AGENT, {
+    workspaceId: WORKSPACE_ID,
+    sessionId: SESSION_ID,
+  });
+
+  assert.deepEqual(result, { ok: false, pending: true });
+  assert.deepEqual(sent, [], 'the agent_job frame was not delivered');
+  assert.equal(
+    db.calls.some(call => call.n.toLowerCase().startsWith('with readable_agent_session as materialized')),
+    false,
+    'an undelivered transcript cannot produce a read receipt',
+  );
 });
 
 test('a turn already inside a thread keeps working there and broadcasts nothing', async () => {
@@ -619,9 +659,24 @@ test('every explicit message column list that selects sender_kind also selects b
   }
 });
 
-test('the realtime fanout does not strip broadcast_to_channel', () => {
+test('the realtime fanout does not strip broadcast_to_channel', async () => {
   // The flag arriving late is the same as it never arriving: the answer would sit
   // in the thread and never appear in the channel until a reload.
+  __test.setTestDb({
+    async unsafe(sql) {
+      const q = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+      if (q.startsWith('select id, visibility, folder, deleted_at from chat_sessions')) {
+        return [{ id: SESSION_ID, visibility: 'workspace', folder: 'General', deleted_at: null }];
+      }
+      if (q.startsWith('select workspace_id, visibility, folder, deleted_at from chat_sessions')) {
+        return [{ workspace_id: WORKSPACE_ID, visibility: 'workspace', folder: 'General', deleted_at: null }];
+      }
+      if (q.startsWith('select id, visibility, folder from chat_sessions')) {
+        return [{ id: SESSION_ID, visibility: 'workspace', folder: 'General' }];
+      }
+      return [];
+    },
+  });
   const sent = [];
   __test.registerTestWebsocketClient({
     userId: 'user-1',
@@ -642,6 +697,7 @@ test('the realtime fanout does not strip broadcast_to_channel', () => {
     thread_parent_id: 'msg-human',
     broadcast_to_channel: true,
   }]);
+  await new Promise(resolve => setTimeout(resolve, 20));
 
   const frame = sent.find((m) => m.type === 'db_changes' && m.table === 'messages');
   assert.ok(frame, 'expected a messages db_changes frame');

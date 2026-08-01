@@ -98,7 +98,14 @@ export function useThreadItems(
   }, [workspaceId, sessionId, userId, items]);
 
   const updateItem = useCallback(async (id: string, updates: Partial<ThreadItem>) => {
-    const result = await offlineUpdate('thread_items', id, updates as Record<string, unknown>, `thread_items_${sessionId}`);
+    if (!sessionId) return null;
+    const result = await offlineUpdate(
+      'thread_items',
+      id,
+      updates as Record<string, unknown>,
+      `thread_items_${sessionId}`,
+      { session_id: sessionId },
+    );
     if (result) {
       setItems(prev => prev.map(i => i.id === id ? { ...i, ...result } as ThreadItem : i));
     }
@@ -115,7 +122,14 @@ export function useThreadItems(
   }, [updateItem]);
 
   const deleteItem = useCallback(async (id: string) => {
-    await offlineDelete('thread_items', id, `thread_items_${sessionId}`);
+    if (!sessionId) return false;
+    const deleted = await offlineDelete(
+      'thread_items',
+      id,
+      `thread_items_${sessionId}`,
+      { session_id: sessionId },
+    );
+    if (!deleted) return false;
     setItems(prev => prev.filter(i => i.id !== id));
     return true;
     }, [sessionId]);

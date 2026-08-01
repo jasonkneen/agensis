@@ -4,6 +4,7 @@ import { cachedFetch, offlineInsertResult, offlineUpdate, offlineDelete } from '
 import { WORKSPACE_UNAVAILABLE, classifyWriteFailure, type WriteFailure } from '../lib/writeFeedback';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import type { WorkspaceAgent } from '../types';
+import type { AgentPurpose, ResourceFacet } from '../lib/agentPurpose';
 
 export interface CreateAgentResult {
   agent: WorkspaceAgent | null;
@@ -21,6 +22,9 @@ export interface CreateAgentInput {
   instructions?: string;
   tools?: string[];
   skills?: string[];
+  purpose?: AgentPurpose;
+  resource_facets?: ResourceFacet[];
+  ambient_replies?: boolean;
   metadata?: Record<string, unknown>;
   handle?: string;
   model?: string;
@@ -116,6 +120,8 @@ export function useAgents(workspaceId: string | null, userId?: string, seed?: Wo
       instructions: input.instructions ?? '',
       tools: input.tools ?? [],
       skills: input.skills ?? [],
+      purpose: input.purpose ?? 'collaborator',
+      resource_facets: input.resource_facets ?? [],
       metadata: input.metadata ?? {},
       handle: input.handle ?? agentHandle(input.name),
       model: input.model ?? 'auto',
@@ -123,6 +129,7 @@ export function useAgents(workspaceId: string | null, userId?: string, seed?: Wo
       sandbox_provider: input.sandbox_provider ?? null,
       sandbox_config: input.sandbox_config ?? {},
       enabled: true,
+      ambient_replies: input.ambient_replies ?? true,
     }, `agents_${workspaceId}`);
     if (data) {
       const agent = data as unknown as WorkspaceAgent;

@@ -45,6 +45,7 @@ function createAgentConnections(deps = {}) {
   publicFarmEnrolledAgent,
   rehomePendingPermissionRequests,
   rehomeRunningJobs,
+  replayPermissionDecisions,
   quoteIdent,
   reachFromMessage,
   repairStoredIdentity,
@@ -722,12 +723,22 @@ function createAgentConnections(deps = {}) {
   // given up on would hold its turn open until its own 10-minute TTL for an answer
   // that can no longer arrive; naming the survivors lets it deny the rest at once.
   // Absent from an older server's reply, which every daemon must read as "none".
-  sendWs(ws, {
+  const registeredSent = sendWs(ws, {
    type: 'agent_registered',
    connection,
    agent: auth.agent,
    resumedPermissionRequests: resumedRequests.map((row) => String(row.request_key || '')).filter(Boolean),
   });
+  // Registration tells the broker which promises to keep BEFORE any phase
+  // replay arrives. Preparing rows get PREPARE again; final rows get COMMIT.
+  // The daemon named every key above, so a restarted process can never receive
+  // a command for a promise it no longer holds.
+  if (registeredSent && resumedRequests.length > 0) {
+   const replayed = await replayPermissionDecisions(ws, resumedRequests);
+   if (replayed > 0) {
+    console.log(`[agensis] @${handle} replayed ${replayed} durable permission decision phase(s) after reconnect`);
+   }
+  }
  }
 
  // The "format we need" gate: stored capabilities must have the three array fields and a

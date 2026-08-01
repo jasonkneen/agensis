@@ -46,6 +46,11 @@ function notFound(message) {
  */
 function publicTemplate(row) {
  if (!row) return null;
+ const purpose = row.purpose === 'resource' ? 'resource' : 'collaborator';
+ const resourceFacets = purpose === 'resource'
+  ? [...new Set(parseList(row.resource_facets))]
+    .filter((facet) => ['context', 'knowledge', 'tooling', 'code'].includes(facet))
+  : [];
  return {
   id: row.id,
   workspace_id: row.workspace_id,
@@ -59,6 +64,8 @@ function publicTemplate(row) {
   instructions: row.instructions || '',
   tools: parseList(row.tools),
   skills: parseList(row.skills),
+  purpose,
+  resourceFacets,
   model: row.model || 'auto',
   runMode: row.run_mode || 'builtin',
   runtime: row.runtime || '',
@@ -133,9 +140,10 @@ function createAgentTemplates(deps = {}) {
   const rows = await getDb().unsafe(
    `insert into workspace_agent_templates
       (workspace_id, slug, name, category, description, handle_hint,
-       system_prompt, soul, instructions, tools, skills, model, run_mode,
-       runtime, avatar, accent_color, source, origin, created_by)
-    values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17,$18::jsonb,$19)
+       system_prompt, soul, instructions, tools, skills, purpose,
+       resource_facets, model, run_mode, runtime, avatar, accent_color,
+       source, origin, created_by)
+    values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12,$13::jsonb,$14,$15,$16,$17,$18,$19,$20::jsonb,$21)
     on conflict (workspace_id, slug) do update set
        name = excluded.name,
        category = excluded.category,
@@ -146,6 +154,8 @@ function createAgentTemplates(deps = {}) {
        instructions = excluded.instructions,
        tools = excluded.tools,
        skills = excluded.skills,
+       purpose = excluded.purpose,
+       resource_facets = excluded.resource_facets,
        model = excluded.model,
        run_mode = excluded.run_mode,
        runtime = excluded.runtime,
@@ -160,6 +170,7 @@ function createAgentTemplates(deps = {}) {
     // Bound as OBJECTS, never stringified: porsager turns a stringified ::jsonb
     // bind into a jsonb string scalar (tests/jsonb-bind-hygiene.test.cjs).
     template.tools, template.skills,
+    template.purpose, template.resourceFacets,
     template.model, template.runMode, template.runtime, template.avatar, template.accentColor,
     source, origin, String(userId || ''),
    ],
@@ -308,8 +319,9 @@ function createAgentTemplates(deps = {}) {
    `update workspace_agent_templates
        set name = $3, category = $4, description = $5, handle_hint = $6,
            system_prompt = $7, soul = $8, instructions = $9,
-           tools = $10::jsonb, skills = $11::jsonb, model = $12, run_mode = $13,
-           runtime = $14, avatar = $15, accent_color = $16,
+           tools = $10::jsonb, skills = $11::jsonb, purpose = $12,
+           resource_facets = $13::jsonb, model = $14, run_mode = $15,
+           runtime = $16, avatar = $17, accent_color = $18,
            revision = revision + 1, updated_at = now()
      where id = $1 and workspace_id = $2
      returning *`,
@@ -317,6 +329,7 @@ function createAgentTemplates(deps = {}) {
     target, id, result.template.name, result.template.category, result.template.description,
     result.template.handleHint, result.template.systemPrompt, result.template.soul,
     result.template.instructions, result.template.tools, result.template.skills,
+    result.template.purpose, result.template.resourceFacets,
     result.template.model, result.template.runMode, result.template.runtime,
     result.template.avatar, result.template.accentColor,
    ],

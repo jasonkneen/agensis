@@ -25,8 +25,8 @@
 //      workspace comes from the TOKEN, so the SQL binds must show a
 //      cross-workspace read is not merely rejected but never issued.
 //
-//   4. THE TOOL SURFACE. `kinds: ['agent']` — an invite bearer is a transient
-//      join secret and must not be able to spend a workspace's provider keys.
+//   4. THE TOOL SURFACE. `kinds: ['agent']` — invitation URLs are not MCP
+//      credentials, and no workspace control token may spend provider keys.
 //
 // No live Box API is called. The bundled Box skill's own operations, paths,
 // methods and credential key drive every call here; only its host is redirected

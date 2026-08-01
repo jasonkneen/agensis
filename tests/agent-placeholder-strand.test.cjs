@@ -220,17 +220,30 @@ test('finalizing a real result sweeps the placeholders the turn rotated past', a
 
 const DELTA_JOB = {
   id: 'job-1', workspace_id: 'ws-1', agent_id: 'agent-1', session_id: 'session-1',
+  connection_id: 'conn-1', status: 'running',
   agent_name: 'Coder', agent_handle: 'coder',
   metadata: { mode: 'daemon', responseMessageId: 'msg-pending', pendingPlaceholder: true, pendingPlaceholderParentId: 'thread-1' },
 };
 
 function installDeltaDb({ job = DELTA_JOB, messageUpdateMatches = false } = {}) {
   const calls = [];
-  __test.setTestDb({
+  const db = {
+    async begin(callback) {
+      return callback(db);
+    },
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
       calls.push({ n, params });
-      if (n.startsWith('select j.*, a.name as agent_name')) return [job];
+      if (n.startsWith('select j.*, a.name as agent_name')) {
+        return params[0] === job.id
+          && params[1] === job.agent_id
+          && params[2] === job.workspace_id
+          && params[3] === job.connection_id
+          && job.status === 'running'
+          ? [job]
+          : [];
+      }
+      if (n.startsWith('select status from agent_jobs')) return [{ status: job.status }];
       if (n.startsWith('update agent_jobs set response')) return [{ id: 'job-1' }];
       if (n.startsWith('update messages set content')) {
         return messageUpdateMatches ? [{ id: 'msg-pending', session_id: 'session-1', content: params[1] }] : [];
@@ -238,7 +251,8 @@ function installDeltaDb({ job = DELTA_JOB, messageUpdateMatches = false } = {}) 
       if (n.startsWith('insert into messages')) return [{ id: params[0], session_id: params[1], content: params[2] }];
       return [];
     },
-  });
+  };
+  __test.setTestDb(db);
   return calls;
 }
 
@@ -313,7 +327,11 @@ test('the lazy placeholder is materialised by text, never by a clock', () => {
 
 test('both terminal funnels sweep, and the placeholder pattern is shared', () => {
   assert.match(bodyOf('finalizeStuckJob'), /clearStrandedPlaceholders\(job, responseMessageId\)/);
-  assert.match(bodyOf('finalizeAgentJobResult'), /clearStrandedPlaceholders\(job, responseMessageId\)/);
+  assert.match(
+    bodyOf('finalizeAgentJobResult'),
+    /clearStrandedPlaceholders\(job, responseMessageId, jobDb, publish\)/,
+    'the daemon transaction and ordinary finalizer both sweep through their own database/fanout lane',
+  );
   // One pattern, so a shape that can be written can always be recognised again.
   assert.equal(__test.PLACEHOLDER_CONTENT_RE, '^Thinking( [0-9]|…)');
   // Narrower than a bare ^Thinking: an agent reply that opens with the word is

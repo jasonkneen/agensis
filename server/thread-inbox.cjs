@@ -5,7 +5,10 @@
 // and this export is a pure string builder. Copying the predicate in here
 // instead would give the rule a second home to drift from, which is exactly the
 // failure this whole change exists to prevent.
-const { sessionReadableSql } = require('../shared/backend-core.cjs');
+const {
+ DELETED_MESSAGE_CONTENT,
+ sessionReadableSql,
+} = require('../shared/backend-core.cjs');
 
 // ============================================================================
 // server/thread-inbox.cjs — the sidebar's Threads list.
@@ -67,6 +70,7 @@ const THREAD_INBOX_LOOKBACK_DAYS = 30;
 /** Wire caps, so one enormous message cannot dominate a payload. */
 const THREAD_TITLE_CHARS = 160;
 const THREAD_PREVIEW_CHARS = 200;
+const DELETED_MESSAGE_CONTENT_SQL = DELETED_MESSAGE_CONTENT.replaceAll("'", "''");
 
 function clampLimit(value) {
  const n = Math.trunc(Number(value));
@@ -129,7 +133,6 @@ function buildThreadInboxSql(limit = THREAD_INBOX_DEFAULT_LIMIT) {
          and rs.workspace_id = $1::uuid
          and rs.deleted_at is null
        where r.thread_parent_id is not null
-         and r.deleted_at is null
          and r.created_at > ${window}
        group by r.thread_parent_id
     )
@@ -137,7 +140,13 @@ function buildThreadInboxSql(limit = THREAD_INBOX_DEFAULT_LIMIT) {
            p.session_id                                 as session_id,
            s.title                                      as session_title,
            s.folder                                     as session_folder,
-           left(coalesce(p.content, ''), ${THREAD_TITLE_CHARS})   as parent_preview,
+           left(
+             case
+               when p.deleted_at is null then coalesce(p.content, '')
+               else '${DELETED_MESSAGE_CONTENT_SQL}'
+             end,
+             ${THREAD_TITLE_CHARS}
+           )                                             as parent_preview,
            coalesce(p.sender_name, '')                  as parent_sender,
            x.reply_count                                as reply_count,
            x.tool_count                                 as tool_count,
@@ -151,16 +160,16 @@ function buildThreadInboxSql(limit = THREAD_INBOX_DEFAULT_LIMIT) {
       from replies x
       join messages p
         on p.id = x.parent_id
-       and p.deleted_at is null
       join chat_sessions s
         on s.id = p.session_id
        and s.workspace_id = $1::uuid
-       and s.deleted_at is null
        -- Workspace read is no longer enough to see a thread: a thread inside a
        -- private session (a DM, or a sub-thread split out of one) belongs to its
-       -- members. Applied to the PARENT's session only — a reply always lives in
-       -- the same session as the message it answers, so the replies CTE needs
-       -- no second copy of this and cannot disagree with it.
+       -- members. The canonical predicate also rejects deleted sessions, so
+       -- there is no duplicate live-session clause here. Applied to the PARENT's
+       -- session only — a reply always lives in the same session as the message
+       -- it answers, so the replies CTE needs no second copy of this and cannot
+       -- disagree with it.
        and ${sessionReadableSql('s', '$2')}
        -- Huddle transcripts are excluded for the same reason mainSessionsOf
        -- excludes them: a voice call is not a thread anyone reads back in a
@@ -171,10 +180,13 @@ function buildThreadInboxSql(limit = THREAD_INBOX_DEFAULT_LIMIT) {
       -- meant to be the last thing SAID, and without this it could be a tool
       -- line (Bash / npm test) instead of the agent's actual answer.
       left join lateral (
-        select m.content, m.sender_name
+        select case
+                 when m.deleted_at is null then m.content
+                 else '${DELETED_MESSAGE_CONTENT_SQL}'
+               end as content,
+               m.sender_name
           from messages m
          where m.thread_parent_id = x.parent_id
-           and m.deleted_at is null
            and coalesce(m.message_kind, '') <> 'tool_step'
          order by m.created_at desc
          limit 1

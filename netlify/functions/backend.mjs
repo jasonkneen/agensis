@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { getDatabase } from '@netlify/database';
 import { getUser } from '@netlify/identity';
 import {
@@ -22,7 +23,22 @@ import {
  arrayColumnElemType,
  toPgArrayLiteral,
  stripPrivilegedDbValues,
+ validateUniformInsertRows,
+ applyAgentPurposeInsertDefaults,
+ stampTaskWriteIdentity,
+ taskDispatchRequesterSql,
+ stripImmutableDbUpdateValues,
+ appendMessageAuthorshipFilters,
+ appendMessageMutationAccessClause,
+ loadBrowserMessageAuthor,
+ stampBrowserMessageInsert,
  safeSelectColumns,
+ assertGenericSelectAllowed,
+ aiStreamErrorText,
+ redactDeletedMessageRows,
+ scrubEditedMessageActivityByMessageId,
+ scrubMessageActivityByMessageId,
+ scrubMessageActivityBySession,
  getWorkspaceSecretValue as coreGetWorkspaceSecretValue,
  setWorkspaceSecretValue as coreSetWorkspaceSecretValue,
  VAULT_KEY_RE,
@@ -31,10 +47,16 @@ import {
  normalizeFeedbackSubmission,
  insertFeedbackReport,
  badRequest,
+ forbidden,
  enforceSessionReadAccess,
+ assertWorkspaceRoleLocked,
+ recordAuditEntry,
+ isPrivateSessionRow,
+ sessionReadableSql,
 } from '../../shared/backend-core.cjs';
+import { createWorkspaceResourceService } from '../../server/workspace-resources.cjs';
 import {
- REACTION_RETURNING_COLUMNS,
+ REACTION_CURRENT_SQL,
  explainReactionNoop,
  normalizeReactionOp,
  normalizeReactionValue,
@@ -43,9 +65,19 @@ import {
 } from '../../shared/reaction-toggle.cjs';
 import {
  ADVANCE_READ_MARKER_SQL,
+ DELETE_HUMAN_READ_MARKERS_SQL,
  SESSION_READ_STATE_SQL,
  toReadMarker,
 } from '../../shared/read-receipts.cjs';
+import { SESSION_RETURNING, settleSessionClosure } from '../../shared/session-close.cjs';
+import { createSessionSplit } from '../../shared/session-split.cjs';
+import {
+ AI_CHAT_SYSTEM_MAX_BYTES,
+ loadStoredAiChatContext,
+ lockAiChatRunScope,
+ normalizeAndBoundAiChatMessages,
+ truncateUtf8Middle,
+} from '../../shared/ai-chat-context.cjs';
 import {
  assertSystemOwner,
  isReservedSignupEmail,
@@ -95,19 +127,41 @@ import { voiceCapabilities, unavailableReason, mintCartesiaToken, scrubError } f
 // other is this repo's most repeated bug. Shared implementation; the ONLY
 // difference is the jsonb bind (see encodeJsonb at the call site).
 import { emitReactionFlowEventsForUpdate } from '../../shared/reaction-events.cjs';
+import {
+ installCreatedSessionMemberships,
+ prepareSessionCreateRows,
+ projectSessionCreateRows,
+ sessionLineageKind,
+} from '../../shared/session-lineage.cjs';
+
+// Nostr invite preview is intentionally shared with the Fly protocol adapter.
+// The preview performs the remote metadata fetch, so this mirror must carry the
+// same HTTPS/SSRF guard and must strip the opaque invite code before responding.
+// Without this route the UI's Check button falls through to the Netlify 404
+// even though the long-running backend has the route.
+const requireCjs = createRequire(import.meta.url);
+const { createNostrProtocol } = requireCjs('../../server/nostr-community.cjs');
+const { assertSafeOutboundUrl } = requireCjs('../../server/lib/net-guard.cjs');
+const netlifyNostrProtocol = createNostrProtocol({ assertSafeOutboundUrl });
+
+const READ_RECEIPT_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function optionalReadReceiptThreadParent(value) {
+ const normalized = String(value || '').trim();
+ if (!normalized) return null;
+ if (!READ_RECEIPT_UUID_RE.test(normalized)) throw badRequest('threadParentId must be a UUID');
+ return normalized;
+}
 
 // Plan 005 — token revocation. See shared/backend-core.mjs's verifyAuthToken/
 // createTokenVersionCache doc comments for the full rationale.
 //
-// requireUserId (-> verifyAuthToken -> getTokenVersion) runs BEFORE any
-// route-specific handler, on every protected route — including ones that never
-// call ensureAppUserProfileColumns() themselves (db/*, settings/secrets,
-// ai-chat, ...). So this is the one place that must ensure token_version
-// exists itself, or a cold container's very first authenticated request on a
-// DB that hasn't run migrations yet would 500 on a missing column.
+// requireUserId (-> verifyAuthToken -> getTokenVersion) runs before every
+// protected route. Schema provisioning is deliberately not part of that request:
+// Netlify shares the primary database, so canonical schema + migrations must
+// establish app_users.token_version before this function is deployed.
 const tokenVersionCache = createTokenVersionCache();
 async function getTokenVersion(userId) {
- await ensureAppUserProfileColumns();
  return tokenVersionCache.get(userId, query);
 }
 
@@ -148,6 +202,7 @@ const campaignMessageRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60
 // could explain from the UI.
 const reactionRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const readReceiptRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+const resourceOperationRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 
 function clientIpFromRequest(req) {
  // Prefer Netlify's trusted x-nf-client-connection-ip (set at the edge); never
@@ -164,7 +219,7 @@ function rateLimitBlock(limiter, key) {
  const retryAfter = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
  return new Response(
   JSON.stringify({ data: null, error: { message: 'Rate limit exceeded. Please retry shortly.', code: 'rate_limited' } }),
-  { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(retryAfter) } },
+  { status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': String(retryAfter) } },
  );
 }
 
@@ -179,6 +234,7 @@ const feedbackDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 5, db
 const tenantsDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: query, namespace: 'tenants' });
 const cursorBuddyGuidesDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 120, db: query, namespace: 'cursorbuddy-guides' });
 const campaignMessageDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: query, namespace: 'campaign-messages' });
+const resourceOperationDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 120, db: query, namespace: 'resource-operations' });
 
 // Async layered gate: returns a 429 Response when EITHER layer blocks, else null.
 // Callers MUST await it.
@@ -190,7 +246,7 @@ async function dbRateLimitBlock(memLimiter, dbLimiter, key) {
  const retryAfter = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
  return new Response(
   JSON.stringify({ data: null, error: { message: 'Rate limit exceeded. Please retry shortly.', code: 'rate_limited' } }),
-  { status: 429, headers: { 'Content-Type': 'application/json', 'Retry-After': String(retryAfter) } },
+  { status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': String(retryAfter) } },
  );
 }
 
@@ -298,7 +354,7 @@ function mapDbError(error) {
 
 const CORS_HEADERS = {
  'Access-Control-Allow-Origin': '*',
- 'Access-Control-Allow-Headers': 'authorization, content-type',
+ 'Access-Control-Allow-Headers': 'authorization, content-type, idempotency-key',
  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
 };
 
@@ -376,7 +432,164 @@ function daemonBaseUrl() {
  return normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL || process.env.AGENSIS_WS_BASE_URL || '');
 }
 
-// eslint-disable-next-line no-unused-vars -- dead helper, not yet wired up; tracked for removal separately
+function isDeployedNetlifyRuntime() {
+ return process.env.NETLIFY === 'true'
+  || Boolean(process.env.CONTEXT)
+  || Boolean(process.env.DEPLOY_PRIME_URL);
+}
+
+/**
+ * Destructive conversation control belongs to the long-running backend: only
+ * that process can abort an in-process built-in stream or address the exact
+ * daemon websocket. Netlify authenticates first, then forwards the same bearer
+ * and payload. If deployment forgot the control-plane URL, fail closed rather
+ * than committing a database-only "cancellation" while tools keep running.
+ *
+ * Returns null only in local unit/dev execution with no daemon base configured.
+ */
+async function forwardLongRunningControl(req, pathname, body, {
+ requiredMessage,
+ unavailableMessage,
+ logTag,
+}) {
+ const baseUrl = daemonBaseUrl();
+ if (!baseUrl) {
+  if (!isDeployedNetlifyRuntime()) return null;
+  return jsonErrorWithData(
+   503,
+   new Error(requiredMessage),
+   { requiredEnv: 'AGENSIS_DAEMON_BASE_URL' },
+  );
+ }
+ const requestOrigin = new URL(req.url).origin.replace(/\/+$/, '');
+ if (baseUrl === requestOrigin) {
+  if (!isDeployedNetlifyRuntime()) return null;
+  return jsonErrorWithData(
+   503,
+   new Error(`${requiredMessage}: the daemon URL must not point back to Netlify`),
+   { requiredEnv: 'AGENSIS_DAEMON_BASE_URL' },
+  );
+ }
+ try {
+  const requestHeaders = {
+   authorization: req.headers.get('authorization') || '',
+   'content-type': req.headers.get('content-type') || 'application/json',
+  };
+  // Join pages use content negotiation rather than User-Agent sniffing. Keep
+  // the caller's Accept header on the forwarding hop or a machine requesting
+  // JSON through Netlify would silently receive the HTML renderer instead.
+  const accept = req.headers.get('accept');
+  if (accept) requestHeaders.accept = accept;
+  const idempotencyKey = req.headers.get('idempotency-key');
+  if (idempotencyKey) requestHeaders['idempotency-key'] = idempotencyKey;
+  const response = await fetch(`${baseUrl}${pathname}`, {
+   method: req.method,
+   headers: requestHeaders,
+   ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const responseHeaders = { ...CORS_HEADERS };
+  for (const name of [
+   'content-type',
+   'cache-control',
+   'referrer-policy',
+   'x-robots-tag',
+   'x-content-type-options',
+   'content-security-policy',
+   'retry-after',
+  ]) {
+   const value = response.headers.get(name);
+   if (value) responseHeaders[name] = value;
+  }
+  return new Response(await response.arrayBuffer(), {
+   status: response.status,
+   headers: responseHeaders,
+  });
+ } catch (error) {
+  console.error(`[${logTag}] forward failed:`, error?.message || error);
+  return jsonError(502, new Error(unavailableMessage));
+ }
+}
+
+function isJoinBackendPath(pathname) {
+ return /^\/backend\/join(?:\/|$)/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/(?:join-links|controllers)(?:\/|$)/.test(pathname);
+}
+
+// Legacy human membership/invite callers still exist in access dialogs and in
+// the `?invite=` compatibility flow.  Keep those paths on the same canonical
+// Fly implementation too: it owns the audit writes, one-use acceptance
+// transaction and realtime fanout.  Without this matcher an explicit Netlify
+// backend base sends the collection/accept paths to the partial serverless
+// mirror (or a 404), so the UI appears selectively broken depending on which
+// invite surface opened it.
+function isLegacyMembershipInvitePath(pathname) {
+ return /^\/backend\/workspaces\/[^/]+\/(?:members|invites)(?:\/|$)/.test(pathname)
+  || /^\/backend\/invites\/[^/]+(?:\/accept)?$/.test(pathname);
+}
+
+// These operations depend on the Fly process rather than just Postgres: they
+// touch live daemon sockets, the automation worker, the append-only audit
+// reader, or server-owned template validation/realtime.  Keep the serverless
+// mirror from exposing a second, incomplete implementation.  The forwarding
+// helper fails closed in a deployed Netlify runtime when the control-plane URL
+// is missing, which is preferable to a successful-looking database write that
+// never reaches the live worker.
+function isFlyOwnedControlPath(pathname) {
+ return /^\/backend\/agents\/connections\/[^/]+$/.test(pathname)
+  || /^\/backend\/agents\/[^/]+\/(?:disconnect|memory-refresh|capabilities-refresh)$/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/audit$/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/(?:automations|automation-runs)(?:\/[^/]+)?$/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/agent-templates(?:\/|$)/.test(pathname)
+  || /^\/backend\/webhooks\/[^/]+$/.test(pathname)
+  // HTTP mirrors for features whose canonical implementation needs the Fly
+  // process (or whose Netlify lane intentionally has no route).  Keep the
+  // list explicit: generic DB and ordinary stateless routes must continue to
+  // use the local serverless implementation and its own access policy.
+  || /^\/backend\/workspaces\/[^/]+\/(?:bootstrap|gateways|skills|schedules|my-threads|huddles|project-files|git|nostr-communities)(?:\/|$)/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/sessions\/[^/]+\/huddle(?:\/|$)/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/permission-requests(?:\/|$)/.test(pathname)
+  || /^\/backend\/sessions\/[^/]+\/(?:messages|access|nostr-members)(?:\/|$)/.test(pathname)
+  || /^\/backend\/schedules\/[^/]+(?:\/|$)/.test(pathname)
+  || /^\/backend\/files\/(?:upload|[^/]+(?:\/content)?)$/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/git\/(?:status|diff|stage|unstage|commit)$/.test(pathname)
+  || /^\/backend\/tts\/(?:voices|preview)$/.test(pathname)
+  || /^\/backend\/bridges(?:\/|$)/.test(pathname)
+  || /^\/backend\/integrations\/farm(?:\/|$)/.test(pathname)
+  || /^\/backend\/link-previews(?:\/|$)/.test(pathname)
+  || /^\/backend\/system\/skill-content(?:\/|$)/.test(pathname)
+  || /^(?:\/backend\/skill(?:\/|$)|\/api\/skill(?:\/|$)|\/skill(?:\/|$)|\/.well-known\/agent-skill(?:\/|$))/.test(pathname);
+}
+
+async function forwardCanonicalRoute(req, requestUrl) {
+ const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await readBody(req);
+ return forwardLongRunningControl(
+  req,
+  `${requestUrl.pathname}${requestUrl.search}`,
+  body,
+  {
+   requiredMessage: 'Unified join links require the long-running backend',
+   unavailableMessage: 'The unified join service is unavailable',
+   logTag: 'join-route',
+  },
+ );
+}
+
+async function forwardConversationControl(req, pathname, body = undefined) {
+ return forwardLongRunningControl(req, pathname, body, {
+  requiredMessage: 'Conversation control requires the long-running backend',
+  unavailableMessage: 'The conversation control service is unavailable',
+  logTag: 'conversation-control',
+ });
+}
+
+async function forwardReadReceiptControl(req, pathname, body) {
+ return forwardLongRunningControl(req, pathname, body, {
+  requiredMessage: 'Read receipt privacy changes require the long-running backend',
+  unavailableMessage: 'The read receipt privacy service is unavailable',
+  logTag: 'read-receipts-control',
+ });
+}
+
 function requestBaseUrl(req) {
  const publicUrl = normalizeBaseUrl(process.env.AGENSIS_PUBLIC_URL || process.env.PUBLIC_URL || '');
  if (publicUrl) return publicUrl;
@@ -648,23 +861,47 @@ function buildOrderClause(orderBy) {
 }
 
 function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
- const sections = [
-  'You are agensis AI, a collaborative workspace assistant. You help teams think, write, and get work done inside a shared workspace that contains documents, chats, memory, tasks, files, and a shared canvas.',
-  '',
+ const sections = [];
+ if (agentContext && (agentContext.systemPrompt || agentContext.name)) {
+  if (agentContext.name) {
+   sections.push(`You are "${agentContext.name}", an AI agent collaborating in a shared agensis workspace.`);
+  }
+  if (agentContext.soul) sections.push(`Agent soul: ${agentContext.soul}`);
+  if (agentContext.systemPrompt) sections.push(agentContext.systemPrompt);
+  if (agentContext.instructions) sections.push(`Instructions:\n${agentContext.instructions}`);
+  if (Array.isArray(agentContext.tools) && agentContext.tools.length > 0) {
+   sections.push(`Available tool preferences: ${agentContext.tools.join(', ')}`);
+  }
+  if (Array.isArray(agentContext.skills) && agentContext.skills.length > 0) {
+   sections.push(`Selected skill libraries: ${agentContext.skills.join(', ')}`);
+  }
+  if (Array.isArray(agentContext.coParticipants) && agentContext.coParticipants.length > 0) {
+   const roster = agentContext.coParticipants
+    .map(peer => `@${peer.handle}${peer.name ? ` (${peer.name})` : ''}`)
+    .join(', ');
+   sections.push(
+    '',
+    `This is a multi-agent channel. Other agents you can collaborate with: ${roster}.`,
+    '- In the conversation history, each message is prefixed with the speaker, e.g. "[@handle]: ...". Messages without a prefix are your own.',
+    '- To bring another agent into the conversation, address them by @handle in your reply. Only mention an agent when you genuinely need their help — do not @ them out of politeness, or the conversation will loop.',
+    '- If the request is already fully handled, answer without mentioning anyone so the conversation can end.',
+   );
+  }
+  sections.push('');
+ } else {
+  sections.push(
+   'You are agensis AI, a collaborative workspace assistant. You help teams think, write, and get work done inside a shared workspace that contains documents, chats, memory, tasks, files, and a shared canvas.',
+   '',
+  );
+ }
+ sections.push(
   'Guidelines:',
   '- Be concise, warm, and thoughtful. Prefer markdown for structure.',
   '- When you reference workspace content, quote the title so teammates can find it.',
   '- When the user asks you to extract or create tasks, emit them on their own lines using this exact format so the app can parse them: `TASK: <title>` (one task per line).',
   '- If you do not know something from the provided context, say so rather than inventing.',
   '- You are one of potentially many people in this workspace; speak in a way that is useful to the whole team, not just a single user.',
- ];
-
- if (agentContext && (agentContext.systemPrompt || agentContext.name)) {
-  const agentBlocks = [];
-  if (agentContext.name) agentBlocks.push(`Agent name: ${agentContext.name}`);
-  if (agentContext.systemPrompt) agentBlocks.push(agentContext.systemPrompt);
-  if (agentBlocks.length > 0) sections.push('', '<agent_context>', agentBlocks.join('\n\n'), '</agent_context>');
- }
+ );
 
  if (workspaceContext) {
   const wsBlocks = [];
@@ -689,23 +926,7 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
 }
 
 function normalizeAiChatMessages(messages) {
- const out = [];
- const system = [];
- if (!Array.isArray(messages)) return { messages: out, systemPrompt: '' };
- for (const message of messages) {
-  const role = String(message?.role || '').trim().toLowerCase();
-  const content = typeof message?.content === 'string' ? message.content : '';
-  if (!content) continue;
-  if (role === 'system') {
-   system.push(content);
-   continue;
-  }
-  out.push({
-   role: role === 'assistant' ? 'assistant' : 'user',
-   content,
-  });
- }
- return { messages: out, systemPrompt: system.join('\n\n') };
+ return normalizeAndBoundAiChatMessages(messages);
 }
 
 async function query(text, params = []) {
@@ -713,6 +934,68 @@ async function query(text, params = []) {
  return result.rows;
 }
 
+async function withDbTransaction(callback) {
+ const client = await dbPool().connect();
+ try {
+  await client.query('BEGIN');
+  const transactionQuery = async (text, params = []) => {
+   const result = await client.query(text, params);
+   return result.rows;
+  };
+  const value = await callback(transactionQuery);
+  await client.query('COMMIT');
+  return value;
+ } catch (error) {
+  await client.query('ROLLBACK').catch(() => {});
+  throw error;
+ } finally {
+  client.release?.();
+ }
+}
+
+// Dedicated resource-service adapter for the serverless pg driver. The service
+// itself owns every tenant, steward, controller, idempotency and lease check;
+// this adapter only gives it the same `unsafe`/`begin` shape postgres.js exposes
+// on Fly. Netlify performs no DDL — both lanes use the canonical schema.
+const netlifyWorkspaceResourceDb = {
+ unsafe: query,
+ begin: callback => withDbTransaction(transactionQuery => callback({ unsafe: transactionQuery })),
+};
+
+const workspaceResources = createWorkspaceResourceService({
+ getDb: () => netlifyWorkspaceResourceDb,
+ enforceWorkspaceRole: (userId, workspaceId, capability) => assertWorkspaceRole({
+  userId,
+  workspaceId,
+  capability,
+  db: query,
+ }),
+ assertWorkspaceRoleLocked,
+ recordAudit: entry => recordAuditEntry({
+  ...entry,
+  db: query,
+  jsonParam: JSON.stringify,
+ }),
+});
+
+function queryBoolean(value, fallback = false) {
+ if (value === null || value === undefined || value === '') return fallback;
+ if (value === true || value === 'true') return true;
+ if (value === false || value === 'false') return false;
+ const error = new Error('includeArtifacts must be true or false');
+ error.status = 400;
+ throw error;
+}
+
+function resourceDefinition(body) {
+ if (body?.definition !== undefined) return body.definition;
+ const {
+  stewardAgentId: _stewardAgentId,
+  steward_agent_id: _stewardAgentIdSnake,
+  ...definition
+ } = body ?? {};
+ return definition;
+}
 // ----------------------------------------------------------------------------
 // VAULT WRITES ON THIS LANE.
 //
@@ -743,39 +1026,7 @@ function vaultWriteUnavailable() {
  ));
 }
 
-async function ensureSecretsTables() {
- await query(`
-    CREATE TABLE IF NOT EXISTS app_settings (
-      key text PRIMARY KEY,
-      value text NOT NULL DEFAULT '',
-      updated_at timestamptz DEFAULT now()
-    )
-  `);
- await query(`
-    CREATE TABLE IF NOT EXISTS workspace_secrets (
-      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      key text NOT NULL,
-      value text NOT NULL DEFAULT '',
-      secret_cipher text DEFAULT '',
-      description text DEFAULT '',
-      updated_by uuid,
-      updated_at timestamptz DEFAULT now(),
-      PRIMARY KEY (workspace_id, key)
-    )
-  `);
- // Idempotent backfill for databases whose workspace_secrets predates
- // encryption-at-rest (CREATE TABLE IF NOT EXISTS above is a no-op for them).
- // Mirrors ensureRuntimeSchema in server/index.cjs — this mirror now writes
- // ciphertext, so the columns have to exist wherever it runs.
- await query(`
-    ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS secret_cipher text DEFAULT '';
-    ALTER TABLE workspace_secrets ADD COLUMN IF NOT EXISTS description text DEFAULT '';
-  `);
- await query('CREATE INDEX IF NOT EXISTS idx_workspace_secrets_workspace_id ON workspace_secrets(workspace_id)');
-}
-
 async function getSettingValue(key) {
- await ensureSecretsTables();
  const rows = await query('select value from app_settings where key = $1 limit 1', [key]);
  return rows[0]?.value || '';
 }
@@ -787,12 +1038,10 @@ async function getSettingValue(key) {
 // through Netlify.
 async function getWorkspaceSecretValue(workspaceId, key) {
  if (!workspaceId) return '';
- await ensureSecretsTables();
  return coreGetWorkspaceSecretValue(workspaceId, key, { db: query, getAuthSecret });
 }
 
 async function setWorkspaceSecretValue(workspaceId, key, value, userId = null) {
- await ensureSecretsTables();
  await coreSetWorkspaceSecretValue(workspaceId, key, value, { db: query, getAuthSecret, userId });
 }
 
@@ -809,7 +1058,6 @@ async function resolveSecret(key, workspaceId = null) {
 // characters of the app-level ANTHROPIC_API_KEY. `scope` already says which key is
 // in play.
 async function listManagedSecrets(workspaceId = null) {
- await ensureSecretsTables();
  const meta = new Map();
  if (workspaceId) {
   const rows = await listWorkspaceSecretMeta(workspaceId, { db: query }).catch(() => []);
@@ -918,7 +1166,11 @@ function publicWorkspaceAgent(row) {
   instructions: row.instructions || '',
   tools: parseJsonArray(row.tools),
   skills: parseJsonArray(row.skills),
-  metadata,
+  purpose: row.purpose === 'resource' ? 'resource' : 'collaborator',
+  resource_facets: row.purpose === 'resource'
+   ? parseJsonArray(row.resource_facets).filter((facet) => ['context', 'knowledge', 'tooling', 'code'].includes(facet))
+   : [],
+  metadata: parseJsonObject(row.metadata),
   identity: parseJsonObject(row.identity),
   model: resolveExecutionModel(row.model, runtime),
   run_mode: row.run_mode === 'daemon' ? 'daemon'
@@ -999,55 +1251,6 @@ function publicCursorBuddyConnectionKey(row) {
  };
 }
 
-async function ensureAgentConnectionsTable() {
- await query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
- await query(`
-    CREATE TABLE IF NOT EXISTS agent_connections (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
-      name text NOT NULL DEFAULT 'Agent',
-      handle text NOT NULL DEFAULT '',
-      host text DEFAULT '',
-      cwd text DEFAULT '',
-      status text NOT NULL DEFAULT 'offline' CHECK (status IN ('online', 'offline', 'busy')),
-      metadata jsonb DEFAULT '{}'::jsonb,
-      connected_at timestamptz DEFAULT now(),
-      last_seen_at timestamptz DEFAULT now(),
-      updated_at timestamptz DEFAULT now()
-    )
-  `);
- await query('CREATE INDEX IF NOT EXISTS idx_agent_connections_workspace_id ON agent_connections(workspace_id)');
- await query('CREATE INDEX IF NOT EXISTS idx_agent_connections_agent_id ON agent_connections(agent_id)');
- await query('CREATE INDEX IF NOT EXISTS idx_agent_connections_status ON agent_connections(workspace_id, status)');
-}
-
-async function ensureCursorBuddyConnectionKeyTables() {
- await query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
- await ensureAgentRuntimeTables();
- await query(`
-    CREATE TABLE IF NOT EXISTS cursorbuddy_connection_keys (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
-      created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
-      key_hash text NOT NULL UNIQUE,
-      name text NOT NULL DEFAULT 'CursorBuddy runtime',
-      surface text NOT NULL DEFAULT 'machine',
-      scope text NOT NULL DEFAULT 'machine',
-      domain text NOT NULL DEFAULT '',
-      status text NOT NULL DEFAULT 'created' CHECK (status IN ('created', 'claimed', 'expired', 'revoked')),
-      metadata jsonb DEFAULT '{}'::jsonb,
-      expires_at timestamptz NOT NULL DEFAULT now() + interval '15 minutes',
-      claimed_at timestamptz,
-      created_at timestamptz DEFAULT now(),
-      updated_at timestamptz DEFAULT now()
-    )
-  `);
- await query('CREATE INDEX IF NOT EXISTS idx_cursorbuddy_connection_keys_workspace ON cursorbuddy_connection_keys(workspace_id, status)');
- await query('CREATE INDEX IF NOT EXISTS idx_cursorbuddy_connection_keys_hash ON cursorbuddy_connection_keys(key_hash)');
-}
-
 async function handleWorkspaces(userId) {
  const rows = await query(
   `select w.id, w.name, w.description, w.icon, w.is_system, w.parent_id,
@@ -1099,12 +1302,11 @@ async function handleDeleteWorkspaceMember(workspaceId, memberId, userId) {
 async function handleWorkspaceAgents(workspaceId, userId) {
  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
  await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
- await ensureAgentRuntimeTables();
  // Same column list as the Fly server's /agents route — the parity test
  // extracts and diffs both, so a column added on one side fails until it is
  // added here too.
  const rows = await query(
-  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, ambient_replies, created_by
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, purpose, resource_facets, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, ambient_replies, created_by
      from workspace_agents
      where workspace_id = $1
      order by created_at asc, name asc`,
@@ -1213,7 +1415,6 @@ async function handleAgentConnections(req, userId) {
  const workspaceId = String(url.searchParams.get('workspaceId') || '').trim();
  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
  await assertWorkspaceRole({ userId, workspaceId, capability: 'read', db: query });
- await ensureAgentConnectionsTable();
  const rows = await query(
   `select *
      from agent_connections
@@ -1226,7 +1427,6 @@ async function handleAgentConnections(req, userId) {
 }
 
 async function handleCursorBuddyConnectionKeys(req, userId) {
- await ensureCursorBuddyConnectionKeyTables();
  const url = new URL(req.url);
  const workspaceId = String(url.searchParams.get('workspaceId') || '').trim();
  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
@@ -1243,7 +1443,6 @@ async function handleCursorBuddyConnectionKeys(req, userId) {
 }
 
 async function handleCreateCursorBuddyConnectionKey(req, userId) {
- await ensureCursorBuddyConnectionKeyTables();
  const body = await readBody(req);
  const workspaceId = String(body?.workspaceId || body?.workspace_id || '').trim();
  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
@@ -1285,7 +1484,6 @@ async function handleCreateCursorBuddyConnectionKey(req, userId) {
 }
 
 async function ensureCursorBuddyAgentForKey(connectionKey, claim = {}) {
- await ensureAgentRuntimeTables();
  if (connectionKey?.agent_id) {
   const rows = await query(
    'select * from workspace_agents where id = $1 and workspace_id = $2 limit 1',
@@ -1381,7 +1579,6 @@ function mergeCursorBuddyProviderMetadata(existingAgent, nextMetadata) {
 }
 
 async function ensureCursorBuddyProviderAgent({ workspaceId, userId, body = {} }) {
- await ensureAgentRuntimeTables();
  const { scope, domain, metadata } = cursorBuddyProviderAgentMetadata(body, userId);
  const resolvedScope = scope === 'domain' && domain ? 'domain' : scope === 'global' ? 'global' : 'workspace';
  metadata.providerScope = resolvedScope;
@@ -1506,7 +1703,6 @@ async function buildCursorBuddyAgentConnectionCommand({ agentId, workspaceId = n
 }
 
 async function handleClaimCursorBuddyConnectionKey(req) {
- await ensureCursorBuddyConnectionKeyTables();
  const body = await readBody(req);
  const key = String(body?.key || '').trim();
  if (!/^cbk_[a-z0-9_]+_[A-Z2-9]{18}$/.test(key)) return jsonError(400, new Error('A valid CursorBuddy connection key is required'));
@@ -1581,59 +1777,6 @@ async function handleClaimCursorBuddyConnectionKey(req) {
  });
 }
 
-let appUserProfileColumnsEnsured = false;
-async function ensureAppUserProfileColumns() {
- if (appUserProfileColumnsEnsured) return;
- await query(`
-    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS display_name text DEFAULT '';
-    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '';
-    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS token_version integer NOT NULL DEFAULT 1;
-    ALTER TABLE app_users ADD COLUMN IF NOT EXISTS share_read_receipts boolean NOT NULL DEFAULT true;
-  `);
- appUserProfileColumnsEnsured = true;
-}
-
-async function ensureAgentRuntimeTables() {
- await query(`
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS soul text DEFAULT '';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS instructions text DEFAULT '';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS tools jsonb DEFAULT '[]'::jsonb;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS skills jsonb DEFAULT '[]'::jsonb;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS metadata jsonb DEFAULT '{}'::jsonb;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS handle text DEFAULT '';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS openpet_avatar_id text DEFAULT '';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS accent_color text DEFAULT '#00a95c';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS connect_token_hash text DEFAULT '';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS identity jsonb NOT NULL DEFAULT '{}'::jsonb;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS sandbox_provider text;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS sandbox_config jsonb NOT NULL DEFAULT '{}'::jsonb;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS memory_dir text DEFAULT '';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS run_mode text NOT NULL DEFAULT 'builtin';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS permission_mode text NOT NULL DEFAULT 'default';
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT true;
-    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS ambient_replies boolean NOT NULL DEFAULT true;
-  `);
- await query('CREATE INDEX IF NOT EXISTS idx_workspace_agents_handle ON workspace_agents(workspace_id, handle)');
- await query('CREATE INDEX IF NOT EXISTS idx_workspace_agents_connect_token_hash ON workspace_agents(connect_token_hash)');
- await query(`
-    CREATE TABLE IF NOT EXISTS agent_webhooks (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-      agent_id uuid REFERENCES workspace_agents(id) ON DELETE SET NULL,
-      name text NOT NULL DEFAULT 'Webhook',
-      token text NOT NULL UNIQUE,
-      enabled boolean NOT NULL DEFAULT true,
-      last_triggered_at timestamptz,
-      created_at timestamptz DEFAULT now(),
-      updated_at timestamptz DEFAULT now(),
-      version integer NOT NULL DEFAULT 1
-    )
-  `);
- await query('CREATE INDEX IF NOT EXISTS idx_agent_webhooks_workspace_id ON agent_webhooks(workspace_id)');
- await query('CREATE INDEX IF NOT EXISTS idx_agent_webhooks_agent_id ON agent_webhooks(agent_id)');
-}
-
 async function handleAgentDispatch(req, userId) {
  const body = await readBody(req);
  const { workspaceId, sessionId, content } = body || {};
@@ -1687,7 +1830,6 @@ async function proxyAgentDispatchToDaemon(req, baseUrl, body) {
 }
 
 async function handleCreateAgentWebhook(req, userId) {
- await ensureAgentRuntimeTables();
  const body = await readBody(req);
  const workspaceId = String(body?.workspace_id || '').trim();
  const agentId = body?.agent_id ? String(body.agent_id).trim() : null;
@@ -1712,7 +1854,6 @@ async function handleCreateAgentWebhook(req, userId) {
 }
 
 async function handleAgentConnectionCommand(req, agentId, userId) {
- await ensureAgentRuntimeTables();
  const body = await readBody(req);
  const rows = await query('select * from workspace_agents where id = $1 limit 1', [agentId]);
  const agent = rows[0];
@@ -1779,7 +1920,6 @@ async function handleAgentConnectionCommand(req, agentId, userId) {
 }
 
 async function handleAuth(pathname, req) {
- await ensureAppUserProfileColumns();
  const body = await readBody(req);
  const email = String(body?.email || '').trim().toLowerCase();
  const password = String(body?.password || '');
@@ -1835,7 +1975,6 @@ async function handleAuth(pathname, req) {
 }
 
 async function handleOAuthAuth() {
- await ensureAppUserProfileColumns();
  const identityUser = await getUser();
  const email = String(identityUser?.email || '').trim().toLowerCase();
  if (!email) return jsonError(401, new Error('Social login was not completed'));
@@ -1859,15 +1998,13 @@ async function handleOAuthAuth() {
 }
 
 async function handleGetMyProfile(userId) {
- await ensureAppUserProfileColumns();
  const rows = await query('select id, email, display_name, accent_color, share_read_receipts, created_at from app_users where id = $1 limit 1', [userId]);
  if (!rows[0]) return jsonError(404, new Error('User not found'));
  return json({ data: rows[0], error: null });
 }
 
-async function handleUpdateMyProfile(req, userId) {
- await ensureAppUserProfileColumns();
- const body = await readBody(req);
+async function handleUpdateMyProfile(req, userId, suppliedBody = null) {
+ const body = suppliedBody ?? await readBody(req);
  const updates = {};
  if (body?.display_name !== undefined) {
   updates.display_name = String(body.display_name || '').trim().slice(0, 80);
@@ -1889,10 +2026,18 @@ async function handleUpdateMyProfile(req, userId) {
  if (fields.length === 0) return jsonError(400, new Error('No fields to update'));
 
  const setClause = fields.map((field, i) => `${field} = $${i + 2}`).join(', ');
- const rows = await query(
-  `update app_users set ${setClause} where id = $1 returning id, email, display_name, accent_color, share_read_receipts, created_at`,
-  [userId, ...fields.map(field => updates[field])],
- );
+ const updateSql =
+  `update app_users set ${setClause} where id = $1 returning id, email, display_name, accent_color, share_read_receipts, created_at`;
+ const params = [userId, ...fields.map(field => updates[field])];
+ const rows = updates.share_read_receipts === false
+  ? await withDbTransaction(async (transactionQuery) => {
+    const updated = await transactionQuery(updateSql, params);
+    if (updated[0]) {
+     await transactionQuery(DELETE_HUMAN_READ_MARKERS_SQL, [userId]);
+    }
+    return updated;
+   })
+  : await query(updateSql, params);
  if (!rows[0]) return jsonError(404, new Error('User not found'));
  return json({ data: rows[0], error: null });
 }
@@ -1935,29 +2080,9 @@ async function handleSignOut(userId) {
 }
 
 // Logs an `activity_events` row for each inserted chat message so it surfaces in
-// the Activity feed. Delegates to the shared idempotent logger so both backends
-// use ONE implementation (idempotent: skips messages already logged).
-// C3 — ensure the partial unique index that makes message-activity logging
-// idempotent. Mirrors the migration + server runtime DDL. Runs at most once per
-// warm instance and never throws into the caller (the ON CONFLICT insert
-// degrades gracefully if this hasn't landed yet).
-let activityIndexEnsured = false;
-async function ensureActivityEventsIndex() {
- if (activityIndexEnsured) return;
- try {
-  await query(
-   `CREATE UNIQUE INDEX IF NOT EXISTS uq_activity_events_message_sent
-       ON activity_events (entity_id)
-       WHERE event_type = 'message_sent' AND entity_type = 'message'`,
-  );
-  activityIndexEnsured = true;
- } catch (error) {
-  console.error('ensureActivityEventsIndex failed', error);
- }
-}
-
+// the Activity feed. The canonical schema and migration own the partial unique
+// index that makes this idempotent; request handling only writes data.
 async function logMessageActivity(rows) {
- await ensureActivityEventsIndex();
  await logMessageActivityIdempotent(rows, { db: query });
 }
 
@@ -2079,16 +2204,117 @@ async function seedDefaultAgents(workspaceId, ownerUserId) {
 
 // Resolve a session and run BOTH gates: workspace membership, then the DM gate
 // under it. Returns the row so callers never re-read it.
-async function authorizeSessionForUser(sessionId, userId, capability) {
+async function authorizeSessionForUser(
+ sessionId,
+ userId,
+ capability,
+ { concealUnavailable = false } = {},
+) {
+ const unavailable = () => jsonError(
+  404,
+  new Error(concealUnavailable
+   ? 'Conversation not found or unavailable'
+   : 'Conversation not found'),
+ );
  const rows = await query(
-  'select id, workspace_id, visibility, folder from chat_sessions where id = $1::uuid limit 1',
+  `select id, workspace_id, visibility, folder, parent_message_id, split_parent_id, deleted_at
+     from chat_sessions
+    where id = $1::uuid
+    limit 1`,
   [sessionId],
  );
  const session = rows[0];
- if (!session) return { error: jsonError(404, new Error('Conversation not found')) };
- await assertWorkspaceRole({ userId, workspaceId: session.workspace_id, capability, db: query });
- await enforceSessionReadAccess({ userId, sessionId, sessionRow: session, db: query });
+ if (!session) return { error: unavailable() };
+ try {
+  await assertWorkspaceRole({ userId, workspaceId: session.workspace_id, capability, db: query });
+  await enforceSessionReadAccess({ userId, sessionId, sessionRow: session, db: query });
+ } catch (error) {
+  if (concealUnavailable && (error?.status === 403 || error?.status === 404)) {
+   return { error: unavailable() };
+  }
+  throw error;
+ }
  return { session };
+}
+
+/**
+ * Resolve the private-session classification inherited by a client-created
+ * sub-thread or split. This is the Netlify mirror of the Fly generic insert
+ * rule: a derived session must be private before its INSERT becomes visible,
+ * never corrected after the fact. Folder-only legacy DMs are private too.
+ */
+async function _resolveInheritedSessionVisibility(
+ rows,
+ userId,
+ db = query,
+ { lockParent = false } = {},
+) {
+ let inheritedPrivate = false;
+ for (const row of rows) {
+  if (!row || typeof row !== 'object') continue;
+  const parentSessionId = String(row.split_parent_id || '').trim() || null;
+  const parentMessageId = String(row.parent_message_id || '').trim() || null;
+  if (!parentSessionId && !parentMessageId) continue;
+  try {
+   const found = await db(
+    `select parent_session.id, parent_session.visibility, parent_session.folder
+       from chat_sessions parent_session
+      where parent_session.id = coalesce(
+              $1::uuid,
+              (select parent_message.session_id
+                 from messages parent_message
+                where parent_message.id = $2::uuid
+                  and parent_message.deleted_at is null)
+            )
+        and parent_session.workspace_id = $3::uuid
+        and ${sessionReadableSql('parent_session', '$4', { lockMembership: lockParent })}
+      limit 1
+      ${lockParent ? 'for share of parent_session' : ''}`,
+    [parentSessionId, parentMessageId, String(row.workspace_id || ''), String(userId || '')],
+   );
+   if (found.length !== 1) {
+    throw forbidden('The parent conversation is unavailable');
+   }
+   if (isPrivateSessionRow(found[0])) inheritedPrivate = true;
+  } catch (error) {
+   if (error?.status) throw error;
+   console.warn('[backend] inherited session visibility lookup failed:', error?.message || error);
+   // This query proves both classification AND authority. Merely forcing the
+   // child private would still accept an unverified cross-workspace parent and
+   // could copy that parent's members after the INSERT. On an infrastructure
+   // fault the only fail-closed answer is therefore no derived session at all.
+   const unavailable = new Error('Unable to verify the parent conversation');
+   unavailable.status = 503;
+   throw unavailable;
+  }
+ }
+ return inheritedPrivate ? 'private' : null;
+}
+
+async function _copyInheritedSessionMembers(row, db = query) {
+ const parentSessionId = row?.split_parent_id ? String(row.split_parent_id) : '';
+ const parentMessageId = row?.parent_message_id ? String(row.parent_message_id) : '';
+ if (!row?.id || (!parentSessionId && !parentMessageId)) return true;
+ try {
+  await db(
+   `insert into chat_session_members (session_id, user_id, source, granted_by, expires_at)
+      select $1::uuid, member.user_id, member.source, member.granted_by, member.expires_at
+        from chat_session_members member
+       where member.session_id = coalesce(
+               $2::uuid,
+               (select parent_message.session_id
+                  from messages parent_message
+                 where parent_message.id = $3::uuid
+                   and parent_message.deleted_at is null)
+             )
+    on conflict (session_id, user_id) do nothing`,
+   [String(row.id), parentSessionId || null, parentMessageId || null],
+  );
+  return true;
+ } catch (error) {
+  console.warn('[backend] inherited session member copy failed:', error?.message || error);
+  return false;
+ }
 }
 
 async function handleToggleReaction(req, messageId, userId) {
@@ -2102,7 +2328,9 @@ async function handleToggleReaction(req, messageId, userId) {
  if (blocked) return blocked;
 
  const rows = await query(
-  `select m.id, m.session_id from messages m where m.id = $1::uuid limit 1`,
+  `select m.id, m.session_id from messages m
+    where m.id = $1::uuid and m.deleted_at is null
+    limit 1`,
   [messageId],
  );
  if (!rows[0]) return jsonError(404, new Error('Message not found'));
@@ -2116,8 +2344,8 @@ async function handleToggleReaction(req, messageId, userId) {
 
  if (updated.length === 0) {
   const current = await query(
-   `select ${REACTION_RETURNING_COLUMNS} from messages where id = $1::uuid limit 1`,
-   [messageId],
+    REACTION_CURRENT_SQL,
+    [messageId, sessionId, String(userId)],
   );
   const problem = explainReactionNoop(current[0], { op, reaction, userId });
   if (problem) return jsonError(problem.status, new Error(problem.message));
@@ -2154,25 +2382,195 @@ async function handleAdvanceReadMarker(req, sessionId, userId) {
  const body = await readBody(req);
  const messageId = String(body?.lastSeenMessageId || body?.last_seen_message_id || '').trim();
  if (!messageId) return jsonError(400, badRequest('lastSeenMessageId is required'));
+ const threadParentId = optionalReadReceiptThreadParent(body?.threadParentId || body?.thread_parent_id);
 
- const blocked = rateLimitBlock(readReceiptRateLimiter, `${userId}:${sessionId}`);
+ const blocked = rateLimitBlock(readReceiptRateLimiter, `${userId}:${sessionId}:${threadParentId || 'channel'}`);
  if (blocked) return blocked;
 
  const gate = await authorizeSessionForUser(sessionId, userId, 'read');
  if (gate.error) return gate.error;
 
- const rows = await query(ADVANCE_READ_MARKER_SQL, [sessionId, String(userId), messageId]);
+ const rows = await query(
+  ADVANCE_READ_MARKER_SQL,
+  [sessionId, String(userId), messageId, threadParentId],
+ );
  // Always ok, exactly like the Fly lane: "already at or ahead of this point" is
  // success, and so is "I have receipts switched off" — a caller must not be able
  // to detect a setting by probing.
  return json({ data: { ok: true, marker: rows[0] ? toReadMarker(rows[0]) : null }, error: null });
 }
 
-async function handleSessionReadState(sessionId, userId) {
+async function handleSessionReadState(req, sessionId, userId) {
  const gate = await authorizeSessionForUser(sessionId, userId, 'read');
  if (gate.error) return gate.error;
- const rows = await query(SESSION_READ_STATE_SQL, [sessionId, String(userId)]);
+ const threadParentId = optionalReadReceiptThreadParent(
+  new URL(req.url).searchParams.get('thread_parent_id'),
+ );
+ const rows = await query(SESSION_READ_STATE_SQL, [sessionId, String(userId), threadParentId]);
  return json({ data: { markers: rows.map(toReadMarker) }, error: null });
+}
+
+async function handleClearSession(sessionId, userId) {
+ const gate = await authorizeSessionForUser(
+  sessionId,
+  userId,
+  'manage',
+  { concealUnavailable: true },
+ );
+ if (gate.error) return gate.error;
+ if (!isPrivateSessionRow(gate.session)) {
+  return jsonError(400, new Error('Only private conversations can be deleted this way'));
+ }
+ // Locking and mutating must be separate statements in one transaction. A
+ // single CTE takes its snapshot before it waits on a concurrent message
+ // INSERT's session lock and can therefore miss the row that just committed.
+ const result = await withDbTransaction(async (transactionQuery) => {
+  const locked = await transactionQuery(
+   `with recursive clear_workspace_chain as (
+      select id, parent_id, 0 as depth
+        from workspaces
+       where id = $5::uuid
+      union all
+      select parent.id, parent.parent_id, chain.depth + 1
+        from workspaces parent
+        join clear_workspace_chain chain on parent.id = chain.parent_id
+       where chain.depth < 10
+    ),
+    clear_locked_workspace_chain as materialized (
+      select workspace.id, workspace.user_id
+        from workspaces workspace
+        join clear_workspace_chain chain on chain.id = workspace.id
+      for share of workspace
+    ),
+    clear_manager_membership as materialized (
+      select membership.workspace_id
+        from workspace_members membership
+        join clear_locked_workspace_chain workspace
+          on workspace.id = membership.workspace_id
+       where membership.user_id = $2
+         and membership.role in ('owner', 'admin')
+      for share of membership
+    )
+    select clear_session_scope.id
+      from chat_sessions clear_session_scope
+      join chat_session_members clear_session_member
+        on clear_session_member.session_id = clear_session_scope.id
+       and clear_session_member.user_id = $2
+     where clear_session_scope.id = $1::uuid
+       and clear_session_scope.deleted_at is null
+       and clear_session_scope.visibility is not distinct from $3
+       and clear_session_scope.folder is not distinct from $4
+       and (
+         exists (
+           select 1 from clear_locked_workspace_chain workspace
+            where workspace.user_id = $2
+         )
+         or exists (select 1 from clear_manager_membership)
+       )
+       and ${sessionReadableSql('clear_session_scope', '$2')}
+     for update of clear_session_scope, clear_session_member`,
+   [
+    sessionId,
+    userId,
+    gate.session.visibility ?? null,
+    gate.session.folder ?? null,
+    gate.session.workspace_id,
+   ],
+  );
+  if (locked.length !== 1) {
+   throw forbidden('Conversation access changed before the delete completed');
+  }
+  const effects = await settleSessionClosure({
+   query: transactionQuery,
+   hostSessionIds: [sessionId],
+   closeHostSessions: true,
+  });
+  if (!effects.sessions.some(row => String(row.id) === String(sessionId))) {
+   throw forbidden('Conversation access changed before the delete completed');
+  }
+  return effects;
+ });
+ return json({
+  data: {
+   sessionId,
+   clearedMessages: result.clearedMessages,
+   cancelledJobs: result.jobs.length,
+   closed: true,
+  },
+  error: null,
+ });
+}
+
+async function handleCloseSession(sessionId, userId) {
+ const gate = await authorizeSessionForUser(sessionId, userId, 'read');
+ if (gate.error) return gate.error;
+ const derived = Boolean(gate.session.parent_message_id || gate.session.split_parent_id);
+ await assertWorkspaceRole({
+  userId,
+  workspaceId: gate.session.workspace_id,
+  capability: derived ? 'write' : 'manage',
+  db: query,
+ });
+ const result = await withDbTransaction(async (transactionQuery) => {
+  const locked = await transactionQuery(
+   `select close_session_scope.id
+      from chat_sessions close_session_scope
+     where close_session_scope.id = $1::uuid
+       and close_session_scope.workspace_id = $3::uuid
+       and close_session_scope.parent_message_id is not distinct from $4::uuid
+       and close_session_scope.split_parent_id is not distinct from $5::uuid
+       and ${sessionReadableSql('close_session_scope', '$2', { lockMembership: true })}
+     for update of close_session_scope`,
+   [
+    sessionId,
+    userId,
+    gate.session.workspace_id,
+    gate.session.parent_message_id ?? null,
+    gate.session.split_parent_id ?? null,
+   ],
+  );
+  if (locked.length !== 1) {
+   throw forbidden('Conversation access changed before the close completed');
+  }
+  const effects = await settleSessionClosure({
+   query: transactionQuery,
+   hostSessionIds: [sessionId],
+   closeHostSessions: true,
+  });
+  if (!effects.sessions.some(row => String(row.id) === String(sessionId))) {
+   throw forbidden('Conversation access changed before the close completed');
+  }
+  return effects;
+ });
+ return json({
+  data: {
+   sessionId,
+   clearedMessages: result.clearedMessages,
+   cancelledJobs: result.jobs.length,
+   closed: true,
+  },
+  error: null,
+ });
+}
+
+async function handleSplitSession(sessionId, userId) {
+ const gate = await authorizeSessionForUser(sessionId, userId, 'write');
+ if (gate.error) return gate.error;
+ const result = await withDbTransaction((transactionQuery) => createSessionSplit({
+  query: transactionQuery,
+  sourceSessionId: sessionId,
+  userId,
+  // node-postgres/@netlify/database requires serialized jsonb parameters.
+  jsonParam: value => JSON.stringify(value),
+ }));
+ return json({
+  data: {
+   session: result.session,
+   baselineMessageId: result.baselineMessage.id,
+   sourceBoundaryMessageId: result.sourceBoundaryMessageId,
+  },
+  error: null,
+ }, 201);
 }
 
 async function handleDb(pathname, req, userId) {
@@ -2181,6 +2579,7 @@ async function handleDb(pathname, req, userId) {
  if (pathname === '/backend/db/select') {
   const { table, columns = '*', filters = [], orderBy = null, limit = null, single = false } = body || {};
   const tableSql = ensureTable(table);
+  assertGenericSelectAllowed(table);
   await enforceDbOperationAccess({ userId, table, op: 'select', filters, db: query });
   // `workspaces` SELECT is scoped to rows the user owns or is a member of.
   // chat_sessions / messages SELECT is scoped to sessions the user may read —
@@ -2193,20 +2592,44 @@ async function handleDb(pathname, req, userId) {
   // M7: project the requested columns through the shared per-table read
   // allow-list first, so `columns: "*"` on app_users can never return the
   // caller's password_hash / token_version.
-  const rows = await query(`select ${normalizeColumns(safeSelectColumns(table, columns))} from ${tableSql}${clause}${buildOrderClause(orderBy)}${limitSql}`, params);
-  return json({ data: single ? (rows[0] ?? null) : rows, error: null });
+  const safeColumns = safeSelectColumns(table, columns);
+  const normalizedColumns = normalizeColumns(safeColumns);
+  const requestedColumns = String(safeColumns || '*').split(',').map((column) => column.trim());
+  const appendedDeletedAt = table === 'messages'
+   && normalizedColumns !== '*'
+   && !requestedColumns.includes('deleted_at');
+  const queryColumns = appendedDeletedAt
+   ? `${normalizedColumns}, "deleted_at"`
+   : normalizedColumns;
+  const rows = await query(`select ${queryColumns} from ${tableSql}${clause}${buildOrderClause(orderBy)}${limitSql}`, params);
+  const publicRows = table === 'messages'
+   ? redactDeletedMessageRows(rows).map((row) => {
+    if (!appendedDeletedAt) return row;
+    const { deleted_at: _projectionOnly, ...projected } = row;
+    return projected;
+   })
+   : rows;
+  return json({ data: single ? (publicRows[0] ?? null) : publicRows, error: null });
  }
 
  if (pathname === '/backend/db/insert') {
   const { table, values, returning = '*', single = false } = body || {};
   const tableSql = ensureTable(table);
   await enforceDbOperationAccess({ userId, table, op: 'insert', payload: { values }, db: query });
+  const messageAuthor = table === 'messages'
+   ? await loadBrowserMessageAuthor({ userId, db: query })
+   : null;
   // Force a workspace's owner to the authed user (never trust a client user_id).
   // Strip privileged columns (storage_path, mcp_approved, …) from generic writes.
   const rows = (Array.isArray(values) ? values : [values]).map((row) => {
-   if (!row || typeof row !== 'object') return row;
+   // Validate before any object spread can turn an array or other non-record
+   // value into a record that appears safe only after server normalization.
+   validateUniformInsertRows([row]);
    let next = stripPrivilegedDbValues(table, row);
+   next = stampTaskWriteIdentity(table, next, userId, { insert: true });
+   next = applyAgentPurposeInsertDefaults(table, next);
    if (table === 'workspaces') next = { ...next, user_id: userId };
+   if (table === 'messages') next = stampBrowserMessageInsert(next, messageAuthor);
    // Mirrors server/index.cjs — see the comment there for why this route
    // strips the title but never infers parent_id from it.
    if (table === 'tasks' && typeof next.title === 'string') {
@@ -2225,19 +2648,50 @@ async function handleDb(pathname, req, userId) {
    next = synthesizeHumanIdentityInsert(table, next);
    return next;
   });
-  if (!rows[0] || typeof rows[0] !== 'object') return jsonError(400, new Error('Insert values are required'));
-
-  const columns = Object.keys(rows[0]);
-  if (columns.length === 0) return jsonError(400, new Error('Insert values are required'));
-  const params = [];
-  const valueSql = rows.map((row) => `(${columns.map((column) => {
-   return bindDbParam(params, table, column, row[column]);
-  }).join(', ')})`).join(', ');
-
-  const result = await query(
-   `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(returning)}`,
-   params,
-  );
+  // Validate the caller-visible projection before opening a transaction or
+  // writing anything. A forbidden/invalid RETURNING shape must not create a
+  // conversation and then fail while formatting the response.
+  if (table === 'chat_sessions') {
+   projectSessionCreateRows([], returning);
+   // This is a pure shape check. Keep it outside the transaction so a malformed
+   // child (both parent edges set) cannot even open a write transaction.
+   rows.forEach(sessionLineageKind);
+  }
+  const insertRows = async (db) => {
+   let effectiveRows = rows;
+   let lineage = null;
+   if (table === 'chat_sessions') {
+    const prepared = await prepareSessionCreateRows({
+     db,
+     userId,
+     rows,
+    });
+    effectiveRows = prepared.rows;
+    lineage = prepared.lineage;
+   }
+   const columns = validateUniformInsertRows(effectiveRows);
+   const params = [];
+   const valueSql = effectiveRows.map((row) => `(${columns.map((column) => {
+    return bindDbParam(params, table, column, row[column]);
+   }).join(', ')})`).join(', ');
+   const returningColumns = table === 'chat_sessions' ? '*' : returning;
+   const inserted = await db(
+    `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(safeSelectColumns(table, returningColumns))}`,
+    params,
+   );
+   if (table === 'chat_sessions') {
+    await installCreatedSessionMemberships({
+     db,
+     userId,
+     createdRows: inserted,
+     lineage,
+    });
+   }
+   return inserted;
+  };
+  const result = table === 'chat_sessions'
+   ? await withDbTransaction(insertRows)
+   : await insertRows(query);
   if (table === 'messages') {
    await logMessageActivity(result);
   }
@@ -2250,7 +2704,10 @@ async function handleDb(pathname, req, userId) {
     }
    }
   }
-  return json({ data: single ? (result[0] ?? null) : result, error: null });
+  const responseRows = table === 'chat_sessions'
+   ? projectSessionCreateRows(result, returning)
+   : table === 'messages' ? redactDeletedMessageRows(result) : result;
+  return json({ data: single ? (responseRows[0] ?? null) : responseRows, error: null });
  }
 
  if (pathname === '/backend/db/update') {
@@ -2263,7 +2720,11 @@ async function handleDb(pathname, req, userId) {
   if (table === 'workspace_agents' && isReservedAgentHandle(values.handle)) {
    return jsonError(400, new Error(reservedAgentHandleMessage(values.handle)));
   }
-  const safeValues = stripPrivilegedDbValues(table, values);
+  const safeValues = stampTaskWriteIdentity(
+   table,
+   stripImmutableDbUpdateValues(table, stripPrivilegedDbValues(table, values)),
+   userId,
+  );
 
   // Mirrors server/index.cjs: a human's edit to an agent's identity is recorded
   // in identity.human_set, so the agent's next self-declaration on connect
@@ -2274,18 +2735,34 @@ async function handleDb(pathname, req, userId) {
   // See shared/agentIdentity.cjs.
   const { values: markedValues, voice, lockPatch } = markHumanIdentityWrite(table, safeValues);
   const keys = Object.keys(markedValues);
+  if (keys.length === 0 && !lockPatch) {
+   return jsonError(400, new Error('No updatable fields provided'));
+  }
+  // Mirrors Fly: workspace_agents.version is stripped before this point, so
+  // every genuine agent edit advances the stored optimistic-concurrency token.
+  const shouldBumpVersion = VERSIONED_TABLES.has(table) && safeValues.version == null;
 
   const params = [];
   const setParts = keys.map((column) => `${quoteIdent(column)} = ${bindDbParam(params, table, column, markedValues[column])}`);
+  if (table === 'tasks' && Object.prototype.hasOwnProperty.call(markedValues, 'assignee_id')) {
+   const assigneeBind = bindDbParam(params, table, 'assignee_id', markedValues.assignee_id);
+   const assigned = typeof markedValues.assignee_id === 'string'
+    ? markedValues.assignee_id.trim()
+    : markedValues.assignee_id;
+   const requesterBind = bindDbParam(
+    params,
+    table,
+    'dispatch_requested_by',
+    assigned ? userId : null,
+   );
+   setParts.push(taskDispatchRequesterSql(assigneeBind, requesterBind));
+  }
   if (lockPatch) {
    const voiceBound = voice !== undefined ? bindDbParam(params, table, 'identity', voice) : null;
    setParts.push(`"identity" = ${identityWriteSql(voiceBound, bindDbParam(params, table, 'identity', lockPatch))}`);
   }
-  if (VERSIONED_TABLES.has(table) && values.version == null) {
+  if (shouldBumpVersion) {
    setParts.push('"version" = COALESCE("version", 0) + 1');
-  }
-  if (setParts.length === 0) {
-   return jsonError(400, new Error('No updatable fields provided'));
   }
   const setClause = setParts.join(', ');
 
@@ -2305,11 +2782,141 @@ async function handleDb(pathname, req, userId) {
    ).catch(() => []);
   }
 
-  const where = buildWhereClause(filters, params);
-  const result = await query(
-   `update ${tableSql} set ${setClause}${where.clause} returning ${normalizeColumns(returning)}`,
-   where.params,
+  const mutationFilters = appendMessageAuthorshipFilters({
+   userId,
+   table,
+   op: 'update',
+   filters,
+   values,
+  });
+  const where = appendMessageMutationAccessClause(
+   buildWhereClause(mutationFilters, params),
+   userId,
+   table,
   );
+  const editsMessageContent = table === 'messages'
+   && Object.prototype.hasOwnProperty.call(safeValues, 'content');
+  const closesSessions = table === 'chat_sessions'
+   && Object.prototype.hasOwnProperty.call(safeValues, 'deleted_at')
+   && safeValues.deleted_at != null;
+  if (
+   table === 'chat_sessions'
+   && Object.prototype.hasOwnProperty.call(safeValues, 'deleted_at')
+   && safeValues.deleted_at == null
+  ) {
+   throw badRequest('A closed conversation cannot be reopened through the generic database route');
+  }
+  if (closesSessions) {
+   const forwarded = await forwardConversationControl(req, pathname, body);
+   if (forwarded) return forwarded;
+  }
+  const changesSessionPrivacy = table === 'chat_sessions'
+   && (
+    Object.prototype.hasOwnProperty.call(safeValues, 'visibility')
+    || Object.prototype.hasOwnProperty.call(safeValues, 'folder')
+   );
+  let canonicalClosedSessionRows = [];
+  const integrityReturning = editsMessageContent
+   ? `${normalizeColumns(returning)}, id as "__integrity_id", session_id as "__integrity_session_id"`
+   : closesSessions
+    ? `${normalizeColumns(returning)}, id as "__integrity_id"`
+    : changesSessionPrivacy
+     ? `${normalizeColumns(returning)}, id as "__integrity_id", visibility as "__integrity_visibility", folder as "__integrity_folder"`
+     : normalizeColumns(returning);
+  const rawResult = editsMessageContent || changesSessionPrivacy || closesSessions
+   ? await withDbTransaction(async (transactionQuery) => {
+    let lockedSessionIds = [];
+    if (closesSessions) {
+     const lockWhere = buildWhereClause(filters, []);
+     lockWhere.params.push(userId);
+     const userParam = `$${lockWhere.params.length}`;
+     const accessJoin = lockWhere.clause ? ' and ' : ' where ';
+     const locked = await transactionQuery(
+      `select close_session_scope.id
+         from chat_sessions close_session_scope
+         ${lockWhere.clause}${accessJoin}${sessionReadableSql(
+          'close_session_scope',
+          userParam,
+          { lockMembership: true },
+         )}
+         for update of close_session_scope`,
+      lockWhere.params,
+     );
+     lockedSessionIds = locked.map(row => String(row.id));
+     if (lockedSessionIds.length === 0) {
+      throw forbidden('Conversation access changed before the close completed');
+     }
+     if (lockedSessionIds.length !== 1) {
+      throw badRequest('Conversations must be closed one at a time');
+     }
+     await settleSessionClosure({
+      query: transactionQuery,
+      hostSessionIds: lockedSessionIds,
+      closeHostSessions: false,
+     });
+    }
+    const updated = await transactionQuery(
+     `update ${tableSql} set ${setClause}${where.clause} returning ${integrityReturning}`,
+     where.params,
+    );
+    if (closesSessions && updated.length !== lockedSessionIds.length) {
+     throw forbidden('Conversation access changed before the close completed');
+    }
+    if (closesSessions) {
+     // Production forwards this request to Fly, where these rows become the
+     // realtime lifecycle event. Keep the local mirror's contract identical:
+     // caller-selected RETURNING is never accepted as an affected-row snapshot.
+     canonicalClosedSessionRows = await transactionQuery(
+      `select ${SESSION_RETURNING}
+         from chat_sessions
+        where id = any($1::uuid[])
+        order by id`,
+      [toPgArrayLiteral(lockedSessionIds)],
+     );
+     if (canonicalClosedSessionRows.length !== lockedSessionIds.length) {
+      throw forbidden('Conversation closure could not be canonicalized');
+     }
+    }
+    if (editsMessageContent) {
+     for (const row of updated) {
+      await scrubEditedMessageActivityByMessageId({
+       db: transactionQuery,
+       messageId: row.__integrity_id,
+       sessionId: row.__integrity_session_id,
+      });
+     }
+    } else if (!closesSessions) {
+     for (const row of updated) {
+      if (!closesSessions && !isPrivateSessionRow({
+       visibility: row.__integrity_visibility,
+       folder: row.__integrity_folder,
+      })) continue;
+      await scrubMessageActivityBySession({
+       db: transactionQuery,
+       sessionId: row.__integrity_id,
+      });
+     }
+    }
+    return updated;
+   })
+   : await query(
+    `update ${tableSql} set ${setClause}${where.clause} returning ${integrityReturning}`,
+    where.params,
+   );
+  const result = rawResult.map((row) => {
+   const next = { ...row };
+   delete next.__integrity_id;
+   delete next.__integrity_session_id;
+   delete next.__integrity_visibility;
+   delete next.__integrity_folder;
+   return next;
+  });
+  if (table === 'messages' && result.length === 0) {
+   throw forbidden('Message access changed before the edit completed');
+  }
+  if (closesSessions && canonicalClosedSessionRows.length !== result.length) {
+   throw forbidden('Conversation closure could not be canonicalized');
+  }
 
   // AFTER the row is written, and awaited only so the serverless container is
   // not frozen mid-insert — a failure here is logged and dropped, never
@@ -2333,7 +2940,8 @@ async function handleDb(pathname, req, userId) {
    }
   }
 
-  return json({ data: single ? (result[0] ?? null) : result, error: null });
+  const publicResult = table === 'messages' ? redactDeletedMessageRows(result) : result;
+  return json({ data: single ? (publicResult[0] ?? null) : publicResult, error: null });
  }
 
  if (pathname === '/backend/db/delete') {
@@ -2343,46 +2951,399 @@ async function handleDb(pathname, req, userId) {
   if (!Array.isArray(filters) || filters.length === 0) {
    return jsonError(400, new Error('Delete requires at least one filter'));
   }
-  const where = buildWhereClause(filters, []);
+  const mutationFilters = appendMessageAuthorshipFilters({
+   userId,
+   table,
+   op: 'delete',
+   filters,
+  });
+  const where = appendMessageMutationAccessClause(
+   buildWhereClause(mutationFilters, []),
+   userId,
+   table,
+  );
   if (!where.clause) {
    return jsonError(400, new Error('Delete requires a non-empty where clause'));
   }
   await enforceDbOperationAccess({ userId, table, op: 'delete', filters, db: query });
-  const result = await query(`delete from ${tableSql}${where.clause} returning *`, where.params);
-  return json({ data: single ? (result[0] ?? null) : null, error: null });
+  const result = table === 'messages'
+   ? await withDbTransaction(async (transactionQuery) => {
+    const deleted = await transactionQuery(
+     `update ${tableSql}
+         set deleted_at = coalesce(deleted_at, now())
+         ${where.clause} and deleted_at is null
+       returning *`,
+     where.params,
+    );
+    if (deleted.length === 0) {
+     throw forbidden('Message access changed before the delete completed');
+    }
+    await scrubMessageActivityByMessageId({
+     db: transactionQuery,
+     messageId: deleted[0].id,
+     sessionId: deleted[0].session_id,
+    });
+    return deleted;
+   })
+   : await query(`delete from ${tableSql}${where.clause} returning *`, where.params);
+  if (table === 'messages' && result.length === 0) {
+   throw forbidden('Message access changed before the delete completed');
+  }
+  const publicResult = table === 'messages' ? redactDeletedMessageRows(result) : result;
+  return json({ data: single ? (publicResult[0] ?? null) : null, error: null });
  }
 
  return jsonError(404, new Error('Backend route not found'));
 }
 
+const MESSAGE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const PENDING_AI_REPLY = 'Thinking …';
+const EMPTY_AI_REPLY = 'AI response finished without content.';
+
+function aiStatusError(status, error) {
+ const issue = error instanceof Error ? error : new Error(String(error || 'AI request failed'));
+ issue.status = status;
+ return issue;
+}
+
 async function handleAiChat(req, userId) {
- const { messages, model, memory, documents, workspaceContext, agentContext, workspaceId } = await readBody(req);
+ const {
+ messages, model, memory, documents, workspaceContext, agentContext, workspaceId,
+  sessionId, messageId, seedMessageId, threadParentId, replyAgentId,
+ } = await readBody(req);
+ let executionModel = model;
+ let executionAgentContext = agentContext;
+ let hasVerifiedReplyAgent = false;
+ let replyAgentSnapshotVersion = null;
+ let storedReplyContext = null;
  // A valid token is required (enforced by the router). workspaceId is mandatory
  // and the user must be allowed to run agents there — otherwise any signed-up
  // user could omit workspaceId to skip authorization and stream completions on
  // the app-level ANTHROPIC_API_KEY (M4, 2026-07 review). Mirrors the daemon.
  if (!workspaceId) return jsonError(400, new Error('workspaceId is required'));
  await assertWorkspaceRole({ userId, workspaceId, capability: 'run_agents', db: query });
- const apiKey = await resolveSecret('ANTHROPIC_API_KEY', workspaceId);
- if (!apiKey) return jsonError(503, new Error('ANTHROPIC_API_KEY is not configured'));
- const resolvedModel = !model || model === 'auto'
-  ? 'claude-opus-4-5'
-  : model === 'claude-opus-4-6'
-   ? 'claude-opus-4-5'
-   : model === 'claude-sonnet-4-6'
-    ? 'claude-sonnet-4-5'
-    : model === 'claude-haiku-4-5'
-     ? 'claude-haiku-4-5'
-     : 'claude-opus-4-5';
- const chat = normalizeAiChatMessages(messages);
- const resolvedAgentContext = chat.systemPrompt
-  ? {
-   ...(agentContext && typeof agentContext === 'object' ? agentContext : {}),
-   systemPrompt: [agentContext?.systemPrompt, chat.systemPrompt].filter(Boolean).join('\n\n'),
-  }
-  : agentContext;
 
- const upstream = await fetch('https://api.anthropic.com/v1/messages', {
+ let replyPersistence = null;
+ if (sessionId != null || messageId != null || threadParentId != null) {
+  if (!MESSAGE_UUID_RE.test(String(sessionId || ''))
+    || !MESSAGE_UUID_RE.test(String(messageId || ''))
+    || !MESSAGE_UUID_RE.test(String(seedMessageId || ''))) {
+   return jsonError(
+    400,
+    new Error('Valid sessionId, messageId, and seedMessageId are required to save an AI reply'),
+   );
+  }
+  if (threadParentId && !MESSAGE_UUID_RE.test(String(threadParentId))) {
+   return jsonError(400, new Error('threadParentId must be a valid message id'));
+  }
+  const gate = await authorizeSessionForUser(String(sessionId), userId, 'write');
+  if (gate.error) return gate.error;
+  if (String(gate.session.workspace_id) !== String(workspaceId)) {
+   return jsonError(404, new Error('Conversation not found'));
+  }
+  const sessionDetails = await query(
+   'select participants, deleted_at from chat_sessions where id = $1::uuid limit 1',
+   [String(sessionId)],
+  );
+  if (!sessionDetails[0] || sessionDetails[0].deleted_at) {
+   return jsonError(404, new Error('Conversation not found'));
+  }
+  if (threadParentId) {
+   const parents = await query(
+    'select id from messages where id = $1::uuid and session_id = $2::uuid limit 1',
+    [String(threadParentId), String(sessionId)],
+   );
+   if (!parents[0]) return jsonError(400, new Error('Thread parent is not in this conversation'));
+  }
+  const replyAttribution = {
+   senderKind: 'assistant',
+   senderId: '',
+   senderName: 'Agensis',
+  };
+  if (replyAgentId != null && String(replyAgentId).trim()) {
+   const requestedAgentId = String(replyAgentId);
+   if (!MESSAGE_UUID_RE.test(requestedAgentId)) {
+    return jsonError(400, new Error('replyAgentId must be a valid agent id'));
+   }
+   const isSessionAgent = parseJsonArray(sessionDetails[0].participants).some((participant) =>
+    participant?.kind === 'agent' && String(participant.agent_id || '') === requestedAgentId,
+   );
+   if (!isSessionAgent) {
+    return jsonError(400, new Error('Reply agent is not a participant in this conversation'));
+   }
+   const agentRows = await query(
+    `select id, name, handle, description, system_prompt, soul, instructions,
+            tools, skills, model, run_mode, version
+       from workspace_agents
+      where id = $1::uuid and workspace_id = $2::uuid and enabled is not false
+      limit 1`,
+    [requestedAgentId, String(workspaceId)],
+   );
+   const replyAgent = agentRows[0];
+   if (!replyAgent) {
+    return jsonError(400, new Error('Reply agent is not available'));
+   }
+   const replyRunMode = String(replyAgent.run_mode || 'builtin');
+   if (replyRunMode !== 'builtin') {
+    return jsonError(
+     409,
+     new Error('Reply agent must answer through its configured connected runtime'),
+    );
+   }
+   replyAttribution.senderKind = 'agent';
+   replyAttribution.senderId = String(replyAgent.id);
+   replyAttribution.senderName = String(replyAgent.name || 'Agent');
+   // An attributed response must run as the verified participant, not as an
+   // arbitrary client-supplied model/persona wearing that participant's name.
+   executionModel = String(replyAgent.model || 'auto');
+   executionAgentContext = {
+    id: String(replyAgent.id),
+    name: String(replyAgent.name || 'Agent'),
+    handle: String(replyAgent.handle || ''),
+    description: String(replyAgent.description || ''),
+    systemPrompt: String(replyAgent.system_prompt || ''),
+    soul: String(replyAgent.soul || ''),
+    instructions: String(replyAgent.instructions || ''),
+    tools: parseJsonArray(replyAgent.tools),
+    skills: parseJsonArray(replyAgent.skills),
+    model: executionModel,
+    runMode: replyRunMode,
+   };
+   replyAgentSnapshotVersion = Number.isInteger(Number(replyAgent.version))
+    ? Number(replyAgent.version)
+    : 1;
+   hasVerifiedReplyAgent = true;
+  }
+  replyPersistence = {
+   reserved: false,
+   finalized: false,
+   async reserve() {
+    await withDbTransaction(async (transactionQuery) => {
+     await lockAiChatRunScope({ db: transactionQuery, workspaceId, userId });
+     const reservedRows = await transactionQuery(
+     `insert into messages
+        (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+      with current_reply_agent as materialized (
+        select agent.id
+          from workspace_agents agent
+         where $10::uuid is not null
+           and agent.id = $10::uuid
+           and agent.workspace_id = $9::uuid
+           and agent.enabled is not false
+           and agent.run_mode = 'builtin'
+           and agent.version = $11::integer
+	         for share of agent
+	      ),
+	      current_reply_seed as materialized (
+	        select seed.id
+	          from messages seed
+	         where seed.id = $12::uuid
+	           and seed.session_id = $2::uuid
+	           and seed.deleted_at is null
+	           and seed.role = 'user'
+	           and seed.sender_kind = 'user'
+	           and seed.sender_id::text = $8::text
+	           and length(btrim(coalesce(seed.content, ''))) > 0
+	           and (
+	             ($4::uuid is null and seed.thread_parent_id is null)
+	             or seed.thread_parent_id = $4::uuid
+	           )
+	         for share of seed
+	      ),
+	      accessible_ai_reply_session as materialized (
+        select ai_reply_session_scope.id
+          from chat_sessions ai_reply_session_scope
+         where ai_reply_session_scope.id = $2::uuid
+           and ai_reply_session_scope.workspace_id = $9::uuid
+	           and ${sessionReadableSql('ai_reply_session_scope', '$8', { lockMembership: true })}
+	           and exists (select 1 from current_reply_seed)
+           and (
+             $4::uuid is null
+             or exists (
+               select 1
+                 from messages reply_parent
+                where reply_parent.id = $4::uuid
+                  and reply_parent.session_id = ai_reply_session_scope.id
+                  and reply_parent.deleted_at is null
+             )
+           )
+           and (
+             $10::uuid is null
+             or (
+               $5 = 'agent'
+               and $6 = $10::text
+               and exists (select 1 from current_reply_agent)
+               and exists (
+                 select 1
+                   from jsonb_array_elements(
+                     coalesce(ai_reply_session_scope.participants, '[]'::jsonb)
+                   ) participant
+                  where participant->>'kind' = 'agent'
+                    and participant->>'agent_id' = $10::text
+               )
+             )
+           )
+         for share of ai_reply_session_scope
+      )
+      select $1::uuid, $2::uuid, 'assistant', $3, $4::uuid, $5, $6, $7
+        from accessible_ai_reply_session
+      returning *`,
+     [
+      String(messageId),
+      String(sessionId),
+      PENDING_AI_REPLY,
+      threadParentId ? String(threadParentId) : null,
+      replyAttribution.senderKind,
+      replyAttribution.senderId,
+      replyAttribution.senderName,
+      userId,
+      String(workspaceId),
+	      hasVerifiedReplyAgent ? replyAttribution.senderId : null,
+	      replyAgentSnapshotVersion,
+	      String(seedMessageId),
+	     ],
+     );
+     if (reservedRows.length !== 1) {
+      throw aiStatusError(403, new Error('AI reply could not be reserved from the caller-owned seed'));
+     }
+     storedReplyContext = await loadStoredAiChatContext({
+      db: transactionQuery,
+      sessionId: String(sessionId),
+      seedMessageId: String(seedMessageId),
+      threadParentId: threadParentId ? String(threadParentId) : null,
+      userId,
+     });
+     return reservedRows;
+    });
+    this.reserved = true;
+   },
+	   async finalize(content) {
+	    const text = typeof content === 'string' && content ? content : EMPTY_AI_REPLY;
+	    const rows = await withDbTransaction(async (transactionQuery) => {
+	     await lockAiChatRunScope({ db: transactionQuery, workspaceId, userId });
+	     return transactionQuery(
+	     `with current_reply_agent as materialized (
+	        select agent.id
+	          from workspace_agents agent
+	         where $8::uuid is not null
+	           and agent.id = $8::uuid
+	           and agent.workspace_id = $7::uuid
+	           and agent.enabled is not false
+	           and agent.run_mode = 'builtin'
+	           and agent.version = $9::integer
+	         for share of agent
+	      ),
+	      current_reply_seed as materialized (
+	        select seed.id
+	          from messages seed
+	         where seed.id = $10::uuid
+	           and seed.session_id = $2::uuid
+	           and seed.deleted_at is null
+	           and seed.role = 'user'
+	           and seed.sender_kind = 'user'
+	           and seed.sender_id::text = $6::text
+	           and seed.content = $11
+	           and (
+	             ($12::uuid is null and seed.thread_parent_id is null)
+	             or seed.thread_parent_id = $12::uuid
+	           )
+	         for share of seed
+	      ),
+	      accessible_ai_reply_session as materialized (
+	        select reply_session.id
+	          from chat_sessions reply_session
+	         where reply_session.id = $2::uuid
+	           and reply_session.workspace_id = $7::uuid
+	           and ${sessionReadableSql('reply_session', '$6', { lockMembership: true })}
+	           and exists (select 1 from current_reply_seed)
+	           and (
+	             $8::uuid is null
+	             or (
+	               exists (select 1 from current_reply_agent)
+	               and exists (
+	                 select 1
+	                   from jsonb_array_elements(coalesce(reply_session.participants, '[]'::jsonb)) participant
+	                  where participant->>'kind' = 'agent'
+	                    and participant->>'agent_id' = $8::text
+	               )
+	             )
+	           )
+	         for share of reply_session
+	      )
+	      update messages reply
+	         set content = $3
+	        from accessible_ai_reply_session reply_scope
+	       where reply.id = $1::uuid
+	         and reply.session_id = reply_scope.id
+	         and reply.role = 'assistant'
+	         and reply.sender_kind = $4
+	         and reply.sender_id = $5
+	         and reply.deleted_at is null
+	       returning reply.*`,
+	     [
+	      String(messageId),
+	      String(sessionId),
+	      text,
+	      replyAttribution.senderKind,
+	      replyAttribution.senderId,
+	      userId,
+	      String(workspaceId),
+	      hasVerifiedReplyAgent ? replyAttribution.senderId : null,
+	      replyAgentSnapshotVersion,
+	      String(seedMessageId),
+	      storedReplyContext.seedContent,
+	      threadParentId ? String(threadParentId) : null,
+	     ],
+	     );
+	    });
+	    if (rows.length !== 1) {
+	     throw new Error('Reserved AI reply could not be finalized');
+	    }
+	    this.finalized = true;
+	    await logMessageActivity(rows);
+	   },
+	   async abort() {
+	    if (!this.reserved || this.finalized) return;
+	    await query(
+	     `update messages
+	         set deleted_at = coalesce(deleted_at, now())
+	       where id = $1::uuid
+	         and session_id = $2::uuid
+	         and role = 'assistant'
+	         and sender_kind = $3
+	         and sender_id = $4`,
+	     [String(messageId), String(sessionId), replyAttribution.senderKind, replyAttribution.senderId],
+	    );
+	    this.finalized = true;
+	   },
+	  };
+ }
+ try {
+  if (replyPersistence) await replyPersistence.reserve();
+  const apiKey = await resolveSecret('ANTHROPIC_API_KEY', workspaceId);
+  if (!apiKey) throw aiStatusError(503, new Error('ANTHROPIC_API_KEY is not configured'));
+  const executionModelId = String(executionModel || '');
+  if (executionModelId.startsWith('gateway:') || executionModelId.startsWith('agensis/')) {
+   throw aiStatusError(400, new Error('This configured model requires the realtime backend'));
+  }
+  const resolvedModel = resolveAnthropicModel(executionModelId);
+	  const chat = storedReplyContext
+	   ? { messages: storedReplyContext.messages, systemPrompt: '' }
+	   : normalizeAiChatMessages(messages);
+  // role=system is caller-controlled too. It remains supported for the generic
+  // assistant, but it cannot become elevated instruction for a named agent.
+	  const clientSystemPrompt = storedReplyContext ? '' : chat.systemPrompt;
+	  const trustedAgentContext = hasVerifiedReplyAgent
+	   ? executionAgentContext
+	   : (storedReplyContext ? null : executionAgentContext);
+	  const resolvedAgentContext = clientSystemPrompt
+	   ? {
+	    ...(trustedAgentContext && typeof trustedAgentContext === 'object' ? trustedAgentContext : {}),
+	    systemPrompt: [trustedAgentContext?.systemPrompt, clientSystemPrompt].filter(Boolean).join('\n\n'),
+	   }
+	   : trustedAgentContext;
+
+  const upstream = await fetch('https://api.anthropic.com/v1/messages', {
   method: 'POST',
   headers: {
    'Content-Type': 'application/json',
@@ -2395,15 +3356,23 @@ async function handleAiChat(req, userId) {
    max_tokens: 4096,
    stream: true,
    messages: chat.messages,
-   system: buildSystemPrompt(memory, documents, workspaceContext, resolvedAgentContext),
+	   system: truncateUtf8Middle(
+	    buildSystemPrompt(
+	     hasVerifiedReplyAgent ? null : memory,
+	     hasVerifiedReplyAgent ? null : documents,
+	     hasVerifiedReplyAgent ? null : workspaceContext,
+	     resolvedAgentContext,
+	    ),
+	    AI_CHAT_SYSTEM_MAX_BYTES,
+	   ),
   }),
- });
+  });
 
- if (!upstream.ok || !upstream.body) {
-  return jsonError(upstream.status, new Error(await upstream.text()));
- }
+  if (!upstream.ok || !upstream.body) {
+   throw aiStatusError(upstream.status, new Error(await upstream.text()));
+  }
 
- const stream = new ReadableStream({
+  const stream = new ReadableStream({
   async start(controller) {
    const reader = upstream.body.getReader();
    const decoder = new TextDecoder();
@@ -2416,64 +3385,124 @@ async function handleAiChat(req, userId) {
    // sent text deltas, so this relay is the sole place this turn's usage is
    // ever visible — exactly as on the Fly lane, using the same accumulator.
    const usage = createAnthropicUsageAccumulator();
+   let fullContent = '';
+   let streamError = '';
    const handleLine = (raw) => {
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
     if (!line.startsWith('data: ')) return;
     const data = line.slice(6);
-    if (data === '[DONE]') {
-     controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-     return;
-    }
+    if (data === '[DONE]') return;
     try {
      const parsed = JSON.parse(data);
      usage.event(parsed);
+     streamError = aiStreamErrorText(parsed) || streamError;
      if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+      fullContent += parsed.delta.text;
       controller.enqueue(encoder.encode(`data: ${JSON.stringify({ delta: { text: parsed.delta.text } })}\n\n`));
      }
     } catch {
      // Ignore malformed upstream chunks.
     }
    };
-   while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = buffer.endsWith('\n') ? '' : (lines.pop() ?? '');
-    for (const line of lines) handleLine(line);
+   try {
+    while (true) {
+     const { done, value } = await reader.read();
+     if (done) break;
+     buffer += decoder.decode(value, { stream: true });
+     const lines = buffer.split('\n');
+     buffer = buffer.endsWith('\n') ? '' : (lines.pop() ?? '');
+     for (const line of lines) handleLine(line);
+    }
+    buffer += decoder.decode();
+    for (const line of buffer.split('\n')) handleLine(line);
+    // Never throws (fail-open), so it cannot break the stream it is closing.
+    await recordAnthropicUsage(query, {
+     workspaceId,
+     model: resolvedModel,
+     kind: 'ai_chat',
+     counts: usage.result(),
+    });
+    if (streamError) throw new Error(streamError);
+    if (replyPersistence) await replyPersistence.finalize(fullContent);
+    controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+    controller.close();
+   } catch (error) {
+    const errorText = error?.message || 'AI stream failed';
+    if (replyPersistence?.reserved && !replyPersistence.finalized) {
+     try {
+      await replyPersistence.finalize(errorText);
+	     } catch (persistError) {
+	      console.error('[ai-chat] failed to finalize reserved reply:', persistError?.message || persistError);
+	      try {
+	       await replyPersistence.abort();
+	      } catch (abortError) {
+	       console.error('[ai-chat] failed to remove reserved reply:', abortError?.message || abortError);
+	      }
+	     }
+    }
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: errorText })}\n\n`));
+    controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+    controller.close();
    }
-   buffer += decoder.decode();
-   for (const line of buffer.split('\n')) handleLine(line);
-   // Never throws (fail-open), so it cannot break the stream it is closing.
-   // This lane runs NO DDL of its own: if `usage_events` does not exist yet
-   // because the Fly bootstrap has not run, the insert quietly does nothing
-   // rather than 500-ing a chat turn.
-   await recordAnthropicUsage(query, {
-    workspaceId,
-    model: resolvedModel,
-    kind: 'ai_chat',
-    counts: usage.result(),
-   });
-   controller.close();
   },
- });
+  });
 
- return new Response(stream, {
-  headers: {
-   'Content-Type': 'text/event-stream',
-   'Cache-Control': 'no-cache',
-   Connection: 'keep-alive',
-  },
- });
+  return new Response(stream, {
+   headers: {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+   },
+  });
+ } catch (error) {
+  const errorText = error?.message || 'AI request failed';
+  if (replyPersistence?.reserved && !replyPersistence.finalized) {
+   try {
+    await replyPersistence.finalize(errorText);
+	   } catch (persistError) {
+	    console.error('[ai-chat] failed to finalize reserved reply:', persistError?.message || persistError);
+	    try {
+	     await replyPersistence.abort();
+	    } catch (abortError) {
+	     console.error('[ai-chat] failed to remove reserved reply:', abortError?.message || abortError);
+	    }
+	   }
+  }
+  return jsonError(error.status || 500, error);
+ }
 }
 
 async function route(req) {
- const pathname = new URL(req.url).pathname;
+ const requestUrl = new URL(req.url);
+ const pathname = requestUrl.pathname;
 
  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
+ // The long-running Fly process is the canonical owner of join-link and
+ // workspace-controller management: it holds the one-use transaction,
+ // realtime fanout, controller credential minting, and owner checks. Netlify
+ // must still match these paths so an explicit Netlify backend base cannot turn
+ // a valid invite or the Users controller panel into a misleading 404.
+ // Forwarding keeps one security implementation rather than creating a second
+ // credential issuer or revocation path in this serverless mirror.
+ if (isJoinBackendPath(pathname)
+  || isLegacyMembershipInvitePath(pathname)
+  || isFlyOwnedControlPath(pathname)) {
+  const forwarded = await forwardCanonicalRoute(req, requestUrl);
+  if (forwarded) return forwarded;
+ }
  if (pathname === '/backend/health') {
   await query('select 1');
   return json({ ok: true });
+ }
+ if (req.method === 'POST' && pathname === '/backend/nostr-communities/preview') {
+  await requireUserId(req);
+  const body = await readBody(req);
+  const preview = await netlifyNostrProtocol.previewInvite(body?.inviteUrl);
+  // The invite code and canonical URL are bearer material. The browser already
+  // retains the submitted URL for the later connect request; do not echo either
+  // field in a preview response, matching server/nostr-community-manager.cjs.
+  const { code: _code, inviteUrl: _inviteUrl, ...safePreview } = preview;
+  return json({ data: safePreview, error: null });
  }
  if (req.method === 'GET' && pathname === '/backend/openpets/catalog') {
   try {
@@ -2544,6 +3573,150 @@ async function route(req) {
  if (req.method === 'GET' && workspaceAgentsMatch) {
   return handleWorkspaceAgents(decodeURIComponent(workspaceAgentsMatch[1]), await requireUserId(req));
  }
+
+ // Agent-stewarded shared resources. These routes mirror Fly's dedicated
+ // surface and delegate to the exact same service; neither backend exposes the
+ // underlying tables through the generic DB API or realtime subscriptions.
+ const resourceCollectionMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/resources$/);
+ if (resourceCollectionMatch) {
+  const workspaceId = decodeURIComponent(resourceCollectionMatch[1]);
+  const userId = await requireUserId(req);
+  const actor = { kind: 'user', userId, workspaceId };
+  if (req.method === 'GET') {
+   const data = await workspaceResources.listResources({
+    workspaceId,
+    actor,
+    status: requestUrl.searchParams.get('status') || undefined,
+    limit: requestUrl.searchParams.get('limit') || undefined,
+   });
+   return json({ data, error: null });
+  }
+  if (req.method === 'POST') {
+   const blocked = await dbRateLimitBlock(
+    resourceOperationRateLimiter,
+    resourceOperationDbRateLimiter,
+    `${userId}:${workspaceId}`,
+   );
+   if (blocked) return blocked;
+   const body = await readBody(req);
+   const data = await workspaceResources.createResource({
+    workspaceId,
+    stewardAgentId: body?.stewardAgentId ?? body?.steward_agent_id,
+    definition: resourceDefinition(body),
+    actor,
+   });
+   return json({ data, error: null }, 201);
+  }
+ }
+
+ const operationCollectionMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/resource-operations$/);
+ if (req.method === 'GET' && operationCollectionMatch) {
+  const workspaceId = decodeURIComponent(operationCollectionMatch[1]);
+  const userId = await requireUserId(req);
+  const data = await workspaceResources.listOperations({
+   workspaceId,
+   actor: { kind: 'user', userId, workspaceId },
+   resourceId: requestUrl.searchParams.get('resourceId')
+    || requestUrl.searchParams.get('resource_id')
+    || undefined,
+   status: requestUrl.searchParams.get('status') || undefined,
+   limit: requestUrl.searchParams.get('limit') || undefined,
+   includeArtifacts: queryBoolean(
+    requestUrl.searchParams.get('includeArtifacts')
+      ?? requestUrl.searchParams.get('include_artifacts'),
+    false,
+   ),
+  });
+  return json({ data, error: null });
+ }
+
+ const operationItemMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/resource-operations\/([^/]+)$/);
+ if (req.method === 'GET' && operationItemMatch) {
+  const workspaceId = decodeURIComponent(operationItemMatch[1]);
+  const userId = await requireUserId(req);
+  const data = await workspaceResources.getOperation({
+   workspaceId,
+   operationId: decodeURIComponent(operationItemMatch[2]),
+   actor: { kind: 'user', userId, workspaceId },
+   includeArtifacts: queryBoolean(
+    requestUrl.searchParams.get('includeArtifacts')
+      ?? requestUrl.searchParams.get('include_artifacts'),
+    true,
+   ),
+  });
+  return json({ data, error: null });
+ }
+
+ const resourceOperationMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/resources\/([^/]+)\/operations$/);
+ if (resourceOperationMatch) {
+  const workspaceId = decodeURIComponent(resourceOperationMatch[1]);
+  const resourceId = decodeURIComponent(resourceOperationMatch[2]);
+  const userId = await requireUserId(req);
+  const actor = { kind: 'user', userId, workspaceId };
+  if (req.method === 'GET') {
+   const data = await workspaceResources.listOperations({
+    workspaceId,
+    resourceId,
+    actor,
+    status: requestUrl.searchParams.get('status') || undefined,
+    limit: requestUrl.searchParams.get('limit') || undefined,
+    includeArtifacts: queryBoolean(
+     requestUrl.searchParams.get('includeArtifacts')
+       ?? requestUrl.searchParams.get('include_artifacts'),
+     false,
+    ),
+   });
+   return json({ data, error: null });
+  }
+  if (req.method === 'POST') {
+   const blocked = await dbRateLimitBlock(
+    resourceOperationRateLimiter,
+    resourceOperationDbRateLimiter,
+    `${userId}:${workspaceId}`,
+   );
+   if (blocked) return blocked;
+   const body = await readBody(req);
+   const bodyHasKey = body?.idempotencyKey !== undefined || body?.idempotency_key !== undefined;
+   const headerKey = String(req.headers.get('idempotency-key') || '').trim();
+   const request = !bodyHasKey && headerKey ? { ...body, idempotencyKey: headerKey } : body;
+   const data = await workspaceResources.requestOperation({
+    workspaceId,
+    resourceId,
+    requester: actor,
+    request,
+   });
+   return json({ data, error: null }, 202);
+  }
+ }
+
+ const resourceItemMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/resources\/([^/]+)$/);
+ if (resourceItemMatch) {
+  const workspaceId = decodeURIComponent(resourceItemMatch[1]);
+  const resourceId = decodeURIComponent(resourceItemMatch[2]);
+  const userId = await requireUserId(req);
+  const actor = { kind: 'user', userId, workspaceId };
+  if (req.method === 'GET') {
+   const data = await workspaceResources.getResource({ workspaceId, resourceId, actor });
+   return json({ data, error: null });
+  }
+  if (req.method === 'PATCH') {
+   const blocked = await dbRateLimitBlock(
+    resourceOperationRateLimiter,
+    resourceOperationDbRateLimiter,
+    `${userId}:${workspaceId}`,
+   );
+   if (blocked) return blocked;
+   const body = await readBody(req);
+   const data = await workspaceResources.updateResource({
+    workspaceId,
+    resourceId,
+    changes: body?.changes ?? body,
+    actor,
+   });
+   return json({ data, error: null });
+  }
+ }
+
  const workspaceUsageMatch = pathname.match(/^\/backend\/workspace\/([^/]+)\/usage$/);
  if (req.method === 'GET' && workspaceUsageMatch) {
   return handleWorkspaceUsage(decodeURIComponent(workspaceUsageMatch[1]), await requireUserId(req));
@@ -2887,7 +4060,15 @@ async function route(req) {
   return handleGetMyProfile(await requireUserId(req));
  }
  if (req.method === 'PATCH' && pathname === '/backend/users/me') {
-  return handleUpdateMyProfile(req, await requireUserId(req));
+  const userId = await requireUserId(req);
+  const body = await readBody(req);
+  if (body?.share_read_receipts !== undefined) {
+   // Netlify owns no websocket clients. Route privacy changes through Fly in a
+   // deployed split so marker deletion and live revocation happen together.
+   const forwarded = await forwardReadReceiptControl(req, pathname, body);
+   if (forwarded) return forwarded;
+  }
+  return handleUpdateMyProfile(req, userId, body);
  }
  if (req.method === 'POST' && pathname === '/backend/users/me/change-password') {
   return handleChangeMyPassword(req, await requireUserId(req));
@@ -2908,7 +4089,28 @@ async function route(req) {
  }
  const sessionReadStateMatch = pathname.match(/^\/backend\/sessions\/([^/]+)\/read-state$/);
  if (req.method === 'GET' && sessionReadStateMatch) {
-  return handleSessionReadState(decodeURIComponent(sessionReadStateMatch[1]), await requireUserId(req));
+  return handleSessionReadState(req, decodeURIComponent(sessionReadStateMatch[1]), await requireUserId(req));
+ }
+ const sessionClearMatch = pathname.match(/^\/backend\/sessions\/([^/]+)\/clear$/);
+ if (req.method === 'POST' && sessionClearMatch) {
+  const userId = await requireUserId(req);
+  const forwarded = await forwardConversationControl(req, pathname);
+  if (forwarded) return forwarded;
+  return handleClearSession(decodeURIComponent(sessionClearMatch[1]), userId);
+ }
+ const sessionCloseMatch = pathname.match(/^\/backend\/sessions\/([^/]+)\/close$/);
+ if (req.method === 'POST' && sessionCloseMatch) {
+  const userId = await requireUserId(req);
+  const forwarded = await forwardConversationControl(req, pathname);
+  if (forwarded) return forwarded;
+  return handleCloseSession(decodeURIComponent(sessionCloseMatch[1]), userId);
+ }
+ const sessionSplitMatch = pathname.match(/^\/backend\/sessions\/([^/]+)\/split$/);
+ if (req.method === 'POST' && sessionSplitMatch) {
+  const userId = await requireUserId(req);
+  const forwarded = await forwardConversationControl(req, pathname);
+  if (forwarded) return forwarded;
+  return handleSplitSession(decodeURIComponent(sessionSplitMatch[1]), userId);
  }
  if (req.method === 'POST' && pathname.startsWith('/backend/db/')) {
   return handleDb(pathname, req, await requireUserId(req));
@@ -2974,7 +4176,6 @@ async function route(req) {
 
    if (req.method === 'GET' && !key) {
     await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
-    await ensureSecretsTables();
     const data = await listWorkspaceVaultEntries(workspaceId, { db: query, managedKeys: MANAGED_SECRET_KEYS });
     return json({ data, error: null });
    }
@@ -2990,7 +4191,6 @@ async function route(req) {
     if (MANAGED_SECRET_KEYS.includes(key)) return jsonError(400, new Error('That key is managed elsewhere'));
     if (!vaultWritesEnabled()) return vaultWriteUnavailable();
     await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
-    await ensureSecretsTables();
     if (req.method === 'DELETE') {
      await query('delete from workspace_secrets where workspace_id = $1 and key = $2', [workspaceId, key]);
      return json({ data: { key }, error: null });

@@ -33,7 +33,7 @@ function createBuiltinTurn(deps = {}) {
   agentRuntimePayload,
   buildAgentActivityDigest,
   buildAgentConnectionCommand,
-  buildAgentTurnContext,
+  buildAgentTurnContextSnapshot,
   buildDaemonPrompt,
   buildSystemPrompt,
   callProviderOperation,
@@ -71,6 +71,7 @@ function createBuiltinTurn(deps = {}) {
   resolveWorkThreadParent,
   resolveWorkspaceAgentByHandle,
   roleHasWorkspaceCapability,
+  workspaceResources,
   sendWs,
   sessionHasLiveHuddle,
   slugHandle,
@@ -78,6 +79,43 @@ function createBuiltinTurn(deps = {}) {
 
  // Lazy singleton; see the header.
  let builtinToolsetInstance = null;
+
+ // A built-in turn runs inside this process, so a durable `status=cancelled`
+ // update is not enough to stop the model stream that is already consuming
+ // tokens. Keep the controller by the one identity the cancellation path can
+ // prove: the agent_jobs id. Never key by session or agent — either would abort
+ // an unrelated concurrent turn.
+ const builtinAbortControllers = new Map();
+
+ function builtinCancellationError(reason = 'Built-in agent turn cancelled') {
+  const error = new Error(String(reason || 'Built-in agent turn cancelled'));
+  error.name = 'AbortError';
+  error.code = 'builtin_job_cancelled';
+  return error;
+ }
+
+ function throwIfAborted(signal) {
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  throw builtinCancellationError();
+ }
+
+ /**
+  * Stop exactly one in-process turn after its durable job row was cancelled.
+  *
+  * This intentionally does not update Postgres: the caller must win the
+  * status='cancelled' compare-and-set first, then call this with the returned
+  * id. That order makes cancellation durable across a process crash and makes
+  * the running-only terminal updates below discard the resulting AbortError.
+  */
+ function cancelBuiltinJob(jobId, reason = 'Built-in agent turn cancelled') {
+  const id = String(jobId || '').trim();
+  if (!id) return false;
+  const controller = builtinAbortControllers.get(id);
+  if (!controller) return false;
+  if (!controller.signal.aborted) controller.abort(builtinCancellationError(reason));
+  return true;
+ }
 
  // Something a listener hears as the end of a spoken sentence.
  //
@@ -172,6 +210,7 @@ function createBuiltinTurn(deps = {}) {
   tools = [],
   callModel,
   callTool,
+  signal = null,
   onSegment = null,
   onToolStart = null,
   onToolResult = null,
@@ -184,9 +223,12 @@ function createBuiltinTurn(deps = {}) {
   let steps = 0;
   let text = '';
 
+  throwIfAborted(signal);
   while (steps < maxSteps) {
    steps += 1;
+   throwIfAborted(signal);
    const turn = await callModel({ messages: convo, tools: hasTools ? tools : [] });
+   throwIfAborted(signal);
    text = turn?.text || '';
    const uses = Array.isArray(turn?.toolUses) ? turn.toolUses : [];
    if (uses.length === 0) return { text, steps, toolCalls, hitCap: false };
@@ -215,8 +257,11 @@ function createBuiltinTurn(deps = {}) {
      outcome = { ok: false, error: `Tool budget for this turn is used up (${maxToolCalls} calls). Answer with what you have.` };
     } else {
      toolCalls += 1;
+     throwIfAborted(signal);
      const handle = onToolStart ? await onToolStart({ name: use.name, args: use.input || {}, id: use.id }) : null;
+     throwIfAborted(signal);
      outcome = await callTool({ name: use.name, args: use.input || {}, id: use.id });
+     throwIfAborted(signal);
      if (onToolResult) await onToolResult(handle, outcome);
     }
     results.push({
@@ -232,7 +277,9 @@ function createBuiltinTurn(deps = {}) {
   // Out of steps and the model still wanted a tool. Ask once more with NO tools
   // attached so it has to answer — a turn that ends here must still say something,
   // not leave the human with a wall of chips and no reply.
+  throwIfAborted(signal);
   const closing = await callModel({ messages: convo, tools: [] });
+  throwIfAborted(signal);
   return { text: closing?.text || '', steps: steps + 1, toolCalls, hitCap: true };
  }
 
@@ -255,6 +302,7 @@ function createBuiltinTurn(deps = {}) {
    getAgentConnectionCommand: buildAgentConnectionCommand,
    enforceWorkspaceRole,
    roleHasWorkspaceCapability,
+   workspaceResources,
    // The credential-injecting provider proxy. Passed in (rather than reached for)
    // so mcp.cjs stays unit-testable with a mocked fetch and no live provider.
    callProviderOperation,
@@ -369,14 +417,21 @@ function createBuiltinTurn(deps = {}) {
    : { id: 'amp' };
  }
 
- // Mirrors advanceAgentReadMarker in server/mcp.cjs. Deliberately a second small
- // copy rather than a shared import: the two differ only in how they reach the
- // db and the broadcaster, and the SQL — the part that must not drift — is
- // already single-sourced in shared/read-receipts.cjs.
- async function advanceAgentReadMarker(sessionId, agentId) {
-  if (!sessionId || !agentId) return;
+ // Record only an exact message that was actually included in this turn's
+ // bounded transcript. Resolving "latest" at write time would race with messages
+ // arriving during a long turn and would widen a thread read to the whole room.
+ async function advanceAgentReadMarker(
+  sessionId,
+  agentId,
+  lastSeenMessageId,
+  threadParentId = null,
+ ) {
+  if (!sessionId || !agentId || !lastSeenMessageId) return;
   try {
-   const rows = await getDb().unsafe(ADVANCE_AGENT_READ_MARKER_SQL, [String(sessionId), String(agentId)]);
+   const rows = await getDb().unsafe(
+    ADVANCE_AGENT_READ_MARKER_SQL,
+    [String(sessionId), String(agentId), String(lastSeenMessageId), threadParentId || null],
+   );
    if (rows.length > 0) notifyDbSubscribers('session_read_state', 'INSERT', rows);
   } catch {
    // Swallowed on purpose: a receipt that fails to record is invisible, never
@@ -388,22 +443,8 @@ function createBuiltinTurn(deps = {}) {
   if (!isAgentEnabled(agent)) return { ok: false, pending: false };
   const handle = slugHandle(agent.handle || agent.name);
   const runMode = resolveRunTarget(agent);
-  const contextMessages = await buildAgentTurnContext(sessionId, agent, threadParentId);
-
-  // The agent has just READ the conversation, so mark it read. Without this the
-  // eye never fills for a daemon-backed agent: advanceAgentReadMarker existed
-  // only on the MCP path (server/mcp.cjs), and `agensis connect` agents do not
-  // go through MCP — they pick a turn up here. So they read the message, replied
-  // to it, and left no receipt, which reads as the feature being broken.
-  //
-  // Placed immediately after the context load because that IS the read: whatever
-  // was in the transcript is now in front of the model.
-  //
-  // Best-effort, exactly as on the MCP side — a receipt is a courtesy signal and
-  // must never fail the turn someone actually asked for. The marker is monotonic
-  // (`where read_at < excluded.read_at`), so a dropped write self-heals on the
-  // next turn rather than going backwards.
-  await advanceAgentReadMarker(sessionId, agent.id);
+  const { messages: contextMessages, lastSeenMessageId } =
+   await buildAgentTurnContextSnapshot(sessionId, agent, threadParentId);
   // The agent works in a thread and only broadcasts its answer. A turn seeded at
   // channel level opens (or re-uses) the thread on the human message that started
   // it, so the "Thinking …" placeholder, its tool chips and its intermediate text
@@ -488,9 +529,19 @@ function createBuiltinTurn(deps = {}) {
      // continueConversation resumes where the human is talking; workThreadParentId
      // is where the agent's own messages live, and broadcastToChannel tells
      // finalizeAgentJobResult to flag the final answer for the channel view.
-     { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, responseMessageId, mode: 'mcp' },
+     {
+      handle,
+      threadParentId: threadParentId || null,
+      workThreadParentId,
+      broadcastToChannel,
+      responseMessageId,
+      lastSeenMessageId,
+      readScopeThreadParentId: threadParentId || null,
+      mode: 'mcp',
+     },
     ],
     responseMessageId,
+    { workspaceId, agentId: agent.id, sessionId, requireMcpApproval: true },
    );
    if (!jobRows) return { ok: false, pending: true }; // a concurrent turn won the race
    notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
@@ -511,10 +562,25 @@ function createBuiltinTurn(deps = {}) {
     [
      workspaceId, agent.id, sessionId, createdBy,
      buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivity, voiceHuddle, intentNote, sandboxSkillNote),
-     { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, mode: 'mcp' },
+     {
+      handle,
+      threadParentId: threadParentId || null,
+      workThreadParentId,
+      broadcastToChannel,
+      lastSeenMessageId,
+      readScopeThreadParentId: threadParentId || null,
+      mode: 'mcp',
+     },
     ],
+    null,
+    { workspaceId, agentId: agent.id, sessionId, requireMcpApproval: true },
    );
-   if (jobRows) notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
+   // Reservation can fail because another turn already owns the active slot, or
+   // because the agent/session/roster proof was revoked after the optimistic
+   // context load. In either case this invocation did NOT queue work, so it must
+   // not post a stand-in claiming that it did (or write as a removed agent).
+   if (!jobRows) return { ok: false, pending: true };
+   notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
    // "Nobody is attached" is not a working note — it is the answer the human has to
    // act on, so it is broadcast rather than buried in the work thread. Same for
    // every other stand-in notice below: silence in the channel would read as a
@@ -541,22 +607,56 @@ function createBuiltinTurn(deps = {}) {
     `insert into agent_jobs (workspace_id, agent_id, session_id, created_by, prompt, status, started_at, metadata)
         values ($1, $2, $3, $4, $5, 'running', now(), $6::jsonb)
         returning *`,
-    // Object, not JSON.stringify — same double-encode trap as the daemon insert below.
-    [workspaceId, agent.id, sessionId, createdBy, '', { handle, threadParentId: threadParentId || null, workThreadParentId, broadcastToChannel, mode: 'builtin' }],
-   );
-   if (!jobRows) return { ok: false, pending: true }; // a concurrent turn won the race
-   notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
-   // Insert a 'Thinking' placeholder first, then stream the built-in reply into it
-   // token-by-token (message UPDATE broadcasts) so it renders live in the thread
-   // like a daemon agent — instead of popping in complete when the call finishes.
-   const responseMessageId = crypto.randomUUID();
-   const placeholderRows = await getDb().unsafe(
-    `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
-         values ($1, $2, 'assistant', 'Thinking 0s', $3, 'agent', $4, $5)
-         returning *`,
-    [responseMessageId, sessionId, workThreadParentId, String(agent.id), agent.name],
-   );
-   notifyDbSubscribers('messages', 'INSERT', placeholderRows);
+   // Object, not JSON.stringify — same double-encode trap as the daemon insert below.
+   [
+    workspaceId,
+    agent.id,
+    sessionId,
+    createdBy,
+    '',
+    {
+     handle,
+     threadParentId: threadParentId || null,
+     workThreadParentId,
+     broadcastToChannel,
+     lastSeenMessageId,
+     readScopeThreadParentId: threadParentId || null,
+     mode: 'builtin',
+    },
+   ],
+   null,
+   { workspaceId, agentId: agent.id, sessionId, requireMcpApproval: false },
+  );
+  if (!jobRows) return { ok: false, pending: true }; // a concurrent turn won the race
+   const builtinJobId = String(jobRows[0].id || '');
+   const abortController = new AbortController();
+   builtinAbortControllers.set(builtinJobId, abortController);
+   let writeChain = Promise.resolve();
+   // Once the stream is over — successfully or not — the terminal write owns
+   // the row and no throttled partial may land behind it.
+   let finished = false;
+   // The failure path needs to know whether a live reply row exists even when a
+   // setup step (placeholder/tool construction/provider key lookup) throws.
+   let currentMessageId = null;
+   // A tool boundary may seal useful text before the final model round returns
+   // no text. Keep the exact durable row so successful terminalization can mark
+   // that block as the result instead of marking the empty-output notice.
+   let lastSealedMessageId = null;
+   try {
+    notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
+    throwIfAborted(abortController.signal);
+    // Insert a 'Thinking' placeholder first, then stream the built-in reply into it
+    // token-by-token (message UPDATE broadcasts) so it renders live in the thread
+    // like a daemon agent — instead of popping in complete when the call finishes.
+    const responseMessageId = crypto.randomUUID();
+    const placeholderRows = await getDb().unsafe(
+     `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
+          values ($1, $2, 'assistant', 'Thinking 0s', $3, 'agent', $4, $5)
+          returning *`,
+     [responseMessageId, sessionId, workThreadParentId, String(agent.id), agent.name],
+    );
+    currentMessageId = responseMessageId;
+    notifyDbSubscribers('messages', 'INSERT', placeholderRows);
    // The turn's tools and the identity they run as. Built from the agent ROW, so
    // every tool call is scoped to the agent's OWN workspace — see
    // builtinToolIdentity. `specs` is a projection of the same list the MCP
@@ -574,12 +674,7 @@ function createBuiltinTurn(deps = {}) {
    if (toolSpecs.length > 0 && agentContext) {
     agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<tools>\n${BUILTIN_TOOL_NOTE}\n</tools>`.trim();
    }
-   let writeChain = Promise.resolve();
    let writing = false;
-   // Declared out here with writeChain/writing because the catch below sets it:
-   // once the stream is over — successfully or not — the terminal write owns the
-   // row and no throttled partial may land behind it.
-   let finished = false;
    // The row currently being streamed into. A turn with tools is really
    // [text][tool][text][tool][text], so each finished text block is SEALED into
    // its own message and the next block gets a fresh row — the same shape
@@ -593,8 +688,6 @@ function createBuiltinTurn(deps = {}) {
    // Out here with the rest because the FAILURE path needs it too: once a block
    // has been sealed, the dispatch placeholder is a finished message, and writing
    // the error over it would destroy something the agent actually said.
-   let currentMessageId = responseMessageId;
-   try {
     // Throttle + serialize DB writes: at most one update in flight at a time and
     // no more than ~4x/sec, always writing the LATEST accumulated text. Because
     // each delta carries the full text so far, awaiting the in-flight write (in
@@ -607,10 +700,11 @@ function createBuiltinTurn(deps = {}) {
     //   - a write skipped because another was in flight is retried when that one
     //     settles, instead of waiting for a delta that may never come — the last
     //     sentence of a reply used to sit unwritten until the stream ended.
-    let latest = '';
-    let written = '';
-    let lastFlush = 0;
-    let flushQueued = false;
+   let latest = '';
+   let written = '';
+   let lastFlush = 0;
+   let flushQueued = false;
+    let readMarkerAdvanced = false;
     // Set while a block is being sealed, so a queued flush cannot write into the
     // row after it has become a finished message (or into a null id).
     let sealing = false;
@@ -618,7 +712,7 @@ function createBuiltinTurn(deps = {}) {
      // Past the end of the stream the final write below is authoritative; a
      // straggler here would overwrite it (and, on the error path, replace the
      // error with a partial reply).
-     if (finished || sealing) return;
+     if (abortController.signal.aborted || finished || sealing) return;
      if (writing) { flushQueued = true; return; }
      if (!streamFlushDue({ text: latest, written, lastFlushAt: lastFlush, now: Date.now() })) return;
      writing = true;
@@ -669,19 +763,23 @@ function createBuiltinTurn(deps = {}) {
      sealing = true;
      await writeChain.catch(() => { });
      try {
+      let rows;
       if (currentMessageId) {
-       const rows = await getDb().unsafe(
+       rows = await getDb().unsafe(
         `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
         [currentMessageId, text, sessionId],
        );
        if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
       } else {
-       const rows = await getDb().unsafe(
+       rows = await getDb().unsafe(
         `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
              values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6) returning *`,
         [crypto.randomUUID(), sessionId, text, workThreadParentId, String(agent.id), agent.name],
        );
        if (rows.length > 0) notifyDbSubscribers('messages', 'INSERT', rows);
+      }
+      if (rows.length > 0 && String(text || '').trim()) {
+       lastSealedMessageId = String(rows[0].id || '') || null;
       }
      } finally {
       currentMessageId = null;
@@ -720,8 +818,9 @@ function createBuiltinTurn(deps = {}) {
      const loop = await runToolUseLoop({
       messages: contextMessages.length > 0 ? contextMessages : [{ role: 'user', content: '(no message)' }],
       tools: toolSpecs,
+      signal: abortController.signal,
       async callModel({ messages, tools }) {
-       return streamAnthropicTurn({
+       const outcome = await streamAnthropicTurn({
         model: resolveAnthropicModel(agent.model),
         messages,
         memory: null,
@@ -730,13 +829,22 @@ function createBuiltinTurn(deps = {}) {
         agentContext,
         tools,
         workspaceId,
+        signal: abortController.signal,
        }, (partial) => { latest = partial; flush(); });
+       // The provider completed its first response from this exact prompt, so
+       // the read is now proven. Mark the captured message id, never whatever
+       // happens to be newest after the model/tool round trip.
+       if (!readMarkerAdvanced) {
+        readMarkerAdvanced = true;
+        await advanceAgentReadMarker(sessionId, agent.id, lastSeenMessageId, threadParentId);
+       }
+       return outcome;
       },
       // runToolForIdentity never throws: a tool that blows up comes back as
       // { ok: false, error } and the loop hands that to the model as a readable
       // tool_result it can recover from, instead of killing the turn.
       async callTool({ name, args }) {
-       return toolset.call({ name, args, identity: toolIdentity, db: getDb() });
+       return toolset.call({ name, args, identity: toolIdentity, db: getDb(), signal: abortController.signal });
       },
       onSegment: sealSegment,
       async onToolStart({ name, args }) {
@@ -772,9 +880,13 @@ function createBuiltinTurn(deps = {}) {
     // The stream is over, so the writes below own the row from here.
     finished = true;
     const updatedRows = await getDb().unsafe(
-     `update agent_jobs set status = 'done', response = $2, finished_at = now(), updated_at = now() where id = $1 returning *`,
+     `update agent_jobs set status = 'done', response = $2, finished_at = now(), updated_at = now()
+         where id = $1 and status = 'running' returning *`,
      [jobRows[0].id, responseText],
     );
+    // The clear route atomically cancels active jobs. Once it wins, this turn
+    // must not change the terminal state back to done or write a final message.
+    if (updatedRows.length === 0) return { ok: false, pending: false };
     notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
     // A builtin turn finalizes its own job here and never reaches
     // finalizeAgentJobResult, so this is its own terminal hook for the task queue.
@@ -787,22 +899,53 @@ function createBuiltinTurn(deps = {}) {
     // it to the channel). The throttled partial writes above deliberately leave the
     // flag alone, which is what keeps the channel quiet while the agent works.
     const finalText = responseText || `@${handle} finished without output.`;
+    const finalMessageKind = String(responseText || '').trim() ? 'agent_result' : '';
     const messageRows = currentMessageId
      ? await getDb().unsafe(
-      `update messages set content = $2, broadcast_to_channel = $4 where id = $1 and session_id = $3 returning *`,
-      [currentMessageId, finalText, sessionId, broadcastToChannel],
+      `update messages
+          set content = $2, broadcast_to_channel = $4, message_kind = $5
+        where id = $1 and session_id = $3
+        returning *`,
+      [currentMessageId, finalText, sessionId, broadcastToChannel, finalMessageKind],
      )
      // Every block was sealed and the last round produced no delta to materialise
      // a row — the answer still has to exist, and it is what gets broadcast.
      : await getDb().unsafe(
-      `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
-           values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7) returning *`,
-      [crypto.randomUUID(), sessionId, finalText, workThreadParentId, String(agent.id), agent.name, broadcastToChannel],
+      `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel, message_kind)
+           values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7, $8) returning *`,
+      [
+       crypto.randomUUID(),
+       sessionId,
+       finalText,
+       workThreadParentId,
+       String(agent.id),
+       agent.name,
+       broadcastToChannel,
+       finalMessageKind,
+      ],
      );
     if (messageRows.length > 0) {
      notifyDbSubscribers('messages', currentMessageId ? 'UPDATE' : 'INSERT', messageRows);
      void logMessageActivity(messageRows);
      void mirrorAgentReplyToTaskComment(messageRows[0]);
+    }
+    if (!finalMessageKind && lastSealedMessageId) {
+     // The terminal model round was empty, but a prior nonempty block is the
+     // successful answer. Mark THAT exact live row atomically; the synthetic
+     // "finished without output" notice above deliberately remains unmarked.
+     const resultRows = await getDb().unsafe(
+      `update messages
+          set message_kind = 'agent_result'
+        where id = $1
+          and session_id = $2
+          and sender_kind = 'agent'
+          and sender_id = $3
+          and deleted_at is null
+          and length(btrim(coalesce(content, ''))) > 0
+        returning *`,
+      [lastSealedMessageId, sessionId, String(agent.id)],
+     );
+     if (resultRows.length > 0) notifyDbSubscribers('messages', 'UPDATE', resultRows);
     }
     return { ok: true, pending: false };
    } catch (error) {
@@ -812,9 +955,13 @@ function createBuiltinTurn(deps = {}) {
     await writeChain.catch(() => { });
     const errorText = error?.message || 'Built-in agent failed';
     const updatedRows = await getDb().unsafe(
-     `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now() where id = $1 returning *`,
+     `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now()
+         where id = $1 and status = 'running' returning *`,
      [jobRows[0].id, errorText],
     );
+    // A deleted conversation already set the durable terminal state to
+    // cancelled. Do not overwrite it or try to append a failure notice there.
+    if (updatedRows.length === 0) return { ok: false, pending: false };
     notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
     scheduleTaskQueueDrain(workspaceId, agent.id, 'builtin_error');
     // A failure is the outcome of the turn, so it broadcasts too — a channel that
@@ -837,6 +984,12 @@ function createBuiltinTurn(deps = {}) {
      );
     if (messageRows.length > 0) notifyDbSubscribers('messages', currentMessageId ? 'UPDATE' : 'INSERT', messageRows);
     return { ok: false, pending: false };
+   } finally {
+    // Compare by controller as well as id: defensive against a future retry
+    // path reusing this helper while an older turn unwinds its finally block.
+    if (builtinAbortControllers.get(builtinJobId) === abortController) {
+     builtinAbortControllers.delete(builtinJobId);
+    }
    }
   }
 
@@ -918,6 +1071,8 @@ function createBuiltinTurn(deps = {}) {
      workThreadParentId,
      broadcastToChannel,
      responseMessageId,
+     lastSeenMessageId,
+     readScopeThreadParentId: threadParentId || null,
      mode: 'daemon',
      ...(ampRuntime ? {
       runtime: 'amp',
@@ -927,12 +1082,13 @@ function createBuiltinTurn(deps = {}) {
     },
    ],
    responseMessageId,
+   { workspaceId, agentId: agent.id, sessionId, requireMcpApproval: false },
   );
   if (!jobRows) return { ok: false, pending: true }; // a concurrent turn won the race
   notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
   await updateAgentHeartbeat(connection.ws, { busy: true }).catch(() => { });
   const agentPayload = agentRuntimePayload(agent);
-  sendWs(connection.ws, {
+  const delivered = sendWs(connection.ws, {
    type: 'agent_job',
    job: {
     id: jobRows[0].id,
@@ -948,8 +1104,18 @@ function createBuiltinTurn(deps = {}) {
     agent: agentPayload,
     ...(ampRuntime ? { runtime: ampRuntime } : {}),
     responseMessageId,
+    lastSeenMessageId,
    },
   });
+  if (!delivered) {
+   // The durable job remains visible to the existing connection/reaper recovery
+   // path, but this invocation must not claim the daemon received its prompt or
+   // publish a read receipt for bytes that never left the server.
+   return { ok: false, pending: true };
+  }
+  // A live daemon has now been handed the prompt containing this exact bounded
+  // transcript. Record that message id; never resolve a newer row at finalize.
+  await advanceAgentReadMarker(sessionId, agent.id, lastSeenMessageId, threadParentId);
   return { ok: true, pending: true };
  }
 
@@ -966,9 +1132,19 @@ function createBuiltinTurn(deps = {}) {
  // API never answered" without ever bounding "the model is still writing".
  const ANTHROPIC_HEADERS_TIMEOUT_MS = 60_000;
 
- async function anthropicFetch({ apiKey, body }) {
-  const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), ANTHROPIC_HEADERS_TIMEOUT_MS);
+ async function anthropicFetch({ apiKey, body, signal = null }) {
+  const headerTimeout = new AbortController();
+  let headersTimedOut = false;
+  const timer = setTimeout(() => {
+   headersTimedOut = true;
+   headerTimeout.abort();
+  }, ANTHROPIC_HEADERS_TIMEOUT_MS);
+  // The header deadline ends once fetch resolves; the job signal deliberately
+  // remains attached to the response body so an exact job cancellation stops a
+  // stream that has already received headers.
+  const requestSignal = signal
+   ? AbortSignal.any([signal, headerTimeout.signal])
+   : headerTimeout.signal;
   try {
    return await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -978,16 +1154,18 @@ function createBuiltinTurn(deps = {}) {
      'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify(body),
-    signal: abort.signal,
+    signal: requestSignal,
    });
   } catch (error) {
    if (error?.name === 'AbortError') {
+    if (signal?.aborted) throwIfAborted(signal);
+    if (!headersTimedOut) throw error;
     throw new Error(`Anthropic did not send response headers within ${ANTHROPIC_HEADERS_TIMEOUT_MS}ms`);
    }
    throw error;
   } finally {
-   // Unconditionally: once headers are in, the body may stream for minutes and
-   // must not be aborted underneath the reader.
+   // The header-only deadline is over once fetch settles. The caller's job
+   // signal remains part of requestSignal and may still abort the response body.
    clearTimeout(timer);
   }
  }
@@ -1046,8 +1224,14 @@ function createBuiltinTurn(deps = {}) {
   * chat, or an array of content blocks once the loop starts appending assistant
   * tool_use / user tool_result turns.
   */
- async function streamAnthropicTurn({ model, messages, memory, documents, workspaceContext, agentContext, tools = null, maxTokens = 4096, workspaceId = null, usageKind = 'builtin_turn' }, onDelta) {
+ async function streamAnthropicTurn({
+  model, messages, memory, documents, workspaceContext, agentContext,
+  tools = null, maxTokens = 4096, workspaceId = null,
+  usageKind = 'builtin_turn', signal = null,
+ }, onDelta) {
+  throwIfAborted(signal);
   const apiKey = await getAnthropicApiKey(workspaceId);
+  throwIfAborted(signal);
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
 
   const resolvedModel = resolveAnthropicModel(model);
@@ -1066,7 +1250,7 @@ function createBuiltinTurn(deps = {}) {
   // The streaming call, and the one the headers-only deadline was designed for:
   // the timer is released as soon as headers land, so the token stream below can
   // run for as long as the model needs.
-  const response = await anthropicFetch({ apiKey, body: payload });
+  const response = await anthropicFetch({ apiKey, body: payload, signal });
 
   if (!response.ok || !response.body) {
    throw new Error(await response.text().catch(() => 'Anthropic stream failed'));
@@ -1087,6 +1271,7 @@ function createBuiltinTurn(deps = {}) {
   const blocks = new Map();
   const decoder = new TextDecoder();
   for await (const chunk of response.body) {
+   throwIfAborted(signal);
    buffer += decoder.decode(chunk, { stream: true });
    // SSE frames are separated by a blank line; each frame has a `data:` line.
    let sep;
@@ -1156,12 +1341,14 @@ function createBuiltinTurn(deps = {}) {
    kind: usageKind,
    counts: usage.result(),
   });
+  throwIfAborted(signal);
   return { text: full, toolUses, stopReason };
  }
 
  return {
   builtinStepDetail,
   builtinToolIdentity,
+  cancelBuiltinJob,
   connectionSupportsAmpRuntime,
   getBuiltinToolset,
   isAmpRuntimeAgent,

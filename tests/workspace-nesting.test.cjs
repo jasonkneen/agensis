@@ -153,9 +153,20 @@ function makeDb({ owners = {}, roles = {}, parents = HIERARCHY, rowWorkspaces = 
     if (n.startsWith('select 1 from workspaces where id = $1 and user_id = $2')) {
       return owners[params[0]] === params[1] ? [{ ok: 1 }] : [];
     }
-    if (n.startsWith('select role from workspace_members where workspace_id = $1 and user_id = $2')) {
+    if (
+      n.startsWith('select role from workspace_members where workspace_id = $1')
+      && n.includes('user_id = $2')
+    ) {
       const role = roles[`${params[0]}:${params[1]}`];
       return role ? [{ role }] : [];
+    }
+    if (n.startsWith('select id, parent_id, user_id from workspaces where id = $1')) {
+      if (!Object.prototype.hasOwnProperty.call(parents, params[0])) return [];
+      return [{
+        id: params[0],
+        parent_id: parents[params[0]] ?? null,
+        user_id: owners[params[0]] ?? null,
+      }];
     }
     // userCanAccessWorkspace's direct owner-or-member union.
     if (n.startsWith('select 1 from workspaces where id = $1 and user_id = $2 union all')) {
@@ -312,6 +323,68 @@ test('a direct role that already grants the capability skips the ancestor walk',
   const db = async (sql, params) => { seen.push(String(sql)); return inner(sql, params); };
   await core.assertWorkspaceRole({ userId: 'client-a-user', workspaceId: 'clientA', capability: 'read', db });
   assert.equal(seen.some((s) => s.includes('with recursive chain as')), false);
+});
+
+test('transactional workspace authorization locks direct role evidence', async () => {
+  const seen = [];
+  const inner = makeDb({ roles: { 'clientA:editor': 'editor' } });
+  const db = async (sql, params) => {
+    seen.push(String(sql).replace(/\s+/g, ' ').trim());
+    return inner(sql, params);
+  };
+
+  await core.assertWorkspaceRoleLocked({
+    userId: 'editor',
+    workspaceId: 'clientA',
+    capability: 'write',
+    db,
+  });
+
+  assert.ok(seen.some((sql) => (
+    /from workspaces/i.test(sql) && /for share/i.test(sql)
+  )));
+  assert.ok(seen.some((sql) => (
+    /from workspace_members/i.test(sql) && /for share/i.test(sql)
+  )));
+});
+
+test('transactional workspace authorization locks and unions inherited evidence', async () => {
+  const seen = [];
+  const inner = makeDb({
+    roles: {
+      'clientA:person': 'viewer',
+      'work:person': 'admin',
+    },
+  });
+  const db = async (sql, params) => {
+    seen.push({ sql: String(sql).replace(/\s+/g, ' ').trim(), params });
+    return inner(sql, params);
+  };
+
+  await core.assertWorkspaceRoleLocked({
+    userId: 'person',
+    workspaceId: 'clientA-team',
+    capability: 'manage',
+    db,
+  });
+  assert.deepEqual(
+    seen.filter(({ sql }) => /from workspaces/i.test(sql)).map(({ params }) => params[0]),
+    ['clientA-team', 'clientA', 'work'],
+  );
+  assert.equal(
+    seen.every(({ sql }) => (
+      (!/from workspaces/i.test(sql) && !/from workspace_members/i.test(sql))
+      || /for share/i.test(sql)
+    )),
+    true,
+  );
+
+  await denied(() => core.assertWorkspaceRoleLocked({
+    userId: 'person',
+    workspaceId: 'clientB',
+    capability: 'manage',
+    db: makeDb({ roles: { 'clientA:person': 'admin' } }),
+  }));
 });
 
 // ---------------------------------------------------------------------------

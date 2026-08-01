@@ -1,8 +1,28 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const path = require('path');
+const { fileURLToPath } = require('url');
 
 const isDev = !app.isPackaged;
 let backendServer = null;
+const rendererFile = path.resolve(__dirname, '..', 'dist', 'index.html');
+
+function trustedRendererUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    const devUrl = process.env.VITE_DEV_SERVER_URL;
+    if (isDev && devUrl) {
+      return url.origin === new URL(devUrl).origin;
+    }
+    return url.protocol === 'file:' && path.resolve(fileURLToPath(url)) === rendererFile;
+  } catch {
+    return false;
+  }
+}
+
+function trustedIpcSender(event) {
+  const senderUrl = event.senderFrame?.url || event.sender?.getURL?.() || '';
+  return trustedRendererUrl(senderUrl);
+}
 
 // Thin-shell model (approach A): the packaged desktop app is a native window
 // onto the SAME hosted backend the web app uses — the backend URL is baked into
@@ -63,10 +83,23 @@ function createWindow() {
   // Electron window.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) {
-      shell.openExternal(url);
-      return { action: 'deny' };
+      void shell.openExternal(url);
     }
-    return { action: 'allow' };
+    // Never create a second privileged renderer, including for file:// or a
+    // custom scheme a hostile page supplied.
+    return { action: 'deny' };
+  });
+
+  // The preload exposes local PTY and folder-picker capability. A main-frame
+  // navigation to a remote origin would keep that preload attached and turn an
+  // ordinary link into local shell access, so only the exact packaged file or
+  // configured dev origin may ever become the main document.
+  win.webContents.on('will-navigate', (event, url) => {
+    if (trustedRendererUrl(url)) return;
+    event.preventDefault();
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      void shell.openExternal(url);
+    }
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -97,6 +130,7 @@ function loadPty() {
 }
 
 ipcMain.handle('pty:spawn', async (event, options) => {
+  if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
   const pty = loadPty();
   if (!pty) return { ok: false, error: 'node-pty is not installed for this build' };
 
@@ -152,11 +186,13 @@ ipcMain.handle('pty:spawn', async (event, options) => {
   return { ok: true, id, shell };
 });
 
-ipcMain.handle('pty:write', (_event, { id, data }) => {
-  ptySessions.get(id)?.write(data);
+ipcMain.handle('pty:write', (event, { id, data }) => {
+  if (!trustedIpcSender(event) || !ptyOwners.get(event.sender)?.has(id)) return;
+  ptySessions.get(id)?.write(String(data || '').slice(0, 1_048_576));
 });
 
-ipcMain.handle('pty:resize', (_event, { id, cols, rows }) => {
+ipcMain.handle('pty:resize', (event, { id, cols, rows }) => {
+  if (!trustedIpcSender(event) || !ptyOwners.get(event.sender)?.has(id)) return;
   // A zero or negative dimension is a hard error inside the pty; the renderer
   // can legitimately measure 0 while the panel is hidden or mid-layout.
   const session = ptySessions.get(id);
@@ -164,6 +200,7 @@ ipcMain.handle('pty:resize', (_event, { id, cols, rows }) => {
 });
 
 ipcMain.handle('pty:kill', (event, { id }) => {
+  if (!trustedIpcSender(event) || !ptyOwners.get(event.sender)?.has(id)) return;
   const session = ptySessions.get(id);
   if (!session) return;
   try {
@@ -176,6 +213,7 @@ ipcMain.handle('pty:kill', (event, { id }) => {
 });
 
 ipcMain.handle('pick-folder', async (event) => {
+  if (!trustedIpcSender(event)) return null;
   const win = BrowserWindow.fromWebContents(event.sender);
   const result = await dialog.showOpenDialog(win, {
     properties: ['openDirectory', 'createDirectory'],

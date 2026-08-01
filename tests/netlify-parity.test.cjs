@@ -97,6 +97,10 @@ const PROTECTED_ROUTES = [
   ['POST', '/backend/ai-chat'],
   ['POST', '/backend/agent-webhooks'],
   ['POST', '/backend/agents/agent-123/connection-command'],
+  // Nostr community preview performs a server-side metadata fetch and must be
+  // mirrored here; a 404 would mean the UI's Check button hit Netlify without
+  // reaching the authenticated route.
+  ['POST', '/backend/nostr-communities/preview'],
   // Feedback submission is open to ANY signed-in user, which makes it easy to
   // mistake for a public endpoint. It is not: it writes a task into the System
   // workspace, so it must still refuse an anonymous caller.
@@ -414,9 +418,29 @@ test('M7: app_users selects are projected to a safe column set', () => {
   assert.equal(core.safeSelectColumns('app_users', 'id, email'), 'id, email');
   assert.throws(() => core.safeSelectColumns('app_users', 'password_hash'), { status: 403 });
   assert.throws(() => core.safeSelectColumns('app_users', 'id,token_version'), { status: 403 });
-  // Tables without an allow-list are untouched.
-  assert.equal(core.safeSelectColumns('tasks', '*'), '*');
+  // Tasks are now pinned too: dispatch_requested_by is server-owned private-DM
+  // routing provenance, not task content a generic reader should receive.
+  assert.equal(
+    core.safeSelectColumns('tasks', '*'),
+    'id, workspace_id, created_by, assignee_id, title, description, status, priority, due_date, source_type, source_id, completed_at, version, created_at, updated_at, parent_id, start_date, depends_on, attachments',
+  );
+  assert.equal(core.safeSelectColumns('tasks', '*').includes('dispatch_requested_by'), false);
   assert.equal(core.safeSelectColumns('tasks', 'id, title'), 'id, title');
+});
+
+test('agent_jobs generic reads cannot return full prompts, replies, or errors', () => {
+  const projected = core.safeSelectColumns('agent_jobs', '*').split(',').map(value => value.trim());
+  assert.deepEqual(projected, [
+    'id', 'workspace_id', 'session_id', 'agent_id', 'status',
+    'started_at', 'created_at', 'metadata',
+  ]);
+  for (const sensitive of ['prompt', 'response', 'error', 'connection_id', 'created_by']) {
+    assert.equal(projected.includes(sensitive), false);
+    assert.throws(
+      () => core.safeSelectColumns('agent_jobs', `id, ${sensitive}`),
+      { status: 403 },
+    );
+  }
 });
 
 // M7, parity half. The helper above is only a guard if BOTH backends actually
@@ -430,9 +454,10 @@ test('M7 parity: both backends project db/select through safeSelectColumns', () 
 
   for (const rel of ['server/index.cjs', 'netlify/functions/backend.mjs']) {
     const source = read(rel);
-    assert.ok(
-      source.includes('normalizeColumns(safeSelectColumns(table, columns))'),
-      `${rel} must project /backend/db/select through safeSelectColumns`,
+    assert.match(
+      source,
+      /const safeColumns = safeSelectColumns\(table, columns\);\s*const normalizedColumns = normalizeColumns\(safeColumns\);/,
+      `${rel} must project /backend/db/select through safeSelectColumns before normalizing`,
     );
     assert.ok(
       !/select \$\{normalizeColumns\(columns\)\}/.test(source),

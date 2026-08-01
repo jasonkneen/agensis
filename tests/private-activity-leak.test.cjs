@@ -45,7 +45,7 @@ function makeDb(sessionRow) {
     if (n.startsWith('select workspace_id') && n.includes('from chat_sessions where id = $1')) {
       return sessionRow ? [sessionRow] : [];
     }
-    if (n.startsWith('insert into activity_events')) {
+    if (n.includes('insert into activity_events')) {
       inserts.push({ title: params[3], metadata: JSON.parse(params[4]) });
       return [];
     }

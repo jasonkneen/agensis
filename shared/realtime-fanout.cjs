@@ -121,7 +121,10 @@ const FANOUT_BROKEN = {};
 // The count is pinned so a NEW dynamic call site — one that might not have that
 // guard — fails the test instead of escaping the scan. If you add one, prove it
 // is gated and then bump this number.
-const DYNAMIC_FANOUT_SITE_COUNT = 3;
+// Generic insert, update, and delete are all variable-table sites and each is
+// gated by ensureTable(table). agent-jobs.cjs has one additional wrapper whose
+// callers are closed over server-owned table names.
+const DYNAMIC_FANOUT_SITE_COUNT = 4;
 
 function fanoutTableStatus(table, isAllowlisted) {
  const categories = [];

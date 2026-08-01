@@ -50,6 +50,9 @@ function makeDb({ rows = {}, role = 'owner' } = {}) {
         return params[0] === 'AUTH_SECRET' ? [{ value: 'audit-secret' }] : [];
       }
       if (q.startsWith('select token_version from app_users')) return [{ token_version: '1' }];
+      if (q.startsWith('select id, user_id from workspaces where id')) {
+        return [{ id: WORKSPACE, user_id: USER }];
+      }
       if (q.startsWith('select 1 from workspaces where id')) {
         return role === 'owner' && String(params[1]) === USER ? [{ ok: 1 }] : [];
       }

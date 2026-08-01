@@ -21,7 +21,6 @@ import {
   Link2,
   Loader2,
   MessageSquare,
-  Mic,
   Monitor,
   MoreHorizontal,
   Settings2,
@@ -45,7 +44,6 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { ChatThreadPanel } from '../chat/ChatThreadPanel';
-import { ModelSelector } from '../chat/ModelSelector';
 import { SubThreadPanel } from '../chat/SubThreadPanel';
 import {
   ComposerAddContent,
@@ -113,9 +111,18 @@ import { ReactionBar, ReactionPicker } from '../chat/ReactionBar';
 import { ReadReceipt } from '../chat/ReadReceipt';
 import { frequentReactions, noteReactionUse, reactionPills, reactionToggleOp, type ReactionUse } from '../../lib/reactionBar';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
-import { useUserProfile } from '../../hooks/useUserProfile';
+import { receiptTargetForViewport } from '../../lib/readReceipts';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
+import { canMutateOwnMessage } from '../../lib/messageOwnership';
+import { redactDeletedMessage, toDeletedMessageTombstone } from '../../lib/messageTombstone';
+import { announceActivityRedaction } from '../../lib/activityRedaction';
+import { compareMessagePosition } from '../../lib/messagePosition';
+import {
+  parseMessageClearMarker,
+  serializeMessageClearMarker,
+} from '../../lib/messageClearMarker';
+import type { QuotedMessageSource } from '../../lib/quotedSessionContext';
 import type {
   CanvasGroup,
   CanvasObject,
@@ -193,7 +200,6 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { useMyThreads } from '../../hooks/useMyThreads';
-import { useGateways } from '../../hooks/useGateways';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
 import { huddleAgentOptions } from '../../lib/huddleAgents';
@@ -208,15 +214,16 @@ import { buildThreadReplySummaries, formatLastReplyTime, type ThreadReplySummary
 import { useSharedNow } from '../../hooks/useSharedNow';
 import { ThreadWorkBadge } from '../chat/AgentWorkBadge';
 import { cn } from '@/lib/utils';
-import { getSettings } from '../../lib/settings';
 import { shouldAnnounceTyping } from '../../lib/typingPresence';
-import { availableChatModelId, workspaceChatModels } from '../../lib/sharedModels';
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
 import { channelComposerPlaceholder, directMessageComposerPlaceholder } from '@/lib/composerPlaceholder';
 import { useComposerAutosize } from '@/hooks/useComposerAutosize';
+import { useNostrMembers } from '@/hooks/useNostrMembers';
 import type { SendOutcome } from '@/lib/writeFeedback';
 
 interface ChatWindowContentProps {
+  /** Authoritative conversation identity, including when the transcript is empty. */
+  sessionId: string | null;
   messages: ChatMessage[];
   topLevelMessages?: ChatMessage[];
   // NET-05: paginated history. hasMoreMessages gates a "Load earlier" affordance
@@ -243,12 +250,12 @@ interface ChatWindowContentProps {
   // `attachments` are structured references to uploaded_files rows, for
   // rendering. They are IN ADDITION to the "[Linked files]" text that
   // buildFileContext folds into `content` for the agent — not a replacement.
-  onSendMessage: (content: string, model: string, facts?: MemoryFact[], docs?: Document[], attachments?: MessageAttachment[]) => void | Promise<SendOutcome | void>;
+  onSendMessage: (content: string, facts?: MemoryFact[], docs?: Document[], attachments?: MessageAttachment[]) => void | Promise<SendOutcome | void>;
   onOpenThread?: (messageId: string) => void;
   onCloseThread?: () => void;
   // broadcastToChannel = the thread composer's "Send to channel" switch: post the
   // reply in the thread AND show it in the channel (messages.broadcast_to_channel).
-  onSendThreadReply?: (content: string, model: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
+  onSendThreadReply?: (content: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
   /**
    * Tell the app a channel's own row changed (title, icon, description,
    * intent, participants). The window keeps its own copy of the channel for
@@ -284,13 +291,24 @@ interface ChatWindowContentProps {
   subThreadsByMessage?: Record<string, ChatSession[]>;
   activeSubThread?: ChatSession | null;
   subThreadMessages?: ChatMessage[];
+  subThreadHasMore?: boolean;
+  subThreadLoadingEarlier?: boolean;
+  onLoadEarlierSubThread?: () => void;
   subThreadStreaming?: boolean;
-  onOpenSubThread?: (session: ChatSession) => void;
+  onOpenSubThread?: (session: ChatSession, hostSessionId?: string) => void;
   onCloseSubThread?: () => void;
-  onCreateSubThread?: (messageId: string, agent: WorkspaceAgent, messageContent?: string) => void;
-  onSendSubThreadMessage?: (content: string) => void;
+  onCreateSubThread?: (
+    messageId: string,
+    agent: WorkspaceAgent,
+    sourceContext?: QuotedMessageSource,
+  ) => void;
+  onSendSubThreadMessage?: (content: string, attachments?: MessageAttachment[]) => void | Promise<SendOutcome | void>;
   onSplitThread?: () => void;
   currentUserId?: string;
+  /** True only for the top/focused app window. */
+  receiptActive?: boolean;
+  /** Account-global reciprocal preference, loaded once by the app shell. */
+  receiptsEnabled?: boolean;
 }
 
 type ChannelPresenceUser = {
@@ -334,6 +352,7 @@ export type { ChatSidePanel };
 const CHAT_COLUMN_CLASS = 'mx-auto w-full max-w-[800px]';
 
 export const ChatWindowContent = React.memo(function ChatWindowContent({
+  sessionId,
   messages,
   topLevelMessages,
   hasMoreMessages = false,
@@ -358,6 +377,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   readOnly = false,
   channelTitle = 'general',
   workspaceId = null,
+  sessionId: explicitSessionId = null,
   uploadedFiles = [],
   onUploadFiles,
   onCreateTask,
@@ -369,6 +389,9 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   subThreadsByMessage = {},
   activeSubThread,
   subThreadMessages = [],
+  subThreadHasMore = false,
+  subThreadLoadingEarlier = false,
+  onLoadEarlierSubThread,
   subThreadStreaming = false,
   onOpenSubThread,
   onCloseSubThread,
@@ -376,10 +399,11 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   onSendSubThreadMessage,
   onSplitThread,
   currentUserId = '',
+  receiptActive = true,
+  receiptsEnabled = true,
 }: ChatWindowContentProps) {
   const [subThreadPickerMessageId, setSubThreadPickerMessageId] = useState<string | null>(null);
   const [input, setInput] = useState('');
-  const [selectedModel, setSelectedModel] = useState(() => getSettings().ai_default_model || 'auto');
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
   const [linkedGroups, setLinkedGroups] = useState<CanvasGroup[]>([]);
   const [linkedFiles, setLinkedFiles] = useState<LinkedFile[]>([]);
@@ -409,6 +433,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const [flowConnectChannelId, setFlowConnectChannelId] = useState<string | null>(null);
   const [selectedParticipantIds, setSelectedParticipantIds] = useState<Set<string>>(() => new Set());
   const [messageOverrides, setMessageOverrides] = useState<MessageOverrides>({});
+  const messageMutationVersionRef = useRef(new Map<string, number>());
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
   const [messageActionBusy, setMessageActionBusy] = useState<string | null>(null);
@@ -469,16 +494,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     () => composerProjectGroups.flatMap(group => group.files.slice(0, 8).map(file => ({ file, source: group.source }))),
     [composerProjectGroups],
   );
-  const { gateways } = useGateways(workspaceId || null);
-  const modelOptions = useMemo(
-    () => workspaceChatModels(workspaceId, agentConnections, gateways),
-    [workspaceId, agentConnections, gateways],
-  );
-
-  useEffect(() => {
-    setSelectedModel(current => availableChatModelId(current, modelOptions));
-  }, [modelOptions]);
-
   const skillOptions = useMemo(() => {
     const fromCapabilities = systemCapabilities?.skills
       .filter(skill => skill.available && (skill.type === 'skills' || skill.type === 'agents'))
@@ -580,7 +595,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     const attachments = buildMessageAttachments(draft.linkedFiles);
     const outcome = await onSendMessage(
       content,
-      selectedModel,
       memoryFacts,
       draft.linkedDocs.length > 0 ? draft.linkedDocs : undefined,
       attachments.length > 0 ? attachments : undefined,
@@ -695,6 +709,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   };
 
   const handleAgentSelect = (agent: WorkspaceAgent) => insertMentionHandle(agentHandle(agent));
+  const handleNostrMemberSelect = (member: { handle: string }) => insertMentionHandle(member.handle);
 
   const handleDocSelect = (doc: Document) => {
     if (!linkedDocs.find(d => d.id === doc.id)) {
@@ -753,6 +768,11 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
         if (filteredAgents.length > 0) {
           e.preventDefault();
           handleAgentSelect(filteredAgents[0]);
+          return;
+        }
+        if (filteredNostrMembers.length > 0) {
+          e.preventDefault();
+          handleNostrMemberSelect(filteredNostrMembers[0]);
           return;
         }
         if (showChannelMentionOption && docPickerQuery.trim()) {
@@ -874,7 +894,17 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     threadMessages[0]?.session_id ||
     null
   ), [messages, threadMessages, topLevelMessages]);
-
+  const nostrMembers = useNostrMembers(explicitSessionId || inferredSessionId);
+  const filteredNostrMembers = useMemo(() => {
+    const q = docPickerQuery.trim().toLowerCase();
+    return nostrMembers
+      .filter(member => member.isAgent && (
+        member.name.toLowerCase().includes(q)
+        || member.handle.toLowerCase().includes(q)
+        || member.aliases.some(alias => alias.toLowerCase().includes(q))
+      ))
+      .slice(0, 12);
+  }, [nostrMembers, docPickerQuery]);
   // --- Reactions and read receipts ------------------------------------------
   //
   // The workspace roster is what turns a uuid into a name in a reaction tooltip
@@ -893,70 +923,18 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     return null;
   }, [workspaceMembers, agents]);
 
-  // The user's own reciprocal opt-out. The SERVER enforces both halves — an
-  // opted-out marker is never stored, and the read returns nothing — so this is
-  // only what stops the client asking.
-  const { profile: myProfile } = useUserProfile(currentUserId || null);
-  const receiptsEnabled = myProfile ? myProfile.share_read_receipts !== false : true;
-
-  const receipts = useReadReceipts({
-    sessionId: inferredSessionId,
-    currentUserId: currentUserId || null,
-    // Only the focused conversation. A background window has been read by
-    // nobody, and the indicator is only drawn where it is focused.
-    active: !readOnly,
-    enabled: receiptsEnabled,
-  });
-
   // Picker history, per account and local only: nobody else's ranking is
   // affected by what you reach for.
   const [reactionUses, setReactionUses] = useState<ReactionUse[]>([]);
-
-  // Advance the read marker as messages arrive while this conversation is on
-  // screen. The POLICY decides whether anything is written (src/lib/readReceipts.ts):
-  // a hidden tab, an unchanged newest id, your own message and the re-arm window
-  // all suppress it. The model does the rest of the work — a high-water mark
-  // means scrolling past two hundred messages is one write, not two hundred.
-  const noteVisibleRead = receipts.noteVisible;
-  const newestVisibleMessage = visibleMessages.length > 0
-    ? visibleMessages[visibleMessages.length - 1]
-    : null;
-  useEffect(() => {
-    noteVisibleRead(newestVisibleMessage);
-  }, [noteVisibleRead, newestVisibleMessage]);
-
-  // One flush on the way out of the PAGE, so closing a tab records what was
-  // actually read rather than losing up to RECEIPT_REARM_MS of it.
-  //
-  // Deliberately not on unmount: by the time a conversation switch has
-  // re-rendered, the newest message already belongs to the conversation being
-  // opened, so a flush there would post the new session's message id against the
-  // old session's route — which the server's `m.session_id = $1` guard correctly
-  // refuses. Nothing is lost, because the marker advanced through the normal
-  // path the whole time the conversation was being read.
-  const newestVisibleRef = useRef(newestVisibleMessage);
-  newestVisibleRef.current = newestVisibleMessage;
-  useEffect(() => {
-    const flush = () => noteVisibleRead(newestVisibleRef.current, { flush: true });
-    window.addEventListener('pagehide', flush);
-    return () => window.removeEventListener('pagehide', flush);
-  }, [noteVisibleRead]);
-
-  // Only the LAST message of each of your contiguous runs carries an indicator;
-  // a five-message burst would otherwise draw five identical eyes.
-  const receiptAnchors = useMemo(
-    () => receipts.anchorIds(visibleMessages),
-    [receipts, visibleMessages],
-  );
   // Floating thread widgets. The rail shows itself once the session's widgets
   // have content and hides again on the toolbar toggle — see
   // `src/lib/threadWidgetRail.ts` for the whole decision, including why the
   // message column's width is identical whether the rail is open or shut.
-  const showWidgetRail = !readOnly && !!inferredSessionId && !!workspaceId;
+  const showWidgetRail = !readOnly && !!sessionId && !!workspaceId;
   // The huddle trigger in the channel toolbar. Bound to THIS session so the
   // call belongs to the conversation it was called from — but the call itself
   // lives in the app-level dock, not here.
-  const showHuddle = !readOnly && !!inferredSessionId && !!workspaceId;
+  const showHuddle = !readOnly && !!sessionId && !!workspaceId;
   const rail = useMemo(
     () => resolveRailState({
       hasContent: railHasContent,
@@ -976,43 +954,102 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const toggleWidgetRail = useCallback(() => {
     const next = toggledRailPreference(rail.open);
     setRailPreference(next);
-    if (inferredSessionId) {
-      try { localStorage.setItem(railPreferenceKey(inferredSessionId), next); } catch { /* ignore quota */ }
+    if (sessionId) {
+      try { localStorage.setItem(railPreferenceKey(sessionId), next); } catch { /* ignore quota */ }
     }
-  }, [rail.open, inferredSessionId]);
+  }, [rail.open, sessionId]);
   // A choice made by hand is per session and sticky: reload it when the session
   // changes, and drop the content flag so the new session's rail doesn't
   // inherit the last one's answer before its own items have loaded.
   useEffect(() => {
     setRailHasContent(false);
-    if (!inferredSessionId) { setRailPreference('auto'); return; }
-    try { setRailPreference(parseRailPreference(localStorage.getItem(railPreferenceKey(inferredSessionId)))); }
+    if (!sessionId) { setRailPreference('auto'); return; }
+    try { setRailPreference(parseRailPreference(localStorage.getItem(railPreferenceKey(sessionId)))); }
     catch { setRailPreference('auto'); }
-  }, [inferredSessionId]);
-  // "Clear my head": eject the current view without deleting anything. A per-session
-  // cutoff timestamp (persisted) hides messages at/before it; "Show earlier" lifts it.
-  const clearKey = inferredSessionId ? `agensis_channel_clear_${inferredSessionId}` : null;
+  }, [sessionId]);
+  // "Clear my head": eject the current view without deleting anything. A
+  // per-session compound server position hides messages at/before it; using the
+  // server row rather than the browser clock avoids skew across devices.
+  const clearKey = sessionId ? `agensis_channel_clear_${sessionId}` : null;
   const [clearedAt, setClearedAt] = useState<string | null>(null);
   useEffect(() => {
-    setClearedAt(clearKey ? localStorage.getItem(clearKey) : null);
+    try { setClearedAt(clearKey ? localStorage.getItem(clearKey) : null); }
+    catch { setClearedAt(null); }
   }, [clearKey]);
   const clearView = useCallback(() => {
     if (!clearKey) return;
-    const cutoff = new Date().toISOString();
-    localStorage.setItem(clearKey, cutoff);
+    const newest = displayMessages[displayMessages.length - 1];
+    const cutoff = serializeMessageClearMarker(newest);
+    if (!cutoff) return;
+    try { localStorage.setItem(clearKey, cutoff); } catch { /* storage may be denied */ }
     setClearedAt(cutoff);
-  }, [clearKey]);
+  }, [clearKey, displayMessages]);
   const restoreView = useCallback(() => {
     if (!clearKey) return;
-    localStorage.removeItem(clearKey);
+    try { localStorage.removeItem(clearKey); } catch { /* storage may be denied */ }
     setClearedAt(null);
   }, [clearKey]);
-  const clearCutoffMs = clearedAt ? new Date(clearedAt).getTime() : 0;
+  const clearMarker = useMemo(() => parseMessageClearMarker(clearedAt), [clearedAt]);
   const shownMessages = useMemo(
-    () => (clearCutoffMs ? displayMessages.filter(m => new Date(m.created_at).getTime() > clearCutoffMs) : displayMessages),
-    [displayMessages, clearCutoffMs],
+    () => (clearMarker
+      ? displayMessages.filter(message => compareMessagePosition(message, clearMarker) > 0)
+      : displayMessages),
+    [displayMessages, clearMarker],
   );
   const hiddenCount = displayMessages.length - shownMessages.length;
+
+  const [browserFocused, setBrowserFocused] = useState(() => (
+    typeof document === 'undefined' || document.hasFocus()
+  ));
+  useEffect(() => {
+    const focus = () => setBrowserFocused(true);
+    const blur = () => setBrowserFocused(false);
+    window.addEventListener('focus', focus);
+    window.addEventListener('blur', blur);
+    return () => {
+      window.removeEventListener('focus', focus);
+      window.removeEventListener('blur', blur);
+    };
+  }, []);
+
+  const receipts = useReadReceipts({
+    sessionId,
+    currentUserId: currentUserId || null,
+    active: !readOnly && receiptActive,
+    enabled: receiptsEnabled,
+    orderedMessages: shownMessages,
+  });
+  const noteVisibleRead = receipts.noteVisible;
+  const newestVisibleMessage = useMemo(
+    () => receiptTargetForViewport(
+      shownMessages,
+      currentUserId || null,
+      {
+        surfaceActive: !readOnly && receiptActive && browserFocused,
+        nearBottom: autoScroll,
+      },
+    ),
+    [autoScroll, browserFocused, currentUserId, readOnly, receiptActive, shownMessages],
+  );
+  useEffect(() => {
+    noteVisibleRead(newestVisibleMessage);
+  }, [noteVisibleRead, newestVisibleMessage]);
+
+  // Keep the last row that was truthfully visible. pagehide often runs after
+  // focus/visibility changed, but the earlier row was genuinely seen and a
+  // keepalive flush must not be replaced by an off-screen realtime append.
+  const newestVisibleRef = useRef<typeof newestVisibleMessage>(null);
+  if (newestVisibleMessage) newestVisibleRef.current = newestVisibleMessage;
+  useEffect(() => {
+    const flush = () => noteVisibleRead(newestVisibleRef.current, { flush: true });
+    window.addEventListener('pagehide', flush);
+    return () => window.removeEventListener('pagehide', flush);
+  }, [noteVisibleRead]);
+
+  const receiptAnchors = useMemo(
+    () => receipts.anchorIds(shownMessages),
+    [receipts, shownMessages],
+  );
 
   // Tool approvals. A permission_request message is only an ANCHOR — its state
   // (still open? granted for how long? by whom?) lives on the request row, which
@@ -1112,10 +1149,11 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // Open the sub-thread side panel whenever activeSubThread is set (e.g. after creation)
   useEffect(() => {
     if (activeSubThread) setSidePanel('sub-thread');
+    else setSidePanel(previous => (previous === 'sub-thread' ? null : previous));
   }, [activeSubThread]);
 
   useEffect(() => {
-    if (!inferredSessionId && (!workspaceId || !channelTitle)) {
+    if (!sessionId && (!workspaceId || !channelTitle)) {
       setChannelMeta(null);
       return;
     }
@@ -1123,15 +1161,15 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     let cancelled = false;
     const loadChannelMeta = async () => {
       try {
-        if (inferredSessionId) {
+        if (sessionId) {
           const { data } = await backendClient
             .from<ChannelSessionMeta>('chat_sessions')
             .select(CHANNEL_META_COLUMNS)
-            .eq('id', inferredSessionId)
+            .eq('id', sessionId)
             .maybeSingle();
           if (!cancelled) {
             setChannelMeta(data ? normalizeChannelSessionMeta(data) : {
-              id: inferredSessionId,
+              id: sessionId,
               title: channelTitle || 'general',
               is_favorite: false,
               archived_at: null,
@@ -1151,9 +1189,9 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
         const row = Array.isArray(data) ? data[0] : null;
         if (!cancelled) setChannelMeta(row ? normalizeChannelSessionMeta(row) : null);
       } catch {
-        if (!cancelled && inferredSessionId) {
+        if (!cancelled && sessionId) {
           setChannelMeta({
-            id: inferredSessionId,
+            id: sessionId,
             title: channelTitle || 'general',
             folder: null,
             is_favorite: false,
@@ -1168,7 +1206,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     return () => {
       cancelled = true;
     };
-  }, [channelTitle, inferredSessionId, workspaceId]);
+  }, [channelTitle, sessionId, workspaceId]);
 
   const persistedParticipants = useMemo(
     () => normalizeChannelParticipants(channelMeta?.participants),
@@ -1380,9 +1418,9 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
 
   const findChannelSession = async (): Promise<ChannelSessionMeta | null> => {
     if (channelMeta?.id) return channelMeta;
-    if (inferredSessionId) {
+    if (sessionId) {
       return {
-        id: inferredSessionId,
+        id: sessionId,
         title: channelTitle || 'general',
         folder: null,
         is_favorite: false,
@@ -1462,12 +1500,9 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
   const [editChannelOpen, setEditChannelOpen] = useState(false);
   const [accessOpen, setAccessOpen] = useState(false);
 
-  // The session the access dialog acts on. `channelMeta.id` FIRST, because
-  // `inferredSessionId` is read off the messages and a direct message with no
-  // messages yet has none — and a fresh DM is exactly the one somebody may need
-  // to be let into. Falls back to the inferred id for the case where the meta
-  // fetch has not landed.
-  const accessSessionId = channelMeta?.id || inferredSessionId || null;
+  // The caller owns the authoritative id even before an empty conversation has
+  // its first message; channelMeta is only a loaded detail row.
+  const accessSessionId = sessionId || channelMeta?.id || null;
 
   // The dialog's seed. Built from the PERSISTED meta so a reopened dialog shows
   // what is stored, never what a previous cancelled edit left in state.
@@ -1558,17 +1593,52 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
     });
   };
 
+  const beginMessageMutation = (messageId: string, field: string): number => {
+    const key = `${messageId}:${field}`;
+    const next = (messageMutationVersionRef.current.get(key) || 0) + 1;
+    messageMutationVersionRef.current.set(key, next);
+    return next;
+  };
+  const isLatestMessageMutation = (messageId: string, field: string, version: number): boolean => (
+    messageMutationVersionRef.current.get(`${messageId}:${field}`) === version
+  );
+
+  // Once realtime carries the committed tombstone, the server row is again the
+  // source of truth and the temporary optimistic delete must stop shadowing it.
+  useEffect(() => {
+    const tombstoned = new Set(
+      messages.filter(message => Boolean(message.deleted_at)).map(message => message.id),
+    );
+    if (tombstoned.size === 0) return;
+    setMessageOverrides(previous => {
+      let changed = false;
+      const next = { ...previous };
+      for (const id of tombstoned) {
+        const current = next[id];
+        if (!current || !Object.prototype.hasOwnProperty.call(current, 'deleted')) continue;
+        const remaining = { ...current };
+        delete remaining.deleted;
+        if (Object.keys(remaining).length === 0) delete next[id];
+        else next[id] = remaining;
+        changed = true;
+      }
+      return changed ? next : previous;
+    });
+  }, [messages]);
+
   const handleTogglePin = async (message: ChatMessage) => {
     const nextPinned = !message.pinned;
+    const version = beginMessageMutation(message.id, 'pinned');
     setMessageOverride(message.id, { pinned: nextPinned });
     setMessageActionBusy(message.id);
-    const { error } = await backendClient
+    await backendClient
       .from('messages')
       .update({ pinned: nextPinned })
       .eq('id', message.id)
       .eq('session_id', message.session_id);
-    if (error) setMessageOverride(message.id, { pinned: message.pinned });
-    else clearMessageOverride(message.id, ['pinned']);
+    if (isLatestMessageMutation(message.id, 'pinned', version)) {
+      clearMessageOverride(message.id, ['pinned']);
+    }
     setMessageActionBusy(null);
   };
 
@@ -1586,6 +1656,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
   // no-op when the world already matches, and the acknowledgement lets realtime
   // put the row back to whatever actually holds.
   const handleToggleReaction = async (message: ChatMessage, reaction: string, op: 'add' | 'remove') => {
+    const version = beginMessageMutation(message.id, 'reactions');
     const uid = currentUserId;
     if (uid) {
       const prev: Record<string, string[]> = message.reactions ?? {};
@@ -1610,13 +1681,18 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
       // Drop the optimistic key rather than pinning the server's map in place:
       // an override left behind masks every later realtime UPDATE for this row,
       // including somebody else reacting to it. See clearMessageOverride.
-      clearMessageOverride(message.id, ['reactions']);
+      if (isLatestMessageMutation(message.id, 'reactions', version)) {
+        clearMessageOverride(message.id, ['reactions']);
+      }
     } catch {
-      setMessageOverride(message.id, { reactions: message.reactions });
+      if (isLatestMessageMutation(message.id, 'reactions', version)) {
+        clearMessageOverride(message.id, ['reactions']);
+      }
     }
   };
 
   const handleStartEdit = (message: ChatMessage) => {
+    if (!canMutateOwnMessage(message, currentUserId)) return;
     setEditingMessageId(message.id);
     setEditingContent(safeMessageText(message.content));
   };
@@ -1631,7 +1707,12 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
     const nextContent = editingContent.trim();
     if (!messageId || !nextContent) return;
     const previous = visibleMessages.find(message => message.id === messageId);
+    if (!canMutateOwnMessage(previous, currentUserId)) {
+      handleCancelEdit();
+      return;
+    }
     setMessageOverride(messageId, { content: nextContent });
+    const version = beginMessageMutation(messageId, 'content');
     setMessageActionBusy(messageId);
     const updateQuery = backendClient
       .from('messages')
@@ -1639,32 +1720,45 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
       .eq('id', messageId);
     if (previous?.session_id) updateQuery.eq('session_id', previous.session_id);
     const { error } = await updateQuery;
-    if (error && previous) setMessageOverride(messageId, { content: previous.content });
-    else if (!error) clearMessageOverride(messageId, ['content']);
+    if (isLatestMessageMutation(messageId, 'content', version)) {
+      clearMessageOverride(messageId, ['content']);
+    }
+    if (!error) {
+      announceActivityRedaction({ messageId, sessionId: previous?.session_id });
+    }
     setMessageActionBusy(null);
     setEditingMessageId(null);
     setEditingContent('');
   };
 
   const handleDeleteMessage = (message: ChatMessage) => {
+    if (!canMutateOwnMessage(message, currentUserId)) return;
     setDeleteMessageTarget(message);
   };
 
   const handleConfirmDeleteMessage = async () => {
     const message = deleteMessageTarget;
     if (!message) return;
+    if (!canMutateOwnMessage(message, currentUserId)) {
+      setDeleteMessageTarget(null);
+      return;
+    }
     setDeleteMessageTarget(null);
     setMessageOverride(message.id, { deleted: true });
+    const version = beginMessageMutation(message.id, 'deleted');
     setMessageActionBusy(message.id);
     const { error } = await backendClient
       .from('messages')
       .delete()
       .eq('id', message.id)
       .eq('session_id', message.session_id);
-    // M9 does not apply to the delete override: the row is gone, so no later
-    // realtime UPDATE can be masked by it. Clearing it here would only resurrect
-    // the message until the realtime DELETE lands (forever, if realtime is down).
-    if (error) setMessageOverride(message.id, { deleted: false });
+    // Message delete is a server-side soft delete. Keep the local override
+    // until the realtime UPDATE carrying deleted_at arrives; clearing it here
+    // would briefly resurrect the message (forever, if realtime is down).
+    if (error && isLatestMessageMutation(message.id, 'deleted', version)) {
+      clearMessageOverride(message.id, ['deleted']);
+    }
+    else announceActivityRedaction({ messageId: message.id, sessionId: message.session_id });
     setMessageActionBusy(null);
   };
   const catchUpSummary = useMemo(() => buildCatchUpSummary(displayMessages, channelTitle), [displayMessages, channelTitle]);
@@ -1722,7 +1816,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
     setSidePanel('thread');
   };
   const openSubThreadPanel = (session: ChatSession) => {
-    onOpenSubThread?.(session);
+    onOpenSubThread?.(session, sessionId || undefined);
     setSidePanel('sub-thread');
   };
   const openAgentProfilePanel = (agentIdOrHandle?: string | null) => {
@@ -1781,14 +1875,14 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
           transcript itself lives in the panel's own hook. */}
       <HuddleSessionProvider
         workspaceId={showHuddle ? workspaceId : null}
-        sessionId={showHuddle ? inferredSessionId : null}
+        sessionId={showHuddle ? sessionId : null}
       >
       {/* `hidden`, not unmounted: the transcript keeps its scroll position, its
           loaded pages and any in-flight composer text, so closing the panel
           returns to exactly the conversation that was left, not the top of it. */}
       <div className={cn('flex min-w-0 flex-1 flex-col overflow-hidden', overlaySidePanel && 'hidden')}>
         <div className="channel-header relative z-20 shrink-0 border-b border-border">
-          <div className="flex h-11 min-w-0 items-center gap-1.5 overflow-hidden px-3">
+          <div className="flex h-11 min-w-max items-center gap-1.5 overflow-x-auto overflow-y-hidden px-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {isDirectMessage ? (
               <Button
                 type="button"
@@ -1800,6 +1894,11 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 <Bot data-icon="inline-start" />
                 <span className="max-w-48 truncate font-semibold">{directAgent?.name || channelTitle || 'Direct message'}</span>
               </Button>
+            ) : readOnly ? (
+              <div className="flex h-8 items-center gap-1.5 px-2" aria-label={`Channel ${channelTitle || 'general'}`}>
+                <ChannelIcon data-icon="inline-start" />
+                <span className="max-w-48 truncate font-semibold">{channelTitle || 'general'}</span>
+              </div>
             ) : (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -1850,7 +1949,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
             {showHuddle && (
               <HuddleToolbarButton
                 workspaceId={workspaceId}
-                sessionId={inferredSessionId}
+                sessionId={sessionId}
                 title={channelTitle}
                 agents={huddleAgents}
               />
@@ -1872,7 +1971,13 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-64">
                   {participants.map(participant => (
-                    <DropdownMenuItem key={participant.id} className="gap-2">
+                    // This is an informational participant row, not a menu
+                    // command. Keeping it as a DropdownMenuItem would make the
+                    // nested Remove button unreachable by keyboard: Radix
+                    // owns the roving menuitem focus and prevents Tab inside
+                    // the menu. A plain row leaves the real button in the
+                    // normal tab order while preserving the popover surface.
+                    <div key={participant.id} className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm">
                       <span className="relative flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-semibold">
                         {participant.kind === 'agent' ? <Bot className="size-3.5" /> : participant.name.slice(0, 2).toUpperCase()}
                         {participant.connected && <span className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-card bg-emerald-500" />}
@@ -1883,7 +1988,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           <span className="block truncate text-xs text-muted-foreground">{participant.status}</span>
                         )}
                       </span>
-                      {participant.user_id !== currentUserId && (
+                      {!readOnly && participant.user_id !== currentUserId && (
                         <Button
                           type="button"
                           variant="ghost"
@@ -1901,7 +2006,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           <X className="size-3.5" />
                         </Button>
                       )}
-                    </DropdownMenuItem>
+                    </div>
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -1944,7 +2049,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-64">
-                {!isDirectMessage && (
+                {!readOnly && !isDirectMessage && (
                   <DropdownMenuItem onSelect={() => setEditChannelOpen(true)}>
                     <Settings2 data-icon="inline-start" />
                     Edit channel
@@ -1972,14 +2077,14 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                     Catch up
                   </DropdownMenuItem>
                 )}
-                {!isDirectMessage && (
+                {!readOnly && !isDirectMessage && (
                   <DropdownMenuItem onSelect={() => { void handleOpenFlowConnect(); }}>
                     <Link2 data-icon="inline-start" />
                     Connect
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
-                {onSplitThread && (
+                {!readOnly && onSplitThread && (
                   <DropdownMenuItem onSelect={() => onSplitThread()}>
                     <Columns2 data-icon="inline-start" />
                     Split thread
@@ -1989,7 +2094,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                   <Eraser data-icon="inline-start" />
                   Clear this view
                 </DropdownMenuItem>
-                {!isDirectMessage && contextControls && (
+                {!readOnly && !isDirectMessage && contextControls && (
                   <>
                     <DropdownMenuSeparator />
                     {contextControls}
@@ -2134,19 +2239,19 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           msg={msg}
                           avatar={resolveMessageAvatar(msg, agentAvatarLookup)}
                           accent={resolveMessageAccent(msg, agentAccentLookup)}
-                          isStreaming={streaming && isLastRow && msg.role === 'assistant'}
+                          isStreaming={streaming && isLastRow && msg.role === 'assistant' && !msg.deleted_at}
                           replyCount={threadReplyCounts[msg.id]}
                           replySummary={threadReplySummaries[msg.id]}
                           isEditing={editingMessageId === msg.id}
                           editingContent={editingContent}
                           actionBusy={messageActionBusy === msg.id}
-                          onTogglePin={() => void handleTogglePin(msg)}
-                          onStartEdit={() => handleStartEdit(msg)}
+                          onTogglePin={readOnly || msg.deleted_at ? undefined : () => void handleTogglePin(msg)}
+                          onStartEdit={!readOnly && canMutateOwnMessage(msg, currentUserId) ? () => handleStartEdit(msg) : undefined}
                           onCancelEdit={handleCancelEdit}
                           onChangeEdit={setEditingContent}
                           onSaveEdit={() => void handleSaveEdit()}
-                          onDelete={() => handleDeleteMessage(msg)}
-                          onOpenThread={onOpenThread ? () => {
+                          onDelete={!readOnly && canMutateOwnMessage(msg, currentUserId) ? () => handleDeleteMessage(msg) : undefined}
+                          onOpenThread={onOpenThread && (!msg.deleted_at || Boolean(threadReplyCounts[msg.id])) ? () => {
                             onOpenThread(msg.id);
                             openThread();
                           } : undefined}
@@ -2160,10 +2265,10 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           onAgentProfile={openAgentProfilePanel}
                           subThreads={subThreadsByMessage[msg.id]}
                           onOpenSubThread={openSubThreadPanel}
-                          onCreateSubThread={onCreateSubThread ? () => setSubThreadPickerMessageId(msg.id) : undefined}
+                          onCreateSubThread={onCreateSubThread && !msg.deleted_at ? () => setSubThreadPickerMessageId(msg.id) : undefined}
                           widgetsOverlaying={railOverlaying}
                           currentUserId={currentUserId}
-                          onToggleReaction={(reaction, op) => void handleToggleReaction(msg, reaction, op)}
+                          onToggleReaction={readOnly || msg.deleted_at ? undefined : (reaction, op) => void handleToggleReaction(msg, reaction, op)}
                           resolveUserName={resolveUserName}
                           reactionUses={reactionUses}
                           // The receipt is drawn only on your OWN messages, and
@@ -2183,7 +2288,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
             {showWidgetRail && (
               <ThreadWidgetRail
                 workspaceId={workspaceId}
-                sessionId={inferredSessionId}
+                sessionId={sessionId}
                 open={rail.open}
                 layout={rail.layout}
                 onSurfaceWidthChange={setRailSurfaceWidth}
@@ -2192,7 +2297,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 onBlockerAnswered={(item, response) => {
                   // Post the answered blocker back into the chat so it's tracked
                   // in the thread and wakes the agent that raised it.
-                  onSendMessage(`**Answered blocker:** ${item.content}\n\n${response}`, 'auto');
+                  onSendMessage(`**Answered blocker:** ${item.content}\n\n${response}`);
                 }}
               />
             )}
@@ -2343,6 +2448,31 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                                 </span>
                               </span>
                               <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">@{agentHandle(agent)}</span>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      )}
+                      {filteredNostrMembers.length > 0 && (
+                        <CommandGroup heading="Nostr agents">
+                          {filteredNostrMembers.map(member => (
+                            <CommandItem
+                              key={member.pubkey}
+                              value={`${member.name} ${member.handle} Nostr`}
+                              className="rounded-lg px-2 py-2.5"
+                              onSelect={() => handleNostrMemberSelect(member)}
+                            >
+                              <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                                <Globe className="size-4" />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate font-medium">{member.name}</span>
+                                <span className="block truncate text-xs text-muted-foreground">
+                                  Nostr agent in this mirrored channel
+                                </span>
+                              </span>
+                              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                @{member.handle}
+                              </span>
                             </CommandItem>
                           ))}
                         </CommandGroup>
@@ -2513,13 +2643,9 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           />
                         </PopoverContent>
                       </Popover>
-                      <InputGroupButton size="icon-xs" aria-label="Voice input">
-                        <Mic />
-                      </InputGroupButton>
                     </div>
 
                     <div className="flex min-w-0 items-center gap-1">
-                      <ModelSelector value={selectedModel} onChange={setSelectedModel} models={modelOptions} />
                       <Button
                         type="button"
                         size="icon-sm"
@@ -2553,7 +2679,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
         )}
       </div>
 
-      {!readOnly && sidePanel && (
+      {sidePanel && (
         <aside
           ref={sidePanelRef}
           className={cn(
@@ -2588,16 +2714,21 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
               onClose={closeSidePanel}
               onUpdateAgent={onUpdateAgent}
             />
-          ) : sidePanel === 'thread' && activeThreadId && parentMessage && onSendThreadReply ? (
+          ) : sidePanel === 'thread' && activeThreadId && parentMessage && (onSendThreadReply || readOnly) ? (
             <ChatThreadPanel
+              key={`${sessionId || 'no-session'}:${activeThreadId}`}
               parentMessage={parentMessage}
               threadMessages={visibleThreadMessages}
+              hasMoreMessages={hasMoreMessages}
+              loadingEarlier={loadingEarlier}
+              onLoadEarlier={onLoadEarlier}
               streaming={streaming}
               resolveMessageAccent={(message) => resolveMessageAccent(message, agentAccentLookup)}
               onSendReply={onSendThreadReply}
-              models={modelOptions}
+              readOnly={readOnly}
               agents={agents}
               workspaceId={workspaceId}
+              currentUserId={currentUserId}
               onAgentProfile={openAgentProfilePanel}
               onClose={closeSidePanel}
               embedded
@@ -2609,13 +2740,18 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
               onClose={closeSidePanel}
               workspaceId={workspaceId}
             />
-          ) : sidePanel === 'sub-thread' && activeSubThread && onSendSubThreadMessage ? (
+          ) : sidePanel === 'sub-thread' && activeSubThread && (onSendSubThreadMessage || readOnly) ? (
             <SubThreadPanel
+              key={`${sessionId || 'no-session'}:${activeSubThread.id}`}
               session={activeSubThread}
               messages={subThreadMessages}
+              hasMoreMessages={subThreadHasMore}
+              loadingEarlier={subThreadLoadingEarlier}
+              onLoadEarlier={onLoadEarlierSubThread}
               streaming={subThreadStreaming}
               resolveMessageAccent={(message) => resolveMessageAccent(message, agentAccentLookup)}
               onSendMessage={onSendSubThreadMessage}
+              readOnly={readOnly}
               onAgentProfile={openAgentProfilePanel}
               onClose={closeSidePanel}
               embedded
@@ -2627,6 +2763,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
               composerProjectFiles={composerProjectFiles}
               skillOptions={skillOptions}
               toolOptions={toolOptions}
+              currentUserId={currentUserId}
             />
           ) : sidePanel === 'files' || sidePanel === 'pins' || sidePanel === 'thread' ? (
             <ChannelSidePanel
@@ -2773,7 +2910,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Dispatch background task to…</DialogTitle>
-            <p className="mt-1 text-xs text-muted-foreground">The agent receives this message as a task and works autonomously. View progress in the Threads panel.</p>
+            <p className="mt-1 text-xs text-muted-foreground">The agent receives a bounded quote of this message, with its source labelled, and works autonomously. View progress in the Threads panel.</p>
           </DialogHeader>
           <div className="flex flex-col gap-1 py-2">
             {agents.filter(a => a.enabled !== false).map(agent => (
@@ -2784,8 +2921,15 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 onClick={() => {
                   if (subThreadPickerMessageId && onCreateSubThread) {
                     const parentMsg = visibleMessages.find(m => m.id === subThreadPickerMessageId);
-                    const content = parentMsg ? (typeof parentMsg.content === 'string' ? parentMsg.content : JSON.stringify(parentMsg.content)) : undefined;
-                    onCreateSubThread(subThreadPickerMessageId, agent, content);
+                    const sourceContext = parentMsg ? {
+                      content: typeof parentMsg.content === 'string'
+                        ? parentMsg.content
+                        : JSON.stringify(parentMsg.content),
+                      sender: parentMsg.sender_name || parentMsg.role || 'Participant',
+                      sessionId: parentMsg.session_id,
+                      sessionTitle: channelTitle || 'Untitled',
+                    } : undefined;
+                    onCreateSubThread(subThreadPickerMessageId, agent, sourceContext);
                   }
                   setSubThreadPickerMessageId(null);
                   setSidePanel('sub-threads');
@@ -3032,10 +3176,10 @@ function ChatMessageBubble({
     ? ({ '--agent-accent': validAgentAccentColor(accent) } as React.CSSProperties & { '--agent-accent': string })
     : undefined;
 
-  const reactions = msg.reactions ?? {};
   // No 'me' fallback any more. The old default meant an anonymous or
   // not-yet-loaded viewer matched the literal string 'me' in the map, so every
   // pill rendered as though they had reacted.
+  const reactions = useMemo(() => msg.reactions ?? {}, [msg.reactions]);
   const uid = currentUserId || null;
   const pills = useMemo(() => reactionPills(reactions, uid), [reactions, uid]);
   // Quick picks in the hover rail: the three most-used reactions, so the common
@@ -3358,7 +3502,7 @@ function SubThreadListPanel({
             </span>
           )}
         </span>
-        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onClose}>
+        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onClose} aria-label="Close sub-threads" title="Close sub-threads">
           <X className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -4295,8 +4439,13 @@ function FileTreeDirSection({
 
 function applyMessageOverrides(messages: ChatMessage[], overrides: MessageOverrides): ChatMessage[] {
   return messages
-    .map(message => ({ ...message, ...overrides[message.id] }))
-    .filter(message => !overrides[message.id]?.deleted);
+    .map(message => {
+      const override = overrides[message.id];
+      const merged = { ...message, ...override };
+      return override?.deleted
+        ? toDeletedMessageTombstone(merged)
+        : redactDeletedMessage(merged);
+    });
 }
 
 function normalizeChannelSessionMeta(meta: ChannelSessionMeta): ChannelSessionMeta {

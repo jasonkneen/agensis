@@ -1,5 +1,9 @@
 'use strict';
 
+const { settleSessionClosure } = require('../shared/session-close.cjs');
+const { createSessionSplit } = require('../shared/session-split.cjs');
+const { applySessionClosureRuntimeEffects } = require('./session-close-runtime.cjs');
+
 // Routes extracted verbatim from server/index.cjs (Wave 2 of the index.cjs
 // reduction). Mounted once by index.cjs; every dependency is INJECTED rather
 // than imported, so the auth, RBAC and rate-limit contract stays single-sourced
@@ -15,11 +19,23 @@
 
 function mountSessionsRoutes(app, deps = {}) {
  const {
-  requireAuth, jsonError, enforceWorkspaceRole, enforceSessionRead, getDb,
+  requireAuth, jsonError, forbidden, enforceWorkspaceRole, enforceSessionRead, sessionReadableSql, getDb,
+  notifyDbSubscribers, isPrivateSessionRow, redactDeletedMessageRows,
+  recordAudit, cancelBuiltinJob, sendToConnection, scheduleTaskQueueDrain, endHuddleRoom,
   buildAgentConnectionCommand, buildWorkspaceBootstrap,
   ensurePrimaryDaemonAgent, normalizeAgentBackendBaseUrl, requestBaseUrl,
   resolveSetupWorkspace, resolveWorkspaceIdForSession,
  } = deps;
+ for (const [name, value] of Object.entries({
+  cancelBuiltinJob,
+  endHuddleRoom,
+  scheduleTaskQueueDrain,
+  sendToConnection,
+ })) {
+  if (typeof value !== 'function') {
+   throw new Error(`mountSessionsRoutes requires deps.${name}`);
+  }
+ }
 
  app.get('/backend/workspace/:id/usage', requireAuth, async (req, res) => {
   try {
@@ -123,14 +139,286 @@ function mountSessionsRoutes(app, deps = {}) {
    }
    const rows = await getDb().unsafe(
     `select * from messages
-       where session_id = $1 and deleted_at is null${beforeClause}
+       where session_id = $1${beforeClause}
        order by created_at desc, id desc
        limit ${limit + 1}`,
     params,
    );
    const hasMore = rows.length > limit;
-   const page = (hasMore ? rows.slice(0, limit) : rows).reverse();
+   const page = redactDeletedMessageRows(
+    (hasMore ? rows.slice(0, limit) : rows).reverse(),
+   );
    res.json({ data: { messages: page, hasMore }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // Deliberately broader than an ordinary message edit: closing a conversation
+ // soft-deletes the whole transcript, including agent and other-participant
+ // rows. It is therefore limited to a manager who is already a member of a
+ // private conversation. A public channel can never pass this route.
+ app.post('/backend/sessions/:id/clear', requireAuth, async (req, res) => {
+  try {
+   const sessionId = String(req.params.id || '').trim();
+   if (!sessionId) return jsonError(res, 400, new Error('sessionId is required'));
+   const rows = await getDb().unsafe(
+    'select id, workspace_id, visibility, folder, deleted_at from chat_sessions where id = $1 limit 1',
+    [sessionId],
+   );
+   const session = rows[0];
+   const unavailable = () => jsonError(
+    res,
+    404,
+    new Error('Conversation not found or unavailable'),
+   );
+   if (!session) return unavailable();
+   try {
+    // Do not reveal whether a foreign id names a public channel, a private
+    // conversation, or an unreadable private conversation. Classification is
+    // intentionally checked only after BOTH authority gates succeed.
+    await enforceWorkspaceRole(req.userId, session.workspace_id, 'manage');
+    await enforceSessionRead(req.userId, sessionId, session);
+   } catch (error) {
+    if (error?.status === 403 || error?.status === 404) return unavailable();
+    throw error;
+   }
+   if (!isPrivateSessionRow(session)) {
+    return jsonError(res, 400, new Error('Only private conversations can be deleted this way'));
+   }
+   const workspaceId = session.workspace_id;
+   // The lock MUST be its own statement inside a transaction. If it sat in the
+   // mutation CTE, that statement's snapshot would be taken before a concurrent
+   // message INSERT released its SHARE lock; after waiting, the clear could miss
+   // that newly committed row and close the session around live content.
+   //
+   // Lock the current membership row too. Otherwise a revoke could commit after
+   // this authorization snapshot but before the mutation. The canonical access
+   // predicate remains sessionReadableSql; the join only makes its qualifying
+   // row lockable.
+   const result = await getDb().begin(async (tx) => {
+    const locked = await tx.unsafe(
+     `with recursive clear_workspace_chain as (
+        select id, parent_id, 0 as depth
+          from workspaces
+         where id = $5
+        union all
+        select parent.id, parent.parent_id, chain.depth + 1
+          from workspaces parent
+          join clear_workspace_chain chain on parent.id = chain.parent_id
+         where chain.depth < 10
+      ),
+      clear_locked_workspace_chain as materialized (
+        select workspace.id, workspace.user_id
+          from workspaces workspace
+          join clear_workspace_chain chain on chain.id = workspace.id
+        for share of workspace
+      ),
+      clear_manager_membership as materialized (
+        select membership.workspace_id
+          from workspace_members membership
+          join clear_locked_workspace_chain workspace
+            on workspace.id = membership.workspace_id
+         where membership.user_id = $2
+           and membership.role in ('owner', 'admin')
+        for share of membership
+      )
+      select clear_session_scope.id
+        from chat_sessions clear_session_scope
+        join chat_session_members clear_session_member
+          on clear_session_member.session_id = clear_session_scope.id
+         and clear_session_member.user_id = $2
+       where clear_session_scope.id = $1
+         and clear_session_scope.deleted_at is null
+         and clear_session_scope.visibility is not distinct from $3
+         and clear_session_scope.folder is not distinct from $4
+         and (
+           exists (
+             select 1 from clear_locked_workspace_chain workspace
+              where workspace.user_id = $2
+           )
+           or exists (select 1 from clear_manager_membership)
+         )
+         and ${sessionReadableSql('clear_session_scope', '$2')}
+       for update of clear_session_scope, clear_session_member`,
+     [sessionId, req.userId, session.visibility ?? null, session.folder ?? null, workspaceId],
+    );
+    if (locked.length !== 1) {
+     throw forbidden('Conversation access changed before the delete completed');
+    }
+    const effects = await settleSessionClosure({
+     query: (sql, params) => tx.unsafe(sql, params),
+     hostSessionIds: [sessionId],
+     closeHostSessions: true,
+    });
+    if (!effects.sessions.some(row => String(row.id) === sessionId)) {
+     throw forbidden('Conversation access changed before the delete completed');
+    }
+    return effects;
+   });
+   await applySessionClosureRuntimeEffects(result, {
+    notifyDbSubscribers,
+    cancelBuiltinJob,
+    sendToConnection,
+    scheduleTaskQueueDrain,
+    endHuddleRoom,
+    onWarn: (message) => console.warn('[session-clear]', message),
+   });
+   if (typeof recordAudit === 'function') {
+    void recordAudit({
+     workspaceId,
+     actor: { userId: req.userId },
+     action: 'chat_session.cleared',
+     target: { type: 'chat_session', id: sessionId },
+     detail: {
+      sessionIds: result.allSessionIds.join(','),
+      clearedMessages: result.clearedMessages,
+      cancelledJobs: result.jobs.length,
+      expiredPermissionRequests: result.permissionRequests.length,
+      endedHuddles: result.huddles.length,
+     },
+    });
+   }
+   res.json({
+    data: {
+     sessionId,
+     clearedMessages: result.clearedMessages,
+     cancelledJobs: result.jobs.length,
+     closed: result.sessions.some(row => String(row.id) === sessionId),
+    },
+    error: null,
+   });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // Close any conversation through one lifecycle-aware command. Derived
+ // sessions (sub-threads and forks) are write-gated so editors can clean up
+ // work they were allowed to create; top-level sessions remain manage-gated.
+ // The immutable lineage columns keep that distinction stable after creation.
+ app.post('/backend/sessions/:id/close', requireAuth, async (req, res) => {
+  try {
+   const sessionId = String(req.params.id || '').trim();
+   if (!sessionId) return jsonError(res, 400, new Error('sessionId is required'));
+   const rows = await getDb().unsafe(
+    `select id, workspace_id, visibility, folder, parent_message_id, split_parent_id, deleted_at
+       from chat_sessions
+      where id = $1
+      limit 1`,
+    [sessionId],
+   );
+   const session = rows[0];
+   if (!session) return jsonError(res, 404, new Error('Session not found'));
+   const derived = Boolean(session.parent_message_id || session.split_parent_id);
+   const workspaceId = session.workspace_id;
+   await enforceWorkspaceRole(req.userId, workspaceId, derived ? 'write' : 'manage');
+   await enforceSessionRead(req.userId, sessionId, session);
+
+   const result = await getDb().begin(async (tx) => {
+    const locked = await tx.unsafe(
+     `select close_session_scope.id
+        from chat_sessions close_session_scope
+       where close_session_scope.id = $1
+         and close_session_scope.workspace_id = $3
+         and close_session_scope.parent_message_id is not distinct from $4
+         and close_session_scope.split_parent_id is not distinct from $5
+         and ${sessionReadableSql('close_session_scope', '$2', { lockMembership: true })}
+       for update of close_session_scope`,
+     [
+      sessionId,
+      req.userId,
+      workspaceId,
+      session.parent_message_id ?? null,
+      session.split_parent_id ?? null,
+     ],
+    );
+    if (locked.length !== 1) {
+     throw forbidden('Conversation access changed before the close completed');
+    }
+    const effects = await settleSessionClosure({
+     query: (sql, params) => tx.unsafe(sql, params),
+     hostSessionIds: [sessionId],
+     closeHostSessions: true,
+    });
+    if (!effects.sessions.some(row => String(row.id) === sessionId)) {
+     throw forbidden('Conversation access changed before the close completed');
+    }
+    return effects;
+   });
+
+   await applySessionClosureRuntimeEffects(result, {
+    notifyDbSubscribers,
+    cancelBuiltinJob,
+    sendToConnection,
+    scheduleTaskQueueDrain,
+    endHuddleRoom,
+    onWarn: (message) => console.warn('[session-close]', message),
+   });
+   if (typeof recordAudit === 'function') {
+    void recordAudit({
+     workspaceId,
+     actor: { userId: req.userId },
+     action: 'chat_session.cleared',
+     target: { type: 'chat_session', id: sessionId },
+     detail: {
+      sessionIds: result.allSessionIds.join(','),
+      clearedMessages: result.clearedMessages,
+      cancelledJobs: result.jobs.length,
+      expiredPermissionRequests: result.permissionRequests.length,
+      endedHuddles: result.huddles.length,
+     },
+    });
+   }
+   res.json({
+    data: {
+     sessionId,
+     clearedMessages: result.clearedMessages,
+     cancelledJobs: result.jobs.length,
+     closed: true,
+    },
+    error: null,
+   });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/sessions/:id/split', requireAuth, async (req, res) => {
+  try {
+   const sourceSessionId = String(req.params.id || '').trim();
+   if (!sourceSessionId) return jsonError(res, 400, new Error('sessionId is required'));
+   const sourceRows = await getDb().unsafe(
+    `select id, workspace_id, visibility, folder, deleted_at
+       from chat_sessions
+      where id = $1
+      limit 1`,
+    [sourceSessionId],
+   );
+   const source = sourceRows[0];
+   if (!source || source.deleted_at) return jsonError(res, 404, new Error('Conversation not found'));
+   await enforceWorkspaceRole(req.userId, source.workspace_id, 'write');
+   await enforceSessionRead(req.userId, sourceSessionId, source);
+
+   const result = await getDb().begin((tx) => createSessionSplit({
+    query: (sql, params) => tx.unsafe(sql, params),
+    sourceSessionId,
+    userId: req.userId,
+    // postgres.js binds jsonb as the parsed object/array, never a JSON string.
+    jsonParam: value => value,
+   }));
+   notifyDbSubscribers('chat_sessions', 'INSERT', [result.session]);
+   notifyDbSubscribers('messages', 'INSERT', [result.baselineMessage], {
+    suppressLogicalEvents: true,
+   });
+   res.status(201).json({
+    data: {
+     session: result.session,
+     baselineMessageId: result.baselineMessage.id,
+     sourceBoundaryMessageId: result.sourceBoundaryMessageId,
+    },
+    error: null,
+   });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }

@@ -30,6 +30,7 @@ export type TipSurface =
   | 'dm'
   | 'document'
   | 'agents'
+  | 'resources'
   | 'inbox'
   | 'tasks'
   | 'activity'
@@ -59,6 +60,7 @@ export const TIP_SURFACE_LABEL: Record<TipSurface, string> = {
   dm: 'Direct messages',
   document: 'Documents',
   agents: 'Agents',
+  resources: 'Resources',
   inbox: 'Inbox',
   tasks: 'Tasks',
   activity: 'Activity',
@@ -203,6 +205,21 @@ export const PAGE_TIPS: readonly PageTip[] = [
     surface: 'agents',
     title: 'Give each agent a different voice',
     body: 'Voice is set per agent here. In a huddle with several agents sharing one voice, you cannot tell who is talking.',
+  },
+
+  // Resources. The steward is the only actor that touches the underlying
+  // artifact; the window creates metadata and queued requests, never a backdoor.
+  {
+    id: 'resources-steward',
+    surface: 'resources',
+    title: 'Every shared resource has one gatekeeper',
+    body: 'The steward is a resource-purpose agent. People and collaborator agents can request work, but only that steward reads or changes the underlying resource.',
+  },
+  {
+    id: 'resources-operations',
+    surface: 'resources',
+    title: 'Apply is a request, not a direct write',
+    body: 'Read, propose, apply and publish enter the same fenced queue. The operation history shows which version the steward worked against and whether it completed, refused or failed.',
   },
 
   // Inbox. Grouping + blocker rank: src/components/inbox/inboxModel.ts.
@@ -366,6 +383,8 @@ export function tipSurfaceFor(input: {
       return 'document';
     case 'agents':
       return 'agents';
+    case 'resources':
+      return 'resources';
     // Tenants is a WINDOW now, not an overlay. Without this case its tips
     // silently stopped resolving when it stopped being passed as `overlay`.
     case 'tenants':

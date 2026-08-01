@@ -47,7 +47,14 @@ const AGENT_2 = {
   enabled: true, model: 'claude-sonnet-4-6', run_mode: 'daemon',
 };
 
-test.afterEach(() => __test.resetTestState());
+let dispatchSeedCounter = 0;
+const dispatchSeeds = new Map();
+
+test.afterEach(() => {
+  __test.resetTestState();
+  dispatchSeeds.clear();
+  dispatchSeedCounter = 0;
+});
 
 function makeDb({ session, agents = [AGENT, AGENT_2] }) {
   const writes = { agentInserts: [], agentUpdates: [], messageInserts: [] };
@@ -63,8 +70,19 @@ function makeDb({ session, agents = [AGENT, AGENT_2] }) {
         return String(params[1]) === USER ? [{ ok: 1 }] : [];
       }
       if (q.startsWith('select role from workspace_members')) return [];
+      if (q.startsWith('select 1 from chat_session_members')) return [{ ok: 1 }];
       if (/^select workspace_id from "?workspace_agents"? where id/.test(q)) return [{ workspace_id: WORKSPACE }];
       if (q.includes('from chat_sessions where id')) return [session];
+      if (q.includes('dispatch_workspace_chain')) {
+        const seed = dispatchSeeds.get(String(params[3]));
+        if (!seed) return [];
+        return [{
+          ...session,
+          seed_id: String(params[3]),
+          seed_content: seed.content,
+          seed_thread_parent_id: seed.threadParentId,
+        }];
+      }
       if (q.startsWith('select * from workspace_agents where workspace_id')) return agents;
       if (q.startsWith('select id, name, handle, enabled from workspace_agents')) return agents;
       if (q.startsWith('insert into "workspace_agents"') || q.startsWith('insert into workspace_agents')) {
@@ -75,11 +93,18 @@ function makeDb({ session, agents = [AGENT, AGENT_2] }) {
         writes.agentUpdates.push({ sql: q, params });
         return [{ id: AGENT.id, workspace_id: WORKSPACE }];
       }
+      if (q.startsWith('update chat_sessions set participants')) {
+        session.participants = params[0];
+        return [{ ...session, updated_at: new Date().toISOString() }];
+      }
       if (q.startsWith('insert into messages')) {
         writes.messageInserts.push({ sql: q, params });
         return [{ id: `m-${writes.messageInserts.length}`, session_id: SESSION }];
       }
       return [];
+    },
+    async begin(run) {
+      return run({ unsafe: (sql, params) => db.unsafe(sql, params) });
     },
   };
   return db;
@@ -98,10 +123,19 @@ async function withServer(fn) {
 }
 
 function post(baseUrl, token, route, body) {
+  let requestBody = body;
+  if (route === '/backend/agents/dispatch') {
+    const messageId = body.messageId || `dispatch-seed-${++dispatchSeedCounter}`;
+    dispatchSeeds.set(String(messageId), {
+      content: String(body.content || ''),
+      threadParentId: body.threadParentId ?? null,
+    });
+    requestBody = { ...body, messageId };
+  }
   return fetch(`${baseUrl}${route}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(requestBody),
   });
 }
 
@@ -109,6 +143,8 @@ function channelSession(overrides = {}) {
   return {
     id: SESSION, workspace_id: WORKSPACE, folder: 'Channels',
     conversation_mode: 'auto',
+    visibility: 'workspace',
+    deleted_at: null,
     participants: [
       { id: `agent:${AGENT.id}`, kind: 'agent', agent_id: AGENT.id, name: AGENT.name, handle: AGENT.handle },
       { id: `agent:${AGENT_2.id}`, kind: 'agent', agent_id: AGENT_2.id, name: AGENT_2.name, handle: AGENT_2.handle },
@@ -377,7 +413,7 @@ test('the dispatch route projects `folder`, without which the legacy-DM check re
   const fly = require('./helpers/fly-lane.cjs').flyLaneSource();
   assert.match(
     fly,
-    /select id, workspace_id, participants, conversation_mode, folder from chat_sessions where id = \$1 limit 1/,
+    /select dispatch_session\.id,[\s\S]*dispatch_session\.conversation_mode,[\s\S]*dispatch_session\.folder,[\s\S]*from chat_sessions dispatch_session/,
   );
 });
 

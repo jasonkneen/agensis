@@ -117,12 +117,22 @@ test('every explicit message column list that selects sender_kind also selects t
   }
 });
 
-test('the paged transcript route selects * so new message columns cannot be dropped', () => {
+test('the paged transcript route selects * and retains redacted deleted anchors', () => {
   const flat = require('./helpers/fly-lane.cjs').flyLaneSource().replace(/\s+/g, ' ');
   assert.match(
     flat,
-    /select \* from messages where session_id = \$1 and deleted_at is null/,
+    /select \* from messages where session_id = \$1/,
     '/backend/sessions/:id/messages must stay `select *` or new columns load blank',
+  );
+  assert.doesNotMatch(
+    flat,
+    /select \* from messages where session_id = \$1 and deleted_at is null/,
+    'deleted roots must remain as redacted tombstones so replies keep their anchor',
+  );
+  assert.match(
+    flat,
+    /const page = redactDeletedMessageRows\(/,
+    'the paged transcript route must redact retained deleted rows',
   );
 });
 
@@ -143,7 +153,7 @@ const JOB = {
 
 function installDb() {
   const calls = [];
-  __test.setTestDb({
+  const db = {
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
       calls.push({ n, params });
@@ -166,7 +176,9 @@ function installDb() {
       }
       return [];
     },
-  });
+  };
+  db.begin = async (work) => work(db);
+  __test.setTestDb(db);
   return calls;
 }
 
@@ -221,7 +233,22 @@ test('agentStepParts splits the same halves the content line is built from', () 
 // The live path. A step that only shows up after a reload is worthless.
 // ----------------------------------------------------------------------------
 
-test('the realtime fanout does not strip the step columns', () => {
+test('the realtime fanout does not strip the step columns', async () => {
+  __test.setTestDb({
+    async unsafe(sql) {
+      const q = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+      if (q.startsWith('select id, visibility, folder, deleted_at from chat_sessions')) {
+        return [{ id: 'session-1', visibility: 'workspace', folder: 'General', deleted_at: null }];
+      }
+      if (q.startsWith('select workspace_id, visibility, folder, deleted_at from chat_sessions')) {
+        return [{ workspace_id: 'ws-1', visibility: 'workspace', folder: 'General', deleted_at: null }];
+      }
+      if (q.startsWith('select id, visibility, folder from chat_sessions')) {
+        return [{ id: 'session-1', visibility: 'workspace', folder: 'General' }];
+      }
+      return [];
+    },
+  });
   const sent = [];
   __test.registerTestWebsocketClient({
     userId: 'user-1',
@@ -243,6 +270,7 @@ test('the realtime fanout does not strip the step columns', () => {
     tool_name: 'Bash',
     tool_detail: 'npm test',
   }]);
+  await new Promise(resolve => setTimeout(resolve, 20));
 
   const frame = sent.find((m) => m.type === 'db_changes' && m.table === 'messages');
   assert.ok(frame, 'expected a messages db_changes frame');

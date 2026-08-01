@@ -96,8 +96,10 @@ primitive and the whole feature would be theatre.
 `server/mcp.cjs`). `chat_session_members` holds user ids and an agent is not a
 user, so the agent branch asks whether the agent is in the session's roster. That
 keeps an agent working in its own DM — the core product loop — without opening
-every other agent's DM to it. A `workspace` MCP token reads as its workspace's
-owner; `invite` and unpinned `integration` tokens get no private sessions at all.
+every other agent's DM to it. A `workspace` MCP token is a control-plane
+credential and sees workspace-visible sessions only; it never impersonates the
+owner for private reads. Unpinned `integration` tokens get no private sessions
+at all.
 
 Pinned by `tests/dm-scope-assumption.test.cjs`. If you change any of the above,
 that file goes red — update it and this section together.
@@ -120,21 +122,35 @@ on it:
   the synchronous fanout and sends them down an async lane that can consult
   membership. Without that split, opening a DM would push its title and roster to
   every socket in the workspace.
+- **`agent_permission_requests` is independently session-scoped.** Requests
+  attached to a session leave synchronous workspace fanout and use a live
+  session-audience lookup before INSERT or UPDATE delivery. Unknown sessions and
+  lookup failures fail closed. Public-session requests and legacy rows with no
+  session remain workspace-visible.
+- **`huddles` and `huddle_events` are scoped through the host session.** Huddle
+  rows resolve `session_id`; event rows resolve `huddle_id -> session_id`. Both
+  leave synchronous workspace fanout and use the same fail-closed live audience
+  lookup. The generic database path is read-only for these tables and applies
+  the corresponding session predicate to workspace-wide reads.
+- **`thread_items`, `agent_jobs` and `agent_schedules` are session-scoped.**
+  Each row carries or resolves one `session_id`, and its realtime event leaves
+  synchronous workspace fanout for the fail-closed live audience lane. Generic
+  job/schedule writes are server-owned and refused; thread mutations must prove
+  one session and pass its access gate. Schedule execution re-checks both the
+  creator's current workspace role and private-session membership at run time.
 - **`messages` is covered by a different argument**, not by that split. An
   unfiltered `messages` subscription cannot be established at all, so a message
   only ever reaches a socket that named its session.
-- **Every other allowlisted table is covered by neither.** The private-session
-  split is keyed on the table name being `chat_sessions`. A table that is
-  subscribable on a `workspace_id` filter and that can hold DM-derived rows —
-  `huddles` carries a DM roster; `thread_items` hangs off a thread that may be a
-  DM sub-thread — fans those rows to every socket in the workspace that holds
-  `read`. The REST projection for those tables is not the control here, because
-  the fanout does not go through it.
+- **Every other allowlisted table is covered by none of those lanes.** A table that is
+  subscribable on a `workspace_id` filter and that can hold DM-derived rows fans
+  those rows to every socket in the workspace that holds `read`. The REST
+  projection for those tables is not the control here, because the fanout does
+  not go through it.
 
-**So the session granularity is enforced on the REST/MCP side and only partially
-on the realtime side.** If you are adding a table that can carry content derived
-from a private session, do not assume the realtime lane will scope it — it will
-not, and workspace role is all that stands in front of it. Raise it rather than
+**So the session granularity is enforced broadly on the REST/MCP side but only
+for the eight named table shapes above.** If you are adding a table that can carry
+content derived from a private session, do not assume realtime will scope it.
+Add an explicit session-audience lane and tests, or raise the gap rather than
 allowlisting quietly.
 
 ## Realtime
@@ -274,6 +290,17 @@ window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
   deploy. A workspace can now author its own and save a tuned agent as a
   starting point. Validator: `shared/agentTemplates.cjs`. Routes:
   `server/agent-templates-routes.cjs`. Things to know before touching it:
+  - **Purpose describes the job; it grants nothing.** `workspace_agents.purpose`
+    is either `collaborator` or `resource`. A resource may carry one or more
+    `resource_facets` (`context`, `knowledge`, `tooling`, `code`), while a
+    collaborator must carry none. The database CHECK, shared normalizer, and
+    frontend types enforce that shape. Neither field changes RBAC, token scope,
+    sandbox access, permission mode, host folders, or tool grants.
+  - **A resource is non-ambient by default.** It is a callable capability or
+    steward, not another voice competing in every room. Creating an agent with
+    `purpose = 'resource'` therefore defaults `ambient_replies` to false unless
+    a manager explicitly changes it. Templates may carry purpose and facets
+    because those are intent, but they still cannot carry authority.
   - **A template carries PROSE and REQUESTS, never AUTHORITY**, and that is
     enforced by the SHAPE rather than by a filter: `workspace_agent_templates`
     has no column for `permission_mode`, `metadata`, `sandbox_provider`,
@@ -560,9 +587,9 @@ window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
     family `agents` in the Activity window): provider, operation, method, resolved
     URL, status, duration. Never a body, a header, or the vault key name.
   - **RBAC**: `kinds: ['agent']` only, and the skill must be one the *calling
-    agent* carries. Workspace/agent ids come from the token; an invite bearer (a
-    transient join secret) cannot spend a provider key. Per-agent
-    `providerCallRateLimiter` at 20/min on top of `mcpRateLimiter`.
+    agent* carries. Workspace/agent ids come from the token; neither a workspace
+    control-plane token nor either kind of join URL can spend a provider key.
+    Per-agent `providerCallRateLimiter` at 20/min on top of `mcpRateLimiter`.
   No schema change — `activity_events` already existed in all three places.
 - **The workspace vault** — `workspace_secrets` is the home of every credential a
   workspace holds, in three namespaces: the platform-managed keys
@@ -637,15 +664,21 @@ window payload. `tests/unit/itemPresenceTyping.test.ts` fails if it does.
     Consume-before-provision is deliberate: a failure leaves the link dead rather
     than replayable.
   - **A join link is NOT a credential.** It is absent from `verifyMcpToken`,
-    `requireAuth` and every other `verify*`. Contrast `workspace_invites`, which
-    IS accepted as an MCP bearer for its full 14 days (`verifyInviteToken`) —
-    exactly the shape being retired. Don't merge the two tables.
+    `requireAuth` and every other `verify*`. `workspace_invites` remains the
+    legacy human-accept record for up to 14 days and is also deliberately absent
+    from MCP authentication. Don't merge the two tables.
   - **No User-Agent sniffing, anywhere.** An agent succeeds via `Accept:
     application/json` / `?format=json`, or via the HTML itself, which carries the
     contract four ways (JSON-LD, a *visible* fenced machine block, plain prose
     addressed to an agent, and the same steps in the redemption response).
     `tests/join-link.test.cjs` asserts the page is byte-identical across five
     User-Agents and that no join code reads the header.
+  - **Redemption intent is explicit even though the URL is shared.** The human
+    button sends `as: 'human'` with a valid session; the machine contract sends
+    `as: 'agent'` with no Authorization header. Missing or contradictory intent
+    is refused before the single-use UPDATE. Never infer agent identity from a
+    failed human authentication check — an expired browser session must not
+    consume a link by provisioning an unintended agent.
   - **No oracle.** Unknown, malformed, expired, revoked, spent and wrong-audience
     all return an identical 410 body, and the refusal page never names the
     workspace. Rate-limited 10/min per IP, in-memory + DB-backed.
@@ -693,12 +726,12 @@ Two related rules:
   published schema. Write new tools the same way.
 - **If something needs a capability MCP does not have, add an MCP tool — never a
   parallel client-only route.** `runToolForIdentity` is the single authorization
-  chokepoint (kinds allowlist, Flows scope, channel pin, invite-role capability
+  chokepoint (kinds allowlist, Flows scope, channel pin, tool-specific capability
   checks, 120/min limiter). Anything reached another way is outside all of it.
 
 ### Login tokens at the MCP door
 
-`verifyMcpToken` (`server/index.cjs`) tries five verifiers in order, and the last
+`verifyMcpToken` (`server/index.cjs`) tries four verifiers in order, and the last
 is `verifyUserAuthMcpToken`: **a human's ordinary agensis session token
 authenticates at `/backend/mcp`**, resolving to a `kind: 'user'` identity on the
 workspace that user owns. This is **deliberate** — it arrived with the MCP client
@@ -725,10 +758,14 @@ Know what it costs before you point anyone at it:
 - **It picks the user's OLDEST owned workspace** (`order by created_at asc limit
   1`), not the one they are looking at.
 
-So: **`agw_` is the credential to hand a human or an MCP client.** It is
-manage-gated, minted at `POST /backend/workspaces/:id/mcp-token`, and it is the
-only thing the UI ever produces (`src/lib/mcpConnect.ts`). Nothing in the product
-tells anyone to paste a login token, and nothing should start.
+So: **`agw_` is the credential to hand an MCP client.** Only the actual
+`workspaces.user_id` owner may mint or rotate it or enable automatic
+registration approval; an admin's `manage` capability is not enough. It is the
+only MCP credential the UI ever produces (`src/lib/mcpConnect.ts`). It remains
+the workspace control-plane credential for registering agents and creating
+workspace-visible resources, but it cannot read private sessions by borrowing
+the owner's identity. Nothing in the product tells anyone to paste a login
+token, and nothing should start.
 
 **The door records that this happened, so the decision can rest on data.** A
 `mcp.login_token_used` audit row is written when a `kind: 'user'` identity

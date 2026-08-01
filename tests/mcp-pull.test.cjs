@@ -3,7 +3,6 @@ const assert = require('node:assert/strict');
 const { __test } = require('../server/index.cjs');
 
 const {
-  verifyInviteToken,
   verifyMcpToken,
   runAgentTurn,
   claimMcpJob,
@@ -23,12 +22,14 @@ const WS = 'ws-1';
 function makeDb(handlers = []) {
   const db = {
     calls: [],
+    async begin(callback) { return callback(db); },
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
       db.calls.push({ n, params });
       for (const h of handlers) {
         if (h.match.test(n)) return typeof h.rows === 'function' ? h.rows(params, n) : (h.rows || []);
       }
+      if (/^select s\.id from chat_sessions s join workspace_agents a/.test(n)) return [{ id: params[2] }];
       return [];
     },
   };
@@ -37,52 +38,27 @@ function makeDb(handlers = []) {
 function use(handlers) { const db = makeDb(handlers); setTestDb(db); return db; }
 test.afterEach(() => resetTestState());
 
-// --- invite-token auth (the ONE link) --------------------------------------
+// --- MCP bearer classes -----------------------------------------------------
 
-test('verifyInviteToken resolves a valid invite to a workspace identity', async () => {
-  use([{ match: /from workspace_invites where token in \(\$1, \$2\) and status = 'pending'/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: 'cursor@x.com', role: 'editor' }] }]);
-  assert.deepEqual(await verifyInviteToken('tok'), { kind: 'invite', workspaceId: WS, inviteId: 'inv-1', name: 'cursor@x.com', autoApprove: true, role: 'editor' });
-});
-
-test('verifyInviteToken looks up by hash + legacy plaintext for a normal token (L4 dual-path)', async () => {
-  // A normal (non-hash) presented token: $1 = its sha256 hash (matches new
-  // hashed invites), $2 = the raw plaintext (matches legacy invites).
-  const db = use([{ match: /from workspace_invites where token in/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: '', role: 'viewer' }] }]);
-  await verifyInviteToken('plain-token');
-  const call = db.calls.find(c => /workspace_invites where token in/.test(c.n));
-  assert.match(call.params[0], /^[a-f0-9]{64}$/, 'first param is the sha256 hash (new hashed invites)');
-  assert.equal(call.params[1], 'plain-token', 'second param is the raw plaintext (legacy invites)');
-});
-
-test('verifyInviteToken never matches a submitted raw hash against a stored hash (L4 leak guard)', async () => {
-  // A 64-hex value (e.g. a hash leaked from the DB) must NOT authenticate as its
-  // own token: both params are hashes-of-the-input, so neither equals the input.
-  const stolenHash = 'a'.repeat(64);
-  const db = use([{ match: /from workspace_invites where token in/, rows: () => [] }]);
-  await verifyInviteToken(stolenHash);
-  const call = db.calls.find(c => /workspace_invites where token in/.test(c.n));
-  assert.notEqual(call.params[0], stolenHash, 'does not query for the raw submitted hash');
-  assert.notEqual(call.params[1], stolenHash, 'legacy branch also does not use the raw submitted hash');
-  assert.match(call.params[0], /^[a-f0-9]{64}$/);
-});
-
-test('verifyInviteToken returns null for missing/expired/revoked (no row)', async () => {
-  use([{ match: /from workspace_invites/, rows: () => [] }]);
-  assert.equal(await verifyInviteToken('nope'), null);
-  assert.equal(await verifyInviteToken(''), null);
-});
-
-test('verifyMcpToken prefers an agent token, then falls back to an invite token', async () => {
+test('verifyMcpToken prefers a per-agent credential', async () => {
   use([{ match: /from workspace_agents where connect_token_hash/, rows: () => [{ id: 'a1', workspace_id: WS, name: 'Coder', handle: 'coder', enabled: true }] }]);
   assert.equal((await verifyMcpToken('aga')).kind, 'agent');
+});
+
+test('a legacy human invite cannot authenticate at MCP', async () => {
   resetTestState();
-  use([
+  const db = use([
     { match: /from workspace_agents where connect_token_hash/, rows: () => [] },
-    { match: /from workspace_invites/, rows: () => [{ id: 'inv-1', workspace_id: WS, email: '' }] },
+    { match: /from workspaces where mcp_token_hash/, rows: () => [] },
+    { match: /from workspace_invites/, rows: () => {
+      throw new Error('MCP authentication must not query legacy invites');
+    } },
   ]);
-  const i = await verifyMcpToken('invite');
-  assert.equal(i.kind, 'invite');
-  assert.equal(i.name, 'MCP client'); // empty email → default label
+  assert.equal(await verifyMcpToken('legacy-human-invite'), null);
+  assert.ok(
+    !db.calls.some((call) => /workspace_invites/.test(call.n)),
+    'the MCP verifier chain must not even consult workspace_invites',
+  );
 });
 
 test('resolveWorkspaceAgentByHandle matches by handle (slugged)', async () => {
@@ -138,16 +114,25 @@ test('claimMcpJob with no agent claims nothing', async () => {
 
 test('claimMcpJob refreshes presence and atomically claims the oldest queued MCP job', async () => {
   const db = use([
-    { match: /update agent_jobs set status = 'running'/, rows: () => [{ id: 'job1', workspace_id: WS, agent_id: 'a1', session_id: 'ch-1', prompt: 'do', metadata: JSON.stringify({ mode: 'mcp', threadParentId: null }) }] },
-    { match: /select \* from workspace_agents where id = \$1/, rows: () => [{ id: 'a1', name: 'Q', handle: 'q', model: 'auto', workspace_id: WS }] },
+    { match: /with claimable_job as materialized/, rows: () => [{
+      id: 'job1', workspace_id: WS, agent_id: 'a1', session_id: 'ch-1', prompt: 'do',
+      metadata: JSON.stringify({ mode: 'mcp', threadParentId: null }),
+      current_agent: { id: 'a1', name: 'Q', handle: 'q', model: 'auto', workspace_id: WS },
+    }] },
   ]);
   const out = await claimMcpJob({ workspaceId: WS, agentId: 'a1' });
   assert.equal(out.jobId, 'job1');
   assert.equal(out.prompt, 'do');
   assert.equal(hasMcpPresence('a1'), true);
-  const claim = db.calls.find((c) => /update agent_jobs set status = 'running'/.test(c.n));
-  assert.ok(/for update skip locked/.test(claim.n));
-  assert.ok(/agent_id = \$2/.test(claim.n));
+  const claim = db.calls.find((c) => /with claimable_job as materialized/.test(c.n));
+  assert.ok(/for update of j, s, a skip locked/.test(claim.n));
+  assert.ok(/j\.agent_id = \$2/.test(claim.n));
+  assert.ok(/s\.deleted_at is null/.test(claim.n));
+  assert.ok(/a\.enabled is true/.test(claim.n));
+  assert.ok(/a\.mcp_approved is true/.test(claim.n));
+  assert.ok(/jsonb_array_elements/.test(claim.n));
+  assert.equal(db.calls.some((c) => /select \* from workspace_agents/.test(c.n)), false,
+    'the payload comes from the same locked current-agent row as the claim');
 });
 
 test('claimMcpJob returns null when the queue is empty', async () => {
@@ -157,7 +142,12 @@ test('claimMcpJob returns null when the queue is empty', async () => {
 
 // --- submitMcpJobResult -----------------------------------------------------
 
-function lookup(job) { return { match: /select j\.\*, a\.name as agent_name/, rows: () => (job ? [job] : []) }; }
+function lookup(job) {
+  return {
+    match: /select status, metadata from agent_jobs/,
+    rows: () => (job ? [{ status: job.status, metadata: job.metadata }] : []),
+  };
+}
 
 test('submitMcpJobResult rejects missing job / non-mcp / non-running', async () => {
   use([lookup(null)]);
@@ -172,13 +162,62 @@ test('submitMcpJobResult rejects missing job / non-mcp / non-running', async () 
 
 test('submitMcpJobResult finalizes a running MCP job and rewrites the placeholder', async () => {
   const db = use([
-    lookup({ id: 'j', workspace_id: WS, agent_id: 'a1', session_id: 'ch-1', status: 'running', agent_name: 'Q', agent_handle: 'q', metadata: JSON.stringify({ mode: 'mcp', responseMessageId: 'm1', threadParentId: null }) }),
-    { match: /update agent_jobs set status = \$2/, rows: () => [{ id: 'j', status: 'done' }] },
+    { match: /^select j\.\*, a\.name as agent_name.*join chat_sessions s/, rows: () => [{
+      id: 'j', workspace_id: WS, agent_id: 'a1', session_id: 'ch-1', status: 'running',
+      agent_name: 'Q', agent_handle: 'q',
+      metadata: JSON.stringify({ mode: 'mcp', responseMessageId: 'm1', threadParentId: null }),
+    }] },
+    { match: /update agent_jobs set status = \$2/, rows: (p) => [{
+      id: 'j', workspace_id: WS, agent_id: 'a1', session_id: 'ch-1', status: p[1],
+      metadata: p[4],
+    }] },
     { match: /update messages set content = \$2/, rows: (p) => [{ id: 'm1', session_id: 'ch-1', content: p[1] }] },
   ]);
   const out = await submitMcpJobResult({ workspaceId: WS, agentId: 'a1', jobId: 'j', responseText: 'the answer' });
   assert.deepEqual(out, { jobId: 'j', status: 'done' });
   assert.equal(db.calls.find((c) => /update messages set content = \$2/.test(c.n)).params[1], 'the answer');
+  const final = db.calls.find((c) => /^select j\.\*, a\.name as agent_name.*join chat_sessions s/.test(c.n));
+  assert.match(final.n, /s\.deleted_at is null/);
+  assert.match(final.n, /a\.enabled is true/);
+  assert.match(final.n, /a\.mcp_approved is true/);
+  assert.match(final.n, /jsonb_array_elements/);
+  assert.match(final.n, /for update of j, s, a/);
+  assert.match(final.n, /j\.status = 'running'/);
+  assert.ok(
+    db.calls.findIndex((c) => /update agent_jobs set status = \$2/.test(c.n))
+      < db.calls.findIndex((c) => /update messages set content = \$2/.test(c.n)),
+    'the terminal transition and transcript write share the transaction; neither can commit alone',
+  );
+});
+
+test('an MCP transcript fault leaves the result retryable instead of stranding a terminal job', async () => {
+  let transcriptAttempts = 0;
+  const db = use([
+    { match: /^select j\.\*, a\.name as agent_name.*join chat_sessions s/, rows: () => [{
+      id: 'j', workspace_id: WS, agent_id: 'a1', session_id: 'ch-1', status: 'running',
+      agent_name: 'Q', agent_handle: 'q',
+      metadata: { mode: 'mcp', responseMessageId: 'm1', threadParentId: null },
+    }] },
+    { match: /update agent_jobs set status = \$2/, rows: (p) => [{
+      id: 'j', workspace_id: WS, agent_id: 'a1', session_id: 'ch-1', status: p[1], metadata: p[4],
+    }] },
+    { match: /update messages set content = \$2/, rows: (p) => {
+      transcriptAttempts += 1;
+      if (transcriptAttempts === 1) throw new Error('transient transcript write failure');
+      return [{ id: 'm1', session_id: 'ch-1', content: p[1] }];
+    } },
+  ]);
+
+  await assert.rejects(
+    () => submitMcpJobResult({ workspaceId: WS, agentId: 'a1', jobId: 'j', responseText: 'the answer' }),
+    /transient transcript write failure/,
+  );
+  const retried = await submitMcpJobResult({
+    workspaceId: WS, agentId: 'a1', jobId: 'j', responseText: 'the answer',
+  });
+  assert.deepEqual(retried, { jobId: 'j', status: 'done' });
+  assert.equal(transcriptAttempts, 2);
+  assert.equal(db.calls.filter((c) => /update agent_jobs set status = \$2/.test(c.n)).length, 2);
 });
 
 // --- reaper + finalize edge -------------------------------------------------
@@ -186,6 +225,11 @@ test('submitMcpJobResult finalizes a running MCP job and rewrites the placeholde
 test('reapStuckMcpJobs finalizes stale queued/running mcp jobs with an error', async () => {
   const db = use([
     { match: /where \(j\.metadata->>'mode'\) = 'mcp' and j\.status in/, rows: () => [{ id: 'j1', workspace_id: WS, agent_id: 'a1', session_id: 'ch-1', agent_name: 'Q', agent_handle: 'q', metadata: JSON.stringify({ responseMessageId: 'm1', mode: 'mcp' }) }] },
+    { match: /^select j\.\*, a\.name as agent_name.*join chat_sessions s/, rows: () => [{
+      id: 'j1', workspace_id: WS, agent_id: 'a1', session_id: 'ch-1', status: 'running',
+      agent_name: 'Q', agent_handle: 'q',
+      metadata: { responseMessageId: 'm1', mode: 'mcp' },
+    }] },
     { match: /update agent_jobs set status = \$2/, rows: () => [{ id: 'j1', status: 'error' }] },
     { match: /update messages set content = \$2/, rows: (p) => [{ id: 'm1', content: p[1] }] },
   ]);
@@ -207,21 +251,12 @@ test('finalizeAgentJobResult inserts a fresh message when there is no placeholde
 const { registerAgentRequest, finalizeRegistrationApproval, decideAgentRegistration, getRegistrationStatus, verifyWorkspaceMcpToken, verifyUserAuthMcpToken, createWorkspaceMcpToken, hashAgentToken } = __test;
 
 test('verifyWorkspaceMcpToken resolves the one workspace token + auto-approve flag', async () => {
-  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS, user_id: 'owner-1', mcp_auto_approve: true }] }]);
-  // ownerUserId is SECURITY-RELEVANT, not decoration: server/mcp.cjs
-  // mcpSubjectUserId reads private sessions AS this user, so a workspace token
-  // that loses it silently stops being able to open its owner's own DMs.
+  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS, mcp_auto_approve: true }] }]);
   assert.deepEqual(await verifyWorkspaceMcpToken('agw_x'), {
-    kind: 'workspace', workspaceId: WS, ownerUserId: 'owner-1', name: 'MCP client', autoApprove: true,
+    kind: 'workspace', workspaceId: WS, name: 'MCP client', autoApprove: true,
   });
   resetTestState();
 
-  // A workspace row with no owner must resolve to '' and NOT to undefined/null:
-  // mcpSubjectUserId treats a falsy value as "no subject", which denies private
-  // sessions. Anything else risks a null landing in a `= $n::uuid` comparison.
-  use([{ match: /from workspaces where mcp_token_hash = \$1/, rows: () => [{ id: WS, user_id: null, mcp_auto_approve: false }] }]);
-  assert.equal((await verifyWorkspaceMcpToken('agw_x')).ownerUserId, '');
-  resetTestState();
   use([{ match: /from workspaces where mcp_token_hash/, rows: () => [] }]);
   assert.equal(await verifyWorkspaceMcpToken('nope'), null);
 });

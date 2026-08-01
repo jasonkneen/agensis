@@ -308,6 +308,7 @@ test('re-granting an existing PARTICIPANT does not demote them to a grant', asyn
 
 test('sessionReadableSql filters expiry and checks membership', () => {
  const sql = core.sessionReadableSql('s', '$2').replace(/\s+/g, ' ');
+ assert.match(sql, /s\.deleted_at is null/, 'a deleted conversation is DB-only');
  assert.match(sql, /chat_session_members/, 'membership must be part of the predicate');
  assert.match(sql, /expires_at is null or csm\.expires_at > now\(\)/, 'expiry must be evaluated in SQL');
  assert.match(sql, /coalesce\(s\.visibility, 'workspace'\) <> 'private'/);
@@ -329,12 +330,66 @@ test('sessionReadableSql groups its OR correctly', () => {
  const sql = core.sessionReadableSql('s', '$2');
  const beforeOr = sql.slice(0, sql.indexOf(' or exists'));
  assert.equal(
-  (beforeOr.match(/\(/g) || []).length - (beforeOr.match(/\)/g) || []).length, 1,
+  (beforeOr.match(/\(/g) || []).length - (beforeOr.match(/\)/g) || []).length, 2,
   'the two public conditions must be bracketed together as one OR operand',
  );
 });
 
-test('appendSessionAccessClause constrains chat_sessions and messages, and nothing else', () => {
+test('sessionReadableSql can lock the qualifying private-member row for a mutation', () => {
+ const sql = core.sessionReadableSql('s', '$2', { lockMembership: true });
+ assert.match(sql, /from chat_session_members csm[\s\S]*for share/);
+});
+
+test('the row-at-a-time gate rejects a deleted conversation before privacy membership', async () => {
+ await assert.rejects(
+  core.enforceSessionReadAccess({
+   userId: OWNER,
+   sessionId: DM,
+   sessionRow: {
+    id: DM,
+    visibility: 'private',
+    folder: 'Direct messages',
+    deleted_at: '2026-07-31T12:00:00.000Z',
+   },
+   db: async () => {
+    throw new Error('a complete session row must not trigger a second lookup');
+   },
+  }),
+  { status: 404, message: 'Conversation not found' },
+ );
+});
+
+test('the row-at-a-time gate re-reads a partial session row before deciding privacy', async () => {
+ const reads = [];
+ await assert.rejects(
+  core.enforceSessionReadAccess({
+   userId: OUTSIDER,
+   sessionId: DM,
+   // Having the deletion marker is not enough: without visibility/folder this
+   // row cannot prove that the conversation is workspace-visible.
+   sessionRow: { id: DM, deleted_at: null },
+   db: async (sql) => {
+    const normalized = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+    reads.push(normalized);
+    if (normalized.startsWith('select id, visibility, folder, deleted_at from chat_sessions')) {
+     return [{
+      id: DM,
+      visibility: 'private',
+      folder: 'Direct messages',
+      deleted_at: null,
+     }];
+    }
+    if (normalized.startsWith('select 1 from chat_session_members')) return [];
+    throw new Error(`Unexpected session access query: ${sql}`);
+   },
+  }),
+  { status: 403, message: 'This conversation is private' },
+ );
+ assert.match(reads[0], /visibility, folder, deleted_at/);
+ assert.ok(reads.some((sql) => sql.startsWith('select 1 from chat_session_members')));
+});
+
+test('appendSessionAccessClause constrains every workspace-wide session-bearing result', () => {
  const base = { clause: ' WHERE "chat_sessions"."workspace_id" = $1', params: ['w1'] };
  const sessions = core.appendSessionAccessClause({ ...base, params: [...base.params] }, OWNER, 'chat_sessions');
  assert.match(sessions.clause, /EXISTS \(SELECT 1 FROM chat_sessions cs WHERE cs\.id = "chat_sessions"\."id"/);
@@ -343,6 +398,56 @@ test('appendSessionAccessClause constrains chat_sessions and messages, and nothi
  const messages = core.appendSessionAccessClause({ clause: '', params: [] }, OWNER, 'messages');
  assert.match(messages.clause, /cs\.id = "messages"\."session_id"/, 'messages joins through session_id');
  assert.match(messages.clause, /^ WHERE /, 'an empty base clause still produces a valid WHERE');
+
+ const permissionRequests = core.appendSessionAccessClause(
+  { clause: ' WHERE "agent_permission_requests"."workspace_id" = $1', params: ['w1'] },
+  OWNER,
+  'agent_permission_requests',
+ );
+ assert.match(
+  permissionRequests.clause,
+  /cs\.id = "agent_permission_requests"\."session_id"/,
+  'permission requests inherit the privacy of the conversation holding the tool call',
+ );
+ assert.match(
+  permissionRequests.clause,
+  /"agent_permission_requests"\."session_id" IS NULL OR EXISTS/,
+  'legacy unattached requests keep their previous workspace visibility',
+ );
+ assert.deepEqual(permissionRequests.params, ['w1', OWNER]);
+
+ for (const table of ['huddles', 'huddle_events']) {
+  const scoped = core.appendSessionAccessClause(
+   { clause: ` WHERE "${table}"."workspace_id" = $1`, params: ['w1'] },
+   OWNER,
+   table,
+  );
+  assert.match(
+   scoped.clause,
+   new RegExp(`cs\\.id = "${table}"\\."session_id"`),
+   `${table} must inherit the host session's privacy on workspace-wide lists`,
+  );
+  assert.deepEqual(scoped.params, ['w1', OWNER]);
+ }
+
+ for (const table of ['thread_items', 'agent_jobs', 'agent_schedules']) {
+  const scoped = core.appendSessionAccessClause(
+   { clause: ` WHERE "${table}"."workspace_id" = $1`, params: ['w1'] },
+   OWNER,
+   table,
+  );
+  assert.match(
+   scoped.clause,
+   new RegExp(`cs\\.id = "${table}"\\."session_id"`),
+   `${table} must inherit its source conversation on a workspace-wide list`,
+  );
+  assert.doesNotMatch(
+   scoped.clause,
+   new RegExp(`"${table}"\\."session_id" IS NULL OR EXISTS`),
+   `${table} has no workspace-visible legacy/null row class`,
+  );
+  assert.deepEqual(scoped.params, ['w1', OWNER]);
+ }
 
  // Untouched tables must come back byte-identical, or this helper would start
  // silently filtering things that have nothing to do with sessions.
@@ -355,12 +460,13 @@ test('appendSessionAccessClause constrains chat_sessions and messages, and nothi
 // The MCP surface
 // ---------------------------------------------------------------------------
 
-test('an AGENT is scoped by participation, a human by membership', () => {
+test('an AGENT is scoped by participation, a human by membership, and a workspace principal to visible sessions', () => {
  // The core product loop: an agent must keep reading its own DM.
  // chat_session_members holds USER ids and an agent is not a user, so the two
  // identities cannot share a branch.
- const { buildTools } = require('../server/mcp.cjs').__test;
+ const { buildTools, mcpSessionScopeSql } = require('../server/mcp.cjs').__test;
  assert.ok(typeof buildTools === 'function');
+ assert.ok(typeof mcpSessionScopeSql === 'function');
 
  const mcpSrc = require('node:fs').readFileSync(require('node:path').join(__dirname, '../server/mcp.cjs'), 'utf8');
  // Source-text, because these branches are inside a SQL string builder that is
@@ -369,7 +475,26 @@ test('an AGENT is scoped by participation, a human by membership', () => {
  assert.match(mcpSrc, /function mcpSessionScopeSql/);
  assert.match(mcpSrc, /identity\?\.kind === 'agent' && identity\.agentId/);
  assert.match(mcpSrc, /mp->>'agent_id'/, 'the agent branch must key on the roster, not on members');
- assert.match(mcpSrc, /kind === 'workspace' && identity\.ownerUserId/, 'a workspace token reads as its owner');
+
+ // A workspace token is a control-plane principal, not a user session. It gets
+ // the open-session predicate with no membership bind and therefore cannot read
+ // an owner's or member's private session.
+ const workspaceParams = [];
+ const workspaceScope = mcpSessionScopeSql(
+  { kind: 'workspace', workspaceId: WORKSPACE, ownerUserId: OWNER },
+  's',
+  workspaceParams,
+ );
+ assert.deepEqual(workspaceParams, [], 'workspace scope must not bind any borrowed user id');
+ assert.doesNotMatch(workspaceScope, /chat_session_members/);
+ assert.match(workspaceScope, /visibility/);
+ assert.match(workspaceScope, /Direct messages/);
+ assert.doesNotMatch(mcpSrc, /kind === 'workspace' && identity\.ownerUserId/);
+
+ const userParams = [];
+ const userScope = mcpSessionScopeSql({ kind: 'user', userId: OWNER }, 's', userParams);
+ assert.deepEqual(userParams, [OWNER]);
+ assert.match(userScope, /chat_session_members/, 'a real user keeps their membership branch');
 
  // Every tool that names a channel must go through the gate.
  const callSites = mcpSrc.match(/assertChannelInWorkspace\(db, \w+, identity\)/g) || [];
@@ -466,7 +591,66 @@ test('a private row with an unresolvable member set is sent to nobody', async ()
  assert.equal(sent.length, 0, 'a failed membership lookup must withhold, never broadcast');
 });
 
-test('list_channels and search_messages carry the scope predicate', () => {
+test('message fanout reauthorizes the current session audience after a public channel becomes private', async () => {
+ const { createRealtime } = require('../server/realtime.cjs');
+ let audience = { memberUserIds: null };
+ const realtime = createRealtime({
+  ensureTable: (table) => table,
+  forbidden: (message) => Object.assign(new Error(message), { status: 403 }),
+  enqueueFlowWebhookEvents: async () => {},
+  enqueueAutomationRuns: async () => [],
+  logMessageActivity: () => {},
+  sessionRealtimeAudience: async (sessionId) => (
+   sessionId === CHANNEL ? audience : null
+  ),
+ });
+ const socket = (userId) => realtime.registerTestWebsocketClient({
+  userId,
+  readyState: 1,
+  subscriptions: [{
+   type: 'db_changes',
+   table: 'messages',
+   event: '*',
+   schema: 'public',
+   filter: `session_id=eq.${CHANNEL}`,
+  }],
+  sent: [],
+  send(raw) { this.sent.push(JSON.parse(raw)); },
+ });
+ const member = socket(OWNER);
+ const outsider = socket(OUTSIDER);
+ const row = {
+  id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  session_id: CHANNEL,
+  role: 'user',
+  sender_kind: 'user',
+  sender_id: OWNER,
+  content: 'current-audience proof',
+ };
+
+ realtime.notifyDbSubscribers('messages', 'INSERT', [row]);
+ await new Promise((resolve) => setTimeout(resolve, 20));
+ assert.equal(member.sent.length, 1, 'an open channel still reaches a subscribed workspace reader');
+ assert.equal(outsider.sent.length, 1, 'open-channel fanout remains unchanged');
+
+ member.sent.length = 0;
+ outsider.sent.length = 0;
+ audience = { memberUserIds: new Set([OWNER]) };
+ // The same bindings survive. Only the current audience resolver changes,
+ // matching a privacy update committed by the other backend process.
+ realtime.notifyDbSubscribers('messages', 'INSERT', [{ ...row, id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }]);
+ await new Promise((resolve) => setTimeout(resolve, 20));
+ assert.equal(member.sent.length, 1, 'a current private-session member still receives the message');
+ assert.equal(outsider.sent.length, 0, 'a socket authorized while public is not authorized forever');
+
+ member.sent.length = 0;
+ audience = null;
+ realtime.notifyDbSubscribers('messages', 'INSERT', [{ ...row, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }]);
+ await new Promise((resolve) => setTimeout(resolve, 20));
+ assert.equal(member.sent.length, 0, 'an unresolvable current audience fails closed');
+});
+
+test('aggregate reads and item-id-only thread updates carry the session scope', () => {
  const mcpSrc = require('node:fs').readFileSync(require('node:path').join(__dirname, '../server/mcp.cjs'), 'utf8');
  // search_messages is the widest read in the MCP surface — it spans every
  // session at once, and was returning matches out of other people's DMs.
@@ -474,4 +658,10 @@ test('list_channels and search_messages carry the scope predicate', () => {
  assert.match(search.slice(0, 2000), /mcpSessionScopeSql\(identity, 's', params\)/);
  const list = mcpSrc.slice(mcpSrc.indexOf("name: 'list_channels'"));
  assert.match(list.slice(0, 2000), /mcpSessionScopeSql\(identity, 'chat_sessions', params\)/);
+ const updateThreadItem = mcpSrc.slice(mcpSrc.indexOf("name: 'update_thread_item'"));
+ assert.match(
+  updateThreadItem.slice(0, 2500),
+  /assertChannelInWorkspace\(db, existing\[0\]\.session_id, identity\)/,
+  'an item-id-only update must resolve and gate its parent session before returning private thread data',
+ );
 });

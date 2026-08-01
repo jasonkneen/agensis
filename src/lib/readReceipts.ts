@@ -35,7 +35,13 @@
 // messages read that arrived after the reader left.
 
 export interface SessionReadMarker {
+  /** Stable row identity; lets a delayed DELETE target the exact pre-opt-out row. */
+  marker_id: string;
+  /** Monotonic server generation used only to order asynchronous realtime rows. */
+  event_version: string;
   session_id: string;
+  /** Null for the channel timeline; otherwise the root message of one thread. */
+  thread_parent_id?: string | null;
   /**
    * The reader — a human `app_users.id` OR an agent `workspace_agents.id`. One
    * opaque id either way, so the client resolves a name the same for both and
@@ -46,11 +52,16 @@ export interface SessionReadMarker {
   reader_kind?: string;
   /** ISO timestamp, resolved server-side from `messages.created_at`. */
   read_at: string;
+  /** Exact high-water row, used to break equal-created_at ties without guessing. */
+  last_seen_message_id: string;
 }
 
 /** The subset of a message this module needs. Keeps it free of the app types. */
 export interface ReceiptMessage {
   id: string;
+  session_id?: string | null;
+  deleted_at?: string | null;
+  deleted?: boolean;
   created_at?: string | null;
   sender_kind?: string | null;
   sender_id?: string | null;
@@ -127,7 +138,7 @@ export function decideReceiptEmit(input: ReceiptEmitInput): ReceiptEmitDecision 
   if (!flush && visibility !== 'visible') return { messageId: null, reason: 'hidden' };
   if (!newestVisible || !newestVisible.id) return { messageId: null, reason: 'nothing-visible' };
   if (newestVisible.id === state.lastSentMessageId) return { messageId: null, reason: 'unchanged' };
-  if (isOwnMessage(newestVisible, currentUserId)) return { messageId: null, reason: 'own-message' };
+  if (isOwnReceiptMessage(newestVisible, currentUserId)) return { messageId: null, reason: 'own-message' };
   if (!flush && now - state.lastSentAt < RECEIPT_REARM_MS) return { messageId: null, reason: 'throttled' };
   return { messageId: newestVisible.id };
 }
@@ -140,10 +151,37 @@ export function noteReceiptSent(_state: ReceiptEmitState, messageId: string, now
   return { lastSentMessageId: messageId, lastSentAt: now };
 }
 
-function isOwnMessage(message: ReceiptMessage, currentUserId: string | null): boolean {
+export function isOwnReceiptMessage(message: ReceiptMessage, currentUserId: string | null): boolean {
   if (!currentUserId) return false;
   if (message.sender_kind === 'agent') return false;
   return String(message.sender_id || '') === String(currentUserId);
+}
+
+/**
+ * Select the newest non-own message the reader can truthfully have seen.
+ *
+ * The transcript array is the loaded data set, not the viewport. `nearBottom`
+ * is therefore load-bearing: when somebody has scrolled up, a realtime append
+ * exists in the array but is physically off screen. Marking it would claim a
+ * read that never happened. Scanning backwards skips a trailing own post so the
+ * inbound message immediately before it can still be acknowledged.
+ */
+export function receiptTargetForViewport(
+  messages: readonly ReceiptMessage[],
+  currentUserId: string | null,
+  options: { surfaceActive: boolean; nearBottom: boolean },
+): ReceiptMessage | null {
+  if (!options.surfaceActive || !options.nearBottom) return null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      message?.id
+      && !message.deleted
+      && !message.deleted_at
+      && !isOwnReceiptMessage(message, currentUserId)
+    ) return message;
+  }
+  return null;
 }
 
 /**
@@ -163,9 +201,16 @@ function isOwnMessage(message: ReceiptMessage, currentUserId: string | null): bo
 export function readersOf(
   message: ReceiptMessage,
   markers: readonly SessionReadMarker[],
+  threadParentId: string | null = null,
+  orderedMessages: readonly ReceiptMessage[] = [],
 ): string[] {
   const createdAt = message.created_at ? Date.parse(message.created_at) : NaN;
   if (!Number.isFinite(createdAt)) return [];
+  const messageOrder = new Map<string, number>();
+  orderedMessages.forEach((row, index) => {
+    if (row?.id) messageOrder.set(String(row.id), index);
+  });
+  const messageIndex = messageOrder.get(String(message.id));
   // The author's id — a user id for a human message, an agent id for an agent
   // message. Reader ids share that namespace, so a single equality check excludes
   // the author of EITHER kind: "you read your own message" is not information,
@@ -173,8 +218,25 @@ export function readersOf(
   const authorId = String(message.sender_id || '');
   const readers: string[] = [];
   for (const marker of markers) {
-    const readAt = Date.parse(marker.read_at);
-    if (!Number.isFinite(readAt) || readAt < createdAt) continue;
+    if (
+      message.session_id
+      && marker.session_id
+      && String(marker.session_id) !== String(message.session_id)
+    ) continue;
+    const markerScope = marker.thread_parent_id == null ? null : String(marker.thread_parent_id);
+    if (markerScope !== (threadParentId == null ? null : String(threadParentId))) continue;
+    const markerIndex = messageOrder.get(String(marker.last_seen_message_id || ''));
+    if (messageIndex != null && markerIndex != null) {
+      if (markerIndex < messageIndex) continue;
+    } else {
+      const readAt = Date.parse(marker.read_at);
+      if (!Number.isFinite(readAt) || readAt < createdAt) continue;
+      // JSON dates collapse Postgres microseconds to milliseconds. When the
+      // exact marker target is outside this loaded page, an equal serialized
+      // time does not establish which sibling came first. Equality is safe only
+      // for the exact target; every other case under-reports rather than lies.
+      if (readAt === createdAt && String(marker.last_seen_message_id) !== String(message.id)) continue;
+    }
     const readerId = String(marker.reader_id);
     if (authorId && readerId === authorId) continue;
     if (!readers.includes(readerId)) readers.push(readerId);
@@ -200,9 +262,9 @@ export function receiptAnchorIds(
   if (!currentUserId) return anchors;
   for (let i = 0; i < messages.length; i += 1) {
     const message = messages[i];
-    if (!isOwnMessage(message, currentUserId)) continue;
+    if (!isOwnReceiptMessage(message, currentUserId)) continue;
     const next = messages[i + 1];
-    if (!next || !isOwnMessage(next, currentUserId)) anchors.add(message.id);
+    if (!next || !isOwnReceiptMessage(next, currentUserId)) anchors.add(message.id);
   }
   return anchors;
 }

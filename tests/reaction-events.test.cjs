@@ -147,6 +147,7 @@ function messageRow(overrides = {}) {
   return {
     id: MESSAGE,
     session_id: SESSION,
+    role: 'assistant',
     reactions: {},
     sender_kind: 'agent',
     sender_id: 'agent-7',
@@ -185,12 +186,22 @@ function makeDb({ message, connections = [connectionRow()], failDeliveryInsert =
       if (q.startsWith('select id, workspace_id from chat_sessions where id')) {
         return String(params[0]) === SESSION ? [{ id: SESSION, workspace_id: WORKSPACE }] : [];
       }
+      if (q.startsWith('select id, visibility, folder, deleted_at from chat_sessions where id')) {
+        return String(params[0]) === SESSION
+          ? [{ id: SESSION, visibility: 'workspace', folder: 'Channels', deleted_at: null }]
+          : [];
+      }
+      if (q.startsWith('select role, sender_kind, sender_id from messages')) {
+        return String(params[0]) === MESSAGE && String(params[1]) === SESSION
+          ? [{ role: message.role, sender_kind: message.sender_kind, sender_id: message.sender_id }]
+          : [];
+      }
       // The reaction route's one pre-write read: the message's session, and the
       // session's workspace and privacy, so both gates run against the row the
       // UPDATE then names. A plain channel, so the DM gate returns immediately.
       if (q.startsWith('select m.id, m.session_id, s.workspace_id')) {
         return String(params[0]) === MESSAGE
-          ? [{ id: MESSAGE, session_id: SESSION, workspace_id: WORKSPACE, visibility: 'workspace', folder: 'General' }]
+          ? [{ id: MESSAGE, session_id: SESSION, workspace_id: WORKSPACE, visibility: 'workspace', folder: 'General', deleted_at: null }]
           : [];
       }
       // The no-op read (a repeat click, or the distinct-reaction cap) and the
@@ -236,7 +247,11 @@ function makeDb({ message, connections = [connectionRow()], failDeliveryInsert =
       if (q.startsWith('update "messages" set')) {
         messageUpdates.push({ sql: n, params });
         if (q.includes('"reactions" =')) message.reactions = params[0];
-        return [{ ...message }];
+        return [{
+          ...message,
+          __integrity_id: MESSAGE,
+          __integrity_session_id: SESSION,
+        }];
       }
       if (q.startsWith('select id, channel_id, events from flow_connections')) {
         return connections.filter(c => String(c.workspace_id) === String(params[0]));
@@ -253,6 +268,9 @@ function makeDb({ message, connections = [connectionRow()], failDeliveryInsert =
         return [];
       }
       return [];
+    },
+    async begin(callback) {
+      return callback(this);
     },
   };
   return db;
@@ -459,7 +477,14 @@ test('a channel-scoped connection only receives reactions in its own channel', a
 });
 
 test('a message edit that does not touch reactions never reads or emits', async () => {
-  const db = makeDb({ message: messageRow() });
+  const db = makeDb({
+    message: messageRow({
+      role: 'user',
+      sender_kind: 'user',
+      sender_id: USER,
+      sender_name: 'User',
+    }),
+  });
   __test.setTestDb(db);
   const token = await __test.issueToken(USER, '1');
 
@@ -470,7 +495,10 @@ test('a message edit that does not touch reactions never reads or emits', async 
       body: JSON.stringify({
         table: 'messages',
         values: { content: 'edited' },
-        filters: [{ column: 'session_id', operator: 'eq', value: SESSION }],
+        filters: [
+          { column: 'id', operator: 'eq', value: MESSAGE },
+          { column: 'session_id', operator: 'eq', value: SESSION },
+        ],
       }),
     });
     assert.equal(res.status, 200);

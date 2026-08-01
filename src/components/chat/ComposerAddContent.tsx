@@ -140,7 +140,7 @@ export function ComposerAddContent({
   uploadStatus: string;
   onUploadFiles: () => void;
   onUploadFolder: () => void;
-  onOpenFiles: () => void;
+  onOpenFiles?: () => void;
   onAddUploadedFile: (file: UploadedFile) => void;
   onAddProjectFile: (file: ProjectFileEntry, source: ProjectFileSource) => void;
   onAddDocument: (doc: Document) => void;
@@ -168,12 +168,14 @@ export function ComposerAddContent({
           </Button>
         </div>
         {uploadStatus && <div className="px-1 pt-1 text-xs text-muted-foreground">{uploadStatus}</div>}
-        <ComposerAddRow
-          icon={<Paperclip />}
-          label="Browse file list"
-          detail="Uploaded, workspace, and connected agent files"
-          onClick={onOpenFiles}
-        />
+        {onOpenFiles && (
+          <ComposerAddRow
+            icon={<Paperclip />}
+            label="Browse file list"
+            detail="Uploaded, workspace, and connected agent files"
+            onClick={onOpenFiles}
+          />
+        )}
         {uploadedFiles.slice(0, 4).map(file => (
           <ComposerAddRow
             key={file.id}

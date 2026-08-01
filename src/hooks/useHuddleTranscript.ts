@@ -1,7 +1,16 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { backendClient, apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import { messageText } from '../lib/chatStream';
+import { redactDeletedMessage } from '../lib/messageTombstone';
+import {
+  applyMessageRow,
+  createMessageSnapshotOverlay,
+  reconcileMessageSnapshot,
+  recordMessageSnapshotChange,
+  resetMessageSnapshotOverlay,
+} from '../lib/messageSnapshot';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
+import { useSessionRevocationSignal } from './useSessionRevocationSignal';
 import type { Message } from '../types';
 
 // The huddle's own conversation: post into it, and watch it.
@@ -100,6 +109,17 @@ export function useHuddleTranscript(
   const [messages, setMessages] = useState<Message[]>(EMPTY);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const activeSessionRef = useRef<string | null>(sessionId);
+  const snapshotOverlayRef = useRef(createMessageSnapshotOverlay());
+  activeSessionRef.current = sessionId;
+  resetMessageSnapshotOverlay(snapshotOverlayRef.current, sessionId);
+
+  useSessionRevocationSignal(sessionId, () => {
+    snapshotOverlayRef.current.changes.clear();
+    setMessages(EMPTY);
+    setLoading(false);
+    setError('Access to this conversation was removed.');
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -112,8 +132,9 @@ export function useHuddleTranscript(
       .eq('session_id', sessionId)
       .order('created_at', { ascending: true })
       .then(({ data }) => {
-        if (cancelled) return;
-        setMessages(Array.isArray(data) ? data.map(normalize) : EMPTY);
+        if (cancelled || activeSessionRef.current !== sessionId) return;
+        const rows = Array.isArray(data) ? data.map(normalize) : EMPTY;
+        setMessages(reconcileMessageSnapshot(rows, snapshotOverlayRef.current, sessionId));
         setLoading(false);
       });
     return () => { cancelled = true; };
@@ -134,21 +155,23 @@ export function useHuddleTranscript(
     },
     (payload) => {
       if (!deduper.shouldProcess(payload)) return;
+      const rowSessionId = String(payload.new?.session_id || payload.old?.session_id || '');
+      if (!sessionId || rowSessionId !== sessionId || activeSessionRef.current !== sessionId) return;
       if (payload.eventType === 'DELETE') {
         const id = payload.old?.id;
-        if (id) setMessages(prev => prev.filter(m => m.id !== id));
+        if (id) {
+          recordMessageSnapshotChange(snapshotOverlayRef.current, sessionId, null, id);
+          setMessages(prev => prev.filter(m => m.id !== id));
+        }
         return;
       }
       const row = payload.new;
       if (!row?.id) return;
       const next = normalize(row);
+      recordMessageSnapshotChange(snapshotOverlayRef.current, sessionId, next);
       // Merge by id: the optimistic row this client drew and the realtime
       // INSERT that follows it are the same message, not two.
-      setMessages(prev => (
-        prev.some(m => m.id === next.id)
-          ? prev.map(m => (m.id === next.id ? { ...m, ...next } : m))
-          : [...prev, next].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
-      ));
+      setMessages(prev => applyMessageRow(prev, next));
     },
   );
 
@@ -161,7 +184,10 @@ export function useHuddleTranscript(
       return null;
     }
     setError('');
-    setMessages(prev => (prev.some(m => m.id === row.id) ? prev : [...prev, row]));
+    if (activeSessionRef.current === sessionId) {
+      recordMessageSnapshotChange(snapshotOverlayRef.current, sessionId, row);
+      setMessages(prev => applyMessageRow(prev, row));
+    }
     return row;
   }, [workspaceId, sessionId]);
 
@@ -169,5 +195,5 @@ export function useHuddleTranscript(
 }
 
 function normalize(message: Message): Message {
-  return { ...message, content: messageText(message.content) };
+  return redactDeletedMessage({ ...message, content: messageText(message.content) });
 }

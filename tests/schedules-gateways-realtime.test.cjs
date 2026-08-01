@@ -32,7 +32,22 @@ const { __test } = require('../server/index.cjs');
 // Answers only the two role queries. Anything else throws, so a path that reads
 // data this test did not anticipate announces itself instead of quietly
 // resolving undefined into an authorization decision.
-function makeDb({ owners = {}, roles = {} } = {}) {
+function makeDb({
+  owners = {},
+  roles = {},
+  sessions = {
+    'session-1': { id: 'session-1', visibility: 'workspace', folder: 'Channels' },
+  },
+  sessionMembers = {},
+  members = {},
+} = {}) {
+  const uuidParams = value => Array.isArray(value)
+    ? value
+    : String(value || '')
+      .replace(/^\{|\}$/g, '')
+      .split(',')
+      .map(item => item.replace(/^"|"$/g, ''))
+      .filter(Boolean);
   return {
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
@@ -43,11 +58,27 @@ function makeDb({ owners = {}, roles = {} } = {}) {
         const role = roles[`${params[0]}:${params[1]}`];
         return role ? [{ role }] : [];
       }
+      if (n.startsWith('select id, visibility, folder from chat_sessions where id = $1')) {
+        const session = sessions[String(params[0])];
+        return session ? [session] : [];
+      }
+      if (n.startsWith('select user_id from chat_session_members')) {
+        return (sessionMembers[String(params[0])] || members[String(params[0])] || []).map((user_id) => ({ user_id }));
+      }
       if (n.includes('with recursive chain as')) return [];
+      if (n.startsWith('select id, visibility, folder from chat_sessions')) {
+        return uuidParams(params[0]).map(id => sessions[id]).filter(Boolean);
+      }
+      if (n.startsWith('select session_id, user_id from chat_session_members')) {
+        return uuidParams(params[0]).flatMap(sessionId =>
+          (members[sessionId] || sessionMembers[sessionId] || []).map(user_id => ({ session_id: sessionId, user_id })));
+      }
       throw new Error(`Unexpected SQL in test: ${sql}`);
     },
   };
 }
+
+const flushFanout = () => new Promise(resolve => setImmediate(resolve));
 
 function fakeClient(userId, subscriptions = []) {
   const sent = [];
@@ -164,6 +195,7 @@ test('a schedule change reaches the subscriber with the full row', async () => {
     running: false,
     next_run_at: '2026-07-30T09:00:00.000Z',
   }]);
+  await flushFanout();
 
   const frames = dbFrames(client, 'agent_schedules');
   assert.equal(frames.length, 1, 'the subscriber must receive exactly one frame');
@@ -176,6 +208,33 @@ test('a schedule change reaches the subscriber with the full row', async () => {
   assert.equal(payload.new.name, 'Daily standup');
   assert.equal(payload.new.interval_seconds, 86400);
   assert.equal(payload.new.enabled, true);
+});
+
+test('a private-session schedule reaches only that session members', async () => {
+  __test.setTestDb(makeDb({
+    roles: { 'ws-1:u1': 'viewer', 'ws-1:u2': 'viewer' },
+    sessions: {
+      'dm-1': { id: 'dm-1', visibility: 'private', folder: 'Direct messages' },
+    },
+    sessionMembers: { 'dm-1': ['u1'] },
+  }));
+  const member = __test.registerTestWebsocketClient(fakeClient('u1', [scheduleBinding('ws-1')]));
+  const other = __test.registerTestWebsocketClient(fakeClient('u2', [scheduleBinding('ws-1')]));
+
+  __test.notifyDbSubscribers('agent_schedules', 'INSERT', [{
+    id: 'sched-private',
+    workspace_id: 'ws-1',
+    agent_id: 'agent-1',
+    session_id: 'dm-1',
+    name: 'Private review',
+    prompt: 'Summarise the confidential channel',
+    interval_seconds: 86400,
+    enabled: true,
+  }]);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(dbFrames(member, 'agent_schedules').length, 1);
+  assert.equal(dbFrames(other, 'agent_schedules').length, 0);
 });
 
 test('a gateway change reaches the subscriber with no key and no headers', async () => {
@@ -221,12 +280,43 @@ test('one workspace never receives another workspace rows', async () => {
     fakeClient('u2', [scheduleBinding('ws-2'), gatewayBinding('ws-2')]),
   );
 
-  __test.notifyDbSubscribers('agent_schedules', 'UPDATE', [{ id: 'sched-1', workspace_id: 'ws-1', name: 'ours' }]);
+  __test.notifyDbSubscribers('agent_schedules', 'UPDATE', [{
+    id: 'sched-1', workspace_id: 'ws-1', session_id: 'session-1', name: 'ours',
+  }]);
   __test.notifyDbSubscribers('gateway_configs', 'UPDATE', [{ id: 'gw-1', workspace_id: 'ws-1', name: 'ours' }]);
+  await flushFanout();
 
   assert.equal(dbFrames(inWorkspace, 'agent_schedules').length, 1);
   assert.equal(dbFrames(inWorkspace, 'gateway_configs').length, 1);
   assert.equal(elsewhere.sent.length, 0, 'a subscriber in ws-2 must receive nothing about ws-1');
+});
+
+test('a private-session schedule reaches only current session members', async () => {
+  __test.setTestDb(makeDb({
+    roles: { 'ws-1:member': 'viewer', 'ws-1:outsider': 'viewer' },
+    sessions: {
+      'private-1': { id: 'private-1', visibility: 'private', folder: 'Direct messages' },
+    },
+    members: { 'private-1': ['member'] },
+  }));
+  const member = __test.registerTestWebsocketClient(
+    fakeClient('member', [scheduleBinding('ws-1')]),
+  );
+  const outsider = __test.registerTestWebsocketClient(
+    fakeClient('outsider', [scheduleBinding('ws-1')]),
+  );
+
+  __test.notifyDbSubscribers('agent_schedules', 'UPDATE', [{
+    id: 'sched-private',
+    workspace_id: 'ws-1',
+    session_id: 'private-1',
+    name: 'Private reminder',
+    prompt: 'Confidential prompt',
+  }]);
+  await flushFanout();
+
+  assert.equal(dbFrames(member, 'agent_schedules').length, 1);
+  assert.equal(dbFrames(outsider, 'agent_schedules').length, 0);
 });
 
 test('a member removed mid-session stops receiving schedules and gateways', async () => {

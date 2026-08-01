@@ -30,6 +30,8 @@ function stored(overrides: Partial<StoredAgentTemplate> = {}): StoredAgentTempla
     instructions: 'Always cite the line.',
     tools: ['read'],
     skills: ['security-review'],
+    purpose: 'collaborator',
+    resourceFacets: [],
     model: 'claude-opus-5',
     runMode: 'daemon',
     runtime: 'claude',
@@ -82,6 +84,8 @@ describe('mergeTemplateSources', () => {
     expect(entry.handle).toBe('sec-reviewer');
     expect(entry.systemPrompt).toBe('You review code for security problems.');
     expect(entry.skills).toEqual(['security-review']);
+    expect(entry.purpose).toBe('collaborator');
+    expect(entry.resourceFacets).toEqual([]);
     expect(entry.runMode).toBe('daemon');
     expect(entry.stored?.soul).toBe('Sceptical.');
   });
@@ -108,6 +112,14 @@ describe('mergeTemplateSources', () => {
     );
     expect(merged[0].tools).toEqual([]);
     expect(merged[0].skills).toEqual([]);
+  });
+
+  it('round-trips authored resource intent into the gallery', () => {
+    const entry = mergeTemplateSources([], [
+      stored({ purpose: 'resource', resourceFacets: ['code', 'tooling'] }),
+    ])[0];
+    expect(entry.purpose).toBe('resource');
+    expect(entry.resourceFacets).toEqual(['tooling', 'code']);
   });
 
   it('handles empty inputs on both sides', () => {

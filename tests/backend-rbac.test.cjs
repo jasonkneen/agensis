@@ -114,11 +114,13 @@ test('stripPrivilegedDbValues removes mcp_approved and storage_path from generic
     mcp_approved: true,
     permission_mode: 'yolo',
     connect_token_hash: 'abc',
+    version: 9001,
   });
   assert.equal(agents.name, 'Coder');
   assert.equal(Object.prototype.hasOwnProperty.call(agents, 'mcp_approved'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(agents, 'permission_mode'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(agents, 'connect_token_hash'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(agents, 'version'), false);
 
   const files = core.stripPrivilegedDbValues('uploaded_files', {
     name: 'x.png',

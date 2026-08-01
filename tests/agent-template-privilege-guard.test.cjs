@@ -85,7 +85,11 @@ function makeDb({ agentRow = dangerousAgentRow(), inserted = null } = {}) {
    queries.push({ sql: raw, params });
    if (q.startsWith('select * from workspace_agents where id')) return agentRow ? [agentRow] : [];
    if (q.startsWith('insert into workspace_agent_templates')) {
-    return [inserted || { id: 'tpl-1', workspace_id: WORKSPACE, slug: params[1], name: params[2], tools: params[9], skills: params[10], source: params[16], origin: params[17] }];
+    return [inserted || {
+     id: 'tpl-1', workspace_id: WORKSPACE, slug: params[1], name: params[2],
+     tools: params[9], skills: params[10], purpose: params[11],
+     resource_facets: params[12], source: params[18], origin: params[19],
+    }];
    }
    if (q.startsWith('select * from workspace_agent_templates where id')) return [{ id: 'tpl-1', workspace_id: WORKSPACE, slug: 'ops-runner' }];
    return [];
@@ -230,9 +234,9 @@ test('the derived template records its provenance', async () => {
  await engine.saveAgentAsTemplate({ userId: USER, workspaceId: WORKSPACE, agentId: 'agent-1' });
  const params = insertedParams(db);
  // source is set by the server, never by the caller.
- assert.equal(params[16], 'derived');
- assert.equal(params[17].derivedFromAgentId, 'agent-1');
- assert.equal(params[18], USER, 'created_by is the verified session');
+ assert.equal(params[18], 'derived');
+ assert.equal(params[19].derivedFromAgentId, 'agent-1');
+ assert.equal(params[20], USER, 'created_by is the verified session');
 });
 
 test('jsonb columns are bound as OBJECTS, never as JSON strings', async () => {
@@ -244,7 +248,8 @@ test('jsonb columns are bound as OBJECTS, never as JSON strings', async () => {
  const params = insertedParams(db);
  assert.ok(Array.isArray(params[9]), 'tools bound as an array');
  assert.ok(Array.isArray(params[10]), 'skills bound as an array');
- assert.equal(typeof params[17], 'object', 'origin bound as an object');
+ assert.ok(Array.isArray(params[12]), 'resource facets bound as an array');
+ assert.equal(typeof params[19], 'object', 'origin bound as an object');
 });
 
 test('a missing agent is a 404 and writes nothing', async () => {
@@ -508,9 +513,9 @@ test('import is MANAGE, unlike authoring, and is audited', () => {
   // Provenance is set by the SERVER, never taken from the caller: a file
   // claiming source='authored' would erase the record of where it came from.
   const params = insertedParams(db);
-  assert.equal(params[16], 'imported');
-  assert.equal(typeof params[17], 'object', 'origin is bound as an object, not a JSON string');
-  assert.equal(params[17].format, 'agensis.agent-template');
+  assert.equal(params[18], 'imported');
+  assert.equal(typeof params[19], 'object', 'origin is bound as an object, not a JSON string');
+  assert.equal(params[19].format, 'agensis.agent-template');
  });
 });
 

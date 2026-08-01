@@ -21,20 +21,26 @@ const path = require('node:path');
 
 const read = (rel) => fs.readFileSync(path.resolve(__dirname, '..', rel), 'utf8');
 
-test('the daemon turn advances the read marker after loading the transcript', () => {
+test('the daemon turn advances the exact captured marker only after prompt delivery', () => {
   const src = read('server/builtin-turn.cjs');
 
-  const ctx = src.indexOf('const contextMessages = await buildAgentTurnContext(');
+  const ctx = src.indexOf('await buildAgentTurnContextSnapshot(');
   assert.ok(ctx > 0, 'the context load moved — re-point this test');
 
-  const call = src.indexOf('advanceAgentReadMarker(sessionId, agent.id)');
-  assert.ok(call > 0, 'runAgentTurn must advance the read marker; without it no daemon agent leaves a receipt');
+  const send = src.indexOf('const delivered = sendWs(connection.ws', ctx);
+  assert.ok(send > ctx, 'the daemon prompt must be sent after its context snapshot');
+  const deliveryGuard = src.indexOf('if (!delivered)', send);
+  assert.ok(deliveryGuard > send, 'a failed socket delivery must return before marking anything read');
+  const call = src.indexOf(
+    'await advanceAgentReadMarker(sessionId, agent.id, lastSeenMessageId, threadParentId)',
+    deliveryGuard,
+  );
+  assert.ok(call > deliveryGuard, 'the daemon marker must follow successful delivery of the prompt');
 
-  // ORDER IS THE POINT. Marking read before the transcript is loaded would claim
-  // a read that has not happened; the receipt has to follow the thing it attests.
-  assert.ok(
-    call > ctx,
-    'the marker must advance AFTER buildAgentTurnContext — that load IS the read',
+  assert.match(
+    src.slice(call - 200, call + 150),
+    /lastSeenMessageId/,
+    'the write must use the id captured with the delivered context',
   );
 });
 
@@ -64,7 +70,23 @@ test('a failed receipt cannot take the turn down', () => {
 
   assert.match(body, /try\s*\{/, 'the write must be inside a try');
   assert.match(body, /\}\s*catch/, 'and its failure swallowed');
-  assert.match(body, /if \(!sessionId \|\| !agentId\) return/, 'and guard missing ids');
+  assert.match(
+    body,
+    /if \(!sessionId \|\| !agentId \|\| !lastSeenMessageId\) return/,
+    'and guard every part of the exact marker identity',
+  );
+});
+
+test('job finalization cannot widen a receipt after a long-running turn', () => {
+  const jobs = read('server/agent-jobs.cjs');
+  const finalizeStart = jobs.indexOf('async function finalizeAgentJobResult(');
+  const finalizeEnd = jobs.indexOf('async function relayEndedHuddleWorkToChannel(', finalizeStart);
+  assert.ok(finalizeStart > 0 && finalizeEnd > finalizeStart);
+  assert.doesNotMatch(
+    jobs.slice(finalizeStart, finalizeEnd),
+    /advanceAgentReadMarker/,
+    'a message arriving after prompt capture must not become read at finalize time',
+  );
 });
 
 test('the SQL it imports is genuinely monotonic', () => {
@@ -74,5 +96,9 @@ test('the SQL it imports is genuinely monotonic', () => {
   const sql = require('../shared/read-receipts.cjs').ADVANCE_AGENT_READ_MARKER_SQL
     .replace(/\s+/g, ' ').toLowerCase();
   assert.match(sql, /on conflict/, 'must upsert');
-  assert.match(sql, /read_at < excluded\.read_at/, 'must only ever move the marker forward');
+  assert.match(
+    sql,
+    /\(session_read_state\.read_at, session_read_state\.last_seen_message_id\) < \(excluded\.read_at, excluded\.last_seen_message_id\)/,
+    'must only ever move the marker forward, including equal-time messages',
+  );
 });

@@ -64,7 +64,12 @@ interface WorkspaceRailProps {
   onSelectWorkspace: (workspaceId: string) => void;
   /** Omit to make the rail read-only. Resolves false when the write is rejected. */
   onRenameWorkspace?: (workspaceId: string, name: string) => Promise<boolean> | boolean;
-  onCreateWorkspace: () => void;
+ onCreateWorkspace: () => void;
+ /** True while the workspace list/repair is settling. */
+ loading?: boolean;
+ /** A recoverable load error shown instead of an empty-looking rail. */
+ loadError?: string | null;
+ onRetry?: () => void;
   /** Omitted for everyone but the system owner — the server decides, not us. */
   onOpenTenants?: () => void;
   /**
@@ -89,7 +94,10 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
   activeWorkspaceId,
   onSelectWorkspace,
   onRenameWorkspace,
-  onCreateWorkspace,
+ onCreateWorkspace,
+ loading = false,
+ loadError = null,
+ onRetry,
   onOpenTenants,
   titlebarInset = 0,
   width = WORKSPACE_RAIL_COLLAPSED_WIDTH,
@@ -205,6 +213,9 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
   // Roving tabindex: exactly one tile is reachable by Tab — the active one, so
   // tabbing into the rail lands where you already are rather than at the top.
   const tabbableId = model.activeId ?? focusOrder[0]?.id ?? null;
+  const hasTiles = model.tiles.length > 0 || model.systemTiles.length > 0;
+  const showLoading = loading && !hasTiles;
+  const showError = !loading && !hasTiles && Boolean(loadError);
 
   const renderRow = (tile: WorkspaceRailTile) => (
     <WorkspaceRow
@@ -238,6 +249,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
       data-workspace-rail
       data-expanded={expanded ? 'true' : undefined}
       aria-label="Workspaces"
+      aria-busy={showLoading ? 'true' : undefined}
       className="relative flex h-full shrink-0 flex-col gap-1.5 overflow-hidden border-r border-border bg-card/85 py-2 text-card-foreground"
       style={{ ...RAIL_WIDTH_STYLE, paddingTop: titlebarInset ? titlebarInset + 8 : undefined }}
       onKeyDown={handleKeyDown}
@@ -251,10 +263,30 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
           Tenants stays pinned below — it is an admin surface, not a workspace,
           and does not belong in the list it would otherwise appear to join. */}
       <div className="flex min-h-0 w-full flex-1 flex-col gap-1.5 overflow-y-auto overflow-x-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {model.tiles.map(renderRow)}
-
-        {model.systemTiles.length > 0 && (
+        {showLoading ? (
+          <div role="status" className="flex min-h-24 flex-col items-center justify-center gap-2 px-2 text-center text-xs text-muted-foreground">
+            <span aria-hidden="true" className="size-9 animate-pulse rounded-lg bg-muted" />
+            <span>Loading workspaces…</span>
+          </div>
+        ) : showError ? (
+          <div role="status" className="flex min-h-24 flex-col items-center justify-center gap-2 px-2 text-center text-xs text-muted-foreground">
+            <span>{loadError}</span>
+            {onRetry && (
+              <button
+                type="button"
+                className="rounded-md px-2 py-1 font-medium text-foreground underline underline-offset-2 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={onRetry}
+              >
+                Retry
+              </button>
+            )}
+          </div>
+        ) : (
           <>
+            {model.tiles.map(renderRow)}
+
+            {model.systemTiles.length > 0 && (
+             <>
             {/* The System workspace is an ordinary workspace — same tile, same
                 interactions — but it is a triage destination rather than a place
                 you work, and it appears/disappears as membership changes. Below a
@@ -270,7 +302,9 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
                 expanded ? 'mx-2' : 'mx-auto w-6',
               )}
             />
-            {model.systemTiles.map(renderRow)}
+              {model.systemTiles.map(renderRow)}
+             </>
+            )}
           </>
         )}
 
@@ -287,6 +321,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
                 type="button"
                 data-workspace-rail-create
                 onClick={onCreateWorkspace}
+                disabled={loading}
                 aria-label="Create workspace"
                 className={cn(
                   // Same literal radius as a tile — see WorkspaceRow — so the

@@ -242,8 +242,8 @@ test('the MCP tool exists, is agent-only, and declares no destination argument',
   assert.ok(start > 0 && end > start, 'could not locate the call_provider tool');
   const block = MCP.slice(start, end);
 
-  // Agent-only. An invite bearer is a transient 14-day join secret; a
-  // workspace/user token has no agent and so no skill layer to authorize against.
+  // Agent-only. Invitation URLs are not MCP credentials; a workspace/user token
+  // has no agent and therefore no skill layer to authorize against.
   assert.match(block, /kinds: \['agent'\]/);
 
   // The schema must not offer a destination. This is documentation (the dispatcher

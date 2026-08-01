@@ -52,7 +52,7 @@ function insertImage(url: string) {
 }
 
 function insertSketchCanvas() {
-  const html = `<div class="doc-sketch-wrap" contenteditable="false"><canvas class="doc-sketch-canvas" data-sketch=""></canvas><div class="doc-sketch-toolbar"><span role="button" tabindex="0" class="doc-sketch-clear">Clear</span></div><div class="doc-image-resize-handle"></div></div><p><br></p>`;
+  const html = `<div class="doc-sketch-wrap" contenteditable="false"><canvas class="doc-sketch-canvas" data-sketch=""></canvas><div class="doc-sketch-toolbar"><button type="button" class="doc-sketch-clear">Clear</button></div><div class="doc-image-resize-handle"></div></div><p><br></p>`;
   document.execCommand('insertHTML', false, html);
 }
 
@@ -381,7 +381,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
       fetchDocumentContent(doc.id).then(applyBody);
     }
     return () => { cancelled = true; };
-  }, [doc.id, doc.content, fetchDocumentContent]);
+  }, [doc.id, doc.title, doc.content, fetchDocumentContent]);
 
   // Keep embedded "Task list" blocks in sync with live task status. `tasks` is
   // websocket-backed (see useTasks), so this re-runs whenever a task's status
@@ -569,7 +569,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
         sketchDrawRef.current = null;
       }
     };
-  }, [triggerAutoSave, onUpdateTask, title]);
+  }, [doc.workspace_id, triggerAutoSave, onUpdateTask, title, workspaceId]);
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setTitle(e.target.value);

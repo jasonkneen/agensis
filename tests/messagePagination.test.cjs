@@ -2,7 +2,7 @@
 
 // NET-05 — paginated message history endpoint. Verifies the newest-page load,
 // the (created_at,id) compound cursor for paging backwards, hasMore detection,
-// ascending return order, deleted-message exclusion, and auth.
+// ascending return order, retained/redacted deletion anchors, and auth.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -42,7 +42,7 @@ function makeDb({ messages = [], sessionWorkspace = {}, roles = {}, owners = {},
         const beforeId = params[2];
         const limitMatch = q.match(/limit (\d+)/);
         const lim = limitMatch ? Number(limitMatch[1]) : 201;
-        let rows = messages.filter(m => m.session_id === sessionId && !m.deleted_at);
+        let rows = messages.filter(m => m.session_id === sessionId);
         if (before) {
           rows = rows.filter(m => (m.created_at < before) || (beforeId && m.created_at === before && m.id < beforeId));
         }
@@ -146,14 +146,16 @@ test('a same-timestamp boundary row is not skipped by the compound cursor', asyn
   });
 });
 
-test('excludes soft-deleted messages', async () => {
+test('retains a soft-deleted row as a body-free structural tombstone', async () => {
   const messages = seedMessages('sess-1', 3);
   messages[1].deleted_at = new Date().toISOString();
   __test.setTestDb(makeDb({ messages, sessionWorkspace: { 'sess-1': 'ws-1' }, roles: { 'ws-1:user-1': 'editor' }, authSecret: 'fixed' }));
   await withServer(async (baseUrl) => {
     const token = await __test.issueToken('user-1', '1');
     const body = await (await authed(baseUrl, token, '/backend/sessions/sess-1/messages?limit=10')).json();
-    assert.deepEqual(body.data.messages.map(m => m.content), ['msg 0', 'msg 2']);
+    assert.deepEqual(body.data.messages.map(m => m.id), ['m-0000', 'm-0001', 'm-0002']);
+    assert.equal(body.data.messages[1].content, 'This message was deleted.');
+    assert.ok(body.data.messages[1].deleted_at);
   });
 });
 

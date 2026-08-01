@@ -22,7 +22,7 @@ import type { FloatingWindowType } from '../../src/types';
 
 const ALL_SURFACES: TipSurface[] = [
   'canvas', 'channel', 'dm', 'document', 'agents', 'inbox', 'tasks',
-  'activity', 'memory', 'skills', 'users', 'schedules', 'tenants',
+  'activity', 'memory', 'skills', 'resources', 'users', 'schedules', 'tenants',
 ];
 
 describe('tipSurfaceFor', () => {
@@ -43,7 +43,7 @@ describe('tipSurfaceFor', () => {
 
   it('maps every window type to a surface', () => {
     const types: FloatingWindowType[] = [
-      'chat', 'document', 'memory', 'skills', 'tasks', 'activity', 'agents', 'users', 'schedules', 'inbox',
+      'chat', 'document', 'memory', 'skills', 'tasks', 'activity', 'agents', 'resources', 'users', 'schedules', 'inbox',
     ];
     for (const type of types) {
       const surface = tipSurfaceFor({ focusedWindowType: type });

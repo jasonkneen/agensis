@@ -17,11 +17,17 @@
 // is what makes an issued token stop verifying everywhere at once — including on
 // the Netlify lane, which reads the same column.
 
+const {
+ DELETE_HUMAN_READ_MARKERS_SQL,
+} = require('../shared/read-receipts.cjs');
+
 function mountAuthRoutes(app, deps = {}) {
  const {
   requireAuth, jsonError, enforceWorkspaceRole, getDb, rateLimitBlocked,
   clientIpFromReq, createPasswordHash, emailLookupRateLimiter,
   evaluatePasswordServerSide, isReservedSignupEmail, issueToken,
+  notifyDbSubscribers, revokeRealtimeAccessForMember = async () => {},
+  notifyReadReceiptPreference = () => {},
   setCachedTokenVersion, signinIpFailureLimiter, signinRateLimiter,
   signupRateLimiter, verifyPassword,
  } = deps;
@@ -159,11 +165,41 @@ function mountAuthRoutes(app, deps = {}) {
    if (fields.length === 0) return jsonError(res, 400, new Error('No fields to update'));
 
    const setClause = fields.map((field, i) => `${field} = $${i + 2}`).join(', ');
-   const rows = await getDb().unsafe(
-    `update app_users set ${setClause} where id = $1 returning id, email, display_name, accent_color, share_read_receipts, created_at`,
-    [req.userId, ...fields.map(field => updates[field])],
-   );
+   const params = [req.userId, ...fields.map(field => updates[field])];
+   let removedMarkers = [];
+   const updateSql =
+    `update app_users set ${setClause} where id = $1 returning id, email, display_name, accent_color, share_read_receipts, created_at`;
+   const rows = updates.share_read_receipts === false
+    ? await getDb().begin(async (tx) => {
+      // Updating the account row first takes the lock paired with
+      // ADVANCE_READ_MARKER_SQL's FOR SHARE. A concurrent scroll either lands
+      // before this delete or observes opt-out and writes nothing.
+      const updated = await tx.unsafe(updateSql, params);
+      if (updated[0]) {
+       removedMarkers = await tx.unsafe(
+        DELETE_HUMAN_READ_MARKERS_SQL,
+        [req.userId],
+       );
+      }
+      return updated;
+     })
+    : await getDb().unsafe(updateSql, params);
    if (!rows[0]) return jsonError(res, 404, new Error('User not found'));
+   if (updates.share_read_receipts === false) {
+    // Commit happened before either effect. Re-authorizing the socket drops a
+    // malicious/raw receipt binding immediately; DELETE frames remove this
+    // person's old eyes from every still-opted-in viewer.
+    try {
+     await revokeRealtimeAccessForMember(req.userId, { reason: 'read_receipts_disabled' });
+    } catch (error) {
+     console.error('[read-receipts] realtime opt-out revocation failed:', error?.message || error);
+    }
+    if (removedMarkers.length > 0 && typeof notifyDbSubscribers === 'function') {
+     notifyDbSubscribers('session_read_state', 'DELETE', removedMarkers);
+    }
+   } else if (updates.share_read_receipts === true) {
+    notifyReadReceiptPreference(req.userId, true);
+   }
    res.json({ data: rows[0], error: null });
   } catch (error) {
    jsonError(res, 500, error);

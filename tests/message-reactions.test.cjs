@@ -71,7 +71,7 @@ test.afterEach(() => __test.resetTestState());
 //
 // `sql` records every statement in order, which is what the round-trip
 // assertions read.
-function makeDb({ reactions = {}, roles = {}, dmMembers = [] } = {}) {
+function makeDb({ reactions = {}, roles = {}, dmMembers = [], deleted = false } = {}) {
   const sql = [];
   const state = { reactions: { ...reactions } };
   const db = {
@@ -103,11 +103,26 @@ function makeDb({ reactions = {}, roles = {}, dmMembers = [] } = {}) {
       // session's workspace and privacy, so both gates run against the row the
       // UPDATE then names. Note it does NOT select `reactions`.
       if (q.startsWith('select m.id, m.session_id, s.workspace_id')) {
+        if (deleted) return [];
         if (String(params[0]) === MESSAGE) {
-          return [{ id: MESSAGE, session_id: CHANNEL, workspace_id: WORKSPACE, visibility: 'workspace', folder: 'General' }];
+          return [{
+            id: MESSAGE,
+            session_id: CHANNEL,
+            workspace_id: WORKSPACE,
+            visibility: 'workspace',
+            folder: 'General',
+            deleted_at: null,
+          }];
         }
         if (String(params[0]) === DM_MESSAGE) {
-          return [{ id: DM_MESSAGE, session_id: DM, workspace_id: WORKSPACE, visibility: 'private', folder: 'Direct messages' }];
+          return [{
+            id: DM_MESSAGE,
+            session_id: DM,
+            workspace_id: WORKSPACE,
+            visibility: 'private',
+            folder: 'Direct messages',
+            deleted_at: null,
+          }];
         }
         return [];
       }
@@ -145,14 +160,27 @@ function makeDb({ reactions = {}, roles = {}, dmMembers = [] } = {}) {
       if (q.startsWith('select workspace_id from chat_sessions where id')) {
         return [{ workspace_id: WORKSPACE }];
       }
+      if (q.startsWith('select id, visibility, folder, deleted_at from chat_sessions where id')) {
+        return [{ id: CHANNEL, visibility: 'workspace', folder: 'Channels', deleted_at: null }];
+      }
+      if (q.startsWith('select role, sender_kind, sender_id from messages')) {
+        return [{ role: 'user', sender_kind: 'user', sender_id: OWNER }];
+      }
       if (q.startsWith('update "messages" set')) {
         // The GENERIC path. Reflect whatever it was actually allowed to write,
         // so a `reactions` value that survived the strip would be visible here.
         const setsReactions = q.includes('"reactions" =');
         if (setsReactions) state.reactions = params[0];
-        return [messageRow(state.reactions)];
+        return [{
+          ...messageRow(state.reactions),
+          __integrity_id: MESSAGE,
+          __integrity_session_id: CHANNEL,
+        }];
       }
       return [];
+    },
+    async begin(callback) {
+      return callback(this);
     },
   };
   return db;
@@ -162,8 +190,9 @@ function messageRow(reactions) {
   return {
     id: MESSAGE,
     session_id: CHANNEL,
+    role: 'user',
     reactions,
-    sender_kind: 'human',
+    sender_kind: 'user',
     sender_id: OWNER,
     sender_name: 'Owner',
     thread_parent_id: null,
@@ -233,6 +262,10 @@ test('the toggle statement carries the guard that makes the lock wait safe', () 
   for (const [name, statement] of [['add', REACTION_ADD_SQL], ['remove', REACTION_REMOVE_SQL]]) {
     assert.match(statement, /where id = \$1::uuid/, `${name} pins the row`);
     assert.match(statement, /and session_id = \$2::uuid/, `${name} pins the session it was authorized against`);
+    assert.match(statement, /and deleted_at is null/, `${name} refuses a soft-deleted message`);
+    assert.match(statement, /chat_sessions reaction_session_scope/, `${name} revalidates the session`);
+    assert.match(statement, /csm\.user_id = \$4::uuid/, `${name} binds the authenticated reactor`);
+    assert.match(statement, /for share/, `${name} locks both session classification and qualifying membership`);
     assert.match(
       statement,
       /coalesce\(reactions -> \$3::text, '\[\]'::jsonb\) @> to_jsonb\(\$4::text\)/,
@@ -241,6 +274,27 @@ test('the toggle statement carries the guard that makes the lock wait safe', () 
   }
   assert.match(REACTION_ADD_SQL, /and not coalesce/, 'add fires only when the user is absent');
   assert.doesNotMatch(REACTION_REMOVE_SQL, /and not coalesce/, 'remove fires only when the user is present');
+});
+
+test('the no-op re-read also carries current session access instead of leaking a reaction map', () => {
+  const { REACTION_CURRENT_SQL } = require('../shared/reaction-toggle.cjs');
+  assert.match(REACTION_CURRENT_SQL, /session_id = \$2::uuid/);
+  assert.match(REACTION_CURRENT_SQL, /reaction_session_scope\.deleted_at is null/);
+  assert.match(REACTION_CURRENT_SQL, /csm\.user_id = \$3::uuid/);
+});
+
+test('a soft-deleted message cannot be reacted to or reach the mutation statement', async () => {
+  const db = makeDb({ deleted: true });
+  __test.setTestDb(db);
+  const token = await __test.issueToken(OWNER, '1');
+
+  await withServer(async (baseUrl) => {
+    const response = await react(baseUrl, token, { reaction: 'check', op: 'add' });
+    assert.equal(response.status, 404);
+  });
+
+  assert.deepEqual(db.sql.filter(isToggle), []);
+  assert.deepEqual(db.state.reactions, {});
 });
 
 // ---------------------------------------------------------------------------

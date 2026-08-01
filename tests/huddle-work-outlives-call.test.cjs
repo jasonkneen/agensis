@@ -64,7 +64,7 @@ function installDb({ job = makeJob(), huddleRow = null } = {}) {
         job.status = params[1];
         return [{ ...job }];
       }
-      if (n.startsWith('select id, session_id from huddles')) {
+      if (n.includes('from huddles') && n.includes('join chat_sessions transcript_session')) {
         return huddleRow ? [huddleRow] : [];
       }
       if (n.startsWith('insert into messages (session_id,')) {
@@ -127,12 +127,14 @@ test('the lookup only matches ENDED huddles, and writes to the host, not the tra
 
   await __test.finalizeAgentJobResult(makeJob(), { responseText: 'done' });
 
-  const lookup = db.calls.find((c) => c.n.startsWith('select id, session_id from huddles'));
+  const lookup = db.calls.find((c) => c.n.includes('from huddles') && c.n.includes('join chat_sessions transcript_session'));
   assert.ok(lookup, 'the huddle is looked up before anything is copied');
   // Without this predicate every answer in a LIVE huddle would be duplicated
   // into the channel while the panel is already showing it.
   assert.match(lookup.n, /ended_at is not null/);
   assert.match(lookup.n, /transcript_session_id = \$1/);
+  assert.match(lookup.n, /transcript_session\.deleted_at is null/);
+  assert.match(lookup.n, /host_session\.deleted_at is null/);
   assert.deepEqual(lookup.params, [TRANSCRIPT]);
   const writes = relayWrites(db);
   assert.equal(writes.length, 1);

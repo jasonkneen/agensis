@@ -90,7 +90,7 @@ function browserRuntimeAssets(): Plugin {
   // failure. Hence the explicit existsSync check below.
   const fs = require('node:fs') as typeof import('node:fs');
   const resolve = (spec: string) => {
-    const full = path.resolve(__dirname, 'node_modules', spec);
+    const full = path.resolve(import.meta.dirname, 'node_modules', spec);
     if (!fs.existsSync(full)) {
       throw new Error(
         `browser runtime asset missing: ${spec}. Run npm install — the web browser panel cannot work without it.`,
@@ -169,11 +169,28 @@ export default defineConfig({
     },
   },
   server: {
+    // Parallel review/implementation worktrees live beneath this checkout.
+    // Without explicit ignores, another agent's build rewrites thousands of
+    // dist files and Vite treats every one as an application change, causing
+    // reload storms in the browser being used for acceptance testing.
+    watch: {
+      ignored: ['**/.worktrees/**', '**/.claude/worktrees/**'],
+    },
     proxy: {
       '/backend': {
         target: 'http://127.0.0.1:3142',
         changeOrigin: true,
         ws: true,
+      },
+      // Keep the single invite URL usable in local development as well as on
+      // Netlify/Fly. Clean /join/<token> navigation must reach the server-rendered
+      // join page; otherwise Vite serves the SPA shell and agents receive no
+      // redemption contract.
+      '/join': {
+        target: 'http://127.0.0.1:3142',
+        changeOrigin: true,
+        ws: false,
+        rewrite: (path) => `/backend${path}`,
       },
     },
   },

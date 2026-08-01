@@ -50,7 +50,7 @@ function makeActivityDb({ sessions = {} } = {}) {
       }];
     }
 
-    if (n.startsWith('insert into activity_events')) {
+    if (n.includes('insert into activity_events')) {
       insertAttempts.push(params);
       const messageId = params[2]; // (workspace_id, user_id, event_type? ...) -> entity_id is $3
       // Partial unique index: dedupe on entity_id for message_sent/message rows.

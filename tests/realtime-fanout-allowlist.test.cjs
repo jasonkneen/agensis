@@ -426,27 +426,25 @@ test('gateway_configs: any member may read, only manage may write', async () => 
   }
 });
 
-test('agent_schedules: any member may read, only manage may write', async () => {
+test('agent_schedules: members may read scoped rows, generic writes are refused', async () => {
   await onBothBackends(
     { roles: { 'ws-1:actor': 'viewer' } },
     { table: 'agent_schedules', op: 'select', filters: [eq('workspace_id', 'ws-1')] },
     allows,
   );
 
-  // Deliberately STRICTER than POST /backend/workspaces/:id/schedules, which asks
-  // for 'run_agents'. A schedule is a standing "run this agent on a timer" grant,
-  // and the dedicated route is the only place agent_id and session_id are checked
-  // to belong to this workspace — so an editor holding run_agents must not be able
-  // to mint one through the generic path instead.
+  // POST /backend/workspaces/:id/schedules is the only writer: it checks both
+  // workspace authority and target-session membership, validates agent/session
+  // tenancy, and clamps the interval. Even a manager must not bypass it.
   for (const [op, payload] of [
     ['insert', { values: { workspace_id: 'ws-1', name: 'nightly' } }],
     ['update', { filters: [eq('workspace_id', 'ws-1')], values: { enabled: true } }],
     ['delete', { filters: [eq('workspace_id', 'ws-1')] }],
   ]) {
     await onBothBackends(
-      { roles: { 'ws-1:actor': 'editor' } },
+      { roles: { 'ws-1:actor': 'owner' } },
       { table: 'agent_schedules', op, ...payload },
-      refusesWith(403, 'You do not have permission to manage this workspace'),
+      refusesWith(403, 'Schedules can only be changed through the dedicated schedule routes'),
     );
   }
 });

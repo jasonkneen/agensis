@@ -75,14 +75,8 @@ test('ambient_replies exists in all THREE schema places', () => {
   .filter((file) => read(path.join('supabase/migrations', file)).includes('ambient_replies'));
  assert.ok(migrations.length >= 1, 'no supabase migration adds ambient_replies');
 
- // The Netlify mirror runs its own runtime DDL over the SAME database, so it
- // must know the column too — otherwise a bootstrap served by Netlify against a
- // fresh database selects a column that does not exist and 500s.
- assert.match(
-  read('netlify/functions/backend.mjs'),
-  /ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS ambient_replies boolean NOT NULL DEFAULT true;/,
-  'missing from the Netlify mirror runtime DDL',
- );
+ // Netlify is a request/response mirror over the same database, not a second
+ // schema owner. tests/netlify-no-ddl.test.cjs keeps DDL out of that handler.
 });
 
 test('the default is true in every place that states one', () => {
@@ -92,7 +86,6 @@ test('the default is true in every place that states one', () => {
  for (const [file, pattern] of [
   ['server/index.cjs', /ambient_replies boolean NOT NULL DEFAULT true/],
   ['database/neon-schema.sql', /ambient_replies boolean NOT NULL DEFAULT true/],
-  ['netlify/functions/backend.mjs', /ambient_replies boolean NOT NULL DEFAULT true/],
  ]) {
   assert.match(read(file), pattern, `${file} must default ambient_replies to true`);
  }

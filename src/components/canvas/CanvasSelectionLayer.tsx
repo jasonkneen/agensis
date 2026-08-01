@@ -144,6 +144,7 @@ export function CanvasSelectionLayer() {
         >
           <span className="text-xs text-muted-foreground">{selectedWindowIds.length} windows selected</span>
           <button
+            type="button"
             className="ml-1 text-xs text-muted-foreground hover:text-foreground"
             onClick={clearSelection}
             aria-label="Clear selection"
