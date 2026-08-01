@@ -749,6 +749,9 @@ function mountHuddleRoutes(app, deps = {}) {
   requireAuth,
   enforceWorkspaceRole,
   enforceSessionRead,
+  assertWorkspaceRoleLocked,
+  installCreatedSessionMemberships,
+  lockPrivateSessionRoster,
   jsonError,
   notifyDbSubscribers,
   rateLimitBlocked,
@@ -762,7 +765,9 @@ function mountHuddleRoutes(app, deps = {}) {
 
  if (!app) throw new Error('mountHuddleRoutes requires an express app');
  for (const [name, value] of Object.entries({
-  getDb, requireAuth, enforceWorkspaceRole, enforceSessionRead, jsonError,
+  getDb, requireAuth, enforceWorkspaceRole, enforceSessionRead,
+  assertWorkspaceRoleLocked, installCreatedSessionMemberships,
+  lockPrivateSessionRoster, jsonError,
  })) {
   if (typeof value !== 'function') throw new Error(`mountHuddleRoutes requires deps.${name}`);
  }
@@ -882,24 +887,15 @@ function mountHuddleRoutes(app, deps = {}) {
  /**
   * Create the huddle's own conversation session and link the huddle to it.
   *
-  * ONE statement copies `participants` and `canvas_id` straight off the host
-  * session. That is not an optimisation — it is how the huddle inherits agent
-  * dispatch. The dispatch route resolves @mentions and the DM `direct: true`
-  * shortcut from the SESSION's participants, so a transcript session with an
-  * empty roster would be a room where talking to an agent silently does
-  * nothing. Copying in SQL also keeps the jsonb out of a bind entirely, which
-  * is the one place the two backends' jsonb binding rules disagree.
-  *
-  * folder='huddle' is the discriminator that keeps these out of the sidebar:
-  * a huddle is reached from its channel's marker or its live card, never from
-  * the channel list.
-  *
-  * Best-effort by design. If this fails the huddle still works — every reader
-  * falls back to the host session, which is exactly what huddles did before.
+  * The caller holds the authoritative host-session and complete private-roster
+  * locks, and runs this inside a savepoint of the huddle-creation transaction.
+  * A failure rolls back the complete transcript/member graph while preserving
+  * the huddle row, whose readers deliberately fall back to the host session.
+  * No private transcript can commit without its inherited members.
   */
- async function createTranscriptSession(huddle, hostTitle) {
+ async function createTranscriptSession(db, huddle, host) {
   const sessionId = crypto.randomUUID();
-  const title = hostTitle ? `Huddle in ${hostTitle}` : 'Huddle';
+  const title = host.title ? `Huddle in ${host.title}` : 'Huddle';
   // 'mention', NEVER the host channel's mode. A channel on 'auto' has agents
   // continue the conversation between themselves for auto_rounds turns — which
   // in a live voice call means a second agent starts talking over the first
@@ -908,32 +904,33 @@ function mountHuddleRoutes(app, deps = {}) {
   //
   // In a huddle the HUMAN drives turn-taking. An utterance mentions the active
   // agent and that agent answers; nothing else should speak unprompted.
-  const rows = await getDb().unsafe(
-   // `visibility` is copied for the same reason `participants` is: a huddle held
-   // inside a private conversation is part of that conversation. Copying it in
-   // the SAME statement is what stops a transcript session existing, even for an
-   // instant, as a world-readable copy of a private one. The member rows are
-   // copied straight after — see below.
+  const rows = await db(
+   // Privacy is inherited from the CANONICAL predicate, not the raw visibility
+   // column. A legacy DM whose folder is the fail-closed signal must produce a
+   // private transcript too.
    `insert into chat_sessions (id, workspace_id, title, model, conversation_mode, folder, canvas_id, participants, visibility)
-        select $1, $2, $3, host.model, 'mention', 'huddle', host.canvas_id, host.participants, host.visibility
+        select $1, $2, $3, host.model, 'mention', 'huddle',
+               host.canvas_id, host.participants,
+               case
+                when host.visibility = 'private' or host.folder = 'Direct messages'
+                then 'private'
+                else 'workspace'
+               end
           from chat_sessions host
-         where host.id = $4
-        returning id`,
-   [sessionId, huddle.workspace_id, title.slice(0, 200), huddle.session_id],
+         where host.id = $4::uuid
+           and host.workspace_id = $2::uuid
+           and host.deleted_at is null
+        returning id, visibility, folder`,
+   [sessionId, huddle.workspace_id, title.slice(0, 200), host.id],
   );
   if (!rows[0]) return null;
-  // Inherit the host's member list too. A private transcript with no members is
-  // a room nobody can open — the failure mode is silent (an empty huddle), so
-  // it rides in the same best-effort path as the session itself.
-  await getDb().unsafe(
-   `insert into chat_session_members (session_id, user_id, source, granted_by, expires_at)
-        select $1, m.user_id, m.source, m.granted_by, m.expires_at
-          from chat_session_members m
-         where m.session_id = $2
-      on conflict (session_id, user_id) do nothing`,
-   [rows[0].id, huddle.session_id],
-  ).catch((error) => console.error('huddle transcript member copy failed', error?.message || error));
-  const updated = await getDb().unsafe(
+  await installCreatedSessionMemberships({
+   db,
+   userId: huddle.started_by,
+   createdRows: rows,
+   lineage: [{ kind: 'huddle', parentSessionId: host.id }],
+  });
+  const updated = await db(
    `update huddles set transcript_session_id = $1 where id = $2 returning ${HUDDLE_COLUMNS}`,
    [rows[0].id, huddle.id],
   );
@@ -1251,13 +1248,67 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!huddle) {
     const id = crypto.randomUUID();
     try {
-     const rows = await getDb().unsafe(
-      `insert into huddles (id, workspace_id, session_id, room_name, started_by)
-             values ($1, $2, $3, $4, $5) returning ${HUDDLE_COLUMNS}`,
-      [id, workspaceId, sessionId, roomNameForHuddle(id), req.userId || null],
-     );
-     huddle = rows[0];
-     created = true;
+     huddle = await getDb().begin(async (transaction) => {
+      const tx = (sql, params = []) => transaction.unsafe(sql, params);
+
+      // Authorization evidence and the source conversation are locked before
+      // either the huddle or transcript exists. A concurrent role/member revoke
+      // or session close therefore has a serial boundary, not a check/write gap.
+      await assertWorkspaceRoleLocked({
+       userId: req.userId,
+       workspaceId,
+       capability: 'write',
+       db: tx,
+      });
+      const hosts = await tx(
+       `select host.id, host.workspace_id, host.title, host.model, host.folder,
+               host.canvas_id, host.participants, host.visibility,
+               host.deleted_at
+          from chat_sessions host
+         where host.id = $1::uuid
+           and host.workspace_id = $2::uuid
+           and host.deleted_at is null
+         for share of host`,
+       [sessionId, workspaceId],
+      );
+      const lockedHost = hosts[0] || null;
+      if (!lockedHost) {
+       const error = new Error('Session not found in this workspace');
+       error.status = 404;
+       throw error;
+      }
+      await lockPrivateSessionRoster({
+       db: tx,
+       userId: req.userId,
+       parent: lockedHost,
+      });
+
+      const rows = await tx(
+       `insert into huddles (id, workspace_id, session_id, room_name, started_by)
+              values ($1, $2, $3, $4, $5) returning ${HUDDLE_COLUMNS}`,
+       [id, workspaceId, sessionId, roomNameForHuddle(id), req.userId || null],
+      );
+      const createdHuddle = rows[0] || null;
+      if (!createdHuddle) return null;
+
+      // A transcript failure rolls back only the savepoint. The huddle commits
+      // without transcript_session_id and all readers use the host session,
+      // preserving availability without committing a private orphan.
+      try {
+       const linked = await transaction.savepoint(async (savepoint) => (
+        createTranscriptSession(
+         (sql, params = []) => savepoint.unsafe(sql, params),
+         createdHuddle,
+         lockedHost,
+        )
+       ));
+       return linked || createdHuddle;
+      } catch (error) {
+       console.error('huddle transcript creation failed', error?.message || error);
+       return createdHuddle;
+      }
+     });
+     created = Boolean(huddle);
     } catch (error) {
      // idx_huddles_one_live_per_session lost a race with a second starter —
      // that is the index doing its job. Fall in behind them.
@@ -1268,11 +1319,8 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!huddle) return jsonError(res, 409, new Error('Could not open a huddle for this session'));
 
    if (created) {
-    // Order matters: the huddle row is inserted FIRST so the unique index has
-    // already elected one winner, and only the winner creates a transcript
-    // session. Creating it before the insert would leave the loser of a race
-    // holding an orphaned session that nothing points at.
-    huddle = (await createTranscriptSession(huddle, host.title)) || huddle;
+    // The huddle, transcript, private member graph, and transcript link have
+    // committed before any durable huddle state becomes visible to subscribers.
     fanout('huddles', 'INSERT', [huddle]);
     // A 'started' marker, not a synthetic participant_joined: nobody has
     // connected to the room yet and the card must not claim they have.

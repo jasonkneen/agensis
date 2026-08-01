@@ -969,6 +969,10 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[] DEFAULT '{}';
 -- References to uploaded_files rows, same shape as messages.attachments — see
 -- JSON_COLUMNS_BY_TABLE / lib/messageAttachments.ts.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachments jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- Server-owned identity of the human whose per-human agent DM should receive a
+-- queued assignment. This is deliberately separate from created_by: a task can
+-- be created by one person and assigned by another.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS dispatch_requested_by uuid;
 
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_id ON tasks(assignee_id);

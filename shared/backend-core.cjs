@@ -418,6 +418,16 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
  messages: new Set([
   'reactions',
  ]),
+ // Server-owned routing provenance for queued agent work. `created_by` is
+ // stamped from the authenticated principal on generic task creation, and
+ // `dispatch_requested_by` records the human whose private agent conversation
+ // must receive a delayed assignment. Letting a browser set either would make
+ // attribution forgeable and could steer a later queue drain into another
+ // human's DM.
+ tasks: new Set([
+  'created_by',
+  'dispatch_requested_by',
+ ]),
  workspace_agents: new Set([
   'mcp_approved',
   'connect_token_hash',
@@ -524,6 +534,18 @@ function setsManageOnlyDbColumn(table, values) {
 // (M7, 2026-07 review).
 const SELECTABLE_COLUMNS_BY_TABLE = {
  app_users: ['id', 'email', 'display_name', 'accent_color', 'created_at'],
+ // Conversations are the root of several security-sensitive joins. Pinning
+ // their complete browser shape means a later credential/provenance column is
+ // not exposed automatically by the generic `columns: '*'` path. Dedicated
+ // creation commands may add an explicitly reviewed public lineage column to
+ // this list; until then it remains server-only.
+ chat_sessions: [
+  'id', 'workspace_id', 'title', 'model', 'folder', 'description', 'icon',
+  'intent', 'is_favorite', 'participants', 'conversation_mode',
+  'max_agent_turns', 'auto_rounds', 'parent_message_id', 'split_parent_id',
+  'split_at', 'archived_at', 'deleted_at', 'canvas_id', 'version',
+  'visibility', 'created_at', 'updated_at',
+ ],
  // Workspace control is deliberately owner-only and its bearer hash is never
  // workspace metadata. Generic reads and mutation echoes previously returned
  // `mcp_token_hash` to every workspace reader because the table had no
@@ -564,6 +586,16 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
  agent_jobs: [
   'id', 'workspace_id', 'session_id', 'agent_id', 'status',
   'started_at', 'created_at', 'metadata',
+ ],
+ // Keep internal queue-routing provenance out of the generic task surface. It
+ // is an authorization input, not task content, and a future internal task
+ // column must not become browser-readable merely because tasks already exist
+ // in ALLOWED_TABLES.
+ tasks: [
+  'id', 'workspace_id', 'created_by', 'assignee_id', 'title', 'description',
+  'status', 'priority', 'due_date', 'source_type', 'source_id', 'completed_at',
+  'version', 'created_at', 'updated_at', 'parent_id', 'start_date',
+  'depends_on', 'attachments',
  ],
  // gateway_configs became selectable so its realtime subscription could work at
  // all (authorizeRealtimeBinding authorizes a db_changes binding as a SELECT), and
@@ -688,6 +720,43 @@ function applyAgentPurposeInsertDefaults(table, values) {
   return values;
  }
  return { ...values, ambient_replies: false };
+}
+
+/**
+ * Stamp task attribution and delayed-dispatch routing from the authenticated
+ * human. Both columns are stripped from client payloads first.
+ *
+ * On creation, `created_by` is always the caller and an initial assignee stores
+ * the caller as requester. Updates need the row's OLD assignee to distinguish a
+ * real transition from a form re-save, so both backend adapters add the
+ * conditional SQL expression at their update chokepoint.
+ */
+function stampTaskWriteIdentity(table, values, userId, { insert = false } = {}) {
+ if (table !== 'tasks' || !values || typeof values !== 'object' || Array.isArray(values)) {
+  return values;
+ }
+ const next = { ...values };
+ if (insert) {
+  next.created_by = userId || null;
+ }
+ if (insert && Object.prototype.hasOwnProperty.call(next, 'assignee_id')) {
+  const assigned = typeof next.assignee_id === 'string'
+   ? next.assignee_id.trim()
+   : next.assignee_id;
+  next.dispatch_requested_by = assigned ? (userId || null) : null;
+ }
+ return next;
+}
+
+function taskDispatchRequesterSql(assigneeBind, requesterBind) {
+ if (!/^\$\d+$/.test(String(assigneeBind)) || !/^\$\d+$/.test(String(requesterBind))) {
+  throw new TypeError('taskDispatchRequesterSql requires positional binds');
+ }
+ return `"dispatch_requested_by" = CASE
+    WHEN "assignee_id" IS DISTINCT FROM ${assigneeBind}
+    THEN ${requesterBind}
+    ELSE "dispatch_requested_by"
+   END`;
 }
 
 /**
@@ -1007,6 +1076,15 @@ function capabilityForDbOperation(table, action) {
  return access?.[action] || (action === 'select' ? 'read' : 'write');
 }
 
+function throwWorkspaceRoleDenied(hasAnyRole, need) {
+ if (!hasAnyRole) throw forbidden('You do not have access to this workspace');
+ if (need === 'manage') throw forbidden('You do not have permission to manage this workspace');
+ if (need === 'write') throw forbidden('You do not have permission to change this workspace');
+ if (need === 'comment') throw forbidden('You do not have permission to comment in this workspace');
+ if (need === 'run_agents') throw forbidden('You do not have permission to run agents in this workspace');
+ throw forbidden('You do not have permission to access this workspace');
+}
+
 // Enforce that `userId` has the required capability in `workspaceId`. Throws 403
 // on denial. `capability` is the canonical name (read|write|comment|run_agents|
 // manage); `minRole`/`mode` are accepted as aliases for ergonomics, interpreted
@@ -1023,12 +1101,69 @@ async function assertWorkspaceRole({ userId, workspaceId, capability, minRole, m
  const inherited = await getInheritedWorkspaceRoles(userId, workspaceId, db);
  if (roleSetHasCapability(inherited, need, WORKSPACE_ROLE_CAPABILITIES)) return;
 
- if (!role && inherited.length === 0) throw forbidden('You do not have access to this workspace');
- if (need === 'manage') throw forbidden('You do not have permission to manage this workspace');
- if (need === 'write') throw forbidden('You do not have permission to change this workspace');
- if (need === 'comment') throw forbidden('You do not have permission to comment in this workspace');
- if (need === 'run_agents') throw forbidden('You do not have permission to run agents in this workspace');
- throw forbidden('You do not have permission to access this workspace');
+ throwWorkspaceRoleDenied(Boolean(role || inherited.length > 0), need);
+}
+
+/**
+ * Transactional counterpart to assertWorkspaceRole.
+ *
+ * Creation and boundary transitions cannot authorize from an unlocked role
+ * snapshot: a concurrent member removal/downgrade could otherwise commit after
+ * the check and before the protected write. This walks the same downward-only
+ * inheritance chain while taking SHARE locks on every workspace row and every
+ * direct role row that can contribute authority. Role updates/deletes and
+ * parent/owner changes then wait for the protected transaction to finish.
+ *
+ * Kept separate from the hot read-path helper above: ordinary reads do not need
+ * row locks, and turning every capability check into a locking query would
+ * serialize unrelated requests.
+ */
+async function assertWorkspaceRoleLocked({
+ userId,
+ workspaceId,
+ capability,
+ minRole,
+ mode,
+ db,
+}) {
+ if (typeof db !== 'function') throw new TypeError('assertWorkspaceRoleLocked requires db');
+ const need = capability || mode || minRole;
+ const roles = [];
+ const seen = new Set();
+ let current = workspaceId ? String(workspaceId) : '';
+ let depth = 0;
+
+ while (current && !seen.has(current) && depth <= WORKSPACE_MAX_DEPTH) {
+  seen.add(current);
+  const workspaces = await db(
+   `select id, parent_id, user_id
+      from workspaces
+     where id = $1::uuid
+       and $2::uuid is not null
+     for share`,
+   [current, userId],
+  );
+  const workspace = workspaces[0] || null;
+  if (!workspace) break;
+  if (String(workspace.user_id || '') === String(userId || '') && !roles.includes('owner')) {
+   roles.push('owner');
+  }
+  const members = await db(
+   `select role
+      from workspace_members
+     where workspace_id = $1::uuid
+       and user_id = $2::uuid
+     for share`,
+   [current, userId],
+  );
+  const role = members[0]?.role;
+  if (role && !roles.includes(role)) roles.push(role);
+  current = workspace.parent_id ? String(workspace.parent_id) : '';
+  depth += 1;
+ }
+
+ if (roleSetHasCapability(roles, need, WORKSPACE_ROLE_CAPABILITIES)) return;
+ throwWorkspaceRoleDenied(roles.length > 0, need);
 }
 
 // ----------------------------------------------------------------------------
@@ -2682,6 +2817,7 @@ module.exports = {
  DEFAULT_TOKEN_TTL_SEC,
  enforceDbOperationAccess,
  assertWorkspaceRole,
+ assertWorkspaceRoleLocked,
  // Session read scope — the granularity below the workspace.
  enforceSessionReadAccess,
  isPrivateSessionRow,
@@ -2704,6 +2840,8 @@ module.exports = {
  stripPrivilegedDbValues,
  validateUniformInsertRows,
  applyAgentPurposeInsertDefaults,
+ stampTaskWriteIdentity,
+ taskDispatchRequesterSql,
  encryptVaultSecret,
  decryptVaultSecret,
  getWorkspaceSecretValue,

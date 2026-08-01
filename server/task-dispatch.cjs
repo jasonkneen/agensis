@@ -328,7 +328,7 @@ function createTaskDispatch(deps = {}) {
   try {
    if (!taskId || !agentId) return { dispatched: false, reason: 'missing_input' };
    const taskRows = await getDb().unsafe(
-    'select id, workspace_id, title, description, status, assignee_id, source_type, source_id from tasks where id = $1 limit 1',
+    'select id, workspace_id, title, description, status, assignee_id, source_type, source_id, dispatch_requested_by from tasks where id = $1 limit 1',
     [String(taskId)],
    );
    const task = taskRows[0];
@@ -355,21 +355,33 @@ function createTaskDispatch(deps = {}) {
    // Running an agent is an agent-dispatch action, so it carries the same
    // capability + throttle as the @mention path: a commenter/viewer who can edit
    // a task still cannot run agents with it.
-   if (actorUserId) {
-    const role = await getWorkspaceRole(actorUserId, wsId);
+   // A delayed drain carries the server-stamped assigning human from the task
+   // row. Never infer this from created_by: A may create a task that B later
+   // assigns, and each human owns a distinct private DM with the same agent.
+   // The row stamp is authoritative. Generic updates determine the real
+   // assignee edge atomically in SQL, while their pre-read used only to decide
+   // whether to schedule this asynchronous call can be stale. If two humans
+   // race null -> same agent, only the first UPDATE owns the edge; both
+   // callbacks must therefore route to that same stored requester. actorUserId
+   // remains a compatibility fallback for legacy rows written before the
+   // routing column existed.
+   const storedRequester = task.dispatch_requested_by || null;
+   const routingUserId = storedRequester || actorUserId || null;
+   if (routingUserId) {
+    const role = await getWorkspaceRole(routingUserId, wsId);
     if (!roleHasWorkspaceCapability(role, 'run_agents')) return { dispatched: false, reason: 'not_permitted' };
-    if (!dispatchRateLimiter.check(String(actorUserId)).allowed) return { dispatched: false, reason: 'rate_limited' };
+    if (!dispatchRateLimiter.check(String(routingUserId)).allowed) return { dispatched: false, reason: 'rate_limited' };
    }
    if (!claimTaskDispatch(task.id, agent.id, TASK_ASSIGN_CLAIM_MS)) return { dispatched: false, reason: 'duplicate' };
    claim = [task.id, agent.id];
 
-   const session = await findOrCreateDirectSession(wsId, agent);
+   const session = await findOrCreateDirectSession(wsId, agent, routingUserId);
    if (!session) return { dispatched: false, reason: 'no_session' };
 
    let who = actorName || '';
-   if (!who && actorUserId) {
+   if (!who && routingUserId) {
     const u = await getDb()
-     .unsafe('select display_name, email from app_users where id = $1 limit 1', [actorUserId])
+     .unsafe('select display_name, email from app_users where id = $1 limit 1', [routingUserId])
      .catch(() => []);
     who = u[0]?.display_name || u[0]?.email || '';
    }
@@ -412,7 +424,7 @@ function createTaskDispatch(deps = {}) {
    if (updated[0]) notifyDbSubscribers('tasks', 'UPDATE', updated);
 
    const { threadParentId, messageRow } = await postTaskSubthreadMention({
-    session, taskId: task.id, content, authorUserId: actorUserId, authorName: who,
+    session, taskId: task.id, content, authorUserId: routingUserId, authorName: who,
    });
 
    // AWAITED, unlike the fire-and-forget it replaces: the turn can still be
@@ -504,7 +516,11 @@ function createTaskDispatch(deps = {}) {
     continue;
    }
    const out = await dispatchTaskAssignment({
-    workspaceId: wsId, taskId: task.id, agentId: aId, cause: `drain:${cause}`, run,
+    workspaceId: wsId,
+    taskId: task.id,
+    agentId: aId,
+    cause: `drain:${cause}`,
+    run,
    });
    if (out.dispatched) {
     taskQueueStrikes.delete(strikeKey);

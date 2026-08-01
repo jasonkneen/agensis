@@ -107,6 +107,12 @@ const { createTaskDispatch } = require('./task-dispatch.cjs');
 const { createAgentJobs } = require('./agent-jobs.cjs');
 const { createBuiltinTurn } = require('./builtin-turn.cjs');
 const {
+ installCreatedSessionMemberships,
+ lockPrivateSessionRoster,
+ prepareSessionCreateRows,
+ projectSessionCreateRows,
+} = require('../shared/session-lineage.cjs');
+const {
  createThreadHarvest, isDiscardTransition, mountThreadHarvestRoutes,
  SUGGEST_SWEEP_INTERVAL_MS,
 } = require('./thread-harvest.cjs');
@@ -204,6 +210,8 @@ const {
  stripPrivilegedDbValues,
  validateUniformInsertRows,
  applyAgentPurposeInsertDefaults,
+ stampTaskWriteIdentity,
+ taskDispatchRequesterSql,
  safeSelectColumns,
  storagePathBelongsToWorkspace,
  issueAuthToken,
@@ -217,6 +225,7 @@ const {
  normalizeFeedbackSubmission,
  insertFeedbackReport,
  assertWorkspaceRole: sharedAssertWorkspaceRole,
+ assertWorkspaceRoleLocked: sharedAssertWorkspaceRoleLocked,
  enforceSessionReadAccess: sharedEnforceSessionReadAccess,
  sessionReadableSql,
  addSessionParticipant,
@@ -711,85 +720,6 @@ function badRequest(message) {
 // capability here; a role held in a CHILD grants nothing upward.
 async function enforceWorkspaceRole(userId, workspaceId, mode) {
  return sharedAssertWorkspaceRole({ userId, workspaceId, capability: mode, db: sharedDbAdapter });
-}
-
-/**
- * 'private' when any of these about-to-be-inserted chat_sessions rows descends
- * from a private one; null when none does (leave the column's default alone).
- *
- * Two edges reach a parent at insert time: `parent_message_id` (a sub-thread
- * session hangs off a MESSAGE, so the parent session is one join away) and
- * `split_parent_id` (a fork points straight at another session). The huddle
- * edge is not here because a transcript session is created server-side and
- * copies its host's visibility in the same statement.
- *
- * Batch-wide rather than per-row on purpose: these inserts are single-row in
- * practice, and one private parent in a batch making the whole batch private is
- * the fail-closed direction.
- */
-async function resolveInheritedSessionVisibility(rows) {
- const messageIds = [];
- const sessionIds = [];
- for (const row of rows) {
-  if (!row || typeof row !== 'object') continue;
-  if (row.parent_message_id) messageIds.push(String(row.parent_message_id));
-  if (row.split_parent_id) sessionIds.push(String(row.split_parent_id));
- }
- if (messageIds.length === 0 && sessionIds.length === 0) return null;
- try {
-  const params = [];
-  const bind = (value) => { params.push(value); return `$${params.length}::uuid`; };
-  const bySession = sessionIds.length > 0
-   ? `s.id in (${sessionIds.map(bind).join(', ')})`
-   : 'false';
-  const byMessage = messageIds.length > 0
-   ? `s.id in (select m.session_id from messages m where m.id in (${messageIds.map(bind).join(', ')}))`
-   : 'false';
-  const found = await getDb().unsafe(
-   `select 1
-      from chat_sessions s
-     where (${bySession} or ${byMessage})
-       and (coalesce(s.visibility, 'workspace') = 'private' or coalesce(s.folder, '') = 'Direct messages')
-     limit 1`,
-   params,
-  );
-  return found.length > 0 ? 'private' : null;
- } catch (error) {
-  // Fail CLOSED. If we cannot tell whether the parent is private, the safe
-  // answer is the restrictive one — an over-private sub-thread is a grant away
-  // from fixed, an under-private one is a disclosure.
-  console.warn('[backend] inherited session visibility lookup failed:', error?.message || error);
-  return 'private';
- }
-}
-
-/**
- * Copy a newly created derived session's member list down from its parent.
- *
- * Best-effort and never throws: the creator has already been added as a member
- * by the caller, so a failure here costs other people their access to the new
- * offshoot — annoying and fixable with a grant — rather than locking everyone
- * out of it.
- */
-async function copyInheritedSessionMembers(row) {
- const parentSessionId = row?.split_parent_id ? String(row.split_parent_id) : '';
- const parentMessageId = row?.parent_message_id ? String(row.parent_message_id) : '';
- if (!parentSessionId && !parentMessageId) return;
- try {
-  await getDb().unsafe(
-   `insert into chat_session_members (session_id, user_id, source, granted_by, expires_at)
-      select $1::uuid, m.user_id, m.source, m.granted_by, m.expires_at
-        from chat_session_members m
-       where m.session_id = coalesce(
-               $2::uuid,
-               (select msg.session_id from messages msg where msg.id = $3::uuid)
-             )
-    on conflict (session_id, user_id) do nothing`,
-   [String(row.id), parentSessionId || null, parentMessageId || null],
-  );
- } catch (error) {
-  console.warn('[backend] inherited session member copy failed:', error?.message || error);
- }
 }
 
 // The read gate BELOW the workspace: a private session (a DM, or a sub-thread /
@@ -1638,6 +1568,9 @@ async function ensureRuntimeSchema() {
     -- messages.attachments (see JSON_COLUMNS_BY_TABLE / parseMessageAttachments):
     -- never file bytes, just { id, name, type, size } chips the client renders.
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachments jsonb NOT NULL DEFAULT '[]'::jsonb;
+    -- Durable per-human queue routing. A task may be created by A and assigned
+    -- by B; delayed work must return to B's agent DM, never infer from created_by.
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS dispatch_requested_by uuid;
     ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
@@ -4484,60 +4417,137 @@ const COMMENT_MENTION_TABLES = {
  },
 };
 
-// Resolve (or lazily create) the human↔agent Direct message session for an agent.
-// Mirrors the client's find-or-create in App.tsx (handleAgentDirectMessage): a DM is
-// a chat_session in the 'Direct messages' folder whose sole/direct participant is the
-// agent. Workspaces are effectively single-human, so the DM keys on the agent alone.
-async function findOrCreateDirectSession(workspaceId, agent) {
+// Resolve (or lazily create) one human↔agent Direct message session.
+//
+// This is a COMMAND, not a read followed by two unrelated writes. Task dispatch
+// and comment mentions can race each other, so a transaction-scoped advisory
+// lock serializes this exact workspace/human/agent key. The private session and
+// its human membership then commit together; fanout happens only after commit.
+// Truly actorless background work falls back to the workspace owner.
+async function findOrCreateDirectSession(workspaceId, agent, humanUserId = null) {
  const wantedId = String(agent.id || '');
  const wantedHandle = slugHandle(agent.handle || agent.name || '');
- const candidates = await getDb().unsafe(
-  "select * from chat_sessions where workspace_id = $1 and folder = 'Direct messages' and archived_at is null",
-  [workspaceId],
- );
- const match = candidates.find((session) => {
-  const participant = directAgentParticipantFromSession(session);
-  if (!participant) return false;
-  const pid = String(participant.agent_id || '');
-  const phandle = slugHandle(participant.handle || participant.name || '');
-  return (wantedId && pid === wantedId) || (wantedHandle && phandle === wantedHandle);
- });
- if (match) return match;
+ if (!wantedId && !wantedHandle) throw badRequest('Agent identity is required');
 
- const handle = wantedHandle;
- const title = agent.name || (handle ? `@${handle}` : 'Agent');
- const participant = {
-  id: agent.id ? `agent:${agent.id}` : `agent:${handle}`,
-  kind: 'agent',
-  name: title,
-  handle: handle || null,
-  agent_id: agent.id || null,
-  user_id: null,
-  status: null,
-  direct: true,
-  added_at: new Date().toISOString(),
- };
- const created = await getDb().unsafe(
-  `insert into chat_sessions (workspace_id, title, model, folder, conversation_mode, participants, visibility)
-     values ($1, $2, $3, 'Direct messages', 'auto', $4::jsonb, 'private')
-     returning *`,
-  // The ARRAY itself — see the note on the participants update above.
-  [workspaceId, title, resolveAnthropicModel(agent.model), [participant]],
- );
- // A DM the SYSTEM opened (a task dispatch, a comment @mention) has no human
- // action behind it to attribute, so it belongs to the workspace owner — the
- // same answer the migration gives every pre-existing DM, so a DM created the
- // minute before this shipped and one created the minute after are owned by the
- // same person. Without this the session would be private with no members and
- // nobody could read it, agent included.
- if (created[0]) {
-  const owner = await getDb().unsafe('select user_id from workspaces where id = $1 limit 1', [workspaceId]);
-  if (owner[0]?.user_id) {
-   await addSessionParticipant({ sessionId: created[0].id, userId: owner[0].user_id, db: sharedDbAdapter });
+ const settled = await getDb().begin(async (transaction) => {
+  const tx = (sql, params = []) => transaction.unsafe(sql, params);
+
+  // Lock workspace ownership before resolving an actorless fallback. An owner
+  // transfer cannot commit between attribution and membership installation.
+  const owners = await tx(
+   'select user_id from workspaces where id = $1::uuid for share',
+   [workspaceId],
+  );
+  const ownerId = owners[0]?.user_id;
+  if (!ownerId) throw new Error('Workspace owner is unavailable');
+  const participantUserId = String(humanUserId || ownerId);
+  const lockKey = `direct-session:${String(workspaceId)}:${participantUserId}:${wantedId || wantedHandle}`;
+  await tx('select pg_advisory_xact_lock(hashtextextended($1::text, 0))', [lockKey]);
+
+  const candidates = await tx(
+   `select *
+      from chat_sessions
+     where workspace_id = $1::uuid
+       and folder = 'Direct messages'
+       and archived_at is null
+       and deleted_at is null
+     order by created_at, id`,
+   [workspaceId],
+  );
+  const matchingCandidates = candidates.filter((session) => {
+   const participant = directAgentParticipantFromSession(session);
+   if (!participant) return false;
+   const participantId = String(participant.agent_id || '');
+   const participantHandle = slugHandle(participant.handle || participant.name || '');
+   // IDs are authoritative. Handle matching is only a compatibility fallback
+   // for a legacy participant/agent that lacks one; handles are non-unique.
+   if (wantedId && participantId) return participantId === wantedId;
+   return Boolean(wantedHandle && participantHandle === wantedHandle);
+  });
+  for (const match of matchingCandidates) {
+   const members = await tx(
+    `select user_id, source, (user_id = $2::uuid) as requested_user
+       from chat_session_members
+      where session_id = $1::uuid
+        and (expires_at is null or expires_at > now())
+      order by user_id
+      for share`,
+    [match.id, participantUserId],
+   );
+   // A grant is oversight, not conversation identity. Reusing a candidate for
+   // any active membership would route a grantee's future work into the
+   // original participant's private DM.
+   if (members.some((member) =>
+    String(member.user_id) === participantUserId
+    && String(member.source || 'participant') === 'participant')) {
+    return { row: match, created: false };
+   }
+   if (members.length === 0 && participantUserId === String(ownerId)) {
+    // Repair only a completely orphaned legacy owner DM. Never attach another
+    // human to somebody else's private conversation just because the agent is
+    // the same.
+    await tx(
+     `insert into chat_session_members
+             (session_id, user_id, source, granted_by, expires_at)
+      values ($1::uuid, $2::uuid, 'participant', null, null)
+      on conflict (session_id, user_id) do nothing`,
+     [match.id, participantUserId],
+    );
+    return { row: match, created: false };
+   }
   }
-  notifyDbSubscribers('chat_sessions', 'INSERT', created);
+
+  const handle = wantedHandle;
+  const title = agent.name || (handle ? `@${handle}` : 'Agent');
+  const participant = {
+   id: agent.id ? `agent:${agent.id}` : `agent:${handle}`,
+   kind: 'agent',
+   name: title,
+   handle: handle || null,
+   agent_id: agent.id || null,
+   user_id: null,
+   status: null,
+   direct: true,
+   added_at: new Date().toISOString(),
+  };
+  const prepared = await prepareSessionCreateRows({
+   db: tx,
+   userId: participantUserId,
+   rows: [{
+    workspace_id: workspaceId,
+    title,
+    model: resolveAnthropicModel(agent.model),
+    folder: 'Direct messages',
+    conversation_mode: 'auto',
+    participants: [participant],
+    visibility: 'private',
+   }],
+  });
+  const row = prepared.rows[0];
+  const inserted = await tx(
+   `insert into chat_sessions
+           (workspace_id, title, model, folder, conversation_mode,
+            participants, visibility)
+    values ($1::uuid, $2, $3, $4, $5, $6::jsonb, $7)
+    returning *`,
+   [
+    row.workspace_id, row.title, row.model, row.folder,
+    row.conversation_mode, JSON.stringify(row.participants), row.visibility,
+   ],
+  );
+  await installCreatedSessionMemberships({
+   db: tx,
+   userId: participantUserId,
+   createdRows: inserted,
+   lineage: prepared.lineage,
+  });
+  return { row: inserted[0] || null, created: Boolean(inserted[0]) };
+ });
+
+ if (settled.created && settled.row) {
+  notifyDbSubscribers('chat_sessions', 'INSERT', [settled.row]);
  }
- return created[0] || null;
+ return settled.row;
 }
 
 
@@ -4729,7 +4739,7 @@ async function dispatchCommentMentions({ table, row, authorUserId, run = continu
    const agent = await resolveWorkspaceAgentByHandle(workspaceId, handle);
    if (!agent) continue;
    // Skip self-mentions (an agent tagging itself in its own note).
-   const session = await findOrCreateDirectSession(workspaceId, agent);
+   const session = await findOrCreateDirectSession(workspaceId, agent, authorUserId);
    if (!session) continue;
 
    const linkLine = source.link ? `\n\nSource: ${source.link}` : '';
@@ -4771,8 +4781,8 @@ async function dispatchCommentMentions({ table, row, authorUserId, run = continu
     // on" with no job attached and nothing that would ever pick it up.
     if (await agentHasActiveJob(session.id, agent.id)) {
      const queued = await getDb().unsafe(
-      'update tasks set assignee_id = $1, updated_at = now() where id = $2 returning *',
-      [String(agent.id), String(taskId)],
+      'update tasks set assignee_id = $1, dispatch_requested_by = $2, updated_at = now() where id = $3 returning *',
+      [String(agent.id), authorUserId || null, String(taskId)],
      );
      if (queued[0]) notifyDbSubscribers('tasks', 'UPDATE', queued);
      const position = await taskQueuePosition(workspaceId, agent.id, taskId);
@@ -4789,12 +4799,12 @@ async function dispatchCommentMentions({ table, row, authorUserId, run = continu
     const stampSource = TASK_SOURCE_LINK_OVERWRITABLE.has(String(task.source_type || ''));
     const taskRows = stampSource
      ? await getDb().unsafe(
-      "update tasks set assignee_id = $1, status = $2, source_type = 'chat', source_id = $3, updated_at = now() where id = $4 returning *",
-      [String(agent.id), nextStatus, String(session.id), String(taskId)],
+      "update tasks set assignee_id = $1, dispatch_requested_by = $2, status = $3, source_type = 'chat', source_id = $4, updated_at = now() where id = $5 returning *",
+      [String(agent.id), authorUserId || null, nextStatus, String(session.id), String(taskId)],
      )
      : await getDb().unsafe(
-      'update tasks set assignee_id = $1, status = $2, updated_at = now() where id = $3 returning *',
-      [String(agent.id), nextStatus, String(taskId)],
+      'update tasks set assignee_id = $1, dispatch_requested_by = $2, status = $3, updated_at = now() where id = $4 returning *',
+      [String(agent.id), authorUserId || null, nextStatus, String(taskId)],
      );
     if (taskRows[0]) notifyDbSubscribers('tasks', 'UPDATE', taskRows);
 
@@ -8023,7 +8033,13 @@ function createApp() {
   ...coreDeps(),
   agentRuntimePayload, assertSafeOutboundUrl, encryptVaultSecret, publicWorkspace,
  });
- mountHuddleRoutes(app, { ...coreDeps(), webhookRateLimiter });
+ mountHuddleRoutes(app, {
+  ...coreDeps(),
+  assertWorkspaceRoleLocked: sharedAssertWorkspaceRoleLocked,
+  installCreatedSessionMemberships,
+  lockPrivateSessionRoster,
+  webhookRateLimiter,
+ });
 
  // Voice engines for huddles. The Cartesia token exchange is plain HTTP and is
  // mirrored on Netlify; the Deepgram audio relay is not a route at all — it
@@ -8244,25 +8260,14 @@ function createApp() {
    const { table, values, returning = '*', single = false } = req.body || {};
    const tableSql = ensureTable(table);
    await enforceDbOperationAccess(req.userId, table, 'insert', { values });
-   // Resolve inherited privacy BEFORE the insert, never as a fixup after it. A
-   // sub-thread or split of a DM is created by the client through this generic
-   // route with no visibility of its own; correcting it afterwards would leave a
-   // window — and a realtime INSERT fanout — in which a private conversation's
-   // offshoot was world-readable.
-   const inheritedVisibility = table === 'chat_sessions'
-    ? await resolveInheritedSessionVisibility(Array.isArray(values) ? values : [values])
-    : null;
    const rows = (Array.isArray(values) ? values : [values]).map(row => {
     // Validate before any object spread can turn an array or other non-record
     // value into a record that appears safe only after server normalization.
     validateUniformInsertRows([row]);
     let next = stripPrivilegedDbValues(table, row);
+    next = stampTaskWriteIdentity(table, next, req.userId, { insert: true });
     next = applyAgentPurposeInsertDefaults(table, next);
     if (table === 'workspaces') next = { ...next, user_id: req.userId };
-    // `visibility` is server-decided. A client may not declare a session public
-    // when its parent is private — that would be a one-line way to publish any
-    // DM by splitting a thread out of it.
-    if (table === 'chat_sessions' && inheritedVisibility) next = { ...next, visibility: inheritedVisibility };
     // Strip agent-invented outline prefixes ("Ship UI work / 1. …") from task
     // titles. Title only on this route: inferring parent_id from a title string
     // is the right call for the MCP tool (server/mcp.cjs, where agents create
@@ -8282,20 +8287,56 @@ function createApp() {
     // human_set locks server-side (discarding any client-supplied ones) so an
     // agent's first connect cannot replace the avatar or profile the human
     // just picked. Empty fields stay unlocked — locking '' pins emptiness.
-    next = synthesizeHumanIdentityInsert(table, next);
-    return next;
-   });
-   const columns = validateUniformInsertRows(rows);
-   const params = [];
-   const valueSql = rows.map((row) => `(${columns.map((column) => {
-    return bindDbParam(params, table, column, row[column]);
-   }).join(', ')})`).join(', ');
+   next = synthesizeHumanIdentityInsert(table, next);
+   return next;
+  });
+   // Validate the caller-visible projection before opening a transaction or
+   // writing anything. A forbidden/invalid RETURNING shape must not create a
+   // conversation and then fail while formatting the response.
+   if (table === 'chat_sessions') projectSessionCreateRows([], returning);
+   const insertRows = async (db) => {
+    let effectiveRows = rows;
+    let lineage = null;
+    if (table === 'chat_sessions') {
+     const prepared = await prepareSessionCreateRows({
+      db,
+      userId: req.userId,
+      rows,
+     });
+     effectiveRows = prepared.rows;
+     lineage = prepared.lineage;
+    }
+    const columns = validateUniformInsertRows(effectiveRows);
+    const params = [];
+    const valueSql = effectiveRows.map((row) => `(${columns.map((column) => {
+     return bindDbParam(params, table, column, row[column]);
+    }).join(', ')})`).join(', ');
+    // Session membership settlement needs the authoritative id/visibility
+    // before commit. The internal return uses the complete reviewed public
+    // session shape; the caller's narrower projection is applied after commit.
+    const returningColumns = table === 'chat_sessions' ? '*' : returning;
+    const inserted = await db(
+     `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(safeSelectColumns(table, returningColumns))}`,
+     params,
+    );
+    if (table === 'chat_sessions') {
+     await installCreatedSessionMemberships({
+      db,
+      userId: req.userId,
+      createdRows: inserted,
+      lineage,
+     });
+    }
+    return inserted;
+   };
+   const result = table === 'chat_sessions'
+    ? await getDb().begin((transaction) => insertRows(
+     (sql, params) => transaction.unsafe(sql, params),
+    ))
+    : await insertRows(sharedDbAdapter);
 
-   const result = await getDb().unsafe(
-    `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(safeSelectColumns(table, returning))}`,
-    params,
-   );
-
+   // The transaction above has committed before any session row can fan out.
+   // No socket can observe a private child before its inherited member graph.
    notifyDbSubscribers(table, 'INSERT', result);
 
    // A message posted into a bridged channel goes out to the outside network it
@@ -8308,31 +8349,6 @@ function createApp() {
      void channelBridges.emitBridgeOutbound(row).catch((error) =>
       console.error('emitBridgeOutbound failed', error),
      );
-    }
-   }
-
-   // A DM opened from the client arrives here (createSession -> POST /db/insert).
-   // The person who opened it is its first member — do this in the SAME request,
-   // not lazily, because a private session with no members is one its own creator
-   // cannot read.
-   //
-   // This is the ONLY place a user is added to a session by their own action.
-   // Dispatching an agent into a DM deliberately does NOT add the dispatcher:
-   // `run_agents` is an editor-level capability, so auto-adding would make
-   // "assign a task" a self-service way into anyone's DM — a self-grant
-   // primitive, which is exactly what this feature exists to remove. Access for
-   // someone else goes through the manage-gated grant route and leaves an audit
-   // row.
-   if (table === 'chat_sessions') {
-    for (const row of result) {
-     if (!row?.id) continue;
-     if (!isPrivateSessionRow(row)) continue;
-     await addSessionParticipant({ sessionId: row.id, userId: req.userId, db: sharedDbAdapter });
-     // A sub-thread or fork of a private session inherits its member list, not
-     // just its privacy. Otherwise splitting a thread out of a DM would quietly
-     // cut off everyone in that DM except whoever clicked — including someone
-     // holding a deliberate grant.
-     await copyInheritedSessionMembers(row);
     }
    }
 
@@ -8374,7 +8390,10 @@ function createApp() {
     }
    }
 
-   res.json({ data: single ? (result[0] ?? null) : result, error: null });
+   const responseRows = table === 'chat_sessions'
+    ? projectSessionCreateRows(result, returning)
+    : result;
+   res.json({ data: single ? (responseRows[0] ?? null) : responseRows, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
@@ -8391,7 +8410,11 @@ function createApp() {
    if (table === 'workspace_agents' && isReservedAgentHandle(values.handle)) {
     return jsonError(res, 400, new Error(reservedAgentHandleMessage(values.handle)));
    }
-   const safeValues = stripPrivilegedDbValues(table, values);
+   const safeValues = stampTaskWriteIdentity(
+    table,
+    stripPrivilegedDbValues(table, values),
+    req.userId,
+   );
 
    // A human editing an agent is the OTHER half of the identity precedence rule
    // (shared/agentIdentity.cjs): whatever they touch here is recorded in
@@ -8410,6 +8433,22 @@ function createApp() {
 
    const params = [];
    const setParts = keys.map((column) => `${quoteIdent(column)} = ${bindDbParam(params, table, column, markedValues[column])}`);
+   if (table === 'tasks' && Object.prototype.hasOwnProperty.call(markedValues, 'assignee_id')) {
+    // SQL expressions in one UPDATE read the OLD row. This preserves requester
+    // A when B merely re-saves the same assignee, while an actual transition
+    // atomically records B (or clears on unassign) before any async dispatch.
+    const assigneeBind = bindDbParam(params, table, 'assignee_id', markedValues.assignee_id);
+    const assigned = typeof markedValues.assignee_id === 'string'
+     ? markedValues.assignee_id.trim()
+     : markedValues.assignee_id;
+    const requesterBind = bindDbParam(
+     params,
+     table,
+     'dispatch_requested_by',
+     assigned ? req.userId : null,
+    );
+    setParts.push(taskDispatchRequesterSql(assigneeBind, requesterBind));
+   }
    if (lockPatch) {
     // Base is the stored column (a rename must not clobber the voice); locks
     // merge INTO the stored ones, so a client cannot forge a lock for a field
@@ -8824,6 +8863,57 @@ if (require.main === module) {
 }
 
 function setTestDb(nextDb) {
+ // Older recording fakes predate transactional commands. Keep the production
+ // code honest (it always requires begin/row locks) while adapting only the
+ // explicit test seam. Dedicated transaction tests use their own `begin` and
+ // therefore bypass this compatibility layer entirely.
+ if (
+  process.env.AGENSIS_TEST === '1'
+  && nextDb
+  && typeof nextDb.unsafe === 'function'
+  && typeof nextDb.begin !== 'function'
+ ) {
+  const unsafe = nextDb.unsafe.bind(nextDb);
+  nextDb.begin = async (callback) => {
+   const testOwnerId = '00000000-0000-4000-8000-000000000099';
+   const transaction = {
+    async unsafe(sql, params = []) {
+     const normalized = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+     if (normalized.startsWith('select user_id from workspaces where id = $1')) {
+      return [{ user_id: testOwnerId }];
+     }
+     if (normalized.startsWith('select id, parent_id, user_id from workspaces')) {
+      const userId = params[1];
+      if (String(userId) === testOwnerId) {
+       return [{ id: params[0], parent_id: null, user_id: testOwnerId }];
+      }
+      const owner = await unsafe(
+       'select 1 from workspaces where id = $1 and user_id = $2 limit 1',
+       [params[0], userId],
+      );
+      return [{
+       id: params[0],
+       parent_id: null,
+       user_id: owner.length > 0 ? userId : null,
+      }];
+     }
+     if (normalized.startsWith('select user_id, source, (user_id = $2::uuid) as requested_user')) {
+      const rows = await unsafe(sql, params);
+      return rows.length > 0 ? rows : [{ user_id: params[1], source: 'participant' }];
+     }
+     return unsafe(sql, params);
+    },
+    async savepoint(callback) {
+     // Compatibility only for legacy recording fakes. Dedicated huddle tests
+     // provide a real snapshot/rollback savepoint; this adapter's purpose is to
+     // ensure old fakes execute the transcript/member path instead of throwing
+     // before the first statement and silently exercising only the fallback.
+     return callback(transaction);
+    },
+   };
+   return callback(transaction);
+  };
+ }
  db = nextDb;
  cachedAuthSecret = null;
  cachedAuthSecretSource = '';
@@ -9005,6 +9095,7 @@ module.exports = {
   mirrorAgentReplyToTaskComment,
   dispatchCommentMentions,
   dispatchTaskAssignment,
+  findOrCreateDirectSession,
   drainAgentTaskQueue,
   agentHasActiveJob,
   agentHasAnyActiveJob,

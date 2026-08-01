@@ -56,7 +56,7 @@ function makeDb({ task, agent = AGENT }) {
         return [{ id: task.id, workspace_id: task.workspace_id, assignee_id: task.assignee_id }];
       }
       // dispatchTaskAssignment's own read of the task
-      if (q.startsWith('select id, workspace_id, title, description, status, assignee_id, source_type, source_id from tasks')) {
+      if (q.startsWith('select id, workspace_id, title, description, status, assignee_id, source_type, source_id')) {
         return [task];
       }
       if (q.startsWith('select * from workspace_agents where id')) {
@@ -72,6 +72,19 @@ function makeDb({ task, agent = AGENT }) {
       }
       if (q.startsWith('update "tasks" set') || q.startsWith('update tasks set')) {
         writes.taskUpdates.push({ sql: n, params });
+        // PostgreSQL evaluates every SET expression against the OLD row. Mirror
+        // the conditional requester stamp so this fake catches a form re-save
+        // stealing a queued task from the human who actually assigned it.
+        const requesterCase = n.match(
+          /"assignee_id" IS DISTINCT FROM \$(\d+)\s+THEN \$(\d+)\s+ELSE "dispatch_requested_by"/i,
+        );
+        if (requesterCase) {
+          const comparedAssignee = params[Number(requesterCase[1]) - 1];
+          const nextRequester = params[Number(requesterCase[2]) - 1];
+          if (String(task.assignee_id ?? '') !== String(comparedAssignee ?? '')) {
+            task.dispatch_requested_by = nextRequester;
+          }
+        }
         // Reflect the write so a follow-up read sees the new assignee.
         if (q.includes('assignee_id')) task.assignee_id = params[0];
         return [{ ...task }];
@@ -146,7 +159,8 @@ function taskRow(overrides = {}) {
 }
 
 test('assigning a task to an agent through /backend/db/update dispatches it', async () => {
-  const db = makeDb({ task: taskRow({ assignee_id: null }) });
+  const task = taskRow({ assignee_id: null, dispatch_requested_by: 'older-requester' });
+  const db = makeDb({ task });
   __test.setTestDb(db);
   const token = await __test.issueToken(USER, '1');
 
@@ -157,13 +171,15 @@ test('assigning a task to an agent through /backend/db/update dispatches it', as
   });
 
   assert.equal(db.writes.messageInserts.length, 1, 'exactly one dispatch message');
+  assert.equal(task.dispatch_requested_by, USER, 'the authenticated assigning human owns delayed routing');
   const stamp = db.writes.taskUpdates.find(u => u.sql.includes("source_type = 'chat'"));
   assert.ok(stamp, 'the task records the chat it is being worked in');
   assert.ok(stamp.params.includes('dm-1'), 'source_id is the session id');
 });
 
 test('re-saving a task with the assignee it already has does not dispatch', async () => {
-  const db = makeDb({ task: taskRow({ assignee_id: AGENT.id }) });
+  const task = taskRow({ assignee_id: AGENT.id, dispatch_requested_by: 'original-assigner' });
+  const db = makeDb({ task });
   __test.setTestDb(db);
   const token = await __test.issueToken(USER, '1');
 
@@ -175,6 +191,11 @@ test('re-saving a task with the assignee it already has does not dispatch', asyn
 
   assert.equal(db.writes.messageInserts.length, 0, 'no agent run for an unchanged assignee');
   assert.equal(db.writes.taskUpdates.length, 1, 'only the user edit was written');
+  assert.equal(
+    task.dispatch_requested_by,
+    'original-assigner',
+    'a later editor cannot steal a queued assignment by re-saving the same assignee',
+  );
 });
 
 test('an edit that does not touch assignee_id never dispatches', async () => {

@@ -4,9 +4,10 @@
 
 **Initial audited snapshot:** `84987556` (`fix(ui): remove inert composer controls`)
 
-**Current implementation snapshot:** main `f19f57a` plus the uncommitted
-`enterprise-controller-resources` and `enterprise-message-integrity` worktrees.
-This is a staged review state, not a release snapshot.
+**Current implementation snapshot:** root branch `enterprise-overhaul-2026-07-31`
+at `60584a7`, with the integration, controller/resource, and
+message-integrity lanes copied into the dirty working tree. This is a verified
+local integration state, not a committed or deployed release snapshot.
 
 **Baseline before this overhaul:** `e6788ffb`
 
@@ -21,10 +22,11 @@ author-only message edits and soft deletion, private-session-aware derived data,
 safe generic mutation projections, atomic legacy invite acceptance, no
 request-time Netlify DDL, collaborator/resource agent classification, safer
 Electron IPC, better offline account isolation, selected-agent sub-thread
-routing, and a cleaner composer. The companion `agensis-agent` branch also adds
-operating-system service commands, and this application surfaces those commands
-in onboarding and agent setup. These are substantive product and security
-changes rather than cosmetic refactoring.
+routing, a cleaner composer, scoped `agc_` workspace-controller credentials,
+controller-owned resource agents, and fenced resource operations. The companion
+`agensis-agent` branch also adds operating-system service commands, and this
+application surfaces those commands in onboarding and agent setup. These are
+substantive product and security changes rather than cosmetic refactoring.
 
 The three critical findings from the initial snapshot are addressed in the
 staged implementation, subject to the final composite verification recorded
@@ -39,15 +41,14 @@ below. Across all 22 findings, the current disposition is:
 The application is still not enterprise-release-ready. The most important
 remaining gaps are:
 
-1. Fly and Netlify still do not share one transactional conversation-lifecycle
-   implementation.
+1. The core Fly/Netlify session-lineage and split creation paths now share the
+   transactional helpers, but browser-driven sub-thread, escalation, and merge
+   commands are still multi-step and need retry/idempotency proof.
 2. Prompt/context assembly has no enforceable per-section budget or strong
    untrusted-content boundary.
-3. Workspace control remains one broad credential rather than named,
-   independently revocable, scoped controllers.
-4. The persistent supervisor is implemented and surfaced, but desktop-quit,
+3. The persistent supervisor is implemented and surfaced, but desktop-quit,
    reboot, reconnect, upgrade, rollback, and ACP acceptance are not proven.
-5. There is no deployed two-human plus real-daemon E2E matrix, uniform
+4. There is no deployed two-human plus real-daemon E2E matrix, uniform
    cancellation contract, or accepted load/fault envelope.
 
 This is a current implementation and risk report, not a declaration that every
@@ -224,12 +225,12 @@ regression baseline.
 | --- | --- |
 | Clean dependency install | Not run on the staged release snapshot |
 | Full `npm run ci` | Not complete; route tests requiring loopback are blocked by sandbox `listen EPERM` |
-| Production build | Pass on controller and message worktrees; not merged |
+| Production build | Pass on the integrated root working tree |
 | Fly/Netlify/shared syntax | Pass on the verified lanes |
 | Runtime dependency audit | Zero known vulnerabilities |
 | Full dependency audit | 22 high advisories in build/development toolchains; no runtime advisories |
-| Focused message-integrity matrix | 2,774 frontend unit tests + 11 offline replay tests + 25 Node segment/hygiene tests pass; loopback route tests blocked |
-| Focused schema/no-DDL/projection/batch matrix | Controller/resource suite: 51 pass, 1 optional PostgreSQL skip |
+| Focused message-integrity matrix | 2,800 frontend unit tests + offline replay tests + source-hygiene tests pass; loopback route tests blocked |
+| Focused schema/no-DDL/projection/batch matrix | Controller/resource suite: 80 pass, 1 optional PostgreSQL skip |
 | Final browser regression | Not run after the staged work; no current visual/E2E release proof |
 | Companion supervisor verification | 178 Node tests, 127 Vitest tests, build, and packed smoke passed on `de59da2` |
 
@@ -326,22 +327,24 @@ privileged configuration by requesting `returning *`.
 
 ### High priority
 
-#### H-01 — Fly and Netlify conversation lifecycle parity can drift
+#### H-01 — Browser-derived conversation commands can be left half-complete
 
-**Status:** Open.
+**Status:** Partly fixed; remaining lifecycle hardening is open.
 
-The Fly generic insert path in [`server/index.cjs`](../server/index.cjs) invokes
-`resolveInheritedSessionVisibility`, `addSessionParticipant`, and
-`copyInheritedSessionMembers`. The Netlify mirror in
-[`netlify/functions/backend.mjs`](../netlify/functions/backend.mjs) does not
-have the same complete creation lifecycle.
+The shared `session-lineage` and `copyInheritedSessionMembers` helpers now cover
+the Fly and Netlify generic session creation paths, and the dedicated split
+routes use the same transactional lineage operation. That closes the original
+cross-backend visibility/member-inheritance drift.
 
-A DM-derived thread or fork created through the wrong backend can therefore
-miss inherited visibility or member copying.
+The remaining risk is higher-level browser orchestration: sub-thread creation,
+escalation, and merge currently make several durable calls (shell/context,
+quoted import/dispatch, synthesis/close). A retry or tab loss can leave a
+recoverable orphan or duplicate seed even though each individual server
+operation is authorized.
 
-**Remediation:** replace generic session creation with a shared, transactional
-conversation command used by both deployments. Add a backend-parity test matrix
-for channel, DM, thread, split, fork, merge, and huddle transcript creation.
+**Remediation:** add idempotency keys and one server-owned command per derived
+conversation action, then run the same parity matrix for channel, DM, thread,
+split, fork, merge, and huddle transcript creation against Fly and Netlify.
 
 #### H-02 — A legacy unauthenticated AI edge function remains in the tree
 
@@ -710,17 +713,36 @@ Enterprise acceptance requires short default expiry, single use, hash-at-rest,
 revoke, replay resistance, redacted logs/referrers, lifecycle audit, and
 two-principal negative tests.
 
+The current UI also reports whether a preview 404 came from a stale Agensis
+backend route or from the remote community host. The hosted preview still needs
+the Fly/Netlify deployment to be updated before that distinction can be checked
+against the public service.
+
+The Netlify function does not duplicate the join transaction or credential
+minting. When a deployment explicitly points the frontend/backend mirror at
+Netlify, `/backend/join/*` and `/backend/workspaces/:id/join-links` forward to
+`AGENSIS_DAEMON_BASE_URL`, preserving JSON negotiation, request credentials and
+the page's no-store/referrer headers. The same canonical-forwarding boundary
+now covers legacy member/invite compatibility, live agent controls, the
+manage-gated audit reader, authored templates, and public webhook triggers;
+those paths otherwise have no complete serverless implementation. Fly remains
+the canonical issuer and live-worker owner; the public `/join/*` rewrite in
+`netlify.toml` continues to proxy directly to the configured Fly deployment.
+This avoids two independent one-use/control-plane implementations while
+preventing an explicit Netlify backend base from becoming a route 404. A
+deployed Netlify runtime must set `AGENSIS_DAEMON_BASE_URL`; the forwarder fails
+closed with 503 when it is missing.
+
 ### Workspace control enrollment is a different grant
 
-Workspace control is intentionally not an ordinary member/agent invitation.
-It may share the `/join/<token>` route family, but it must remain visibly
-high-authority:
+Workspace control is intentionally not an ordinary member/agent invitation. It
+shares the `/join/<token>` route family, but remains visibly high-authority:
 
 ```text
 grant_kind: individual | workspace_control
 ```
 
-A workspace-control grant should require:
+The implemented workspace-control grant requires:
 
 - current owner confirmation;
 - a shorter, one-time enrollment TTL;
@@ -1085,8 +1107,8 @@ The audit does not claim:
 - Fly and Netlify have complete behavioural parity;
 - empty and production-like upgraded databases were applied, diffed, rolled
   back, and re-applied;
-- the broad workspace-control credential was replaced by named scoped
-  controller credentials;
+- public deployment and live-browser redemption of the scoped controller and
+  resource flows;
 - the persistent service survives real reboot/desktop-quit scenarios;
 - ACP is implemented;
 - Windows service support exists;

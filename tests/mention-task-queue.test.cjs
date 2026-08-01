@@ -76,8 +76,17 @@ function liveJob(overrides = {}) {
 
 // In-memory stand-in for the statements the mention + queue paths touch. Mutates
 // real rows, so the assertions read the same state the server would.
-function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
-  const state = { tasks, jobs, agents, messages: [], session: { ...SESSION } };
+function makeWorld({
+  tasks = [],
+  jobs = [],
+  agents = [AGENT],
+  sessions = [{
+    ...SESSION,
+    participants: [{ kind: 'agent', agent_id: AGENT.id, handle: 'coder', direct: true }],
+  }],
+  members = [],
+} = {}) {
+  const state = { tasks, jobs, agents, messages: [], sessions, members };
   const log = { sql: [], taskWrites: [] };
   let seq = 0;
   const findTask = (id) => state.tasks.find((t) => t.id === String(id));
@@ -103,9 +112,13 @@ function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
         const task = findTask(params[0]);
         return task ? [{ id: task.id, status: task.status, source_type: task.source_type, source_id: task.source_id }] : [];
       }
-      if (n.startsWith('select id, workspace_id, title, description, status, assignee_id, source_type, source_id from tasks')) {
+      if (n.startsWith('select id, workspace_id, title, description, status, assignee_id, source_type, source_id')) {
         const task = findTask(params[0]);
         return task ? [{ ...task }] : [];
+      }
+      if (n.startsWith('select dispatch_requested_by from tasks')) {
+        const task = findTask(params[0]);
+        return task ? [{ dispatch_requested_by: task.dispatch_requested_by || null }] : [];
       }
       if (n.startsWith('select id, title, workspace_id, created_at from tasks')) {
         return state.tasks
@@ -124,28 +137,31 @@ function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
         return [{ ahead }];
       }
       // The queued @mention: assignee only, so the drain owns the task. NO status.
-      if (n.startsWith('update tasks set assignee_id = $1, updated_at = now() where id = $2')) {
-        const task = findTask(params[1]);
-        if (!task) return [];
-        task.assignee_id = params[0];
-        log.taskWrites.push({ id: task.id, assignee_id: task.assignee_id, status: task.status, queued: true });
-        return [{ ...task }];
-      }
-      if (n.startsWith("update tasks set assignee_id = $1, status = $2, source_type = 'chat', source_id = $3")) {
-        const task = findTask(params[3]);
-        if (!task) return [];
-        task.assignee_id = params[0];
-        task.status = params[1];
-        task.source_type = 'chat';
-        task.source_id = params[2];
-        log.taskWrites.push({ id: task.id, status: task.status, source_id: task.source_id });
-        return [{ ...task }];
-      }
-      if (n.startsWith('update tasks set assignee_id = $1, status = $2, updated_at = now() where id = $3')) {
+      if (n.startsWith('update tasks set assignee_id = $1, dispatch_requested_by = $2, updated_at = now() where id = $3')) {
         const task = findTask(params[2]);
         if (!task) return [];
         task.assignee_id = params[0];
-        task.status = params[1];
+        task.dispatch_requested_by = params[1];
+        log.taskWrites.push({ id: task.id, assignee_id: task.assignee_id, status: task.status, queued: true });
+        return [{ ...task }];
+      }
+      if (n.startsWith("update tasks set assignee_id = $1, dispatch_requested_by = $2, status = $3, source_type = 'chat', source_id = $4")) {
+        const task = findTask(params[4]);
+        if (!task) return [];
+        task.assignee_id = params[0];
+        task.dispatch_requested_by = params[1];
+        task.status = params[2];
+        task.source_type = 'chat';
+        task.source_id = params[3];
+        log.taskWrites.push({ id: task.id, status: task.status, source_id: task.source_id });
+        return [{ ...task }];
+      }
+      if (n.startsWith('update tasks set assignee_id = $1, dispatch_requested_by = $2, status = $3, updated_at = now() where id = $4')) {
+        const task = findTask(params[3]);
+        if (!task) return [];
+        task.assignee_id = params[0];
+        task.dispatch_requested_by = params[1];
+        task.status = params[2];
         log.taskWrites.push({ id: task.id, status: task.status });
         return [{ ...task }];
       }
@@ -195,7 +211,12 @@ function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
       }
       if (n.startsWith('select * from workspace_agents')) return state.agents.map((a) => ({ ...a }));
       if (n.startsWith('select * from chat_sessions where workspace_id')) {
-        return [{ ...state.session, participants: [{ kind: 'agent', agent_id: AGENT.id, handle: 'coder', direct: true }] }];
+        return state.sessions.map((session) => ({ ...session }));
+      }
+      if (n.startsWith('select user_id, source, (user_id = $2::uuid) as requested_user')) {
+        return state.members
+          .filter((member) => String(member.session_id) === String(params[0]))
+          .map((member) => ({ user_id: member.user_id, source: member.source }));
       }
 
       // --- agent_jobs -------------------------------------------------------
@@ -217,10 +238,31 @@ function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
         const nested = n.includes('thread_parent_id, source_task_id');
         const tagged = n.includes('source_task_id');
         const row = nested
-          ? { id: `m-${seq}`, session_id: params[0], content: params[1], thread_parent_id: params[2], source_task_id: params[3] }
+          ? {
+            id: `m-${seq}`,
+            session_id: params[0],
+            content: params[1],
+            thread_parent_id: params[2],
+            source_task_id: params[3],
+            sender_id: params[4],
+          }
           : tagged
-            ? { id: `m-${seq}`, session_id: params[0], content: params[1], thread_parent_id: null, source_task_id: params[2] }
-            : { id: `m-${seq}`, session_id: params[0], content: params[1], thread_parent_id: null, source_task_id: null };
+            ? {
+              id: `m-${seq}`,
+              session_id: params[0],
+              content: params[1],
+              thread_parent_id: null,
+              source_task_id: params[2],
+              sender_id: params[3],
+            }
+            : {
+              id: `m-${seq}`,
+              session_id: params[0],
+              content: params[1],
+              thread_parent_id: null,
+              source_task_id: null,
+              sender_id: params[2],
+            };
         state.messages.push(row);
         return [{ ...row }];
       }
@@ -369,6 +411,41 @@ test('@mention on a task with a free agent dispatches immediately', async () => 
   assert.equal(String(world.state.messages[0].source_task_id), 't-1', 'inside the task subthread');
   assert.equal(runs[0].threadParentId, world.state.messages[0].id, 'and the turn targets that subthread');
   assert.match(world.state.messages[0].content, /tagged you in a comment/, 'the comment is quoted, not a generic assignment');
+});
+
+test('a comment mention runs in the author’s own private DM with the agent', async () => {
+  const authorA = 'human-a';
+  const authorB = 'human-b';
+  const sessionA = {
+    ...SESSION,
+    id: 'dm-a',
+    participants: [{ kind: 'agent', agent_id: AGENT.id, handle: 'coder', direct: true }],
+  };
+  const sessionB = { ...sessionA, id: 'dm-b' };
+  const world = makeWorld({
+    tasks: [taskRow('t-1')],
+    sessions: [sessionA, sessionB],
+    members: [
+      { session_id: sessionA.id, user_id: authorA, source: 'participant' },
+      { session_id: sessionB.id, user_id: authorB, source: 'participant' },
+    ],
+  });
+  __test.setTestDb(world.db);
+  const { runs, run } = jobRunner(world);
+
+  await __test.dispatchCommentMentions({
+    table: 'task_comments',
+    row: taskComment('t-1'),
+    authorUserId: authorB,
+    run,
+  });
+
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].sessionId, sessionB.id, 'the mention follows B, not the first DM for this agent');
+  assert.equal(world.state.messages[0].session_id, sessionB.id);
+  assert.equal(world.state.messages[0].sender_id, authorB);
+  assert.equal(world.state.tasks[0].dispatch_requested_by, authorB);
+  assert.equal(world.state.tasks[0].source_id, sessionB.id);
 });
 
 // --- (4) the race window: a refused turn must not strand the task -----------

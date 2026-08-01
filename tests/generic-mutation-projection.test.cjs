@@ -35,8 +35,13 @@ test('Fly and Netlify project insert, update, and delete RETURNING clauses', () 
     const source = read(relative);
     assert.match(
       source,
-      /insert into \$\{tableSql\}[^`]+returning \$\{normalizeColumns\(safeSelectColumns\(table, returning\)\)\}/s,
+      /insert into \$\{tableSql\}[^`]+returning \$\{normalizeColumns\(safeSelectColumns\(table, returningColumns\)\)\}/s,
       `${relative} generic insert must use the safe projection`,
+    );
+    assert.match(
+      source,
+      /const returningColumns = table === 'chat_sessions' \? '\*' : returning;/,
+      `${relative} may widen only chat_sessions for transactional membership settlement`,
     );
     assert.match(
       source,

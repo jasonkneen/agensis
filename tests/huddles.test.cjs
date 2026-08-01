@@ -34,6 +34,7 @@ const express = require('express');
 
 const { __test } = require('../server/index.cjs');
 const core = require('../shared/backend-core.cjs');
+const sessionLineage = require('../shared/session-lineage.cjs');
 const huddles = require('../server/huddles.cjs');
 const { createRealtime } = require('../server/realtime.cjs');
 
@@ -100,10 +101,24 @@ function makeDb({
   presenceRows = [],
   // Is an agent mid-turn? The reaper asks before ending an empty huddle.
   agentBusy = false,
+  // Savepoint rollback proof: force the private transcript member copy to fail.
+  failTranscriptMembership = false,
 } = {}) {
   const calls = [];
   const state = {
     huddles: [...huddleRows], events: [...eventRows], messages: [], chatSessions: [],
+    chatSessionMembers: Object.fromEntries(
+      Object.entries(sessionMembers).map(([sessionId, users]) => [
+        sessionId,
+        users.map((userId) => ({
+          session_id: sessionId,
+          user_id: userId,
+          source: 'participant',
+          granted_by: null,
+          expires_at: null,
+        })),
+      ]),
+    ),
     presence: presenceRows.map((row) => ({ connection_epoch: '', heartbeat_at: null, reaped_at: null, ...row })),
   };
   let seq = state.events.length;
@@ -128,6 +143,15 @@ function makeDb({
         const role = roles[`${params[0]}:${params[1]}`];
         return role ? [{ role }] : [];
       }
+      if (n.startsWith('select id, parent_id, user_id from workspaces where id = $1')) {
+        const exists = params[0] === WS || params[0] === OTHER_WS
+          || Object.values(sessions).includes(params[0]);
+        return exists ? [{
+          id: params[0],
+          parent_id: null,
+          user_id: owners[params[0]] || null,
+        }] : [];
+      }
       if (n.startsWith('select display_name, email from app_users')) {
         return [{ display_name: 'Member', email: 'member@example.com' }];
       }
@@ -150,8 +174,26 @@ function makeDb({
           folder: privacy.folder || 'General',
         }];
       }
+      if (n.startsWith('select host.id, host.workspace_id, host.title, host.model')) {
+        if (sessions[params[0]] !== params[1]) return [];
+        const privacy = sessionPrivacy[params[0]] || {};
+        return [{
+          id: params[0],
+          workspace_id: params[1],
+          title: 'general',
+          model: 'auto',
+          folder: privacy.folder || 'General',
+          canvas_id: null,
+          participants: [],
+          visibility: privacy.visibility || 'workspace',
+          deleted_at: null,
+        }];
+      }
       if (n.startsWith('select 1 from chat_session_members')) {
         return (sessionMembers[params[0]] || []).includes(String(params[1])) ? [{ ok: 1 }] : [];
+      }
+      if (n.startsWith('select user_id, source, granted_by, expires_at from chat_session_members')) {
+        return (state.chatSessionMembers[params[0]] || []).map((row) => ({ ...row }));
       }
       if (n.startsWith('select count(*)::int as count from messages where session_id = $1')) {
         return [{ count: Number(transcriptCounts[params[0]] || 0) }];
@@ -161,9 +203,31 @@ function makeDb({
         // The select-into-insert copies from the host; no host row, no session
         // (which is what the real statement does too).
         if (!sessions[hostId]) return [];
-        const row = { id, workspace_id: workspaceId, title, folder: 'huddle', host_id: hostId };
+        const privacy = sessionPrivacy[hostId] || {};
+        const visibility = privacy.visibility === 'private' || privacy.folder === 'Direct messages'
+          ? 'private'
+          : 'workspace';
+        const row = {
+          id,
+          workspace_id: workspaceId,
+          title,
+          folder: 'huddle',
+          visibility,
+          host_id: hostId,
+        };
         state.chatSessions.push(row);
-        return [{ id }];
+        return [{ id, visibility, folder: 'huddle' }];
+      }
+      if (n.startsWith('insert into chat_session_members')) {
+        if (failTranscriptMembership) throw new Error('forced transcript membership failure');
+        const [childId, parentId] = params;
+        const target = state.chatSessionMembers[childId] || [];
+        const seenUsers = new Set(target.map((row) => row.user_id));
+        for (const member of state.chatSessionMembers[parentId] || []) {
+          if (!seenUsers.has(member.user_id)) target.push({ ...member, session_id: childId });
+        }
+        state.chatSessionMembers[childId] = target;
+        return [];
       }
       if (n.startsWith('insert into messages')) {
         const [sessionId, content, kind, huddleId] = params;
@@ -296,6 +360,29 @@ function makeDb({
       if (n.includes('with recursive chain as')) return [];
       throw new Error(`Unexpected SQL in huddles test: ${sql}`);
     },
+    async begin(callback) {
+      const snapshot = structuredClone(state);
+      const transaction = {
+        unsafe: (sql, params) => db.unsafe(sql, params),
+        async savepoint(savepointCallback) {
+          const savepointSnapshot = structuredClone(state);
+          try {
+            return await savepointCallback({
+              unsafe: (sql, params) => db.unsafe(sql, params),
+            });
+          } catch (error) {
+            for (const key of Object.keys(state)) state[key] = savepointSnapshot[key];
+            throw error;
+          }
+        },
+      };
+      try {
+        return await callback(transaction);
+      } catch (error) {
+        for (const key of Object.keys(state)) state[key] = snapshot[key];
+        throw error;
+      }
+    },
   };
   return db;
 }
@@ -317,6 +404,9 @@ function makeApp(db, overrides = {}) {
       sessionRow,
       db: (sql, params) => db.unsafe(sql, params),
     }),
+    assertWorkspaceRoleLocked: core.assertWorkspaceRoleLocked,
+    installCreatedSessionMemberships: sessionLineage.installCreatedSessionMemberships,
+    lockPrivateSessionRoster: sessionLineage.lockPrivateSessionRoster,
     jsonError,
     notifyDbSubscribers: (table, eventType, rows) => broadcasts.push({ table, eventType, rows }),
     mintToken: async (args) => { minted.push(args); return `token-for-${args.identity}`; },
@@ -419,6 +509,23 @@ test.afterEach(() => {
     if (savedEnv[key] === undefined) delete process.env[envName];
     else process.env[envName] = savedEnv[key];
   }
+});
+
+test('the legacy test DB adapter executes savepoint callbacks instead of bypassing them', async () => {
+  const db = {
+    async unsafe() { return []; },
+  };
+  __test.setTestDb(db);
+  let calls = 0;
+
+  const result = await db.begin(async (transaction) => transaction.savepoint(async (savepoint) => {
+    calls += 1;
+    assert.equal(savepoint, transaction);
+    return 'settled';
+  }));
+
+  assert.equal(result, 'settled');
+  assert.equal(calls, 1);
 });
 
 // --- 1. membership ----------------------------------------------------------
@@ -1027,6 +1134,64 @@ test('starting a huddle creates its OWN conversation session, linked to the hudd
     assert.equal(created.folder, 'huddle', 'folder="huddle" is what keeps it out of the sidebar');
     assert.equal(created.host_id, SESSION, 'it is built from the host session');
   });
+});
+
+test('a legacy DM folder creates a private transcript with the complete member graph', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    sessionPrivacy: {
+      [SESSION]: { visibility: 'workspace', folder: 'Direct messages' },
+    },
+    sessionMembers: { [SESSION]: [MEMBER] },
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` },
+    });
+    assert.equal(res.status, 201);
+    const body = await res.json();
+    const transcriptId = body.data.huddle.transcript_session_id;
+    const transcript = db.state.chatSessions.find((row) => row.id === transcriptId);
+    assert.equal(transcript.visibility, 'private');
+    assert.deepEqual(
+      db.state.chatSessionMembers[transcriptId].map((row) => row.user_id),
+      [MEMBER],
+    );
+  });
+});
+
+test('a transcript member failure rolls back the orphan and commits a host-session fallback', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    sessionPrivacy: {
+      [SESSION]: { visibility: 'private', folder: 'Direct messages' },
+    },
+    sessionMembers: { [SESSION]: [MEMBER] },
+    failTranscriptMembership: true,
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    await withServer(app, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` },
+      });
+      assert.equal(res.status, 201);
+      const body = await res.json();
+      assert.equal(body.data.huddle.transcript_session_id, null);
+      assert.equal(body.data.state.transcriptSessionId, null);
+      assert.equal(db.state.chatSessions.length, 0, 'savepoint must remove the private orphan');
+      assert.equal(db.state.huddles.length, 1, 'the call itself remains available');
+    });
+  } finally {
+    console.error = originalError;
+  }
 });
 
 test('the transcript session copies the host row in SQL, never through a jsonb bind', () => {
