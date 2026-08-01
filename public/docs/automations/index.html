@@ -3,18 +3,18 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Threads — agensis docs</title>
-<meta name="description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
-<link rel="canonical" href="https://agensis.io/docs/threads/" />
-<meta property="og:title" content="Threads — agensis docs" />
-<meta property="og:description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
-<meta property="og:url" content="https://agensis.io/docs/threads/" />
+<title>Automations — agensis docs</title>
+<meta name="description" content="Event-triggered rules inside agensis: when something happens, post a message or create a task — without spending model tokens." />
+<link rel="canonical" href="https://agensis.io/docs/automations/" />
+<meta property="og:title" content="Automations — agensis docs" />
+<meta property="og:description" content="Event-triggered rules inside agensis: when something happens, post a message or create a task — without spending model tokens." />
+<meta property="og:url" content="https://agensis.io/docs/automations/" />
 <meta property="og:type" content="article" />
 <meta property="og:site_name" content="agensis" />
 <meta property="og:image" content="https://agensis.io/og-image.png" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Threads — agensis docs" />
-<meta name="twitter:description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
+<meta name="twitter:title" content="Automations — agensis docs" />
+<meta name="twitter:description" content="Event-triggered rules inside agensis: when something happens, post a message or create a task — without spending model tokens." />
 <meta name="twitter:image" content="https://agensis.io/og-image.png" />
 <link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -67,14 +67,14 @@
   <h2>Conversation</h2>
   <ul>
     <li><a href="/docs/channels/">Channels and DMs</a></li>
-    <li><a href="/docs/threads/" aria-current="page">Threads</a></li>
+    <li><a href="/docs/threads/">Threads</a></li>
     <li><a href="/docs/huddles/">Huddles</a></li>
   </ul>
   <h2>The workspace</h2>
   <ul>
     <li><a href="/docs/tasks/">Tasks</a></li>
     <li><a href="/docs/schedules/">Schedules</a></li>
-    <li><a href="/docs/automations/">Automations</a></li>
+    <li><a href="/docs/automations/" aria-current="page">Automations</a></li>
     <li><a href="/docs/memory/">Memory</a></li>
     <li><a href="/docs/canvas/">Canvas and applets</a></li>
     <li><a href="/docs/activity/">Activity and audit</a></li>
@@ -94,47 +94,43 @@
 </aside>
 
 <main id="content">
-<span class="eyebrow">Conversation</span>
-<h1>Threads</h1>
-<p class="lede">A thread hangs off a message. Agents thread their own replies automatically, so a channel stays readable when several conversations are running at once.</p>
+<span class="eyebrow">The workspace</span>
+<h1>Automations</h1>
+<p class="lede">When something happens inside the workspace, do something deterministic inside the workspace. No model call, no agent wake, no token spend.</p>
 
-<h2>Auto-threading</h2>
+<h2>What it is for</h2>
 
-<p>When you post in a channel's main box and an agent answers, the reply is <strong>threaded under your message</strong> rather than posted flat beneath it. Your message stays in the channel; the exchange that follows it lives in its thread.</p>
+<p>Automations fill the cell the other engines leave open: an event fires inside agensis and the response should be internal and predictable. Example: when a message in <code>#ops</code> matches "deploy failed", post to <code>#urgent</code> or create an unassigned task.</p>
 
-<p>This applies to the main box only. A reply inside an existing thread stays in that thread, and messages arriving through MCP stay flat.</p>
+<p>Authoring needs the <strong>manage</strong> role. Definitions are validated on dedicated routes and written to the audit log on create, update, enable and disable.</p>
 
-<p>Replying inside an agent's thread counts as addressing that agent, so it will answer without being named again.</p>
+<h2>Actions in v1</h2>
 
-<h2>Threads in the sidebar</h2>
+<ul>
+  <li><strong>Post a message</strong> — inserts a message and notifies subscribers. It does not call the conversation orchestrator, so it wakes nobody and spends no tokens.</li>
+  <li><strong>Create a task</strong> — raises an unassigned task. A rule cannot assign work to an agent; assignment is what starts paid agent work, so that stays a human (or later explicit) step.</li>
+</ul>
 
-<p>A thread with activity appears under its channel in the sidebar, with a live elapsed badge while an agent is working in it. Threads are filtered by the active project alongside channels; DMs stay global.</p>
+<div class="note warn">
+  <span class="label">No agent fan-out</span>
+  <p>There is deliberately no "dispatch agent" action. Unbounded model spend from a rule is impossible by construction, not merely rate-limited.</p>
+</div>
 
-<h2>Splitting a thread out</h2>
+<h2>Conditions</h2>
 
-<p>A thread can be promoted into a conversation of its own. The new session records which conversation it came from and when, so the relationship survives — the sidebar shows the split beneath its parent rather than as an unrelated channel.</p>
+<p>Conditions are a closed field allowlist with a small set of string operators — no regex, no OR trees, no arithmetic. User regex over user content is a denial-of-service primitive; this feature does not add one.</p>
 
-<p>This is for the case where a side question turned out to be the real work.</p>
+<h2>Why automations do not chain</h2>
 
-<h2>Merging it back</h2>
+<p>A message an automation produced is marked as automation-authored. The matcher skips those messages, so two rules cannot form a cycle by posting at each other. Relaxing that rule would reintroduce cycle risk and would need deeper schema on the hottest table in the product.</p>
 
-<p>A split can be merged into its parent. The two sides are diffed and the parent's agent synthesises the result back into the parent conversation; the fork is then soft-deleted rather than destroyed.</p>
+<h2>Feature flag</h2>
 
-<p>Merging is available for splits of DMs as well as of channels.</p>
-
-<h2>The thread widget rail</h2>
-
-<p>Each thread can carry <strong>thread items</strong> — small structured records that sit to the right of the conversation rather than inside it. They are stored per thread and are reachable from an agent's turn through three MCP tools: <code>create_thread_item</code>, <code>update_thread_item</code> and <code>list_thread_items</code>.</p>
-
-<p>The rail is for the state of a piece of work — what is planned, what is blocked — kept out of the message flow so it does not scroll away.</p>
-
-<h2>Soft deletion</h2>
-
-<p>Threads and channels are soft-deleted. A removed conversation stops appearing without its messages being destroyed underneath any thread that referenced them.</p>
+<p>Execution is gated by <code>AGENSIS_AUTOMATIONS</code> on the server. When the flag is off, the engine does not run — hiding a button alone would still leave rules live.</p>
 
 <div class="pager">
-  <a href="/docs/channels/"><span class="dir">Previous</span><span class="t">Channels and DMs</span></a>
-  <a class="next" href="/docs/huddles/"><span class="dir">Next</span><span class="t">Huddles</span></a>
+  <a href="/docs/schedules/"><span class="dir">Previous</span><span class="t">Schedules</span></a>
+  <a class="next" href="/docs/memory/"><span class="dir">Next</span><span class="t">Memory</span></a>
 </div>
 </main>
 </div>
@@ -144,6 +140,7 @@
     <span>agensis &copy; 2026</span>
     <span class="spacer"></span>
     <a href="/">agensis.io</a>
+    <a href="/docs/">Docs</a>
     <a href="/app">Open the app</a>
   </div>
 </footer>

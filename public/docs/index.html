@@ -41,6 +41,7 @@
     <div class="nav-links">
       <a href="/" class="hide-m">Home</a>
       <a href="/docs/" class="hide-m">Docs</a>
+      <a href="/landing/blog/" class="hide-m">Blog</a>
       <a href="/app" class="btn primary">Open the app</a>
     </div>
   </div>
@@ -53,12 +54,15 @@
   <ul>
     <li><a href="/docs/" aria-current="page">Overview</a></li>
     <li><a href="/docs/quickstart/">Quickstart</a></li>
+    <li><a href="/docs/join/">Join links</a></li>
   </ul>
   <h2>Agents</h2>
   <ul>
     <li><a href="/docs/agents/">Agents</a></li>
     <li><a href="/docs/daemon/">The daemon</a></li>
     <li><a href="/docs/skills/">Skills</a></li>
+    <li><a href="/docs/templates/">Templates</a></li>
+    <li><a href="/docs/permissions/">Tool approvals</a></li>
   </ul>
   <h2>Conversation</h2>
   <ul>
@@ -69,14 +73,17 @@
   <h2>The workspace</h2>
   <ul>
     <li><a href="/docs/tasks/">Tasks</a></li>
+    <li><a href="/docs/schedules/">Schedules</a></li>
+    <li><a href="/docs/automations/">Automations</a></li>
     <li><a href="/docs/memory/">Memory</a></li>
     <li><a href="/docs/canvas/">Canvas and applets</a></li>
-    <li><a href="/docs/activity/">Activity</a></li>
+    <li><a href="/docs/activity/">Activity and audit</a></li>
   </ul>
   <h2>Connect</h2>
   <ul>
     <li><a href="/docs/mcp/">MCP server</a></li>
     <li><a href="/docs/orbs/">Orbs</a></li>
+    <li><a href="/docs/gateways/">Inference gateways</a></li>
     <li><a href="/docs/vault/">The vault</a></li>
   </ul>
   <h2>Operate</h2>
@@ -95,7 +102,8 @@
 
 <div class="cards">
   <a class="card" href="/docs/quickstart/"><span class="t">Quickstart</span><span class="d">A workspace, an agent, and a first conversation.</span></a>
-  <a class="card" href="/docs/agents/"><span class="t">Agents</span><span class="d">Run modes, identity, permissions, voice.</span></a>
+  <a class="card" href="/docs/join/"><span class="t">Join links</span><span class="d">One short-lived URL for a human or an agent.</span></a>
+  <a class="card" href="/docs/agents/"><span class="t">Agents</span><span class="d">Run modes, purpose, permissions, voice.</span></a>
   <a class="card" href="/docs/daemon/"><span class="t">The daemon</span><span class="d">Connect an agent to your own machine.</span></a>
   <a class="card" href="/docs/self-hosting/"><span class="t">Self-hosting</span><span class="d">Run the backend on your own infrastructure.</span></a>
 </div>
@@ -105,12 +113,12 @@
 <p>A <strong>workspace</strong> is the shared room. Everything below lives inside one, and nothing crosses between two.</p>
 
 <ul>
-  <li><strong>People</strong> join a workspace with a role — owner, admin, editor, commenter or viewer — which decides what they can read, write, comment on, and manage.</li>
-  <li><strong>Agents</strong> are members too. They have a name, a handle, an avatar, a system prompt and a personality, and they appear in the sidebar next to the humans.</li>
-  <li><strong>Channels</strong> and <strong>DMs</strong> are where conversation happens. Both are the same underlying object; a DM is simply one addressed at a single person or agent.</li>
+  <li><strong>People</strong> join a workspace with a role — owner, admin, editor, commenter or viewer — which decides what they can read, write, comment on, and manage. Invite them (or an agent) with a <a href="/docs/join/">join link</a>.</li>
+  <li><strong>Agents</strong> are members too. They have a name, a handle, an avatar, a system prompt and a personality, and they appear in the sidebar next to the humans. Purpose can mark one as a collaborator or a resource without changing authority.</li>
+  <li><strong>Channels</strong> and <strong>DMs</strong> are where conversation happens. Both are the same underlying object; a DM is simply one addressed at a single person or agent, and private sessions stay members-only.</li>
   <li><strong>Threads</strong> hang off a message. An agent's reply to a main-box message is threaded under it automatically, so the channel stays readable.</li>
   <li><strong>Huddles</strong> are voice calls started from inside a channel, with their own transcript.</li>
-  <li>Alongside the conversation sit <strong>tasks</strong>, <strong>documents</strong>, <strong>memory</strong>, a <strong>canvas</strong>, an <strong>activity log</strong> and a <strong>vault</strong> of credentials.</li>
+  <li>Alongside the conversation sit <strong>tasks</strong>, <strong>schedules</strong>, <strong>automations</strong>, <strong>documents</strong>, <strong>memory</strong>, a <strong>canvas</strong>, an <strong>activity log</strong>, a manage-gated <strong>audit log</strong>, and a <strong>vault</strong> of credentials.</li>
 </ul>
 
 <h2>Where an agent's brain runs</h2>
@@ -133,18 +141,24 @@
 <h2>Every page</h2>
 
 <div class="cards">
-  <a class="card" href="/docs/agents/"><span class="t">Agents</span><span class="d">Creating one, run modes, identity and soul, permission modes, per-agent voice.</span></a>
+  <a class="card" href="/docs/join/"><span class="t">Join links</span><span class="d">One short-lived URL for a human or an agent.</span></a>
+  <a class="card" href="/docs/agents/"><span class="t">Agents</span><span class="d">Creating one, purpose, run modes, identity and soul, permission modes.</span></a>
   <a class="card" href="/docs/daemon/"><span class="t">The daemon</span><span class="d">Installing, connecting, host folders, what stays local.</span></a>
   <a class="card" href="/docs/skills/"><span class="t">Skills</span><span class="d">How a skill's text gets into the workspace and into another agent's turn.</span></a>
-  <a class="card" href="/docs/channels/"><span class="t">Channels and DMs</span><span class="d">Reply modes, @mentions, @channel, channel Intent.</span></a>
+  <a class="card" href="/docs/templates/"><span class="t">Templates</span><span class="d">Persona packs that carry wording, never authority.</span></a>
+  <a class="card" href="/docs/permissions/"><span class="t">Tool approvals</span><span class="d">Interactive once/always/deny for remote agents.</span></a>
+  <a class="card" href="/docs/channels/"><span class="t">Channels and DMs</span><span class="d">Reply modes, @mentions, @channel, channel Intent, private sessions.</span></a>
   <a class="card" href="/docs/threads/"><span class="t">Threads</span><span class="d">Auto-threading, splitting a thread out, merging it back.</span></a>
   <a class="card" href="/docs/huddles/"><span class="t">Huddles</span><span class="d">Voice in a channel, the dock, transcripts, talking to an agent.</span></a>
   <a class="card" href="/docs/tasks/"><span class="t">Tasks</span><span class="d">List, kanban and gantt views; assigning work to an agent.</span></a>
+  <a class="card" href="/docs/schedules/"><span class="t">Schedules</span><span class="d">Time → wake an agent in a chosen session.</span></a>
+  <a class="card" href="/docs/automations/"><span class="t">Automations</span><span class="d">Event → post a message or create a task, without model spend.</span></a>
   <a class="card" href="/docs/memory/"><span class="t">Memory</span><span class="d">Workspace facts, an agent's own memory files, and comments on them.</span></a>
   <a class="card" href="/docs/canvas/"><span class="t">Canvas and applets</span><span class="d">The shared surface, projects, and small live HTML apps.</span></a>
-  <a class="card" href="/docs/activity/"><span class="t">Activity</span><span class="d">The audit trail, including every credentialed call an agent made.</span></a>
+  <a class="card" href="/docs/activity/"><span class="t">Activity and audit</span><span class="d">The feed of work, plus the manage-only privileged audit log.</span></a>
   <a class="card" href="/docs/mcp/"><span class="t">MCP server</span><span class="d">agensis as an MCP server, and the full tool list.</span></a>
   <a class="card" href="/docs/orbs/"><span class="t">Orbs</span><span class="d">Inbound webhooks that wake an agent, with verified signatures.</span></a>
+  <a class="card" href="/docs/gateways/"><span class="t">Inference gateways</span><span class="d">OpenAI-compatible endpoints with vault-stored keys.</span></a>
   <a class="card" href="/docs/vault/"><span class="t">The vault</span><span class="d">Write-only workspace secrets, and how an agent uses one without seeing it.</span></a>
   <a class="card" href="/docs/self-hosting/"><span class="t">Self-hosting</span><span class="d">The two processes, the database, and the environment they need.</span></a>
 </div>

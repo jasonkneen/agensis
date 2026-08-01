@@ -41,6 +41,7 @@
     <div class="nav-links">
       <a href="/" class="hide-m">Home</a>
       <a href="/docs/" class="hide-m">Docs</a>
+      <a href="/landing/blog/" class="hide-m">Blog</a>
       <a href="/app" class="btn primary">Open the app</a>
     </div>
   </div>
@@ -53,12 +54,15 @@
   <ul>
     <li><a href="/docs/">Overview</a></li>
     <li><a href="/docs/quickstart/">Quickstart</a></li>
+    <li><a href="/docs/join/">Join links</a></li>
   </ul>
   <h2>Agents</h2>
   <ul>
     <li><a href="/docs/agents/" aria-current="page">Agents</a></li>
     <li><a href="/docs/daemon/">The daemon</a></li>
     <li><a href="/docs/skills/">Skills</a></li>
+    <li><a href="/docs/templates/">Templates</a></li>
+    <li><a href="/docs/permissions/">Tool approvals</a></li>
   </ul>
   <h2>Conversation</h2>
   <ul>
@@ -69,14 +73,17 @@
   <h2>The workspace</h2>
   <ul>
     <li><a href="/docs/tasks/">Tasks</a></li>
+    <li><a href="/docs/schedules/">Schedules</a></li>
+    <li><a href="/docs/automations/">Automations</a></li>
     <li><a href="/docs/memory/">Memory</a></li>
     <li><a href="/docs/canvas/">Canvas and applets</a></li>
-    <li><a href="/docs/activity/">Activity</a></li>
+    <li><a href="/docs/activity/">Activity and audit</a></li>
   </ul>
   <h2>Connect</h2>
   <ul>
     <li><a href="/docs/mcp/">MCP server</a></li>
     <li><a href="/docs/orbs/">Orbs</a></li>
+    <li><a href="/docs/gateways/">Inference gateways</a></li>
     <li><a href="/docs/vault/">The vault</a></li>
   </ul>
   <h2>Operate</h2>
@@ -107,10 +114,17 @@
     <tr><td><strong>Model</strong></td><td>A specific model, or <code>auto</code> for the workspace default.</td></tr>
     <tr><td><strong>Run mode</strong></td><td>Built-in or Remote. See below.</td></tr>
     <tr><td><strong>Skills</strong></td><td>A list of skill ids this agent carries. See <a href="/docs/skills/">Skills</a>.</td></tr>
+    <tr><td><strong>Purpose</strong></td><td><code>collaborator</code> or <code>resource</code> — presentation and ambient defaults only. Never grants permissions, folders, tokens or sandbox access.</td></tr>
     <tr><td><strong>Accent colour</strong></td><td>The colour its initials wear across the app.</td></tr>
   </tbody>
 </table>
 </div>
+
+<h2>Collaborator vs resource</h2>
+
+<p><strong>Purpose describes the job; it grants nothing.</strong> A collaborator is another voice in the room. A resource is a callable capability or steward for context, knowledge, tooling or code — non-ambient by default so it does not compete in every channel unless a manager turns ambient replies on.</p>
+
+<p>Resource facets (<code>context</code>, <code>knowledge</code>, <code>tooling</code>, <code>code</code>) are labels for how the agent is presented and requested. They never change RBAC, token scope, permission mode, host folders or tool grants. Templates may carry purpose as intent for the same reason — see <a href="/docs/templates/">Templates</a>.</p>
 
 <h2>Run modes</h2>
 
@@ -158,6 +172,8 @@
 </div>
 
 <p>An unspecified mode stays <code>default</code>. Nothing escalates it silently; <code>yolo</code> must be asked for explicitly.</p>
+
+<p>When a daemon agent still needs a tool it is not cleared for, it can raise an interactive approval in the conversation — once, always, or deny. That path is separate from the mode table above; see <a href="/docs/permissions/">Tool approvals</a>.</p>
 
 <div class="note warn">
   <span class="label">This matters elsewhere</span>

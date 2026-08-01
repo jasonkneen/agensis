@@ -41,6 +41,7 @@
     <div class="nav-links">
       <a href="/" class="hide-m">Home</a>
       <a href="/docs/" class="hide-m">Docs</a>
+      <a href="/landing/blog/" class="hide-m">Blog</a>
       <a href="/app" class="btn primary">Open the app</a>
     </div>
   </div>
@@ -53,12 +54,15 @@
   <ul>
     <li><a href="/docs/">Overview</a></li>
     <li><a href="/docs/quickstart/">Quickstart</a></li>
+    <li><a href="/docs/join/">Join links</a></li>
   </ul>
   <h2>Agents</h2>
   <ul>
     <li><a href="/docs/agents/">Agents</a></li>
     <li><a href="/docs/daemon/">The daemon</a></li>
     <li><a href="/docs/skills/">Skills</a></li>
+    <li><a href="/docs/templates/">Templates</a></li>
+    <li><a href="/docs/permissions/">Tool approvals</a></li>
   </ul>
   <h2>Conversation</h2>
   <ul>
@@ -69,14 +73,17 @@
   <h2>The workspace</h2>
   <ul>
     <li><a href="/docs/tasks/">Tasks</a></li>
+    <li><a href="/docs/schedules/">Schedules</a></li>
+    <li><a href="/docs/automations/">Automations</a></li>
     <li><a href="/docs/memory/">Memory</a></li>
     <li><a href="/docs/canvas/">Canvas and applets</a></li>
-    <li><a href="/docs/activity/" aria-current="page">Activity</a></li>
+    <li><a href="/docs/activity/" aria-current="page">Activity and audit</a></li>
   </ul>
   <h2>Connect</h2>
   <ul>
     <li><a href="/docs/mcp/">MCP server</a></li>
     <li><a href="/docs/orbs/">Orbs</a></li>
+    <li><a href="/docs/gateways/">Inference gateways</a></li>
     <li><a href="/docs/vault/">The vault</a></li>
   </ul>
   <h2>Operate</h2>
@@ -118,6 +125,14 @@
 <p>A row records the provider, the operation, the HTTP method, the resolved URL, the response status and the duration.</p>
 
 <p>It <strong>never</strong> records a request body, a response body, a header, or the name of the vault key used. Those fields are absent from the record's shape, not redacted from it.</p>
+
+<h2>Activity is not the audit log</h2>
+
+<p>The Activity window is a workspace feed. Some of its rows are client-authored events (a document edit, a task completion). That is the right design for a timeline and the wrong design for evidence of privileged actions.</p>
+
+<p>Privileged actions — role changes, member removal, invites, permission-mode flips (including <code>yolo</code>), permanent tool grants, connect-token mints, vault writes — write a separate, <strong>server-authored</strong> audit log. Only managers can read it. The table is not on the generic database or realtime paths at all, so there is no client insert, update or subscribe door into the trail.</p>
+
+<p>A row is always less sensitive than the thing it describes (key <em>names</em>, never values; token mints without the token). It is tamper-evident at the application layer, not tamper-proof against someone who holds the database credentials.</p>
 
 <h2>Commenting</h2>
 

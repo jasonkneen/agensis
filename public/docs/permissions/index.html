@@ -3,18 +3,18 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Threads — agensis docs</title>
-<meta name="description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
-<link rel="canonical" href="https://agensis.io/docs/threads/" />
-<meta property="og:title" content="Threads — agensis docs" />
-<meta property="og:description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
-<meta property="og:url" content="https://agensis.io/docs/threads/" />
+<title>Tool approvals — agensis docs</title>
+<meta name="description" content="Interactive tool approvals for daemon agents: once, always, or deny — without editing host settings files." />
+<link rel="canonical" href="https://agensis.io/docs/permissions/" />
+<meta property="og:title" content="Tool approvals — agensis docs" />
+<meta property="og:description" content="Interactive tool approvals for daemon agents: once, always, or deny — without editing host settings files." />
+<meta property="og:url" content="https://agensis.io/docs/permissions/" />
 <meta property="og:type" content="article" />
 <meta property="og:site_name" content="agensis" />
 <meta property="og:image" content="https://agensis.io/og-image.png" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Threads — agensis docs" />
-<meta name="twitter:description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
+<meta name="twitter:title" content="Tool approvals — agensis docs" />
+<meta name="twitter:description" content="Interactive tool approvals for daemon agents: once, always, or deny — without editing host settings files." />
 <meta name="twitter:image" content="https://agensis.io/og-image.png" />
 <link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -62,12 +62,12 @@
     <li><a href="/docs/daemon/">The daemon</a></li>
     <li><a href="/docs/skills/">Skills</a></li>
     <li><a href="/docs/templates/">Templates</a></li>
-    <li><a href="/docs/permissions/">Tool approvals</a></li>
+    <li><a href="/docs/permissions/" aria-current="page">Tool approvals</a></li>
   </ul>
   <h2>Conversation</h2>
   <ul>
     <li><a href="/docs/channels/">Channels and DMs</a></li>
-    <li><a href="/docs/threads/" aria-current="page">Threads</a></li>
+    <li><a href="/docs/threads/">Threads</a></li>
     <li><a href="/docs/huddles/">Huddles</a></li>
   </ul>
   <h2>The workspace</h2>
@@ -94,47 +94,38 @@
 </aside>
 
 <main id="content">
-<span class="eyebrow">Conversation</span>
-<h1>Threads</h1>
-<p class="lede">A thread hangs off a message. Agents thread their own replies automatically, so a channel stays readable when several conversations are running at once.</p>
+<span class="eyebrow">Agents</span>
+<h1>Tool approvals</h1>
+<p class="lede">When a remote agent hits a tool it is not cleared for, it asks in the conversation instead of failing silently. Approvals live in the workspace, not in a file on the daemon host.</p>
 
-<h2>Auto-threading</h2>
+<h2>How a request appears</h2>
 
-<p>When you post in a channel's main box and an agent answers, the reply is <strong>threaded under your message</strong> rather than posted flat beneath it. Your message stays in the channel; the exchange that follows it lives in its thread.</p>
+<p>A daemon-backed agent that needs a tool clearance posts a permission request into the session it is working in. You decide:</p>
 
-<p>This applies to the main box only. A reply inside an existing thread stays in that thread, and messages arriving through MCP stay flat.</p>
+<ul>
+  <li><strong>Allow once</strong> — this call only (needs write).</li>
+  <li><strong>Always allow</strong> — store a permanent rule on the agent (needs manage).</li>
+  <li><strong>Deny</strong> — refuse this call (needs write; never waits for an admin).</li>
+</ul>
 
-<p>Replying inside an agent's thread counts as addressing that agent, so it will answer without being named again.</p>
+<p>Stored rules match the runtime's own rule suggestions byte-for-byte. agensis does not reimplement shell-glob matching, so it cannot drift from the agent runtime's idea of a rule.</p>
 
-<h2>Threads in the sidebar</h2>
+<h2>What a rule does not grant</h2>
 
-<p>A thread with activity appears under its channel in the sidebar, with a live elapsed badge while an agent is working in it. Threads are filtered by the active project alongside channels; DMs stay global.</p>
+<p>A permission rule cannot open a folder. Working-directory access is a separate gate — host folders / additional directories on the daemon. If an agent still cannot write somewhere after an approval, check host folders, not the rule list.</p>
 
-<h2>Splitting a thread out</h2>
+<h2>Delivery</h2>
 
-<p>A thread can be promoted into a conversation of its own. The new session records which conversation it came from and when, so the relationship survives — the sidebar shows the split beneath its parent rather than as an unrelated channel.</p>
+<p>A decision is delivered to the exact daemon connection that raised the request, before it is recorded. A reconnected process has no memory of old request ids, so approving into a different socket would show "Approved" over a tool that never ran.</p>
 
-<p>This is for the case where a side question turned out to be the real work.</p>
-
-<h2>Merging it back</h2>
-
-<p>A split can be merged into its parent. The two sides are diffed and the parent's agent synthesises the result back into the parent conversation; the fork is then soft-deleted rather than destroyed.</p>
-
-<p>Merging is available for splits of DMs as well as of channels.</p>
-
-<h2>The thread widget rail</h2>
-
-<p>Each thread can carry <strong>thread items</strong> — small structured records that sit to the right of the conversation rather than inside it. They are stored per thread and are reachable from an agent's turn through three MCP tools: <code>create_thread_item</code>, <code>update_thread_item</code> and <code>list_thread_items</code>.</p>
-
-<p>The rail is for the state of a piece of work — what is planned, what is blocked — kept out of the message flow so it does not scroll away.</p>
-
-<h2>Soft deletion</h2>
-
-<p>Threads and channels are soft-deleted. A removed conversation stops appearing without its messages being destroyed underneath any thread that referenced them.</p>
+<div class="note">
+  <span class="label">Codex</span>
+  <p>Codex agents get once-per-session only. That runtime has no per-rule permanent grant, and "always" would otherwise mean any command forever.</p>
+</div>
 
 <div class="pager">
-  <a href="/docs/channels/"><span class="dir">Previous</span><span class="t">Channels and DMs</span></a>
-  <a class="next" href="/docs/huddles/"><span class="dir">Next</span><span class="t">Huddles</span></a>
+  <a href="/docs/templates/"><span class="dir">Previous</span><span class="t">Templates</span></a>
+  <a class="next" href="/docs/channels/"><span class="dir">Next</span><span class="t">Channels and DMs</span></a>
 </div>
 </main>
 </div>
@@ -144,6 +135,7 @@
     <span>agensis &copy; 2026</span>
     <span class="spacer"></span>
     <a href="/">agensis.io</a>
+    <a href="/docs/">Docs</a>
     <a href="/app">Open the app</a>
   </div>
 </footer>

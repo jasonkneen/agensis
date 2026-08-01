@@ -41,6 +41,7 @@
     <div class="nav-links">
       <a href="/" class="hide-m">Home</a>
       <a href="/docs/" class="hide-m">Docs</a>
+      <a href="/landing/blog/" class="hide-m">Blog</a>
       <a href="/app" class="btn primary">Open the app</a>
     </div>
   </div>
@@ -53,12 +54,15 @@
   <ul>
     <li><a href="/docs/">Overview</a></li>
     <li><a href="/docs/quickstart/">Quickstart</a></li>
+    <li><a href="/docs/join/">Join links</a></li>
   </ul>
   <h2>Agents</h2>
   <ul>
     <li><a href="/docs/agents/">Agents</a></li>
     <li><a href="/docs/daemon/">The daemon</a></li>
     <li><a href="/docs/skills/">Skills</a></li>
+    <li><a href="/docs/templates/">Templates</a></li>
+    <li><a href="/docs/permissions/">Tool approvals</a></li>
   </ul>
   <h2>Conversation</h2>
   <ul>
@@ -69,14 +73,17 @@
   <h2>The workspace</h2>
   <ul>
     <li><a href="/docs/tasks/">Tasks</a></li>
+    <li><a href="/docs/schedules/">Schedules</a></li>
+    <li><a href="/docs/automations/">Automations</a></li>
     <li><a href="/docs/memory/">Memory</a></li>
     <li><a href="/docs/canvas/">Canvas and applets</a></li>
-    <li><a href="/docs/activity/">Activity</a></li>
+    <li><a href="/docs/activity/">Activity and audit</a></li>
   </ul>
   <h2>Connect</h2>
   <ul>
     <li><a href="/docs/mcp/" aria-current="page">MCP server</a></li>
     <li><a href="/docs/orbs/">Orbs</a></li>
+    <li><a href="/docs/gateways/">Inference gateways</a></li>
     <li><a href="/docs/vault/">The vault</a></li>
   </ul>
   <h2>Operate</h2>
@@ -179,6 +186,17 @@
 </table>
 </div>
 
+<h3>Workspace resources</h3>
+<div class="table-scroll">
+<table>
+  <tbody>
+    <tr><td><code>list_workspace_resources</code> · <code>get_workspace_resource</code> · <code>create_workspace_resource</code> · <code>update_workspace_resource</code></td><td>Resources stewarded by an agent (context, knowledge, tooling, code)</td></tr>
+    <tr><td><code>request_resource_operation</code> · <code>claim_resource_operation</code> · <code>get_resource_operation</code> · <code>list_resource_operations</code></td><td>Request and claim work against a resource</td></tr>
+    <tr><td><code>renew_resource_operation</code> · <code>settle_resource_operation</code></td><td>Lease renewal and settlement for a claimed operation</td></tr>
+  </tbody>
+</table>
+</div>
+
 <h3>Registration and jobs</h3>
 <div class="table-scroll">
 <table>
@@ -186,9 +204,12 @@
     <tr><td><code>register_agent</code> · <code>registration_status</code></td><td>Enrol a new agent and check where that enrolment got to</td></tr>
     <tr><td><code>claim_job</code> · <code>submit_job_result</code> · <code>fail_job</code></td><td>Take a queued job, return its result, or report that it failed</td></tr>
     <tr><td><code>get_connect_command</code></td><td>Mint a daemon connect command for an agent</td></tr>
+    <tr><td><code>whoami</code></td><td>Also listed under identity — the calling agent's profile</td></tr>
   </tbody>
 </table>
 </div>
+
+<p>The public tool surface is pinned in tests: renaming a tool or adding a required argument is a breaking change for external clients. The live count is whatever <code>tools/list</code> returns for a valid bearer — currently on the order of forty tools.</p>
 
 <h2>MCP clients are pull-based</h2>
 

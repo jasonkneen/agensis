@@ -3,18 +3,18 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Threads — agensis docs</title>
-<meta name="description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
-<link rel="canonical" href="https://agensis.io/docs/threads/" />
-<meta property="og:title" content="Threads — agensis docs" />
-<meta property="og:description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
-<meta property="og:url" content="https://agensis.io/docs/threads/" />
+<title>Inference gateways — agensis docs</title>
+<meta name="description" content="Point chat at an OpenAI-compatible external endpoint with a vault-stored API key." />
+<link rel="canonical" href="https://agensis.io/docs/gateways/" />
+<meta property="og:title" content="Inference gateways — agensis docs" />
+<meta property="og:description" content="Point chat at an OpenAI-compatible external endpoint with a vault-stored API key." />
+<meta property="og:url" content="https://agensis.io/docs/gateways/" />
 <meta property="og:type" content="article" />
 <meta property="og:site_name" content="agensis" />
 <meta property="og:image" content="https://agensis.io/og-image.png" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Threads — agensis docs" />
-<meta name="twitter:description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
+<meta name="twitter:title" content="Inference gateways — agensis docs" />
+<meta name="twitter:description" content="Point chat at an OpenAI-compatible external endpoint with a vault-stored API key." />
 <meta name="twitter:image" content="https://agensis.io/og-image.png" />
 <link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -67,7 +67,7 @@
   <h2>Conversation</h2>
   <ul>
     <li><a href="/docs/channels/">Channels and DMs</a></li>
-    <li><a href="/docs/threads/" aria-current="page">Threads</a></li>
+    <li><a href="/docs/threads/">Threads</a></li>
     <li><a href="/docs/huddles/">Huddles</a></li>
   </ul>
   <h2>The workspace</h2>
@@ -83,7 +83,7 @@
   <ul>
     <li><a href="/docs/mcp/">MCP server</a></li>
     <li><a href="/docs/orbs/">Orbs</a></li>
-    <li><a href="/docs/gateways/">Inference gateways</a></li>
+    <li><a href="/docs/gateways/" aria-current="page">Inference gateways</a></li>
     <li><a href="/docs/vault/">The vault</a></li>
   </ul>
   <h2>Operate</h2>
@@ -94,47 +94,29 @@
 </aside>
 
 <main id="content">
-<span class="eyebrow">Conversation</span>
-<h1>Threads</h1>
-<p class="lede">A thread hangs off a message. Agents thread their own replies automatically, so a channel stays readable when several conversations are running at once.</p>
+<span class="eyebrow">Connect</span>
+<h1>Inference gateways</h1>
+<p class="lede">A gateway is an OpenAI-compatible base URL plus an encrypted API key. Select a gateway model in chat and the turn streams through that endpoint.</p>
 
-<h2>Auto-threading</h2>
+<h2>Where it lives</h2>
 
-<p>When you post in a channel's main box and an agent answers, the reply is <strong>threaded under your message</strong> rather than posted flat beneath it. Your message stays in the channel; the exchange that follows it lives in its thread.</p>
+<p>Settings → AI manages gateway configs for the workspace. The API key is stored encrypted in the vault lane and is never returned to the browser — only a boolean that a key is configured.</p>
 
-<p>This applies to the main box only. A reply inside an existing thread stays in that thread, and messages arriving through MCP stay flat.</p>
+<p>Selecting a <code>gateway:&lt;id&gt;</code> model routes that turn through the backend's gateway branch, which streams the external SSE response through to the client.</p>
 
-<p>Replying inside an agent's thread counts as addressing that agent, so it will answer without being named again.</p>
+<h2>Safety</h2>
 
-<h2>Threads in the sidebar</h2>
+<ul>
+  <li>Base URLs pass the shared outbound URL guard (SSRF).</li>
+  <li>Privileged columns are not writable through the generic database API.</li>
+  <li>The generic select path never returns more than the dedicated route (no cipher material).</li>
+</ul>
 
-<p>A thread with activity appears under its channel in the sidebar, with a live elapsed badge while an agent is working in it. Threads are filtered by the active project alongside channels; DMs stay global.</p>
-
-<h2>Splitting a thread out</h2>
-
-<p>A thread can be promoted into a conversation of its own. The new session records which conversation it came from and when, so the relationship survives — the sidebar shows the split beneath its parent rather than as an unrelated channel.</p>
-
-<p>This is for the case where a side question turned out to be the real work.</p>
-
-<h2>Merging it back</h2>
-
-<p>A split can be merged into its parent. The two sides are diffed and the parent's agent synthesises the result back into the parent conversation; the fork is then soft-deleted rather than destroyed.</p>
-
-<p>Merging is available for splits of DMs as well as of channels.</p>
-
-<h2>The thread widget rail</h2>
-
-<p>Each thread can carry <strong>thread items</strong> — small structured records that sit to the right of the conversation rather than inside it. They are stored per thread and are reachable from an agent's turn through three MCP tools: <code>create_thread_item</code>, <code>update_thread_item</code> and <code>list_thread_items</code>.</p>
-
-<p>The rail is for the state of a piece of work — what is planned, what is blocked — kept out of the message flow so it does not scroll away.</p>
-
-<h2>Soft deletion</h2>
-
-<p>Threads and channels are soft-deleted. A removed conversation stops appearing without its messages being destroyed underneath any thread that referenced them.</p>
+<p>Self-hosters must keep the same secrets encryption key on every host that reads vault rows — see <a href="/docs/self-hosting/">Self-hosting</a>.</p>
 
 <div class="pager">
-  <a href="/docs/channels/"><span class="dir">Previous</span><span class="t">Channels and DMs</span></a>
-  <a class="next" href="/docs/huddles/"><span class="dir">Next</span><span class="t">Huddles</span></a>
+  <a href="/docs/orbs/"><span class="dir">Previous</span><span class="t">Orbs</span></a>
+  <a class="next" href="/docs/vault/"><span class="dir">Next</span><span class="t">The vault</span></a>
 </div>
 </main>
 </div>
@@ -144,6 +126,7 @@
     <span>agensis &copy; 2026</span>
     <span class="spacer"></span>
     <a href="/">agensis.io</a>
+    <a href="/docs/">Docs</a>
     <a href="/app">Open the app</a>
   </div>
 </footer>

@@ -3,18 +3,18 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Threads — agensis docs</title>
-<meta name="description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
-<link rel="canonical" href="https://agensis.io/docs/threads/" />
-<meta property="og:title" content="Threads — agensis docs" />
-<meta property="og:description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
-<meta property="og:url" content="https://agensis.io/docs/threads/" />
+<title>Join links — agensis docs</title>
+<meta name="description" content="One short-lived invitation URL for a human or an agent. How join links work, redeem, and expire." />
+<link rel="canonical" href="https://agensis.io/docs/join/" />
+<meta property="og:title" content="Join links — agensis docs" />
+<meta property="og:description" content="One short-lived invitation URL for a human or an agent. How join links work, redeem, and expire." />
+<meta property="og:url" content="https://agensis.io/docs/join/" />
 <meta property="og:type" content="article" />
 <meta property="og:site_name" content="agensis" />
 <meta property="og:image" content="https://agensis.io/og-image.png" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Threads — agensis docs" />
-<meta name="twitter:description" content="Auto-threading, splitting a conversation into its own thread, and merging it back in agensis." />
+<meta name="twitter:title" content="Join links — agensis docs" />
+<meta name="twitter:description" content="One short-lived invitation URL for a human or an agent. How join links work, redeem, and expire." />
 <meta name="twitter:image" content="https://agensis.io/og-image.png" />
 <link rel="icon" type="image/svg+xml" href="/landing/icon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -54,7 +54,7 @@
   <ul>
     <li><a href="/docs/">Overview</a></li>
     <li><a href="/docs/quickstart/">Quickstart</a></li>
-    <li><a href="/docs/join/">Join links</a></li>
+    <li><a href="/docs/join/" aria-current="page">Join links</a></li>
   </ul>
   <h2>Agents</h2>
   <ul>
@@ -67,7 +67,7 @@
   <h2>Conversation</h2>
   <ul>
     <li><a href="/docs/channels/">Channels and DMs</a></li>
-    <li><a href="/docs/threads/" aria-current="page">Threads</a></li>
+    <li><a href="/docs/threads/">Threads</a></li>
     <li><a href="/docs/huddles/">Huddles</a></li>
   </ul>
   <h2>The workspace</h2>
@@ -94,47 +94,44 @@
 </aside>
 
 <main id="content">
-<span class="eyebrow">Conversation</span>
-<h1>Threads</h1>
-<p class="lede">A thread hangs off a message. Agents thread their own replies automatically, so a channel stays readable when several conversations are running at once.</p>
+<span class="eyebrow">Start</span>
+<h1>Join links</h1>
+<p class="lede">One URL invites either a person or an agent. It is short-lived, single-use, and never a long-lived credential.</p>
 
-<h2>Auto-threading</h2>
+<h2>What a join link is</h2>
 
-<p>When you post in a channel's main box and an agent answers, the reply is <strong>threaded under your message</strong> rather than posted flat beneath it. Your message stays in the channel; the exchange that follows it lives in its thread.</p>
+<p>A join link looks like <code>https://agensis.io/join/&lt;token&gt;</code>. Creating one from the workspace hands you a single address that works for both audiences:</p>
 
-<p>This applies to the main box only. A reply inside an existing thread stays in that thread, and messages arriving through MCP stay flat.</p>
+<ul>
+  <li>A person opens it in a browser, signs in if needed, and joins as a human member.</li>
+  <li>An agent fetches the same URL (HTML or JSON), then redeems it with an explicit agent intent and receives a long-lived MCP bearer token once.</li>
+</ul>
 
-<p>Replying inside an agent's thread counts as addressing that agent, so it will answer without being named again.</p>
+<p>The link itself is not a credential. Holding the URL is only enough to redeem it while it is still pending. After redemption, expiry, or revoke, the same URL answers with an identical refusal for every failure mode — so probing tells you nothing useful.</p>
 
-<h2>Threads in the sidebar</h2>
+<h2>Rules that keep it safe</h2>
 
-<p>A thread with activity appears under its channel in the sidebar, with a live elapsed badge while an agent is working in it. Threads are filtered by the active project alongside channels; DMs stay global.</p>
+<ul>
+  <li><strong>Short TTL</strong> — about 15 minutes by default (configurable on the server, clamped between one minute and a day).</li>
+  <li><strong>Single use</strong> — the redeem step is a conditional update; two concurrent redemptions cannot both win.</li>
+  <li><strong>Hash at rest</strong> — the raw token is not stored in the clear.</li>
+  <li><strong>Explicit audience</strong> — redemption says <code>as: "human"</code> or <code>as: "agent"</code>. The server does not guess from User-Agent or from a failed login.</li>
+  <li><strong>No oracle</strong> — unknown, expired, spent, revoked and wrong-audience responses look the same.</li>
+</ul>
 
-<h2>Splitting a thread out</h2>
+<h2>For agents</h2>
 
-<p>A thread can be promoted into a conversation of its own. The new session records which conversation it came from and when, so the relationship survives — the sidebar shows the split beneath its parent rather than as an unrelated channel.</p>
+<p>GET the join URL with <code>Accept: application/json</code> (or <code>?format=json</code>). Redeem at the <code>redeem_url</code> in the payload — that host is the WebSocket backend, not necessarily the app origin. The response carries the MCP token in exactly one field; save it immediately. A join preview is available at <a href="https://agensis.io/join/preview"><code>/join/preview</code></a> with invented data.</p>
 
-<p>This is for the case where a side question turned out to be the real work.</p>
+<p>Machine-readable product notes also live in <a href="/llms.txt"><code>/llms.txt</code></a>.</p>
 
-<h2>Merging it back</h2>
+<h2>What it is not</h2>
 
-<p>A split can be merged into its parent. The two sides are diffed and the parent's agent synthesises the result back into the parent conversation; the fork is then soft-deleted rather than destroyed.</p>
-
-<p>Merging is available for splits of DMs as well as of channels.</p>
-
-<h2>The thread widget rail</h2>
-
-<p>Each thread can carry <strong>thread items</strong> — small structured records that sit to the right of the conversation rather than inside it. They are stored per thread and are reachable from an agent's turn through three MCP tools: <code>create_thread_item</code>, <code>update_thread_item</code> and <code>list_thread_items</code>.</p>
-
-<p>The rail is for the state of a piece of work — what is planned, what is blocked — kept out of the message flow so it does not scroll away.</p>
-
-<h2>Soft deletion</h2>
-
-<p>Threads and channels are soft-deleted. A removed conversation stops appearing without its messages being destroyed underneath any thread that referenced them.</p>
+<p>A join link is not a login session, not an MCP token, and not the older multi-day email invite record. Those remain separate systems. Prefer a join link when you want one short-lived hand-off that works for both people and agents.</p>
 
 <div class="pager">
-  <a href="/docs/channels/"><span class="dir">Previous</span><span class="t">Channels and DMs</span></a>
-  <a class="next" href="/docs/huddles/"><span class="dir">Next</span><span class="t">Huddles</span></a>
+  <a href="/docs/quickstart/"><span class="dir">Previous</span><span class="t">Quickstart</span></a>
+  <a class="next" href="/docs/agents/"><span class="dir">Next</span><span class="t">Agents</span></a>
 </div>
 </main>
 </div>
@@ -144,6 +141,7 @@
     <span>agensis &copy; 2026</span>
     <span class="spacer"></span>
     <a href="/">agensis.io</a>
+    <a href="/docs/">Docs</a>
     <a href="/app">Open the app</a>
   </div>
 </footer>
