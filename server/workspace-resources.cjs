@@ -302,6 +302,11 @@ function createWorkspaceResourceService(deps = {}) {
   enforceWorkspaceRole,
   assertWorkspaceRoleLocked,
   recordAudit = async () => null,
+  // Wakes the steward when an operation is enqueued. Defaults to a no-op so the
+  // service stays pure for tests and for any caller that has no agent runtime;
+  // a missing dispatcher degrades to the old pull-only behaviour rather than
+  // failing a request that is already committed.
+  dispatchResourceOperation = async () => null,
   controllerHasScope = defaultControllerHasScope,
   operationLeaseMs = RESOURCE_OPERATION_LEASE_MS,
   maxOperationAttempts = RESOURCE_OPERATION_MAX_ATTEMPTS,
@@ -1020,6 +1025,35 @@ function createWorkspaceResourceService(deps = {}) {
      // The durable audit row already points at the operation. This convenience
      // backlink must not turn an accepted request into an error.
     }
+   }
+
+   // Claiming is pull-only, so before this nothing told the steward an operation
+   // existed — it sat pending until a human happened to wake the daemon, while
+   // the lease clock (RESOURCE_OPERATION_LEASE_MS) was already running. Wake the
+   // steward in its DM instead, the same way a comment @mention does.
+   //
+   // Fire-and-forget on purpose: the row is committed and still claimable by the
+   // old pull path, so a dispatch that fails, is refused, or is throttled must
+   // never turn an accepted request into an error response. Guarded by
+   // `requested.created`, so an idempotent replay never re-wakes the steward.
+   // try/catch AND .catch: an async dispatcher rejects, but a synchronously
+   // throwing one would escape the promise wrapper entirely and fail a request
+   // whose row is already committed.
+   try {
+    void Promise.resolve(
+     dispatchResourceOperation({
+      workspaceId,
+      operationId: String(requested.row.id),
+      resourceId: String(requested.row.resource_id),
+      stewardAgentId: String(requested.row.steward_agent_id),
+      operation: String(requested.row.operation),
+      resourceName: String(requested.resource?.name || ''),
+      requesterKind: String(requested.identity.kind || ''),
+      requesterUserId: requested.identity.kind === 'user' ? String(requested.identity.id) : null,
+     }),
+    ).catch(error => console.error('dispatchResourceOperation failed', error));
+   } catch (error) {
+    console.error('dispatchResourceOperation failed', error);
    }
   }
   return publicResourceOperation(requested.row);
