@@ -5,7 +5,8 @@ Snapshot: 2026-08-01
 Current application release: `c096ebd` is pushed on `main`/`origin/main`, with
 the final handoff snapshot at `96bee3d` and Neon current through the resource
 soft-delete migration.
-Fly release **v155** and the Netlify production deploy are live and healthy.
+Fly release **v156** and the Netlify production deploy are live and healthy.
+Fly is running image `deployment-01KYYJXKDK1TWFHE49W83H4P88`.
 The automatic main deploy for this commit is
 `6a6ddd4cf7097d0008f774eb`; the final manual function-packaging deploy was
 `6a6ddd51bb695706dfd5421b`. The earlier
