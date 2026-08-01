@@ -170,6 +170,20 @@ export function setNostrChannelSubscription(connectionId: string, channelId: str
   );
 }
 
+export function removeNostrChannel(connectionId: string, channelId: string) {
+  return request<{ removed: boolean; channelId: string; sessionId: string }>(
+    `/backend/nostr-communities/${encodeURIComponent(connectionId)}/channels/${encodeURIComponent(channelId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+export function deleteNostrCommunity(connectionId: string) {
+  return request<NostrConnection>(
+    `/backend/nostr-communities/${encodeURIComponent(connectionId)}`,
+    { method: 'DELETE' },
+  );
+}
+
 export function getNostrMembers(sessionId: string, signal?: AbortSignal) {
   return request<NostrMember[]>(`/backend/sessions/${encodeURIComponent(sessionId)}/nostr-members`, { signal });
 }

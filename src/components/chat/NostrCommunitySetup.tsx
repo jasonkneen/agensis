@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Globe2, Link2, Plus } from 'lucide-react';
+import { ArrowLeft, Globe2, Link2, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import {
@@ -11,6 +21,8 @@ import {
   mapNostrChannels,
   nostrErrorMessage,
   previewNostrInvite,
+  deleteNostrCommunity,
+  removeNostrChannel,
   setNostrChannelSubscription,
   type NostrChannel,
   type NostrConnectResult,
@@ -26,6 +38,11 @@ type ChannelDraft = {
   intent: string;
   conversation_mode: ConversationMode;
 };
+
+type DeleteTarget =
+  | { kind: 'channel'; channel: NostrChannel }
+  | { kind: 'connection'; name: string }
+  | null;
 
 interface Props {
   workspaceId: string | null;
@@ -48,6 +65,7 @@ export function NostrCommunitySetup({
   const [ageConfirmed, setAgeConfirmed] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
   const managing = !!existingConnection;
 
   useEffect(() => {
@@ -188,6 +206,37 @@ export function NostrCommunitySetup({
     }
   };
 
+  const confirmDelete = async () => {
+    if (!connected || !deleteTarget) return;
+    const target = deleteTarget;
+    setBusy(target.kind === 'channel' ? `delete:${target.channel.id}` : 'delete:connection');
+    setError('');
+    try {
+      if (target.kind === 'channel') {
+        await removeNostrChannel(connected.connection.id, target.channel.id);
+        setConnected(current => current ? {
+          ...current,
+          channels: current.channels.filter(channel => channel.id !== target.channel.id),
+        } : current);
+        setSelected(current => {
+          const next = new Set(current);
+          next.delete(target.channel.id);
+          return next;
+        });
+        onCommunityChange?.();
+      } else {
+        await deleteNostrCommunity(connected.connection.id);
+        onCommunityChange?.();
+        onClose();
+      }
+      setDeleteTarget(null);
+    } catch (reason) {
+      setError(nostrErrorMessage(reason));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <>
       <DialogHeader>
@@ -301,21 +350,33 @@ export function NostrCommunitySetup({
                 <div className="font-medium">
                   {connected.connection.status === 'connected' ? 'Connected to' : 'Connection paused for'} {connected.connection.name}
                 </div>
-                {managing && connected.connection.status === 'disconnected' && (
+                <div className="flex shrink-0 gap-2">
+                  {managing && connected.connection.status === 'disconnected' && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setConnected(null);
+                        setPreview(null);
+                        setInviteUrl('');
+                        resetConsent();
+                      }}
+                    >
+                      Reconnect with invite
+                    </Button>
+                  )}
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="destructive"
                     size="sm"
-                    onClick={() => {
-                      setConnected(null);
-                      setPreview(null);
-                      setInviteUrl('');
-                      resetConsent();
-                    }}
+                    onClick={() => setDeleteTarget({ kind: 'connection', name: connected.connection.name })}
+                    disabled={busy !== null}
                   >
-                    Reconnect with invite
+                    <Trash2 data-icon="inline-start" />
+                    Delete connection
                   </Button>
-                )}
+                </div>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
                 {connected.connection.status === 'disconnected'
@@ -341,8 +402,9 @@ export function NostrCommunitySetup({
                 const selectionChecked = channel.subscription ? subscribed : selected.has(channel.id);
                 const toggleUnavailable = busy !== null || (unavailable && !subscribed);
                 return (
-                  <label key={channel.id} className="flex items-start gap-3 rounded-lg border border-border p-3">
+                  <div key={channel.id} className="flex items-start gap-3 rounded-lg border border-border p-3">
                     <Checkbox
+                      id={`nostr-channel-${channel.id}`}
                       checked={selectionChecked}
                       disabled={toggleUnavailable}
                       aria-label={channel.subscription
@@ -350,7 +412,7 @@ export function NostrCommunitySetup({
                         : `Import #${channel.name}`}
                       onCheckedChange={() => void toggleChannel(channel)}
                     />
-                    <span className="min-w-0 flex-1">
+                    <label htmlFor={`nostr-channel-${channel.id}`} className="min-w-0 flex-1 cursor-pointer">
                       <span className="flex items-center gap-2">
                         <span className="min-w-0 flex-1 truncate text-sm font-medium">#{channel.name}</span>
                         {channel.subscription && (
@@ -373,8 +435,21 @@ export function NostrCommunitySetup({
                             ? 'Private channels stay unavailable until Agensis can preserve equivalent access'
                             : channel.description || (channel.joined ? 'Joined channel; not imported yet' : 'Accessible public channel; not imported yet')}
                       </span>
-                    </span>
-                  </label>
+                    </label>
+                    {channel.subscription && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={`Remove #${channel.name} from Agensis`}
+                        title={`Remove #${channel.name} from Agensis`}
+                        onClick={() => setDeleteTarget({ kind: 'channel', channel })}
+                        disabled={busy !== null}
+                      >
+                        <Trash2 />
+                      </Button>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -395,6 +470,31 @@ export function NostrCommunitySetup({
           </Button>
         )}
       </div>
+
+      <AlertDialog open={deleteTarget !== null} onOpenChange={open => { if (!open && busy === null) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {deleteTarget?.kind === 'connection' ? 'Delete this Nostr connection?' : 'Remove this Nostr channel?'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget?.kind === 'connection'
+                ? `This removes ${deleteTarget.name || 'the community'} and all of its Nostr bridge mappings. Local Agensis channels and message history are kept.`
+                : `This stops syncing #${deleteTarget?.channel.name || 'this channel'} and removes its Nostr mapping. The local Agensis channel and message history are kept.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy !== null}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => void confirmDelete()}
+              disabled={busy !== null}
+            >
+              {busy !== null ? 'Deleting…' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

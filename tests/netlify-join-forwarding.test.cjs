@@ -234,6 +234,8 @@ test('Netlify forwards the remaining Fly-owned workspace and conversation surfac
   ['POST', 'https://app.example.test/backend/workspaces/ws-1/flow-connections', { targetUrl: 'https://example.test/hook' }],
   ['POST', 'https://app.example.test/backend/workspaces/ws-1/mcp-token', { label: 'desktop' }],
   ['GET', 'https://app.example.test/backend/workspaces/ws-1/agent-registrations?status=pending', undefined],
+  ['DELETE', 'https://app.example.test/backend/nostr-communities/connection-1/channels/channel-1', undefined],
+  ['DELETE', 'https://app.example.test/backend/nostr-communities/connection-1', undefined],
   ['POST', 'https://app.example.test/backend/agent-registrations/registration-1/approve', {}],
   ['POST', 'https://app.example.test/backend/agensis/setup/connect', { workspaceId: 'ws-1' }],
   ['POST', 'https://app.example.test/backend/agents/agent-1/connection-command', { runtime: 'codex' }],

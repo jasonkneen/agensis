@@ -742,7 +742,6 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         agent={connectAgent}
         open={connectAgentId != null}
         onOpenChange={(o) => { if (!o) setConnectAgentId(null); }}
-        runtimeChoices={runtimeChoices}
         webhooks={connectAgent ? webhooks.filter(webhook => webhook.agent_id === connectAgent.id) : []}
         onCreateWebhook={() => connectAgent ? onCreateWebhook({ agent_id: connectAgent.id, name: `${connectAgent.name} webhook` }) : Promise.resolve(null)}
         onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
@@ -1125,7 +1124,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                         className={cn(
                           // agents-list-card carries the selected wash (accent
                           // over card, index.css) and the neo depth treatment.
-                          'agents-list-card group relative flex flex-col items-center gap-2.5 rounded-2xl border bg-card/60 p-4 text-center shadow-sm shadow-black/5 backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:shadow-black/20 dark:hover:shadow-black/30',
+                          'agents-list-card group relative flex flex-col items-center gap-2.5 overflow-hidden rounded-2xl border bg-card/60 p-4 text-center shadow-sm shadow-black/5 backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:shadow-black/20 dark:hover:shadow-black/30',
                           selected && 'border-primary/50',
                           !active && 'opacity-60',
                         )}
@@ -1140,7 +1139,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                             />
                           )}
                         </span>
-                        <div className="min-w-0">
+                        <div className="w-full min-w-0">
                           <div className="flex items-center justify-center gap-1.5">
                             <span className="agent-accent-dot" style={{ backgroundColor: accent }} aria-hidden />
                             <span className="truncate text-sm font-semibold">{agent.name}</span>
@@ -1148,7 +1147,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                           <span className="block truncate text-[11px] text-muted-foreground opacity-70">@{agent.handle || agentHandle(agent.name)}</span>
                           <span className="mt-0.5 block truncate text-[11px] text-muted-foreground opacity-80">{displayModel(agent.model)}</span>
                           {normalizeAgentPurpose(agent.purpose) === 'resource' && (
-                            <span className="mt-0.5 block truncate text-[11px] font-medium text-primary">
+                            <span className="mt-0.5 block w-full max-w-full line-clamp-2 break-words text-[11px] font-medium leading-tight text-primary">
                               Shared resource · {resourceFacetSummary(agent.resource_facets)}
                             </span>
                           )}
@@ -2554,7 +2553,6 @@ function AgentConnectDialog({
   agent,
   open,
   onOpenChange,
-  runtimeChoices,
   webhooks,
   onCreateWebhook,
   onToggleWebhook,
@@ -2562,7 +2560,6 @@ function AgentConnectDialog({
   agent: WorkspaceAgent | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  runtimeChoices: AgentRuntimeChoice[];
   webhooks: AgentWebhook[];
   onCreateWebhook: () => Promise<AgentWebhook | null>;
   onToggleWebhook: (webhook: AgentWebhook, enabled: boolean) => Promise<AgentWebhook | null>;
@@ -2716,29 +2713,6 @@ function AgentConnectDialog({
                 benefit={`Full power. Runs @${handle} on your machine with real tools — edit files, run shells, local MCP. Best for coding agents.`}
                 note="Needs the agensis CLI installed. Run it in this shell, or install its saved profile as an OS-supervised service so it survives closing the desktop app."
               />
-              <div>
-                <p className="mb-2 text-xs font-medium text-muted-foreground">Supported coding agents your daemon can run</p>
-                <div className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(140px,1fr))]">
-                  {runtimeChoices.map(runtime => (
-                    <div
-                      key={runtime.id}
-                      className={cn(
-                        'flex flex-col gap-1 rounded-lg border p-2.5',
-                        agentExecutionRuntime(agent) === runtime.id ? 'border-primary/60 bg-primary/10' : 'border-border bg-card/50',
-                      )}
-                    >
-                      <div className="flex items-center gap-1.5">
-                        <Terminal className="size-3.5 shrink-0 text-muted-foreground" />
-                        <span className="truncate text-xs font-semibold">{runtime.label}</span>
-                        {agentExecutionRuntime(agent) === runtime.id && <Badge variant="outline" className="ml-auto text-[9px]">Selected</Badge>}
-                      </div>
-                      <span className={cn('text-[10px]', runtime.available ? 'text-emerald-500' : 'text-muted-foreground')}>
-                        {runtimeChoiceNote(runtime)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
               <McpDialogSection icon={Terminal} title="Daemon connect command">
                 <p className="text-xs text-muted-foreground">
                   Generate a one-line command, then run it where the daemon should execute. It&apos;s copied to your clipboard.

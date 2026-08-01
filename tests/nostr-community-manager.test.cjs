@@ -60,6 +60,79 @@ test('connection listings include local channel subscriptions for sidebar groupi
   }]);
 });
 
+test('removing an imported channel deletes only its Nostr bridge and restarts the remaining relay work', async () => {
+  const connection = {
+    id: 'connection-remove', workspace_id: 'workspace-1', relay_http_url: 'https://community.test',
+    relay_ws_url: 'wss://community.test', status: 'connected',
+  };
+  const bridge = {
+    id: 'bridge-remove', nostr_connection_id: connection.id, external_id: 'channel-remove',
+    session_id: 'session-remove', provider: 'nostr', enabled: true,
+  };
+  const notices = [];
+  const db = {
+    async unsafe(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
+      if (normalized.startsWith('select * from nostr_community_connections where id')) return [connection];
+      if (normalized.startsWith('delete from channel_bridges')) return [{ ...bridge }];
+      if (normalized.startsWith('delete from nostr_community_members')) return [];
+      if (normalized.startsWith('select * from channel_bridges')) return [];
+      return [];
+    },
+  };
+  const manager = createNostrCommunityManager({
+    getDb: () => db,
+    getWorkspaceSecretValue: async () => '',
+    setWorkspaceSecretValue: async () => {},
+    bridges: {},
+    protocol: {},
+    notifyDbSubscribers: (...args) => notices.push(args),
+  });
+
+  assert.deepEqual(await manager.removeChannelSubscription(connection.id, 'channel-remove'), {
+    removed: true, channelId: 'channel-remove', sessionId: 'session-remove',
+  });
+  assert.deepEqual(notices, [['channel_bridges', 'DELETE', [{ ...bridge }]]]);
+});
+
+test('deleting a Nostr connection removes its secret and bridge mappings but keeps local sessions', async () => {
+  const connection = {
+    id: 'connection-delete', workspace_id: 'workspace-1', relay_http_url: 'https://community.test',
+    relay_ws_url: 'wss://community.test', name: 'Delete me', status: 'connected',
+  };
+  const bridge = {
+    id: 'bridge-delete', nostr_connection_id: connection.id, external_id: 'channel-delete',
+    session_id: 'session-delete', provider: 'nostr', enabled: true,
+  };
+  const notices = [];
+  const secretWrites = [];
+  const db = {
+    async unsafe(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, ' ').trim();
+      if (normalized.startsWith('select * from nostr_community_connections where id')) return [connection];
+      if (normalized.startsWith('select * from channel_bridges')) return [bridge];
+      if (normalized.startsWith('delete from nostr_community_connections')) return [connection];
+      if (normalized.startsWith('delete from workspace_secrets')) return [];
+      return [];
+    },
+  };
+  const manager = createNostrCommunityManager({
+    getDb: () => db,
+    getWorkspaceSecretValue: async () => 'a'.repeat(64),
+    setWorkspaceSecretValue: async (...args) => secretWrites.push(args),
+    bridges: {},
+    protocol: {},
+    notifyDbSubscribers: (...args) => notices.push(args),
+  });
+
+  const deleted = await manager.deleteCommunity(connection.id, 'user-1');
+  assert.equal(deleted.name, 'Delete me');
+  assert.deepEqual(secretWrites, [[
+    'workspace-1', 'bridge:nostr:connection-delete:nsec', '', 'user-1', 'Deleted Nostr community identity',
+  ]]);
+  assert.deepEqual(notices, [['channel_bridges', 'DELETE', [bridge]]]);
+});
+
 test('offline discovery keeps existing imports visible and pausable without a relay secret', async () => {
   const connection = {
     id: 'offline-connection', workspace_id: 'workspace-1', relay_http_url: 'https://community.test',

@@ -43,8 +43,9 @@ test('Nostr community routes require auth and enforce workspace and session scop
     },
     async mapChannels(_id, mappings) { calls.push(['map', mappings]); return [{}]; },
     async setChannelSubscription(_id, channelId, enabled) { calls.push(['subscribe', channelId, enabled]); return { channelId, enabled }; },
+    async removeChannelSubscription(_id, channelId) { calls.push(['remove-channel', channelId]); return { removed: true, channelId, sessionId: 'session-1' }; },
     async membersForSession(sessionId) { calls.push(['members', sessionId]); return []; },
-    async disconnectCommunity() { calls.push(['disconnect']); return connection; },
+    async deleteCommunity() { calls.push(['delete-community']); return connection; },
   };
   mountNostrCommunityRoutes(app, {
     requireAuth,
@@ -88,6 +89,9 @@ test('Nostr community routes require auth and enforce workspace and session scop
     assert.equal((await fetch(`${baseUrl}/backend/nostr-communities/connection-1/channels/c1`, {
       method: 'PATCH', headers: auth, body: JSON.stringify({ enabled: false }),
     })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/backend/nostr-communities/connection-1/channels/c1`, {
+      method: 'DELETE', headers: auth,
+    })).status, 200);
     const subscribeCalls = () => calls.filter(value => value[0] === 'subscribe').length;
     const beforeRefusals = subscribeCalls();
     assert.equal((await fetch(`${baseUrl}/backend/nostr-communities/connection-1/channels/c1`, {
@@ -95,6 +99,12 @@ test('Nostr community routes require auth and enforce workspace and session scop
     })).status, 400);
     assert.equal((await fetch(`${baseUrl}/backend/nostr-communities/foreign/channels/c1`, {
       method: 'PATCH', headers: auth, body: JSON.stringify({ enabled: false }),
+    })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/backend/nostr-communities/foreign/channels/c1`, {
+      method: 'DELETE', headers: auth,
+    })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/backend/nostr-communities/foreign`, {
+      method: 'DELETE', headers: auth,
     })).status, 403);
     assert.equal(subscribeCalls(), beforeRefusals, 'invalid and cross-workspace PATCH requests never reach the manager');
     assert.equal((await fetch(`${baseUrl}/backend/sessions/session-1/nostr-members`, { headers: auth })).status, 200);
@@ -107,7 +117,8 @@ test('Nostr community routes require auth and enforce workspace and session scop
   assert.ok(calls.some(value => value[0] === 'connect'));
   assert.ok(calls.some(value => value[0] === 'map'));
   assert.ok(calls.some(value => value[0] === 'subscribe' && value[1] === 'c1' && value[2] === false));
-  assert.ok(calls.some(value => value[0] === 'disconnect'));
+  assert.ok(calls.some(value => value[0] === 'remove-channel' && value[1] === 'c1'));
+  assert.ok(calls.some(value => value[0] === 'delete-community'));
 });
 
 function withServer(app, run) {

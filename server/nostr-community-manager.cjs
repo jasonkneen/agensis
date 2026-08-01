@@ -465,6 +465,47 @@ function createNostrCommunityManager(deps = {}) {
   return publicSubscription(finalRows[0]);
  }
 
+ async function removeChannelSubscription(connectionId, channelId) {
+  const row = await connectionById(connectionId);
+  if (!row) throw inputError('Nostr community connection not found', 404);
+  const normalizedChannelId = String(channelId || '').trim();
+  if (!normalizedChannelId) throw inputError('Nostr channel id is required');
+
+  // Removing an import is deliberately narrower than deleting the local
+  // Agensis channel. The bridge, relay cursor, and cached member roster go
+  // away; the local channel and its message history remain available as an
+  // ordinary Agensis channel.
+  const rows = await getDb().unsafe(
+   `delete from channel_bridges
+      where nostr_connection_id = $1 and external_id = $2 and provider = 'nostr'
+      returning *`,
+   [String(row.id), normalizedChannelId],
+  );
+  if (!rows[0]) throw inputError('Imported Nostr channel not found', 404);
+  await getDb().unsafe(
+   'delete from nostr_community_members where connection_id = $1 and channel_id = $2',
+   [String(row.id), normalizedChannelId],
+  );
+  notifyDbSubscribers('channel_bridges', 'DELETE', rows);
+
+  // Rebuild the relay subscription without the removed channel. A failed
+  // replacement must not turn a successful removal into a false 500: the
+  // durable row is already gone, and the connection is marked for recovery.
+  stopConnection(row.id);
+  if (row.status !== 'disconnected') {
+   try {
+    await startConnection(row.id);
+   } catch (error) {
+    await setConnectionError(row.id, error);
+   }
+  }
+  return {
+   removed: true,
+   channelId: normalizedChannelId,
+   sessionId: String(rows[0].session_id || ''),
+  };
+ }
+
  async function membersForSession(sessionId) {
   const mappings = await getDb().unsafe(
    `select nostr_connection_id, external_id
@@ -754,6 +795,40 @@ function createNostrCommunityManager(deps = {}) {
   return publicConnection(rows[0] || row);
  }
 
+ async function deleteCommunity(connectionId, userId = null) {
+  const row = await connectionById(connectionId);
+  if (!row) throw inputError('Nostr community connection not found', 404);
+  stopConnection(row.id);
+
+  // Capture bridge rows before the FK cascade so subscribed clients can drop
+  // the corresponding sidebar entries immediately. Local chat sessions are
+  // intentionally retained; deleting an integration must not erase history.
+  const bridges = await getDb().unsafe(
+   "select * from channel_bridges where nostr_connection_id = $1 and provider = 'nostr'",
+   [String(row.id)],
+  );
+  const rows = await getDb().unsafe(
+   'delete from nostr_community_connections where id = $1 returning *',
+   [String(row.id)],
+  );
+  if (!rows[0]) throw inputError('Nostr community connection not found', 404);
+  // Clear through the vault helper first so a failed physical cleanup cannot
+  // leave the Nostr private key usable, then remove the now-empty secret row.
+  await setWorkspaceSecretValue(
+   row.workspace_id,
+   nostrSecretKey(row.id),
+   '',
+   userId,
+   'Deleted Nostr community identity',
+  ).catch(() => {});
+  await getDb().unsafe(
+   'delete from workspace_secrets where workspace_id = $1 and key = $2',
+   [String(row.workspace_id), nostrSecretKey(row.id)],
+  );
+  if (bridges.length) notifyDbSubscribers('channel_bridges', 'DELETE', bridges);
+  return publicConnection(rows[0]);
+ }
+
  function stopAll() {
   for (const connectionId of [...runtimes.keys()]) stopConnection(connectionId);
  }
@@ -768,6 +843,7 @@ function createNostrCommunityManager(deps = {}) {
   refreshMembers,
   mapChannels,
   setChannelSubscription,
+  removeChannelSubscription,
   membersForSession,
   send,
   startConnection,
@@ -775,6 +851,7 @@ function createNostrCommunityManager(deps = {}) {
   stopConnection,
   stopAll,
   disconnectCommunity,
+  deleteCommunity,
   hubAdapter,
   __test: { runtimes, ingestRelayEvent },
  };

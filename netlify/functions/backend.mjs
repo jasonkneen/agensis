@@ -547,6 +547,10 @@ function isFlyOwnedControlPath(pathname) {
   // list explicit: generic DB and ordinary stateless routes must continue to
   // use the local serverless implementation and its own access policy.
   || /^\/backend\/workspaces\/[^/]+\/(?:bootstrap|gateways|skills|schedules|my-threads|huddles|project-files|git|nostr-communities)(?:\/|$)/.test(pathname)
+  // Nostr preview is stateless and remains mirrored above; every connection
+  // operation needs the Fly manager because it owns relay sockets, bridge
+  // fanout, and the encrypted identity lifecycle.
+  || /^\/backend\/nostr-communities\/(?!preview(?:\/|$))[^/]+(?:\/|$)/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/sessions\/[^/]+\/huddle(?:\/|$)/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/permission-requests(?:\/|$)/.test(pathname)
   || /^\/backend\/sessions\/[^/]+\/(?:messages|access|nostr-members)(?:\/|$)/.test(pathname)

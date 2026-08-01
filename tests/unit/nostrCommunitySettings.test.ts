@@ -181,6 +181,66 @@ describe('Nostr community settings re-entry', () => {
     expect(document.body.textContent).toContain('Relay unavailable');
   });
 
+  it('removes an imported channel without deleting the local Agensis history', async () => {
+    const subscribed = {
+      bridgeId: 'bridge-1', channelId: 'support', sessionId: 'session-1',
+      enabled: true, status: 'connected', lastError: '',
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (init?.method === 'DELETE') return response({ removed: true, channelId: 'support', sessionId: 'session-1' });
+      return response([channel({ subscription: subscribed })]);
+    });
+    const { onCommunityChange } = mount();
+    await settle();
+
+    const remove = document.body.querySelector<HTMLButtonElement>('[aria-label="Remove #support from Agensis"]');
+    expect(remove).not.toBeNull();
+    await act(async () => { remove?.click(); });
+    const confirm = [...document.body.querySelectorAll<HTMLButtonElement>('button')]
+      .find(button => button.textContent?.trim() === 'Delete');
+    await act(async () => { confirm?.click(); });
+    await settle();
+
+    const deleteRequest = fetchMock.mock.calls.find(([, request]) => request?.method === 'DELETE');
+    expect(new URL(String(deleteRequest?.[0]), 'http://local').pathname)
+      .toBe('/backend/nostr-communities/connection-1/channels/support');
+    expect(document.body.textContent).not.toContain('Pause #support');
+    expect(onCommunityChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('deletes a community connection and closes the settings flow', async () => {
+    const onClose = vi.fn();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (init?.method === 'DELETE') return response(connection);
+      return response([channel({ subscription: {
+        bridgeId: 'bridge-1', channelId: 'support', sessionId: 'session-1',
+        enabled: true, status: 'connected', lastError: '',
+      } })]);
+    });
+    root = createRoot(container);
+    act(() => {
+      root.render(createElement(Dialog, { open: true },
+        createElement(DialogContent, null,
+          createElement(NostrCommunitySetup, {
+            workspaceId: 'workspace-1', existingConnection: connection,
+            onBack: () => {}, onClose, onCreate: async () => ({ id: 'session-new' }), onCommunityChange: vi.fn(),
+          }),
+        ),
+      ));
+    });
+    await settle();
+
+    const deleteConnection = [...document.body.querySelectorAll<HTMLButtonElement>('button')]
+      .find(button => button.textContent?.includes('Delete connection'));
+    await act(async () => { deleteConnection?.click(); });
+    const confirm = [...document.body.querySelectorAll<HTMLButtonElement>('button')]
+      .find(button => button.textContent?.trim() === 'Delete');
+    await act(async () => { confirm?.click(); });
+    await settle();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps offline imports manageable and offers invite-based reconnection', async () => {
     const paused = {
       bridgeId: 'bridge-1', channelId: 'support', sessionId: 'session-1',
