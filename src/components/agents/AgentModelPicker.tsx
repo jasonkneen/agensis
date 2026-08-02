@@ -13,6 +13,7 @@ import type { WorkspaceAgent } from '../../types';
 import { modelOptionsForRuntime } from '../../lib/runtimeModels';
 import {
   agentModelPickerCanSwitch,
+  agentAcpHarnessFromMetadata,
   agentExecutionRuntimeFromMetadata,
   normalizeAgentRunMode,
   type AgentExecutionRuntime,
@@ -60,10 +61,13 @@ export function AgentModelPicker({
 
   const runtime = executionRuntime(agent);
   const runMode = runModeOf(agent);
+  // The pinned harness decides which models are even meaningful here — a Grok
+  // agent must not be offered (or pinned to) a Claude id.
+  const acpHarness = agentAcpHarnessFromMetadata(agent.metadata as Record<string, unknown> | undefined);
   const current = pendingModel ?? (agent.model || 'auto');
   const options = useMemo(
-    () => modelOptionsForRuntime(current, runMode, runtime),
-    [current, runMode, runtime],
+    () => modelOptionsForRuntime(current, runMode, runtime, acpHarness),
+    [current, runMode, runtime, acpHarness],
   );
   const selected = options.find(o => o.id === current) || options[0];
   const displayLabel = selected?.label || current || 'Auto';
