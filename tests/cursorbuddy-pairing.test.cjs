@@ -376,7 +376,7 @@ test('Agensis CLI setup creates or reuses a primary daemon agent and returns dae
       handle: 'mac',
       name: 'mac',
       cwd: '/Users/alice/projects/example-app',
-      model: 'claude-opus-4-8',
+      model: 'claude-opus-5',
       permissionMode: 'default',
     });
   });
