@@ -203,6 +203,8 @@ import { useMyThreads } from '../../hooks/useMyThreads';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '../../lib/openpets';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';
 import { huddleAgentOptions } from '../../lib/huddleAgents';
+import { englishVoiceIds } from '../../lib/agentVoice';
+import { useCartesiaVoices } from '../../hooks/useCartesiaVoices';
 import { groupHuddleMarkers, type HuddleMarkerGroup, isHuddleMarkerMessage } from '../../lib/huddleTranscript';
 import {
   activityLine,
@@ -1395,9 +1397,14 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // derived a default voice: boris, who has a voice stored, came out sounding
   // like someone else entirely in every DM. The strip hides itself when there
   // is nothing to choose (below); the roster stays populated regardless.
+  const { voices: cartesiaVoices } = useCartesiaVoices();
+  const huddleVoiceIds = useMemo(
+    () => englishVoiceIds(cartesiaVoices),
+    [cartesiaVoices],
+  );
   const huddleAgents = useMemo(
-    () => huddleAgentOptions(agents, persistedParticipants),
-    [agents, persistedParticipants],
+    () => huddleAgentOptions(agents, persistedParticipants, huddleVoiceIds),
+    [agents, persistedParticipants, huddleVoiceIds],
   );
   // A huddle marker in the transcript ("You were in a huddle · 12:04 · Ada,
   // Sam") opens that huddle in the DOCK. There is no huddle side panel any
