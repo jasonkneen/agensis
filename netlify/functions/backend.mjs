@@ -409,12 +409,16 @@ function normalizeAgentPermissionMode(value) {
  return value === 'accept_edits' || value === 'yolo' ? value : 'default';
 }
 
+// Keep in lockstep with server/index.cjs DEFAULT_AI_MODEL — Auto on either
+// runtime must resolve to the same model when AGENSIS_DEFAULT_AI_MODEL is unset.
+const DEFAULT_AI_MODEL = process.env.AGENSIS_DEFAULT_AI_MODEL || 'claude-opus-5';
+
 function resolveAnthropicModel(model) {
  if (model === 'claude-sonnet-4-6') return 'claude-sonnet-4-5';
  if (model === 'claude-opus-4-6') return 'claude-opus-4-5';
  if (model === 'claude-haiku-4-5') return 'claude-haiku-4-5';
  if (model && model !== 'auto') return model;
- return 'claude-opus-4-5';
+ return DEFAULT_AI_MODEL;
 }
 
 function normalizeBaseUrl(value) {

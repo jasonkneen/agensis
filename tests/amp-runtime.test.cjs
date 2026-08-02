@@ -31,7 +31,7 @@ test('generated daemon commands lock explicit agents to their selected runtime',
   assert.match(codexCommand, / --runtime codex(?: |$)/);
   assert.doesNotMatch(codexCommand, / --model /);
   assert.match(__test.agentConnectionCommand({ ...common, runtime: 'codex', model: 'gpt-5.4' }).portableCommand, / --model gpt-5\.4(?: |$)/);
-  assert.match(__test.agentConnectionCommand({ ...common, runtime: 'claude', model: 'auto' }).portableCommand, / --model claude-opus-4-8(?: |$)/);
+  assert.match(__test.agentConnectionCommand({ ...common, runtime: 'claude', model: 'auto' }).portableCommand, / --model claude-opus-5(?: |$)/);
   assert.doesNotMatch(__test.agentConnectionCommand(common).portableCommand, / --runtime /);
 });
 
@@ -58,9 +58,9 @@ test('agent payloads resolve automatic models for the selected runtime', () => {
   );
   assert.equal(
     __test.agentRuntimePayload({ ...common, metadata: { runtime: 'claude' } }).model,
-    'claude-opus-4-8',
+    'claude-opus-5',
   );
-  assert.equal(__test.agentRuntimePayload(common).model, 'claude-opus-4-8');
+  assert.equal(__test.agentRuntimePayload(common).model, 'claude-opus-5');
 });
 
 test('agent-token auth carries runtime metadata into the daemon config payload', async () => {

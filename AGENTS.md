@@ -1027,7 +1027,7 @@ Local dev reads a `.env` (see README). For the deployed split:
 | `AGENSIS_WORKSPACE_CONTROL_JOIN_TTL_MS` | — | ✓ | Controller enrollment-link lifetime (default 5 min; clamped to 1–15 min) |
 | `AGENSIS_CONTROLLER_CREDENTIAL_TTL_MS` | — | ✓ | Controller bearer lifetime (default 90 days; clamped to 1 day–1 year) |
 | `NETLIFY_WEBHOOK_JWS_SECRET` | — | ✓ | Verifies Netlify deploy webhooks that trigger the update banner |
-| `AGENSIS_DEFAULT_AI_MODEL` | — | ✓ | Override the default model (`claude-opus-4-8`) |
+| `AGENSIS_DEFAULT_AI_MODEL` | — | ✓ | Override the default model (`claude-opus-5`) |
 | `CARTESIA_API_KEY` | ✓ | ✓ | Huddle text-to-speech (sonic-3.5). **Never sent to the browser** — exchanged for a 120s `tts`-only access token by `/voice/tts-token`. Unset ⇒ huddles fall back to `speechSynthesis` and say so |
 | `DEEPGRAM_API_KEY` | — | ✓ | Huddle speech-to-text (Flux). **Never sent to the browser** — the Fly server relays the audio itself over `/backend/ws`, so this key is useless on Netlify (no websockets). Unset ⇒ fallback to `SpeechRecognition` |
 

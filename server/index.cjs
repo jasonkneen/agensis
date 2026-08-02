@@ -344,7 +344,7 @@ const {
 const execFileAsync = promisify(execFile);
 
 const DEFAULT_PORT = Number(process.env.API_PORT || 3142);
-const DEFAULT_AI_MODEL = process.env.AGENSIS_DEFAULT_AI_MODEL || 'claude-opus-4-8';
+const DEFAULT_AI_MODEL = process.env.AGENSIS_DEFAULT_AI_MODEL || 'claude-opus-5';
 const OPENPETS_CATALOG_URL = 'https://openpets.dev/pets/catalog.v3/page-000.json';
 
 let envLoaded = false;
@@ -8839,6 +8839,7 @@ const agentJobs = createAgentJobs({
  updateAgentHeartbeat: (...a) => agentConnections.updateAgentHeartbeat(...a),
  getConnectedAgents: () => agentConnections.connectedAgents,
  scheduleTaskQueueDrain: (...a) => taskDispatch.scheduleTaskQueueDrain(...a),
+ recordAnthropicUsage: (...a) => recordAnthropicUsage(...a),
 });
 const {
  insertActiveAgentJob, agentHasActiveJob, agentHasAnyActiveJob,
@@ -8846,7 +8847,7 @@ const {
  clearStrandedPlaceholders, handleAgentJobResult, handleAgentJobDelta,
  handleAgentJobStep, handleAgentJobSegment, agentStepParts, agentStepContent,
  finalizeAgentJobResult, ampResultMetadata, validateAmpJobResult, claimMcpJob, submitMcpJobResult, reapStuckMcpJobs,
- normalizeStopReason, stopResultMetadata, failureSentence,
+ normalizeStopReason, stopResultMetadata, failureSentence, daemonStopUsage,
  dispatchFarmAgentJob, getFarmAgentJob, cancelFarmAgentJob,
 } = agentJobs;
 
@@ -10633,6 +10634,7 @@ module.exports = {
   ampResultMetadata,
   normalizeStopReason,
   stopResultMetadata,
+  daemonStopUsage,
   failureSentence,
   validateAmpJobResult,
   dispatchFarmAgentJob,

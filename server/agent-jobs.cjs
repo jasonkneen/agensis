@@ -58,6 +58,9 @@ function createAgentJobs(deps = {}) {
   slugHandle,
   textFromValue,
   verifyThreadParent,
+  // Fail-open metering. Optional so unit tests that construct this module with a
+  // thin deps bag still work; production always wires recordAnthropicUsage.
+  recordAnthropicUsage = null,
  } = deps;
 
  function publishCommittedFanout(pendingFanout) {
@@ -635,6 +638,28 @@ function createAgentJobs(deps = {}) {
  }
 
  /**
+  * Daemon-reported Anthropic-shaped usage on an agent_job_result frame.
+  * Untrusted: only the four Messages-API count fields survive, positive finite
+  * only. Returns null when there is nothing countable (rule 3 of usage-metering:
+  * never invent a row).
+  */
+ function daemonStopUsage(message) {
+  const raw = message && message.usage;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const usage = {};
+  for (const key of [
+   'input_tokens',
+   'output_tokens',
+   'cache_creation_input_tokens',
+   'cache_read_input_tokens',
+  ]) {
+   const num = Number(raw[key]);
+   if (Number.isFinite(num) && num > 0) usage[key] = Math.round(num);
+  }
+  return Object.keys(usage).length > 0 ? usage : null;
+ }
+
+ /**
   * The result metadata the daemon used to throw away, validated for storage.
   *
   * Returns an EMPTY object when there is no recognised reason, so a job from an
@@ -654,13 +679,48 @@ function createAgentJobs(deps = {}) {
   // a human is a product decision nobody has made yet.
   const costUsd = finiteNumber(message.costUsd, 10_000);
   const permissionDenials = finiteNumber(message.permissionDenials, 10_000);
+  const usage = daemonStopUsage(message);
   return {
    stopReason,
    ...(stopDetail ? { stopDetail } : {}),
    ...(numTurns ? { numTurns } : {}),
    ...(costUsd ? { costUsd } : {}),
    ...(permissionDenials ? { permissionDenials } : {}),
+   ...(usage ? { usage } : {}),
   };
+ }
+
+ /**
+  * Pipe daemon-reported token counts into usage_events. Counts only — never
+  * dollars (costUsd stays on job metadata). Fail-open; never blocks finalize.
+  * Model comes from the result frame first (daemon knows what it ran), then
+  * job/agent metadata. Non-Anthropic runtimes that omit usage simply no-op.
+  */
+ async function recordDaemonJobUsage(job, message, db) {
+  if (typeof recordAnthropicUsage !== 'function') return null;
+  const usage = daemonStopUsage(message);
+  if (!usage) return null;
+  const jobMeta = parseJsonObject(job && job.metadata);
+  const model = String(
+   (message && message.model)
+   || jobMeta.model
+   || (job && job.agent_model)
+   || '',
+  ).trim().slice(0, 120);
+  if (!model || model === 'auto') return null;
+  // jobDb is postgres.js-style `.unsafe`; metering expects a bare (sql, params) fn.
+  const dbFn = typeof db === 'function'
+   ? db
+   : (db && typeof db.unsafe === 'function'
+    ? (sql, params) => db.unsafe(sql, params)
+    : null);
+  if (!dbFn) return null;
+  return recordAnthropicUsage(dbFn, {
+   workspaceId: job && job.workspace_id,
+   model,
+   kind: 'agent_job',
+   usage,
+  });
  }
 
  // A daemon result is an untrusted websocket message. Persist only the Amp
@@ -753,6 +813,10 @@ function createAgentJobs(deps = {}) {
   );
   if (updatedRows.length === 0) return null;
   publish('agent_jobs', 'UPDATE', updatedRows);
+
+  // Meter daemon token usage when the CLI forwarded it. Awaited so a thin
+  // transaction still includes the insert; recordAnthropicUsage never throws.
+  await recordDaemonJobUsage(job, resultStop, jobDb);
 
   // The agent just freed its one active-job slot: give it the next task waiting on
   // it. Fire-and-forget, before the early returns below so farm/sessionless jobs
@@ -1844,6 +1908,7 @@ function createAgentJobs(deps = {}) {
   ampResultMetadata,
   normalizeStopReason,
   stopResultMetadata,
+  daemonStopUsage,
   failureSentence,
   validateAmpJobResult,
   cancelFarmAgentJob,
