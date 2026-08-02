@@ -287,6 +287,12 @@ export function resolveAgentAcpHarness(input: {
   const fromMeta = agentAcpHarnessFromMetadata(input.metadata);
   if (fromMeta) return fromMeta;
 
+  // Guard: classic claude pin should not silently pick a non-claude harness like Grok.
+  const runtimePin = String(input.metadata?.runtime || '').trim().toLowerCase();
+  if (runtimePin === 'claude' && input.liveHarness) {
+    return '';
+  }
+
   const live = normalizeAcpHarnessId(input.liveHarness);
   if (live) return live;
 
