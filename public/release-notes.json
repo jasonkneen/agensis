@@ -1,5 +1,17 @@
 [
   {
+    "version": "windows-desktop-support",
+    "date": "2026-08-01",
+    "title": "Desktop now runs on Windows",
+    "summary": "The desktop app's terminal panel and local ACP agent harness (Start on this PC) previously assumed macOS/Linux \u2014 the terminal spawned /bin/zsh and the ACP host couldn't launch npm-installed CLI harnesses on Windows, both hard failures. The terminal now resolves cmd.exe (or $SHELL elsewhere) and the correct home directory, and harness spawning handles Windows .cmd/.bat shims correctly. Windows installers (NSIS + portable) now build cleanly: native modules are no longer force-rebuilt from source (node-pty already ships prebuilt binaries for every target), and the two installer types no longer silently overwrite each other's output file.",
+    "highlights": [
+      "Terminal panel: cmd.exe/PowerShell + correct home dir on Windows, was hardcoded to /bin/zsh",
+      "Local ACP harness spawn: .cmd/.bat shims now launch correctly instead of crashing with EINVAL",
+      "Windows installers (NSIS + portable) build without a native toolchain installed",
+      "NSIS and portable builds no longer overwrite each other's output file"
+    ]
+  },
+  {
     "version": "0.1.3",
     "date": "2026-08-01",
     "title": "Direct, Relay, Connector \u2014 and desktop ACP",
