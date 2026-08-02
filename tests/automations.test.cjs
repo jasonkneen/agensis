@@ -73,17 +73,29 @@ function automationRow(overrides = {}) {
  */
 function makeDb({ rows = {}, recentRuns = 0 } = {}) {
  const queries = [];
+ const events = [];
  const db = {
   queries,
+  events,
   async unsafe(sql, params = []) {
    const raw = String(sql).replace(/\s+/g, ' ').trim();
    const q = raw.toLowerCase();
    queries.push({ sql: raw, params });
+   events.push({ type: 'query', sql: raw, params });
    for (const [prefix, value] of Object.entries(rows)) {
     if (q.startsWith(prefix)) return typeof value === 'function' ? value(params) : value;
    }
    if (q.startsWith('select count(*)::int as count from automation_runs')) {
     return [{ count: recentRuns }];
+   }
+   // Default execution fixture: the worker still owns a live claim and the
+   // durable ledger is empty. Tests for stale claims and resume override these
+   // prefixes explicitly.
+   if (q.startsWith('select id, steps from automation_runs')) {
+    return [{ id: params[0], steps: [] }];
+   }
+   if (q.startsWith('update automation_runs set steps')) {
+    return [{ id: params[0] }];
    }
    // Default for create/update post_message target checks: a live workspace channel.
    if (q.startsWith('select id, workspace_id, visibility, folder, deleted_at from chat_sessions')) {
@@ -96,6 +108,17 @@ function makeDb({ rows = {}, recentRuns = 0 } = {}) {
     }];
    }
    return [];
+  },
+  async begin(callback) {
+   events.push({ type: 'begin' });
+   try {
+    const result = await callback(db);
+    events.push({ type: 'commit' });
+    return result;
+   } catch (error) {
+    events.push({ type: 'rollback' });
+    throw error;
+   }
   },
  };
  return db;
@@ -168,6 +191,7 @@ test('a matching event enqueues exactly one run', async () => {
  // bind into a jsonb string scalar (tests/jsonb-bind-hygiene.test.cjs).
  assert.equal(typeof insert.params[4], 'object');
  assert.equal(insert.params[4].data.content, 'the deploy failed again');
+ assert.deepEqual(insert.params[5], goodDefinition(), 'the validated definition is frozen onto the run');
 });
 
 test('enqueue is idempotent by construction', async () => {
@@ -534,6 +558,202 @@ test('claiming uses a compare-and-set with a lease token', async () => {
  assert.match(sql, /attempt_count = attempt_count \+ 1/);
 });
 
+test('a stale claim cannot execute another automation step', async () => {
+ const db = makeDb({
+  rows: {
+   "update automation_runs set status = 'inflight'": [{
+    id: 'run-1', automation_id: 'auto-1', workspace_id: WORKSPACE, claim_token: 'claim-old',
+    attempt_count: 1, payload: { data: { senderName: 'Jason' } }, steps: [],
+   }],
+   'select * from automations where id': [automationRow()],
+   'select id, steps from automation_runs': [],
+  },
+ });
+ const engine = build(db);
+ const result = await engine.runOneAutomation();
+
+ assert.equal(result.claimLost, true);
+ assert.equal(db.queries.some((entry) => entry.sql.toLowerCase().startsWith('insert into messages')), false);
+ assert.equal(db.queries.some((entry) => /update automation_runs set status = \$2/i.test(entry.sql)), false);
+ assert.equal(db.queries.some((entry) => entry.sql.toLowerCase().startsWith('update automations set run_count')), false);
+});
+
+test('a step commits its effect and durable checkpoint before notifying subscribers', async () => {
+ const db = makeDb({
+  rows: {
+   "update automation_runs set status = 'inflight'": [{
+    id: 'run-1', automation_id: 'auto-1', workspace_id: WORKSPACE, claim_token: 'claim-1',
+    attempt_count: 1, definition: goodDefinition(), payload: { data: { senderName: 'Jason' } }, steps: [],
+   }],
+   'select * from automations where id': [automationRow()],
+   'insert into messages': [{ id: 'message-1' }],
+   'update automation_runs set status = $2': (params) => [{ id: 'run-1', status: params[1] }],
+  },
+ });
+ const engine = build(db, {
+  notifyDbSubscribers: (table) => db.events.push({ type: 'notify', table }),
+ });
+ await engine.runOneAutomation();
+
+ const fence = db.queries.find((entry) => entry.sql.toLowerCase().startsWith('select id, steps from automation_runs'));
+ assert.ok(fence, 'the step must lock and fence the claimed run');
+ assert.match(fence.sql.toLowerCase(), /claim_token = \$2/);
+ assert.match(fence.sql.toLowerCase(), /status = 'inflight'/);
+ assert.match(fence.sql.toLowerCase(), /lease_expires_at > now\(\)/);
+ assert.match(fence.sql.toLowerCase(), /for update/);
+
+ const checkpoint = db.queries.find((entry) => entry.sql.toLowerCase().startsWith('update automation_runs set steps'));
+ assert.ok(checkpoint, 'the effect must have a durable checkpoint');
+ assert.match(checkpoint.sql.toLowerCase(), /claim_token = \$2/);
+ assert.match(checkpoint.sql.toLowerCase(), /status = 'inflight'/);
+ assert.match(checkpoint.sql.toLowerCase(), /lease_expires_at = now\(\)/);
+ assert.match(checkpoint.sql.toLowerCase(), /returning id/);
+
+ const indexOf = (predicate) => db.events.findIndex(predicate);
+ const begin = indexOf((event) => event.type === 'begin');
+ const locked = indexOf((event) => event.type === 'query' && event.sql.toLowerCase().startsWith('select id, steps from automation_runs'));
+ const inserted = indexOf((event) => event.type === 'query' && event.sql.toLowerCase().startsWith('insert into messages'));
+ const ledgered = indexOf((event) => event.type === 'query' && event.sql.toLowerCase().startsWith('update automation_runs set steps'));
+ const commit = indexOf((event) => event.type === 'commit');
+ const notify = indexOf((event) => event.type === 'notify' && event.table === 'messages');
+ assert.ok(
+  begin < locked && locked < inserted && inserted < ledgered && ledgered < commit && commit < notify,
+  'effect and ledger must share one transaction, and notification must follow commit',
+ );
+});
+
+test('a failed checkpoint rolls back the effect transaction and sends no notification', async () => {
+ const db = makeDb({
+  rows: {
+   "update automation_runs set status = 'inflight'": [{
+    id: 'run-1', automation_id: 'auto-1', workspace_id: WORKSPACE, claim_token: 'claim-1',
+    attempt_count: 1, definition: goodDefinition(), payload: { data: { senderName: 'Jason' } }, steps: [],
+   }],
+   'select * from automations where id': [automationRow()],
+   'insert into messages': [{ id: 'message-1' }],
+   'update automation_runs set steps': () => { throw new Error('checkpoint failed'); },
+   'update automation_runs set status = $2': (params) => [{ id: 'run-1', status: params[1] }],
+  },
+ });
+ const engine = build(db, {
+  notifyDbSubscribers: (table) => db.events.push({ type: 'notify', table }),
+ });
+ const result = await engine.runOneAutomation();
+
+ assert.equal(result.status, 'error');
+ assert.ok(db.events.some((event) => event.type === 'rollback'));
+ assert.equal(db.events.some((event) => event.type === 'commit'), false);
+ assert.equal(db.events.some((event) => event.type === 'notify' && event.table === 'messages'), false);
+});
+
+test('a post-commit notification failure cannot turn a committed step into an error', async () => {
+ const db = makeDb({
+  rows: {
+   "update automation_runs set status = 'inflight'": [{
+    id: 'run-1', automation_id: 'auto-1', workspace_id: WORKSPACE, claim_token: 'claim-1',
+    attempt_count: 1, definition: goodDefinition(), payload: { data: { senderName: 'Jason' } }, steps: [],
+   }],
+   'select * from automations where id': [automationRow()],
+   'insert into messages': [{ id: 'message-1' }],
+   'update automation_runs set status = $2': (params) => [{ id: 'run-1', status: params[1] }],
+  },
+ });
+ const engine = build(db, {
+  notifyDbSubscribers: (table) => {
+   if (table === 'messages') throw new Error('socket fanout failed');
+  },
+ });
+ const result = await engine.runOneAutomation();
+
+ assert.equal(result.status, 'done');
+ const finish = db.queries.find((entry) => /update automation_runs set status = \$2/i.test(entry.sql));
+ assert.equal(finish.params[2][0].ok, true, 'settlement must retain the committed ledger result');
+ assert.ok(engine.warnings.some((warning) => /socket fanout failed/.test(warning)));
+});
+
+test('a reclaimed run resumes after its durable step ledger without duplicating effects', async () => {
+ const firstResult = { action: 'post_message', ok: true, messageId: 'message-first' };
+ const frozenDefinition = goodDefinition({
+  steps: [
+   { action: 'post_message', channelId: TARGET_CHANNEL, text: 'first' },
+   { action: 'post_message', channelId: TARGET_CHANNEL, text: 'second' },
+  ],
+ });
+ const db = makeDb({
+  rows: {
+   "update automation_runs set status = 'inflight'": [{
+    id: 'run-1', automation_id: 'auto-1', workspace_id: WORKSPACE, claim_token: 'claim-new',
+    attempt_count: 2, definition: frozenDefinition, payload: { data: {} }, steps: [firstResult],
+   }],
+   'select * from automations where id': [automationRow({ definition: goodDefinition({ steps: [] }) })],
+   'select id, steps from automation_runs': [{ id: 'run-1', steps: [firstResult] }],
+   'insert into messages': [{ id: 'message-second' }],
+   'update automation_runs set steps': [{ id: 'run-1' }],
+   'update automation_runs set status = $2': (params) => [{ id: 'run-1', status: params[2] }],
+  },
+ });
+ const notifications = [];
+ const engine = build(db, {
+  notifyDbSubscribers: (table) => notifications.push(table),
+ });
+ await engine.runOneAutomation();
+
+ const inserts = db.queries.filter((entry) => entry.sql.toLowerCase().startsWith('insert into messages'));
+ assert.equal(inserts.length, 1);
+ assert.equal(inserts[0].params[1], 'second');
+ assert.deepEqual(notifications.filter((table) => table === 'messages'), ['messages'], 'the replayed first step must not notify again');
+});
+
+test('a run executes its enqueue-time definition rather than a later edit', async () => {
+ const frozenDefinition = goodDefinition({
+  steps: [{ action: 'post_message', channelId: TARGET_CHANNEL, text: 'frozen' }],
+ });
+ const db = makeDb({
+  rows: {
+   "update automation_runs set status = 'inflight'": [{
+    id: 'run-1', automation_id: 'auto-1', workspace_id: WORKSPACE, claim_token: 'claim-1',
+    attempt_count: 1, definition: frozenDefinition, payload: { data: {} }, steps: [],
+   }],
+   'select * from automations where id': [automationRow({
+    definition: goodDefinition({
+     steps: [{ action: 'post_message', channelId: TARGET_CHANNEL, text: 'edited' }],
+    }),
+   })],
+   'select id, steps from automation_runs': [{ id: 'run-1', steps: [] }],
+   'insert into messages': [{ id: 'message-frozen' }],
+   'update automation_runs set steps': [{ id: 'run-1' }],
+   'update automation_runs set status = $2': (params) => [{ id: 'run-1', status: params[2] }],
+  },
+ });
+ const engine = build(db);
+ await engine.runOneAutomation();
+
+ const insert = db.queries.find((entry) => entry.sql.toLowerCase().startsWith('insert into messages'));
+ assert.equal(insert.params[1], 'frozen');
+});
+
+test('a stale settlement cannot overwrite the run or increment automation counters', async () => {
+ const db = makeDb({
+  rows: {
+   "update automation_runs set status = 'inflight'": [{
+    id: 'run-1', automation_id: 'auto-1', workspace_id: WORKSPACE, claim_token: 'claim-old',
+    attempt_count: 1, definition: goodDefinition({ steps: [] }), payload: {}, steps: [],
+   }],
+   'select * from automations where id': [automationRow({ definition: goodDefinition({ steps: [] }) })],
+   'update automation_runs set status = $2': [],
+  },
+ });
+ const engine = build(db);
+ const result = await engine.runOneAutomation();
+
+ const finish = db.queries.find((entry) => /update automation_runs set status = \$2/i.test(entry.sql));
+ assert.match(finish.sql.toLowerCase(), /claim_token = \$5/);
+ assert.match(finish.sql.toLowerCase(), /status = 'inflight'/);
+ assert.match(finish.sql.toLowerCase(), /lease_expires_at > now\(\)/);
+ assert.equal(result.settled, false);
+ assert.equal(db.queries.some((entry) => entry.sql.toLowerCase().startsWith('update automations set run_count')), false);
+});
+
 test('a settle whose UPDATE matches nothing still returns a result', async () => {
  // MUTATION: make finishRun return rows[0] unguarded -> the drain gets null,
  // treats it as "queue empty" and abandons the rest of the backlog for another
@@ -566,6 +786,9 @@ test('a run whose automation was disabled after enqueue is SKIPPED', async () =>
  const result = await engine.runOneAutomation();
  assert.equal(result.status, 'skipped');
  assert.equal(db.queries.some((entry) => entry.sql.toLowerCase().startsWith('insert into messages')), false);
+ const finish = db.queries.find((entry) => /update automation_runs set status = \$2/i.test(entry.sql));
+ assert.match(finish.sql.toLowerCase(), /steps = coalesce\(\$3::jsonb, steps\)/);
+ assert.equal(finish.params[2], null, 'settling without new results must preserve the durable ledger');
 });
 
 test('a run posts the message and settles done', async () => {

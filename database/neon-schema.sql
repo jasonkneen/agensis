@@ -548,11 +548,15 @@ CREATE TABLE IF NOT EXISTS automation_runs (
   claim_token uuid,
   lease_expires_at timestamptz,
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  -- Frozen at enqueue so a reclaimed run cannot resume against edited steps.
+  -- Nullable for runs created before the forward migration.
+  definition jsonb,
   steps jsonb NOT NULL DEFAULT '[]'::jsonb,
   error text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS definition jsonb;
 -- Idempotent enqueue. This index IS the deduplication.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_runs_event ON automation_runs(automation_id, event_id);
 CREATE INDEX IF NOT EXISTS idx_automation_runs_pending ON automation_runs(status, created_at);

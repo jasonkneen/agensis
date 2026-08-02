@@ -145,6 +145,14 @@ function createAutomations(deps = {}) {
   isEnabled = () => String(process.env.AGENSIS_AUTOMATIONS || '0') === '1',
  } = deps;
 
+ function notifySafely(table, notify) {
+  try {
+   notify();
+  } catch (error) {
+   onWarn(`failed to notify ${table} subscribers: ${error?.message || error}`);
+  }
+ }
+
  // Consecutive rate-limit trips per automation. In memory on purpose: it only
  // has to survive long enough to reach AUTOMATION_RUNAWAY_STRIKES, and the
  // durable half of the guard is the disabled_reason column it writes.
@@ -298,11 +306,11 @@ function createAutomations(deps = {}) {
     runawayStrikes.delete(String(automation.id));
 
     const inserted = await getDb().unsafe(
-     `insert into automation_runs (automation_id, workspace_id, event_id, event_type, payload)
-        values ($1, $2, $3, $4, $5::jsonb)
+     `insert into automation_runs (automation_id, workspace_id, event_id, event_type, payload, definition)
+        values ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
         on conflict (automation_id, event_id) do nothing
         returning *`,
-     [String(automation.id), String(location.workspaceId), eventId, flowEventType, payload],
+     [String(automation.id), String(location.workspaceId), eventId, flowEventType, payload, definition],
     );
     if (inserted[0]) queued.push(inserted[0]);
    }
@@ -331,16 +339,33 @@ function createAutomations(deps = {}) {
   * the rest of a backlog sitting for another 30 seconds. This is the
   * thread-harvest finishHarvest lesson, restated because it is easy to lose.
   */
- async function finishRun(runId, patch) {
+ async function finishRun(run, patch) {
   const rows = await getDb().unsafe(
    `update automation_runs
-       set status = $2, steps = $3::jsonb, error = $4, updated_at = now()
+       set status = $2,
+           steps = coalesce($3::jsonb, steps),
+           error = $4,
+           claim_token = null,
+           lease_expires_at = null,
+           updated_at = now()
      where id = $1
+       and claim_token = $5
+       and status = 'inflight'
+       and lease_expires_at > now()
      returning *`,
-   [String(runId), patch.status, patch.steps ?? [], patch.error ?? null],
+   [String(run.id), patch.status, patch.steps === undefined ? null : patch.steps, patch.error ?? null, run.claim_token],
   );
-  if (rows.length) notifyDbSubscribers('automation_runs', 'UPDATE', rows);
-  return rows[0] || { id: runId, status: patch.status, steps: patch.steps ?? [], error: patch.error ?? null };
+  if (rows.length) {
+   notifySafely('automation_runs', () => notifyDbSubscribers('automation_runs', 'UPDATE', rows));
+  }
+  if (rows[0]) return { ...rows[0], settled: true };
+  return {
+   id: run.id,
+   status: patch.status,
+   steps: patch.steps ?? stepResults(run.steps),
+   error: patch.error ?? null,
+   settled: false,
+  };
  }
 
  /**
@@ -377,8 +402,8 @@ function createAutomations(deps = {}) {
   * Live workspace-visible channel required for post_message.
   * Soft-deleted and private/DM sessions are permanent failures (no retries).
   */
- async function resolvePostMessageTarget(channelId, workspaceId) {
-  const sessions = await getDb().unsafe(
+ async function resolvePostMessageTarget(channelId, workspaceId, executor = getDb()) {
+  const sessions = await executor.unsafe(
    `select id, workspace_id, visibility, folder, deleted_at
       from chat_sessions where id = $1 limit 1`,
    [String(channelId || '').trim()],
@@ -406,25 +431,29 @@ function createAutomations(deps = {}) {
  }
 
  /** Insert the message an automation posts. No agent is woken; see the header. */
- async function runPostMessageStep(step, run, payload) {
+ async function runPostMessageStep(step, run, payload, executor = getDb(), effects = null) {
   const channelId = String(step.channelId || '').trim();
   // A channel that has gone, is private, or is in another workspace is a
   // PERMANENT failure: retrying cannot make it succeed, and an automation must
   // never write into a DM or a foreign workspace.
-  const target = await resolvePostMessageTarget(channelId, run.workspace_id);
+  const target = await resolvePostMessageTarget(channelId, run.workspace_id, executor);
   if (!target.ok) {
    return { action: step.action, ok: false, permanent: true, error: target.error };
   }
 
   const text = interpolate(String(step.text || ''), payload);
-  const rows = await getDb().unsafe(
+  const rows = await executor.unsafe(
    `insert into messages (session_id, role, content, sender_kind, sender_id, sender_name)
       values ($1, 'assistant', $2, $3, $4, $5)
       returning *`,
    [channelId, text, AUTOMATION_SENDER_KIND, String(run.automation_id), 'Automation'],
   );
-  notifyDbSubscribers('messages', 'INSERT', rows);
-  await getDb().unsafe('update chat_sessions set updated_at = now() where id = $1', [channelId]).catch(() => {});
+  if (effects) {
+   effects.push({ table: 'messages', rows, channelId });
+  } else {
+   notifyDbSubscribers('messages', 'INSERT', rows);
+   await getDb().unsafe('update chat_sessions set updated_at = now() where id = $1', [channelId]).catch(() => {});
+  }
   return { action: step.action, ok: true, messageId: rows[0]?.id || null };
  }
 
@@ -442,7 +471,7 @@ function createAutomations(deps = {}) {
   * what post_message does with sender_kind / sender_id: the automation made
   * this, not the person who happened to author the rule months ago.
   */
- async function runCreateTaskStep(step, run, payload) {
+ async function runCreateTaskStep(step, run, payload, executor = getDb(), effects = null) {
   const title = interpolate(String(step.title || ''), payload).slice(0, MAX_TASK_TITLE_LENGTH).trim();
   // A title that interpolated down to nothing is a PERMANENT failure. `tasks.title`
   // is NOT NULL and a blank one is unusable in the list anyway, so retrying it
@@ -453,14 +482,86 @@ function createAutomations(deps = {}) {
   }
   const description = interpolate(String(step.description || ''), payload);
 
-  const rows = await getDb().unsafe(
+  const rows = await executor.unsafe(
    `insert into tasks (workspace_id, created_by, title, description, status, priority, source_type, source_id)
       values ($1, null, $2, $3, 'todo', 'normal', $4, $5)
       returning *`,
    [String(run.workspace_id), title, description, AUTOMATION_TASK_SOURCE_TYPE, String(run.automation_id)],
   );
-  notifyDbSubscribers('tasks', 'INSERT', rows);
+  if (effects) effects.push({ table: 'tasks', rows });
+  else notifyDbSubscribers('tasks', 'INSERT', rows);
   return { action: step.action, ok: true, taskId: rows[0]?.id || null };
+ }
+
+ /** The steps column is both public history and the durable execution ledger. */
+ function stepResults(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+   const parsed = JSON.parse(value);
+   return Array.isArray(parsed) ? parsed : [];
+  } catch {
+   return [];
+  }
+ }
+
+ /**
+  * Execute at most one effect while this worker still owns the live claim.
+  *
+  * The run-row lock serializes the worker with the lease sweeper and any next
+  * claimant. The effect and its ledger entry commit together: a process crash
+  * leaves both present or both absent, so reclaim can safely resume by index.
+  */
+ async function runAutomationStep(step, stepIndex, run, payload, runStep) {
+  const outcome = await getDb().begin(async (tx) => {
+   const fenced = await tx.unsafe(
+    `select id, steps from automation_runs
+      where id = $1
+        and claim_token = $2
+        and status = 'inflight'
+        and lease_expires_at > now()
+      for update`,
+    [String(run.id), run.claim_token],
+   );
+   if (!fenced[0]) return { claimLost: true, effects: [] };
+
+   const ledger = stepResults(fenced[0].steps);
+   if (ledger.length > stepIndex) {
+    return { claimLost: false, result: ledger[stepIndex], effects: [], replayed: true };
+   }
+   if (ledger.length !== stepIndex) {
+    throw new Error('Automation run step ledger is not contiguous');
+   }
+
+   const effects = [];
+   const result = runStep
+    ? await runStep(step, run, payload, tx, effects)
+    : { action: String(step?.action || ''), ok: false, permanent: true, error: 'unsupported action' };
+   const checkpoint = await tx.unsafe(
+    `update automation_runs
+        set steps = $3::jsonb,
+            lease_expires_at = now() + ($4 || ' milliseconds')::interval,
+            updated_at = now()
+      where id = $1 and claim_token = $2 and status = 'inflight'
+      returning id`,
+    [String(run.id), run.claim_token, [...ledger, result], String(AUTOMATION_LEASE_MS)],
+   );
+   if (!checkpoint[0]) throw new Error('Automation run claim changed while checkpointing');
+   return { claimLost: false, result, effects, replayed: false };
+  });
+
+  if (outcome.claimLost) return outcome;
+  for (const effect of outcome.effects) {
+   if (effect.table === 'messages') {
+    notifySafely('messages', () => notifyDbSubscribers('messages', 'INSERT', effect.rows));
+   } else if (effect.table === 'tasks') {
+    notifySafely('tasks', () => notifyDbSubscribers('tasks', 'INSERT', effect.rows));
+   }
+   if (effect.channelId) {
+    await getDb().unsafe('update chat_sessions set updated_at = now() where id = $1', [effect.channelId]).catch(() => {});
+   }
+  }
+  return outcome;
  }
 
  /** Run one claimed automation. Steps are serial and there are at most five. */
@@ -473,15 +574,15 @@ function createAutomations(deps = {}) {
    [String(run.automation_id)],
   );
   const automation = automations[0];
-  if (!automation) return finishRun(run.id, { status: 'error', error: 'automation not found' });
+  if (!automation) return finishRun(run, { status: 'error', error: 'automation not found' });
   // Disabled between enqueue and drain (possibly by the runaway guard). Skipped,
   // not run: `enabled` is the off switch and it has to work retroactively on
   // whatever is already queued, or disabling a runaway would not actually stop it.
   if (automation.enabled !== true) {
-   return finishRun(run.id, { status: 'skipped', error: 'automation is disabled' });
+   return finishRun(run, { status: 'skipped', error: 'automation is disabled' });
   }
 
-  const definition = parseDefinition(automation.definition);
+  const definition = parseDefinition(run.definition || automation.definition);
   const payload = parseDefinition(run.payload);
   const results = [];
   let failed = null;
@@ -498,17 +599,25 @@ function createAutomations(deps = {}) {
 
   let lastAction = '';
   try {
-   for (const step of Array.isArray(definition.steps) ? definition.steps : []) {
+   const steps = Array.isArray(definition.steps) ? definition.steps : [];
+   for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
+    const step = steps[stepIndex];
     lastAction = String(step?.action || '');
     const runStep = Object.prototype.hasOwnProperty.call(STEP_RUNNERS, lastAction)
      ? STEP_RUNNERS[lastAction]
      : null;
-    if (!runStep) {
-     results.push({ action: lastAction, ok: false, permanent: true, error: 'unsupported action' });
-     failed = 'unsupported action';
-     break;
+    const outcome = await runAutomationStep(step, stepIndex, run, payload, runStep);
+    if (outcome.claimLost) {
+     return {
+      id: run.id,
+      status: 'inflight',
+      steps: results,
+      error: null,
+      settled: false,
+      claimLost: true,
+     };
     }
-    const result = await runStep(step, run, payload);
+    const result = outcome.result;
     results.push(result);
     if (!result.ok) { failed = result.error; break; }
    }
@@ -523,18 +632,20 @@ function createAutomations(deps = {}) {
   // attempt on something that cannot start working.
   const status = failed ? (permanent || exhausted ? 'dead' : 'error') : 'done';
 
-  await getDb().unsafe(
-   `update automations
-       set run_count = run_count + 1,
-           fail_count = fail_count + $2,
-           last_run_at = now(),
-           last_status = $3,
-           updated_at = now()
-     where id = $1`,
-   [String(automation.id), failed ? 1 : 0, status],
-  ).catch(() => {});
-
-  return finishRun(run.id, { status, steps: results, error: failed });
+  const finished = await finishRun(run, { status, steps: results, error: failed });
+  if (finished.settled) {
+   await getDb().unsafe(
+    `update automations
+        set run_count = run_count + 1,
+            fail_count = fail_count + $2,
+            last_run_at = now(),
+            last_status = $3,
+            updated_at = now()
+      where id = $1`,
+    [String(automation.id), failed ? 1 : 0, status],
+   ).catch(() => {});
+  }
+  return finished;
  }
 
  /**

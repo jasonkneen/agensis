@@ -200,7 +200,7 @@ const JSON_COLUMNS_BY_TABLE = {
  workspace_agent_templates: new Set(['tools', 'skills', 'resource_facets', 'origin']),
  workspace_skills: new Set(['origin']),
  automations: new Set(['definition']),
- automation_runs: new Set(['payload', 'steps']),
+ automation_runs: new Set(['payload', 'definition', 'steps']),
 };
 
 // Columns that are Postgres native arrays (NOT jsonb). The generic /backend/db
@@ -2053,6 +2053,23 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
 // the readability rule to keep correct. Legacy permission rows with no session
 // retain their workspace visibility; a non-null orphan is withheld.
 function appendSessionAccessClause(where, userId, table) {
+ if (table === 'activity_events') {
+  const params = where.params || [];
+  params.push(userId);
+  const userParam = `$${params.length}`;
+  const sessionId = `case
+    when "activity_events"."event_type" = 'message_sent' then nullif("activity_events"."metadata"->>'session_id', '')
+    when "activity_events"."event_type" = 'chat_created' then nullif("activity_events"."entity_id", '')
+    else null
+   end`;
+  const sessionExists = `EXISTS (SELECT 1 FROM chat_sessions cs WHERE cs.id::text = ${sessionId} AND ${sessionReadableSql('cs', userParam)})`;
+  const unscoped = `("activity_events"."event_type" IS DISTINCT FROM 'message_sent' AND "activity_events"."event_type" IS DISTINCT FROM 'chat_created')`;
+  const accessClause = `(${unscoped} OR (${sessionId} IS NOT NULL AND ${sessionExists}))`;
+  return {
+   clause: where.clause ? `${where.clause} AND ${accessClause}` : ` WHERE ${accessClause}`,
+   params,
+  };
+ }
  if (![
   'chat_sessions',
   'messages',
@@ -2260,12 +2277,11 @@ async function logMessageActivityIdempotent(rows, { db }) {
 
    const messageId = message.id != null ? String(message.id) : null;
 
-   // `visibility` and `folder` come back with the workspace because this feed
-   // row outlives the caller's knowledge of where the message came from:
-   // `activity_events` is workspace-scoped, `appendSessionAccessClause` skips
-   // every table but chat_sessions/messages, and the realtime private lane only
-   // splits chat_sessions. Nothing downstream can tell that a row began life in
-   // a members-only conversation, so the check has to happen here, at write.
+   // Keep the canonical session privacy signals beside the workspace lookup.
+   // The generic SELECT and realtime fanout now re-authorize the session_id in
+   // metadata, while this write-time check remains defense in depth so even an
+   // authorized participant never receives private message text through the
+   // workspace activity row.
    const sessionRows = await db(
     'select workspace_id, visibility, folder, deleted_at from chat_sessions where id = $1 limit 1',
     [sessionId],

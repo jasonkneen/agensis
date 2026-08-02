@@ -1185,11 +1185,15 @@ async function ensureRuntimeSchema() {
       -- The projected event the run saw, so a run stays readable after the
       -- source row has changed or been deleted.
       payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+      -- Frozen at enqueue so a reclaimed run cannot resume against edited
+      -- steps. Nullable for runs created before the forward migration.
+      definition jsonb,
       steps jsonb NOT NULL DEFAULT '[]'::jsonb,
       error text,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+    ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS definition jsonb;
     -- Idempotent enqueue. This index IS the deduplication.
     CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_runs_event
       ON automation_runs(automation_id, event_id);
