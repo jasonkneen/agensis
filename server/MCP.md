@@ -124,7 +124,8 @@ Implementation: `server/mcp.cjs` (protocol + tools), wired in `server/index.cjs`
 
 ## OAuth 2.1 (remote MCP clients)
 
-Additive to Bearer tokens (`agw_`, `aga_`, session). Authorization-code + PKCE (S256).
+Additive to the existing agent, Flow, controller, workspace, and login-token
+bearers. Authorization-code + PKCE (S256).
 
 | Endpoint | Purpose |
 | --- | --- |

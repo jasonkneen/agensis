@@ -78,7 +78,7 @@ remote branch was changed and nothing was pushed.
 
 - Clean, already integrated or patch-equivalent branches: `chore/drop-visual-editor`,
   `chore/publish-fixes`, `enterprise-agent-resource-taxonomy`,
-  `enterprise-audit-documentation`, `enterprise-buzz-architecture`,
+  `enterprise-audit-documentation`, the integrated architecture-review branch,
   `enterprise-conversation-foundation-2026-07-31`,
   `enterprise-generic-db-projections`, `enterprise-integration-2026-07-31`,
   `enterprise-legacy-invite-atomic`, `enterprise-netlify-no-ddl`,
@@ -110,7 +110,7 @@ prune the missing detached worktree; do not use `--force` on any dirty path.
 ## Resume first
 
 ```sh
-cd /Users/jkneen/Documents/GitHub/agensis
+cd "$(git rev-parse --show-toplevel)"
 git status --short --branch
 npm run typecheck
 npm run build

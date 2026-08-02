@@ -5,7 +5,7 @@
 // ----------------------------------------------------------------------------
 // A user's ORDINARY LOGIN TOKEN authenticates at the MCP endpoint.
 //
-// `verifyMcpToken` falls through four verifiers and the last one is
+// `verifyMcpToken` falls through six verifiers and the last one is
 // `verifyUserAuthMcpToken`, which takes an agensis session token and resolves it
 // to a workspace identity. This is DELIBERATE — it arrived with the MCP client
 // registration approval flow, the fall-through order is spelled out in a comment
@@ -26,8 +26,9 @@
 //      app_users, a per-user counter, so revoking the pasted copy signs the
 //      human out everywhere. The purpose-built agw_ token revokes by re-minting
 //      and affects MCP clients only.
-//   3. It has no prefix. aga_/agw_/agx_/agf_/cbk_ are all pattern-matchable, so
-//      a redactor can strip them from a log, a transcript or a screenshot. A
+//   3. It has no prefix. aga_/agw_/agx_/agf_/agc_/ago_/cbk_ are all
+//      pattern-matchable, so a redactor can strip them from a log, a transcript
+//      or a screenshot. A
 //      session token cannot be recognised by shape.
 //   4. It expires in 14 days (DEFAULT_TOKEN_TTL_SEC), so a working MCP config
 //      silently starts 401ing. agw_ does not expire.
@@ -168,7 +169,7 @@ test('the agw_ sibling carries a recognisable prefix; a session token cannot', a
 
   // This is why redaction cannot be prefix-only. The CLI's redactor (cli/src/
   // render.mjs) also strips the exact resolved credential for this reason.
-  const prefixes = /\b(?:aga|agw|agx|agf|cbk)_[A-Za-z0-9_-]+/;
+  const prefixes = /\b(?:aga|agw|agx|agf|agc|ago|cbk)_[A-Za-z0-9_-]+/;
   assert.ok(prefixes.test(minted), 'agw_ is pattern-matchable');
   assert.ok(
     !prefixes.test('dXNlci0x.3.1780000000.c2lnbmF0dXJl'),

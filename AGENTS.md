@@ -665,26 +665,30 @@ live in the workspace: **push-and-store**, not fetch-on-demand.
   confined to `skills`/`agents`/`commands` types — `config` is excluded because
   `~/.gemini/settings.json` holds API keys.
 
-### The join link (ONE invite URL, for a human OR an agent)
+### The join link (ONE URL, three explicit redemption lanes)
 
 `workspace_join_links` + `server/join-page.cjs` + the `/join/*` routes in
-`server/index.cjs`. Exists to remove a premise, not to add a feature: the MCP
-connect surface handed out a long-lived bearer token inside a convenience string
-with a copy button, it leaked into a transcript, and the same mistake was then
-found in a second place. The defect is not *where* a credential is rendered — it
-is that a long-lived credential has to be rendered at all.
+`server/index.cjs`. One short-lived URL can admit a human, create a Connector
+agent, or enroll a named workspace controller. It exists to remove a premise,
+not to add a feature: the MCP connect surface handed out a long-lived bearer
+token inside a convenience string with a copy button, it leaked into a
+transcript, and the same mistake was then found in a second place. The defect is
+not *where* a credential is rendered — it is that a long-lived credential has
+to be rendered at all.
 
-- **`https://agensis.io/join/<token>`**, one URL for both audiences.
+- **`https://agensis.io/join/<token>`**, one URL for every audience.
   Server-rendered by Fly and PROXIED through Netlify (`netlify.toml`, `/join/*`,
   above the `/*` 404 catch-all) — the SPA is a JS shell, so an agent fetching it
   would get an empty `<div id="root">`. Requires **`AGENSIS_APP_URL`** on Fly,
   or minted links carry the fly.dev host instead of the app host.
-- **15-minute TTL, single use, hash at rest.** `AGENSIS_JOIN_LINK_TTL_MS`
-  overrides, clamped to [1m, 24h]. The single-use rule IS the conditional
-  `UPDATE ... where status='pending' and expires_at > now() and audience in
-  ('both',$2)` — one statement, so two concurrent redemptions cannot both win.
-  Consume-before-provision is deliberate: a failure leaves the link dead rather
-  than replayable.
+- **Short TTL, single use, hash at rest.** Individual links default to 15
+  minutes (`AGENSIS_JOIN_LINK_TTL_MS`, clamped to [1m, 24h]); controller
+  enrollment links use the shorter controller-specific TTL. The single-use rule
+  IS one conditional `UPDATE`: `status='pending'`, not expired, the requested
+  lane matches `audience`, and `grant_kind` matches that lane (`workspace_control`
+  only for `controller`, otherwise `individual`). Two concurrent redemptions
+  cannot both win. Consume-before-provision is deliberate: a failure leaves the
+  link dead rather than replayable.
 - **A join link is NOT a credential.** It is absent from `verifyMcpToken`,
   `requireAuth` and every other `verify*`. `workspace_invites` remains the
   legacy human-accept record for up to 14 days and is also deliberately absent
@@ -696,11 +700,21 @@ is that a long-lived credential has to be rendered at all.
   `tests/join-link.test.cjs` asserts the page is byte-identical across five
   User-Agents and that no join code reads the header.
 - **Redemption intent is explicit even though the URL is shared.** The human
-  button sends `as: 'human'` with a valid session; the machine contract sends
-  `as: 'agent'` with no Authorization header. Missing or contradictory intent is
-  refused before the single-use UPDATE. Never infer agent identity from a failed
-  human authentication check — an expired browser session must not consume a
-  link by provisioning an unintended agent.
+  button sends `as: 'human'` with a valid session; machine contracts send exactly
+  `as: 'agent'` or `as: 'controller'` with no Authorization header. Missing or
+  contradictory intent is refused before the single-use UPDATE. Never infer a
+  machine lane from a failed human authentication check — an expired browser
+  session must not consume a link by provisioning an unintended principal.
+- **Controller enrollment is a distinct, owner-minted grant.** It carries
+  `grant_kind='workspace_control'`, `audience='controller'`, a required name,
+  closed scopes, and a credential expiry. A `manage`-role admin may create an
+  ordinary human/agent link, but only the canonical workspace owner may create a
+  controller enrollment. The resulting controller is named, expiring,
+  independently revocable, and never becomes a human member or workspace owner.
+  Controller scopes cannot express owner, role, private-read or vault authority;
+  a child controller can neither exceed nor outlive its parent. Pinned by
+  `tests/workspace-controller-enrollment.test.cjs` and
+  `tests/workspace-controller-resource-schema.test.cjs`.
 - **No oracle.** Unknown, malformed, expired, revoked, spent and wrong-audience
   all return an identical 410 body, and the refusal page never names the
   workspace. Rate-limited 10/min per IP, in-memory + DB-backed.
@@ -708,12 +722,13 @@ is that a long-lived credential has to be rendered at all.
   through a handler that contains no `getDb`, no `crypto`, and no minter — a
   dedicated path rather than `?preview=1` so there is no branch inside the
   handler that talks to the database.
-- **One secret per response.** The redemption response carries the agent's
-  bearer token in exactly one field (`data.credential.token`); the config block
-  beside it uses `TOKEN_PLACEHOLDER`, like `server/skills.cjs`. A test asserts
-  the token appears exactly once. The same rule was applied retroactively to
-  `/backend/workspaces/:id/mcp-token`, which was still passing the live token
-  into `configBlock`.
+- **One secret per response.** Machine redemption returns its new bearer in
+  exactly one field (`data.credential.token`) — an agent token for the agent
+  lane or a scoped controller token for the controller lane. Config blocks use
+  placeholders (`TOKEN_PLACEHOLDER` / `CONTROLLER_TOKEN_PLACEHOLDER`) rather
+  than repeating it. Tests assert the secret appears exactly once. The same rule
+  was applied retroactively to `/backend/workspaces/:id/mcp-token`, which was
+  still passing the live token into `configBlock`.
 
 ### Inference gateways (`gateway_configs`)
 
@@ -730,8 +745,8 @@ routes (Fly server only).
 `buildTools()` in `server/mcp.cjs` is not an internal list. `listToolSummaries()`
 feeds `/backend/skill` (also `/api/skill`, `/skill`,
 `/.well-known/agent-skill`), which is served with **no authentication** — an IP
-rate limiter only — so the name and description of all 30 tools are public, and
-the point of publishing them is that third parties bind to them. `tools/list`
+rate limiter only — so every tool name and description is public, and the point
+of publishing them is that third parties bind to them. `tools/list`
 then hands the full JSON Schema to any valid bearer.
 
 So **renaming a tool, removing one, or adding a required argument breaks clients
@@ -755,22 +770,40 @@ Two related rules:
   capability checks, 120/min limiter). Anything reached another way is outside
   all of it.
 
+### Connector agents (`run_mode='external'`)
+
+A Connector is an external MCP client acting as an agent. It is not Direct
+(`builtin`) and not Relay (`daemon`, including desktop ACP). `register_agent`
+creates Connector agents with `run_mode='external'`; `resolveRunTarget` must
+keep that mode out of both the builtin and daemon lanes.
+
+- **Never impersonate a disconnected Connector.** If no matching MCP poller is
+  live, the server queues the turn and posts its own explicit waiting notice; it
+  must not let the workspace model answer as that agent. `claim_job` later lets
+  the real Connector drain the queue.
+- **Connector and Relay are different attach paths.** A Connector's agent bearer
+  authenticates at `/backend/mcp`. `get_connect_command` is the Relay CLI path:
+  it rotates the same agent's connect token and changes the agent to Relay, so
+  do not use it as a Connector setup shortcut.
+- Pinned by `tests/agent-sandbox-schema.test.cjs`,
+  `tests/builtin-tool-loop.test.cjs`, and `server/MCP.md`.
+
 ### Login tokens at the MCP door
 
-`verifyMcpToken` (`server/index.cjs`) tries four verifiers in order, and the
-last is `verifyUserAuthMcpToken`: **a human's ordinary agensis session token
-authenticates at `/backend/mcp`**, resolving to a `kind: 'user'` identity on the
-workspace that user owns. This is **deliberate** — it arrived with the MCP
-client registration approval flow, the order is documented above
-`verifyMcpToken`, and `get_connect_command` carries a per-kind branch that
-re-checks the `manage` role specifically for `kind === 'user'`. Do not "fix" it
-as a fall-through bug.
+`verifyMcpToken` (`server/index.cjs`) tries six verifiers in order: agent
+connect token, Flow token, controller token, workspace token, OAuth access
+token, then `verifyUserAuthMcpToken`. The last path means **a human's ordinary
+agensis session token authenticates at `/backend/mcp`**, resolving to a
+`kind: 'user'` identity on the oldest workspace that user owns. This is
+**deliberate** — it arrived with the MCP client registration approval flow, and
+`get_connect_command` carries a per-kind branch that re-checks the `manage`
+role specifically for `kind === 'user'`. Do not "fix" it as a fall-through bug.
 
 Know what it costs before you point anyone at it:
 
-- **It grants nothing the `agw_` workspace token does not.** Both reach the same
-  29 tools — asserted in `tests/mcp-user-token-assumption.test.cjs`, which fails
-  if that ever stops being true.
+- **It grants nothing the `agw_` workspace token does not.** Both reach exactly
+  the same tool set — asserted in `tests/mcp-user-token-assumption.test.cjs`,
+  which fails if that ever stops being true.
 - **It is not separately revocable.** Revocation is `token_version` on
   `app_users`, a per-user counter, so withdrawing a pasted copy signs the human
   out everywhere. `agw_` is revoked by re-minting and touches MCP clients only.
@@ -785,14 +818,20 @@ Know what it costs before you point anyone at it:
 - **It picks the user's OLDEST owned workspace** (`order by created_at asc limit
   1`), not the one they are looking at.
 
-So: **`agw_` is the credential to hand an MCP client.** Only the actual
-`workspaces.user_id` owner may mint or rotate it or enable automatic
-registration approval; an admin's `manage` capability is not enough. It is the
-only MCP credential the UI ever produces (`src/lib/mcpConnect.ts`). It remains
-the workspace control-plane credential for registering agents and creating
-workspace-visible resources, but it cannot read private sessions by borrowing
-the owner's identity. Nothing in the product tells anyone to paste a login
-token, and nothing should start.
+So: **`agw_` is the non-expiring workspace bearer to hand a trusted MCP client.**
+Only the actual `workspaces.user_id` owner may mint or rotate it or enable
+automatic registration approval; an admin's `manage` capability is not enough.
+It remains the workspace control-plane credential for registering agents and
+creating workspace-visible resources, but it cannot read private sessions by
+borrowing the owner's identity. Nothing in the product tells anyone to paste a
+login token, and nothing should start.
+
+Settings also manages OAuth client registrations (`src/lib/mcpConnect.ts`). An
+OAuth client id/optional secret is client authentication, not a workspace
+bearer: authorization-code + PKCE consent issues a one-hour `ago_` access token
+with the closed `mcp:tools` scope. OAuth tokens map back onto the existing
+user/workspace identity kinds, so OAuth does not bypass `runToolForIdentity`.
+Revoking the OAuth client invalidates its outstanding access tokens.
 
 **The door records that this happened, so the decision can rest on data.** A
 `mcp.login_token_used` audit row is written when a `kind: 'user'` identity
@@ -827,8 +866,8 @@ product decision: removing it would break anyone who has already pasted one.
 
 `cli/agensis-ops.mjs` (`npm run ops -- <command>`) is a transport-only wrapper
 over `POST /backend/mcp`, for **humans and CI** — not for agents, which already
-have all 30 tools over MCP inside every job. It ships **zero server routes and
-zero hand-written tool schemas**: `call` builds its flag parser from the
+receive their allowed MCP tool surface inside every job. It ships **zero server
+routes and zero hand-written tool schemas**: `call` builds its flag parser from the
 `inputSchema` the server publishes at runtime, so it cannot drift.
 
 The rule above is enforced here mechanically. `cli/src/rpc.mjs` is the CLI's
@@ -848,7 +887,8 @@ redaction and the egress allowlist. Full reference: `cli/README.md`.
 
 - `npm test` — Node's built-in runner over `tests/*.test.cjs`
   (backend/integration, mock DBs). Note the glob is **top-level only** — a
-  `.test.cjs` in a subdirectory is never run, and is invisible to both runners.
+  `.test.cjs` in a subdirectory is never run, and is invisible to all three
+  runners.
 - `npm run test:unit` — Vitest over `tests/unit/**/*.test.ts` (frontend/pure).
 - `npm run smoke` — Vitest over `tests/smoke/**/*.smoke.ts` (jsdom, its own
   config). Mounts each main surface with data in it and fails if an **empty
@@ -860,8 +900,9 @@ redaction and the egress allowlist. Full reference: `cli/README.md`.
   references, update the tour JSON (`public/.well-known/cursorbuddy.json`) +
   that test.
 - **A test process never sees your `.env`.** `tests/helpers/test-env.cjs` is
-  preloaded by both runners (`--require` in the `test` script, `setupFiles` in
-  `vitest.config.ts`): it sets `AGENSIS_TEST=1`, which makes `loadEnvFile()` in
+  preloaded by all three runners (`--require` in the `test` script, `setupFiles`
+  in both `vitest.config.ts` and `vitest.smoke.config.ts`): it sets
+  `AGENSIS_TEST=1`, which makes `loadEnvFile()` in
   `server/index.cjs` inert, and deletes every credential-bearing name plus
   everything a local `.env` declares. Without it the suite's result depended on
   the machine — three vault tests that `delete process.env.BOX_API_KEY` to
@@ -982,7 +1023,9 @@ Local dev reads a `.env` (see README). For the deployed split:
 | `AGENSIS_CAPABILITIES_TTL_MS` | — | ✓ | TTL for the `/system/capabilities` cache (default 30 s) |
 | `AGENSIS_RUNTIME_SCHEMA` | — | ✓ | Set `false` to disable runtime DDL bootstrap (migrations become the sole schema source) |
 | `AGENSIS_PUBLIC_URL` / `AGENSIS_APP_URL` | — | ✓ | Public origin for links the server emits. **`AGENSIS_APP_URL` must be `https://agensis.io` for join links** — unset, a minted `/join/<token>` URL carries the fly.dev host, which works but is not the one URL people are meant to be handed |
-| `AGENSIS_JOIN_LINK_TTL_MS` | — | ✓ | Join-link lifetime (default 15 min; clamped to 1 min – 24 h) |
+| `AGENSIS_JOIN_LINK_TTL_MS` | — | ✓ | Individual human/agent join-link lifetime (default 15 min; clamped to 1 min – 24 h) |
+| `AGENSIS_WORKSPACE_CONTROL_JOIN_TTL_MS` | — | ✓ | Controller enrollment-link lifetime (default 5 min; clamped to 1–15 min) |
+| `AGENSIS_CONTROLLER_CREDENTIAL_TTL_MS` | — | ✓ | Controller bearer lifetime (default 90 days; clamped to 1 day–1 year) |
 | `NETLIFY_WEBHOOK_JWS_SECRET` | — | ✓ | Verifies Netlify deploy webhooks that trigger the update banner |
 | `AGENSIS_DEFAULT_AI_MODEL` | — | ✓ | Override the default model (`claude-opus-4-8`) |
 | `CARTESIA_API_KEY` | ✓ | ✓ | Huddle text-to-speech (sonic-3.5). **Never sent to the browser** — exchanged for a 120s `tts`-only access token by `/voice/tts-token`. Unset ⇒ huddles fall back to `speechSynthesis` and say so |
@@ -1051,9 +1094,10 @@ Product spelling is `accept_edits` (underscore). Aliases `acceptEdits` /
 A flat `{ outcome: "selected", optionId }` is treated as deny by Claude ACP —
 that is how Full access still looked like every command was rejected.
 
-**ALWAYS ALLOWED** rules in the Agents form are the **daemon** grant store
-(`metadata.permission_rules`). They do **not** apply to the ACP lane. Do not
-document or implement them as if they did.
+**ALWAYS ALLOWED** has one grant store for both Relay executors:
+`workspace_agents.metadata.permission_rules`. The daemon reads it directly; the
+desktop ACP bridge seeds its permission broker from the same field on every job.
+Do not create an ACP-only grant store or let the two matching rules drift.
 
 **Ask / residual shell must use product auth dialogs**, not only a native OS
 box. During a bridged job, `session/request_permission` raises the same

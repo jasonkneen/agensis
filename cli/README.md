@@ -1,9 +1,10 @@
 # `agensis-ops` — operator/CI client for the agensis MCP surface
 
-**This is not an agent tool.** Agents running inside agensis already reach all 30
-workspace tools over MCP — the daemon injects the MCP server into every coding
-CLI it launches, so an agent doing a job today can already `list_channels`,
-`read_channel`, `post_message` and `dispatch_agent` without this binary. Building
+**This is not an agent tool.** Agents running inside agensis already receive
+their allowed workspace tools over MCP — the daemon injects the MCP server into
+every coding CLI it launches, so an agent doing a job today can already
+`list_channels`, `read_channel`, `post_message` and `dispatch_agent` without this
+binary. Building
 a CLI for *them* would be a second front door onto a house they are standing
 inside.
 
@@ -46,9 +47,10 @@ Global flags: `--json`, `--human`, `--raw`, `--quiet`, `--full-ids`,
 `--profile <name>`, `--url <url>`, `--token <t>`, `--timeout-ms <n>`, and `--`
 (everything after it is verbatim, so a message body may contain `--json`).
 
-The eight verbs are sugar. `call` reaches all 30 tools, including any added
-after this CLI was written — it builds its flag parser from the schema the
-server publishes at runtime, so it has no independent knowledge of any tool.
+The eight verbs are sugar. `call` reaches every tool the credential may use,
+including any added after this CLI was written — it builds its flag parser from
+the schema the server publishes at runtime, so it has no independent knowledge
+of any tool.
 
 ## Auth — what a leaked credential grants
 

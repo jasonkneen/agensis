@@ -2794,8 +2794,9 @@ function createMcpHandler(deps) {
   try {
    if (runtimeSchemaReady) await runtimeSchemaReady;
 
-   // Auth: Bearer = an agent, workspace, flow, or user credential. A legacy
-   // human invite URL is deliberately not an MCP bearer.
+   // Auth: Bearer = an agent, Flow, controller, workspace, OAuth, or user
+   // credential. Legacy invite and join-link URLs are deliberately not MCP
+   // bearers.
    const header = req.headers['authorization'] || '';
    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
    const identity = token ? await verifyMcpToken(token, req) : null;

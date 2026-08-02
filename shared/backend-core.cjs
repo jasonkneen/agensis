@@ -2728,7 +2728,7 @@ const REDACTED_PLACEHOLDER = '[redacted]';
 
 const FEEDBACK_REDACTION_PATTERNS = [
  { name: 'agensis-session-token', pattern: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.\d+\.\d+\.[A-Za-z0-9_-]{16,}/gi, replacement: REDACTED_PLACEHOLDER },
- { name: 'agensis-agent-token', pattern: /\baga_[A-Za-z0-9_-]{8,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'agensis-agent-token', pattern: /\b(?:aga|agw|agx|agf|agc|ago|cbk)_[A-Za-z0-9_-]{8,}/g, replacement: REDACTED_PLACEHOLDER },
  { name: 'bearer-header', pattern: /\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: `$1 ${REDACTED_PLACEHOLDER}` },
  { name: 'jwt', pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, replacement: REDACTED_PLACEHOLDER },
  { name: 'anthropic-key', pattern: /\bsk-ant-[A-Za-z0-9_-]{10,}/g, replacement: REDACTED_PLACEHOLDER },
@@ -3048,8 +3048,8 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  'agent.connect_token_minted',
  'chat_session.cleared',
  // The workspace MCP token (agw_) is the control-plane secret for the whole
- // workspace: a bearer reaches all 29 MCP tools, can register_agent, and can
- // mint an agent's daemon connect token via get_connect_command. Minting it
+ // workspace: a bearer reaches its full allowed MCP surface, can register_agent,
+ // and can mint an agent's daemon connect token via get_connect_command. Minting it
  // ROTATES it, which silently breaks every MCP client still holding the old
  // one — so "who reissued this, and when" is exactly the question this log
  // exists to answer. Its sibling agent.connect_token_minted was recorded from

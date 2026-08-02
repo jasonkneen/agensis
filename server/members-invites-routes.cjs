@@ -13,8 +13,9 @@ const crypto = require('crypto');
 // A workspace_invite is a legacy, email-oriented human invitation secret. It is
 // stored hashed and its plaintext is rendered exactly once, but it is NOT an MCP
 // bearer. The newer join-link surface exists separately because it is the
-// short-lived, single-use entry point for either a human or an agent. Neither
-// invitation table authenticates outside its dedicated redemption route.
+// short-lived, single-use entry point for a human, Connector agent, or named
+// workspace controller. Neither invitation table authenticates outside its
+// dedicated redemption route.
 
 async function acceptLegacyWorkspaceInvite({ db, lookupParams, userId }) {
  if (!db || typeof db.begin !== 'function') throw new Error('Invite acceptance requires transaction support');

@@ -48,9 +48,10 @@ export const REDACTION_PATTERNS: readonly RedactionPattern[] = [
     replacement: REDACTED,
   },
   {
-    // Agent connect tokens minted for the daemon / MCP clients.
+    // Every prefixed credential minted by agensis: agent/workspace/Flow/farm,
+    // workspace controller, OAuth access token, and CursorBuddy connection key.
     name: 'agensis-agent-token',
-    pattern: /\baga_[A-Za-z0-9_-]{8,}/g,
+    pattern: /\b(?:aga|agw|agx|agf|agc|ago|cbk)_[A-Za-z0-9_-]{8,}/g,
     replacement: REDACTED,
   },
   {

@@ -433,7 +433,10 @@ test('the CJS and TS redaction pattern lists carry the same shapes', () => {
 
 test('the server-side redactor strips this app\'s own credentials', () => {
  assert.equal(core.redactSecretsText(`Bearer ${SESSION_TOKEN}`).includes('Zm9vYmFy'), false);
- assert.equal(core.redactSecretsText('aga_9f8e7d6c5b4a39281706').includes('aga_9f8e'), false);
+ for (const prefix of ['aga_', 'agw_', 'agx_', 'agf_', 'agc_', 'ago_', 'cbk_']) {
+  const token = `${prefix}9f8e7d6c5b4a39281706`;
+  assert.equal(core.redactSecretsText(token).includes(token), false, `${prefix} credential survived`);
+ }
  const benign = 'GET /backend/workspaces 200 in 41ms';
  assert.equal(core.redactSecretsText(benign), benign);
 });

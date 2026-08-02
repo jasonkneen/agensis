@@ -260,8 +260,9 @@ test('a permission_mode flip to yolo is recorded with the mode it came from', as
 });
 
 test('minting the workspace MCP token is recorded, and the token never reaches the row', async () => {
-  // agw_ is the workspace's control-plane secret: a bearer reaches all 29 MCP
-  // tools and can mint an agent's daemon token via get_connect_command. Minting
+  // agw_ is the workspace's control-plane secret: a bearer reaches its full
+  // allowed MCP surface and can mint an agent's daemon token via
+  // get_connect_command. Minting
   // also ROTATES it, so every MCP client holding the old one breaks at that
   // moment. Its sibling agent.connect_token_minted was audited from the start;
   // this call site was not, which is the gap this test closes.

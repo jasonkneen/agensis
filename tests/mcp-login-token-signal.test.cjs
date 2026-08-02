@@ -95,7 +95,7 @@ test('the recorded row cannot reconstruct the credential', async () => {
   // mint row is held to.
   const serialized = JSON.stringify(audits[0]);
   assert.ok(!serialized.includes(USER_TOKEN), 'the token must never reach the row');
-  assert.ok(!/aga_|agw_|agx_|agf_|cbk_/.test(serialized), 'nor any credential prefix');
+  assert.ok(!/aga_|agw_|agx_|agf_|agc_|ago_|cbk_/.test(serialized), 'nor any credential prefix');
   const hash = require('node:crypto').createHash('sha256').update(USER_TOKEN).digest('hex');
   assert.ok(!serialized.includes(hash), 'nor its hash -- a verifier is still a secret');
   assert.deepEqual(Object.keys(audits[0].detail).sort(), ['firstUseInWindowHours', 'kind']);

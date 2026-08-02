@@ -2290,8 +2290,9 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_workspace_invites_workspace_id ON workspace_invites(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_workspace_invites_token ON workspace_invites(token);
 
-    -- The ONE join link: a single URL a human OR an agent can redeem, which
-    -- provisions the real credential server-side and never displays it.
+    -- The ONE join link: a single URL a human, Connector agent, or named
+    -- workspace controller can redeem. It provisions the real credential
+    -- server-side and returns a machine credential exactly once.
     -- (Deliberately kept inside THIS statement block rather than opening a new
     -- db.unsafe: a block whose text begins with a comment breaks every strict
     -- mock database in tests/, all of which dispatch on the leading keyword.)
@@ -2540,12 +2541,14 @@ ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_
 ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_workspace_id_fkey
   FOREIGN KEY (requested_by_workspace_id) REFERENCES workspaces(id) ON DELETE RESTRICT;
 
-    -- MCP "connect a client" model. ONE workspace token (or your agensis login, or an
-    -- invite link) authenticates an MCP client; it then calls register_agent to become an
-    -- agent (new or existing). You approve via a popup unless auto-approve / invite link.
+    -- MCP workspace control-plane bearer. The singleton workspace token (or a
+    -- separately verified login/OAuth identity) may call register_agent to become
+    -- an agent, new or existing. Legacy invite and join-link URLs authenticate only
+    -- at their dedicated redemption routes, never at the MCP door.
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS mcp_token_hash text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS mcp_auto_approve boolean NOT NULL DEFAULT false;
-    -- MCP OAuth 2.1 (authorization-code + PKCE). Additive to agw_/aga_ bearers.
+    -- MCP OAuth 2.1 (authorization-code + PKCE). Additive to the existing
+    -- agent, Flow, controller, workspace, and login-token bearer paths.
     CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       client_id text NOT NULL UNIQUE,
@@ -4255,10 +4258,11 @@ async function verifyFlowConnectionToken(token) {
 }
 
 // The MCP endpoint accepts, in priority order: a per-agent connect token (acts AS
-// that agent), a flow token, the one workspace MCP token, or the user's agensis
-// login. The latter two authenticate into the workspace; the client then calls
-// register_agent to become an agent. Legacy workspace_invites remain human-accept
-// URLs only and deliberately do not authenticate here.
+// that agent), a Flow token, a scoped controller token, the singleton workspace
+// token, an OAuth access token, or the user's agensis login. Workspace/user OAuth
+// identities retain their existing kinds and pass through the same tool
+// authorization chokepoint. Legacy workspace_invites and workspace_join_links
+// deliberately do not authenticate here.
 let _mcpOauthStore = null;
 function getMcpOauthStore() {
  if (!_mcpOauthStore) {

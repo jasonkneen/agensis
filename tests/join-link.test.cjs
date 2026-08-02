@@ -1,8 +1,11 @@
 // ============================================================================
 // tests/join-link.test.cjs
 // ----------------------------------------------------------------------------
-// The ONE join URL: short-lived, single-use, redeemable by a human OR an agent,
-// and never a place a long-lived credential is displayed.
+// The ONE join URL: short-lived, single-use, with explicit human,
+// Connector-agent, and workspace-controller lanes, and never a place a
+// long-lived credential is
+// displayed. Controller-specific authority is pinned in the workspace-controller
+// suites; this file exercises the shared individual-link contract.
 //
 // This is a credential-issuing surface reachable with no authentication beyond
 // the URL, so these run against a REAL express app over a REAL socket with a
@@ -10,8 +13,8 @@
 // bodies and headers are what an attacker sees, so they are what is asserted.
 //
 // The fake DB models the redeeming UPDATE's WHERE clause faithfully (status,
-// expiry, audience) rather than stubbing a happy path, because "redeems exactly
-// once" IS that predicate. A mock that always returns a row would pass a suite
+// expiry, audience, grant kind) rather than stubbing a happy path, because
+// "redeems exactly once" IS that predicate. A mock that always returns a row would pass a suite
 // that proves nothing.
 //
 // Four properties are load-bearing and each has a test that would fail if the

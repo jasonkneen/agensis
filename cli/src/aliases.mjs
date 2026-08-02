@@ -15,7 +15,7 @@
 //      rename happens.
 //
 // Anything not aliased is still reachable: `agensis-ops call <tool> --k v`
-// covers all 30 tools with no table entry at all.
+// covers every tool the credential may use with no table entry at all.
 
 import { EXIT } from './exitCodes.mjs';
 

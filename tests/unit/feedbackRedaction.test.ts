@@ -33,7 +33,12 @@ describe('redactSecrets — the shapes this app actually leaks', () => {
     expect(redactSecrets(SESSION_TOKEN)).toBe(REDACTED);
   });
 
-  it('removes aga_ agent tokens', () => {
+  it('removes every prefixed agensis credential', () => {
+    const prefixes = ['aga_', 'agw_', 'agx_', 'agf_', 'agc_', 'ago_', 'cbk_'];
+    for (const prefix of prefixes) {
+      const token = `${prefix}9f8e7d6c5b4a39281706`;
+      expect(redactSecrets(`connecting with ${token}`)).not.toContain(token);
+    }
     expect(redactSecrets(`connecting with ${AGENT_TOKEN}`)).not.toContain(AGENT_TOKEN);
   });
 

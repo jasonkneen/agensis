@@ -3,8 +3,9 @@
 // The environment a test process is allowed to see.
 //
 // This file is PRELOADED into every test worker (`--require` in the `test`
-// script, `setupFiles` in vitest.config.ts) so it runs before any test file's
-// top-level code, before any `require('../server/index.cjs')`.
+// script, `setupFiles` in both vitest.config.ts and vitest.smoke.config.ts) so
+// it runs before any test file's top-level code, before any
+// `require('../server/index.cjs')`.
 //
 // Why it exists: `loadEnvFile()` in server/index.cjs reads the repo's `.env`
 // into process.env, and it is called from `getWorkspaceSecretValue`,

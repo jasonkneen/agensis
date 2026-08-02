@@ -5,7 +5,7 @@
 //
 // `/backend/skill` (and `/api/skill`, `/skill`, `/.well-known/agent-skill`) is
 // served with NO authentication — only an IP rate limiter — and its body is
-// `listToolSummaries()`, i.e. the name and description of all 30 tools. Any
+// `listToolSummaries()`, i.e. every published tool name and description. Any
 // third party can read that table, and the whole point of publishing it is that
 // they bind to it. `tools/list` then hands out the full JSON Schema per tool to
 // any bearer of a valid token.
@@ -13,9 +13,10 @@
 // So renaming a tool, dropping one, or adding a required argument is a BREAKING
 // CHANGE FOR CLIENTS WE CANNOT SEE OR REDEPLOY. Nothing said so.
 //
-// WHY THE EXISTING TESTS COVER ONLY 5 OF THE 30. tests/builtin-tool-loop.test.cjs
-// checks the builtin toolset against buildTools(), but those assertions are
-// RELATIVE — they compare one derived list to another, so a rename that moves
+// WHY THE PRE-EXISTING TESTS PINNED ONLY FIVE NAMES.
+// tests/builtin-tool-loop.test.cjs checks the builtin toolset against
+// buildTools(), but those assertions are RELATIVE — they compare one derived
+// list to another, so a rename that moves
 // both sides together stays green:
 //
 //     assert.deepEqual(specNames, expected)   // both derived from buildTools()
@@ -23,7 +24,7 @@
 // It does incidentally protect five names, hardcoded as a sanity check inside a
 // different assertion (builtin-tool-loop.test.cjs:340): create_thread_item,
 // call_provider, post_message, create_task, read_channel. Rename one of those
-// and it fails. Rename any of the OTHER 25 and the whole existing suite stays
+// and it fails. Rename an unpinned name and the relative assertions still stay
 // green — verified by mutation: renaming `list_members` fails this file and
 // nothing else.
 //
