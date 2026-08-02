@@ -18,7 +18,7 @@ import {
 
 describe('redact', () => {
   it('removes every agensis credential prefix', () => {
-    const prefixes = ['aga_', 'agw_', 'agx_', 'agf_', 'cbk_'];
+    const prefixes = ['aga_', 'agw_', 'agx_', 'agf_', 'agc_', 'ago_', 'cbk_'];
     for (const prefix of prefixes) {
       expect(redact(`token=${prefix}AbC123_xyz-456 rest`)).toBe('token=[redacted] rest');
     }

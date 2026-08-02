@@ -2823,7 +2823,18 @@ function AppContent() {
           onClose={() => setSettingsOpen(false)}
           workspace={settingsWorkspace}
           secretsWorkspaceId={activeWorkspace?.id ?? null}
-          isWorkspaceOwner={Boolean(activeWorkspace?.user_id && activeWorkspace.user_id === user.id)}
+          isWorkspaceOwner={
+            // List route projects `role` (owner/admin/…), not always `user_id`.
+            // Prefer role; fall back to user_id when a row still carries it.
+            Boolean(
+              activeWorkspace
+              && user?.id
+              && (
+                activeWorkspace.role === 'owner'
+                || (activeWorkspace.user_id && activeWorkspace.user_id === user.id)
+              ),
+            )
+          }
           initialTab={settingsInitialTab}
           onUpdateWorkspace={handleUpdateSettingsWorkspace}
           workspaceName={settingsWorkspace?.name || 'Personal'}

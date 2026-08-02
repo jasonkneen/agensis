@@ -65,7 +65,7 @@ async function runPostCommitEffect(label, effect) {
 // in index.cjs / shared/backend-core.cjs and this file cannot drift from it.
 //
 // The join page itself: https://agensis.io/join/<token>, server-rendered, one
-// URL for a human OR an agent.
+// URL with explicit human, Connector-agent, and workspace-controller lanes.
 //
 // NO USER-AGENT SNIFFING, ANYWHERE. An agent succeeds via Accept: application/json
 // or ?format=json, or via the HTML itself, which carries the contract four ways

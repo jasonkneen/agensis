@@ -14,11 +14,28 @@
 // all, because Amp manages its own. "Amp default" is the honest choice there,
 // not an omission.
 
-import { AI_MODELS, CODEX_MODELS, type AIModel } from '../types';
+import { AI_MODELS, CODEX_MODELS, GROK_MODELS, type AIModel } from '../types';
 import type { AgentExecutionRuntime } from './agentTemplates';
 
 /** Ties the Codex model input to its suggestion list. */
 export const CODEX_MODEL_LIST_ID = 'agent-codex-model-options';
+
+/**
+ * Models offered per ACP harness.
+ *
+ * A harness runs its own model, so offering it the Anthropic and Codex catalogs
+ * is not just noise — it is how a Grok agent got pinned to `claude-opus-5` and
+ * then described itself as Claude. A harness absent from this map keeps the old
+ * everything-goes list, because for those we genuinely do not know the ids.
+ */
+const ACP_HARNESS_MODELS: Record<string, AIModel[]> = {
+  grok: GROK_MODELS,
+};
+
+/** The models offered for an ACP harness. Empty when we have no catalog for it. */
+export function harnessModelCatalog(acpHarness: string | null | undefined): AIModel[] {
+  return ACP_HARNESS_MODELS[String(acpHarness || '').trim().toLowerCase()] || [];
+}
 
 /** The models offered for a runtime. Empty for Amp — it takes no `--model`. */
 export function runtimeModelCatalog(runtime: AgentExecutionRuntime): AIModel[] {
@@ -59,14 +76,23 @@ export function modelOptionsForRuntime(
   current: string,
   runMode: 'builtin' | 'daemon' | 'sandbox' | 'external',
   runtime: AgentExecutionRuntime,
+  acpHarness?: string | null,
 ): AIModel[] {
   if (runMode === 'daemon' && runtime === 'desktop') {
+    const harness = String(acpHarness || '').trim().toLowerCase();
+    const catalog = harnessModelCatalog(harness);
     const fallback: AIModel = {
       id: 'auto',
       label: 'Harness default',
-      description: 'Whatever Hermes / Grok / Goose / … uses locally',
+      description: harness
+        ? `Whatever ${harness} uses locally`
+        : 'Whatever Hermes / Grok / Goose / … uses locally',
     };
-    const offered = [fallback, ...AI_MODELS.filter(m => m.id !== 'auto'), ...CODEX_MODELS];
+    // A harness we HAVE a catalog for offers only its own models. Listing Claude
+    // and Codex ids to a Grok agent is what let one get pinned to claude-opus-5.
+    const offered = catalog.length
+      ? [fallback, ...catalog]
+      : [fallback, ...AI_MODELS.filter(m => m.id !== 'auto'), ...CODEX_MODELS];
     const isKnown = current === 'auto'
       || offered.some(entry => entry.id === current);
     return current && !isKnown

@@ -1,5 +1,19 @@
 [
   {
+    "version": "connector-oauth-and-runtime-reliability",
+    "date": "2026-08-02",
+    "title": "Safer Connectors, OAuth, and Relay jobs",
+    "summary": "Connector agents now remain Connector agents across the server, templates, Netlify, model controls, and network views instead of falling back to Direct. MCP OAuth exchanges are single-use and transactional, dynamic clients can be granted or revoked per workspace, and every access token is checked against the consenting admin's current authority. Relay and Farm execution now rejects overlapping jobs, serializes desktop ACP work, times out stuck harness calls, and carries pending permission prompts safely across reconnects.",
+    "highlights": [
+      "Connector run mode survives every projection and keeps model selection with the external client",
+      "OAuth authorization codes are atomically single-use; client authentication, scopes, metadata, and redirect limits are enforced",
+      "Dynamic OAuth clients can be authorized and revoked independently per workspace, with current owner/admin access rechecked on every token use",
+      "Workspace managers can list, grant, and revoke standing agent permission rules through audited MCP tools",
+      "Farm dispatch reserves one active job per Relay agent; desktop ACP jobs run serially and stuck prompts cancel then terminate safely",
+      "Workspace switches discard late connection, registration, credential, OAuth, clipboard, and realtime updates from the previous workspace"
+    ]
+  },
+  {
     "version": "windows-desktop-support",
     "date": "2026-08-01",
     "title": "Desktop now runs on Windows",

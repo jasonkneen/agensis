@@ -16,10 +16,7 @@ import {
  createDbRateLimiter,
  evaluatePasswordServerSide,
  createTokenVersionCache,
- ALLOWED_TABLES,
  VERSIONED_TABLES,
- JSON_COLUMNS_BY_TABLE,
- arrayColumnElemType,
  toPgArrayLiteral,
  stripPrivilegedDbValues,
  validateUniformInsertRows,
@@ -124,13 +121,14 @@ import {
  quoteIdent,
  ensureTable,
  normalizeColumns,
- isJsonColumn,
+ buildGenericInsertSource,
  invalidJsonValue,
  createBindDbParam,
  buildWhereClause,
  buildOrderClause,
  mapDbError,
 } from '../../server/lib/db-sql.cjs';
+import { normalizeAgentRunMode } from '../../shared/agentTemplates.cjs';
 import { voiceCapabilities, unavailableReason, mintCartesiaToken, scrubError } from '../../shared/voice-core.cjs';
 // Reaction flow events. This lane can write `messages.reactions` through the
 // same generic /backend/db/update route the Fly lane serves, so it queues the
@@ -411,12 +409,16 @@ function normalizeAgentPermissionMode(value) {
  return value === 'accept_edits' || value === 'yolo' ? value : 'default';
 }
 
+// Keep in lockstep with server/index.cjs DEFAULT_AI_MODEL — Auto on either
+// runtime must resolve to the same model when AGENSIS_DEFAULT_AI_MODEL is unset.
+const DEFAULT_AI_MODEL = process.env.AGENSIS_DEFAULT_AI_MODEL || 'claude-opus-5';
+
 function resolveAnthropicModel(model) {
  if (model === 'claude-sonnet-4-6') return 'claude-sonnet-4-5';
  if (model === 'claude-opus-4-6') return 'claude-opus-4-5';
  if (model === 'claude-haiku-4-5') return 'claude-haiku-4-5';
  if (model && model !== 'auto') return model;
- return 'claude-opus-4-5';
+ return DEFAULT_AI_MODEL;
 }
 
 function normalizeBaseUrl(value) {
@@ -568,6 +570,11 @@ function isFlyOwnedControlPath(pathname) {
   || /^\/backend\/link-previews(?:\/|$)/.test(pathname)
   || /^\/backend\/system\/skill-content(?:\/|$)/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/flow-connections(?:\/|$)/.test(pathname)
+    || /^\/backend\/workspaces\/[^/]+\/mcp-connection$/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/oauth-clients(?:\/|$)/.test(pathname)
+  || /^\/backend\/oauth\/(?:authorize|token|register)$/.test(pathname)
+  || /^\/\.well-known\/oauth-(?:authorization-server|protected-resource)(?:\/|$)/.test(pathname)
+  || /^\/backend\/\.well-known\/oauth-(?:authorization-server|protected-resource)$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/mcp-token$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/mcp-auto-approve$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/agent-registrations(?:\/|$)/.test(pathname)
@@ -1072,7 +1079,9 @@ function publicWorkspace(row) {
   project_kind: row.project_kind || '',
   git_root: row.git_root || '',
   git_remote: row.git_remote || '',
+  // Mirrors server/index.cjs — Settings → Connections gates MCP on role.
   role: row.role || 'viewer',
+  user_id: row.user_id || null,
   created_at: row.created_at,
   updated_at: row.updated_at,
  };
@@ -1109,9 +1118,7 @@ function publicWorkspaceAgent(row) {
   metadata: parseJsonObject(row.metadata),
   identity: parseJsonObject(row.identity),
   model: resolveExecutionModel(row.model, runtime),
-  run_mode: row.run_mode === 'daemon' ? 'daemon'
-   : row.run_mode === 'sandbox' ? 'sandbox'
-    : 'builtin',
+  run_mode: normalizeAgentRunMode(row.run_mode),
   sandbox_provider: row.sandbox_provider || null,
   sandbox_config: parseJsonObject(row.sandbox_config),
   permissionMode,
@@ -2607,14 +2614,24 @@ async function handleDb(pathname, req, userId) {
    }
    const columns = validateUniformInsertRows(effectiveRows);
    const params = [];
-   const valueSql = effectiveRows.map((row) => `(${columns.map((column) => {
+   const valueBindings = effectiveRows.map((row) => columns.map((column) => {
     return bindDbParam(params, table, column, row[column]);
-   }).join(', ')})`).join(', ');
+   }));
+   const insertSource = buildGenericInsertSource({
+    table,
+    columns,
+    valueBindings,
+    rows: effectiveRows,
+    params,
+   });
    const returningColumns = table === 'chat_sessions' ? '*' : returning;
    const inserted = await db(
-    `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(safeSelectColumns(table, returningColumns))}`,
+    `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) ${insertSource} returning ${normalizeColumns(safeSelectColumns(table, returningColumns))}`,
     params,
    );
+   if (table === 'messages' && inserted.length !== effectiveRows.length) {
+    throw forbidden('Message parent must belong to the target conversation');
+   }
    if (table === 'chat_sessions') {
     await installCreatedSessionMemberships({
      db,
@@ -2752,13 +2769,14 @@ async function handleDb(pathname, req, userId) {
     || Object.prototype.hasOwnProperty.call(safeValues, 'folder')
    );
   let canonicalClosedSessionRows = [];
+  const projectedReturning = normalizeColumns(safeSelectColumns(table, returning));
   const integrityReturning = editsMessageContent
-   ? `${normalizeColumns(returning)}, id as "__integrity_id", session_id as "__integrity_session_id"`
+   ? `${projectedReturning}, id as "__integrity_id", session_id as "__integrity_session_id"`
    : closesSessions
-    ? `${normalizeColumns(returning)}, id as "__integrity_id"`
+    ? `${projectedReturning}, id as "__integrity_id"`
     : changesSessionPrivacy
-     ? `${normalizeColumns(returning)}, id as "__integrity_id", visibility as "__integrity_visibility", folder as "__integrity_folder"`
-     : normalizeColumns(returning);
+     ? `${projectedReturning}, id as "__integrity_id", visibility as "__integrity_visibility", folder as "__integrity_folder"`
+     : projectedReturning;
   const rawResult = editsMessageContent || changesSessionPrivacy || closesSessions
    ? await withDbTransaction(async (transactionQuery) => {
     let lockedSessionIds = [];
@@ -2902,13 +2920,14 @@ async function handleDb(pathname, req, userId) {
    return jsonError(400, new Error('Delete requires a non-empty where clause'));
   }
   await enforceDbOperationAccess({ userId, table, op: 'delete', filters, db: query });
+  const deleteReturning = normalizeColumns(safeSelectColumns(table, '*'));
   const result = table === 'messages'
    ? await withDbTransaction(async (transactionQuery) => {
     const deleted = await transactionQuery(
      `update ${tableSql}
          set deleted_at = coalesce(deleted_at, now())
          ${where.clause} and deleted_at is null
-       returning *`,
+       returning ${deleteReturning}`,
      where.params,
     );
     if (deleted.length === 0) {
@@ -2921,7 +2940,10 @@ async function handleDb(pathname, req, userId) {
     });
     return deleted;
    })
-   : await query(`delete from ${tableSql}${where.clause} returning *`, where.params);
+   : await query(
+    `delete from ${tableSql}${where.clause} returning ${deleteReturning}`,
+    where.params,
+   );
   if (table === 'messages' && result.length === 0) {
    throw forbidden('Message access changed before the delete completed');
   }

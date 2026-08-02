@@ -23,7 +23,7 @@ const { createAutomations, mountAutomationRoutes } = require('./automations.cjs'
 const { createAgentTemplates, mountAgentTemplateRoutes } = require('./agent-templates-routes.cjs');
 const { createWorkspaceSkills, mountWorkspaceSkillRoutes } = require('./workspace-skills-routes.cjs');
 const {
- normalizeAgentTemplate, normalizeAgentIntent, agentToTemplateDraft, readTemplateExport, templateFingerprint,
+ normalizeAgentTemplate, normalizeAgentIntent, normalizeAgentRunMode, agentToTemplateDraft, readTemplateExport, templateFingerprint,
 } = require('../shared/agentTemplates.cjs');
 // Reactions are written through the generic /backend/db/update route as a whole
 // jsonb map, so their flow events come from diffing that map — see the module
@@ -160,6 +160,9 @@ const { mountAgentsRoutes } = require('./agents-routes.cjs');
 const { mountJoinPagesRoutes } = require('./join-pages-routes.cjs');
 const { mountTtsRoutes } = require('./tts-routes.cjs');
 const { mountMcpDoorsRoutes } = require('./mcp-doors-routes.cjs');
+const { mountMcpOauthRoutes } = require('./mcp-oauth-routes.cjs');
+const { createMcpOauthStore } = require('./mcp-oauth.cjs');
+const mcpOauthShared = require('../shared/mcp-oauth.cjs');
 const { mountConnectionsRoutes } = require('./connections-routes.cjs');
 const { mountSessionsRoutes } = require('./sessions-routes.cjs');
 const { SESSION_RETURNING, settleSessionClosure } = require('../shared/session-close.cjs');
@@ -192,6 +195,7 @@ const {
  quoteIdent,
  ensureTable,
  normalizeColumns,
+ buildGenericInsertSource,
  bindDbParam,
  buildWhereClause,
  appendWorkspaceAccessClause,
@@ -340,7 +344,7 @@ const {
 const execFileAsync = promisify(execFile);
 
 const DEFAULT_PORT = Number(process.env.API_PORT || 3142);
-const DEFAULT_AI_MODEL = process.env.AGENSIS_DEFAULT_AI_MODEL || 'claude-opus-4-8';
+const DEFAULT_AI_MODEL = process.env.AGENSIS_DEFAULT_AI_MODEL || 'claude-opus-5';
 const OPENPETS_CATALOG_URL = 'https://openpets.dev/pets/catalog.v3/page-000.json';
 
 let envLoaded = false;
@@ -1181,11 +1185,15 @@ async function ensureRuntimeSchema() {
       -- The projected event the run saw, so a run stays readable after the
       -- source row has changed or been deleted.
       payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+      -- Frozen at enqueue so a reclaimed run cannot resume against edited
+      -- steps. Nullable for runs created before the forward migration.
+      definition jsonb,
       steps jsonb NOT NULL DEFAULT '[]'::jsonb,
       error text,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+    ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS definition jsonb;
     -- Idempotent enqueue. This index IS the deduplication.
     CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_runs_event
       ON automation_runs(automation_id, event_id);
@@ -2287,8 +2295,9 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_workspace_invites_workspace_id ON workspace_invites(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_workspace_invites_token ON workspace_invites(token);
 
-    -- The ONE join link: a single URL a human OR an agent can redeem, which
-    -- provisions the real credential server-side and never displays it.
+    -- The ONE join link: a single URL a human, Connector agent, or named
+    -- workspace controller can redeem. It provisions the real credential
+    -- server-side and returns a machine credential exactly once.
     -- (Deliberately kept inside THIS statement block rather than opening a new
     -- db.unsafe: a block whose text begins with a comment breaks every strict
     -- mock database in tests/, all of which dispatch on the leading keyword.)
@@ -2537,11 +2546,74 @@ ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_
 ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_workspace_id_fkey
   FOREIGN KEY (requested_by_workspace_id) REFERENCES workspaces(id) ON DELETE RESTRICT;
 
-    -- MCP "connect a client" model. ONE workspace token (or your agensis login, or an
-    -- invite link) authenticates an MCP client; it then calls register_agent to become an
-    -- agent (new or existing). You approve via a popup unless auto-approve / invite link.
+    -- MCP workspace control-plane bearer. The singleton workspace token (or a
+    -- separately verified login/OAuth identity) may call register_agent to become
+    -- an agent, new or existing. Legacy invite and join-link URLs authenticate only
+    -- at their dedicated redemption routes, never at the MCP door.
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS mcp_token_hash text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS mcp_auto_approve boolean NOT NULL DEFAULT false;
+    -- MCP OAuth 2.1 (authorization-code + PKCE). Additive to the existing
+    -- agent, Flow, controller, workspace, and login-token bearer paths.
+    CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      client_id text NOT NULL UNIQUE,
+      client_secret_hash text NOT NULL DEFAULT '',
+      workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,
+      name text NOT NULL DEFAULT '',
+      token_endpoint_auth_method text NOT NULL DEFAULT 'none',
+      redirect_uris jsonb NOT NULL DEFAULT '[]'::jsonb,
+      scopes jsonb NOT NULL DEFAULT '["mcp:tools"]'::jsonb,
+      created_by uuid,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      revoked_at timestamptz
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_oauth_clients_workspace
+      ON mcp_oauth_clients(workspace_id) WHERE revoked_at IS NULL;
+    CREATE TABLE IF NOT EXISTS mcp_oauth_client_grants (
+      client_id text NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      granted_by uuid,
+      granted_at timestamptz NOT NULL DEFAULT now(),
+      revoked_at timestamptz,
+      PRIMARY KEY (client_id, workspace_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_oauth_client_grants_workspace
+      ON mcp_oauth_client_grants(workspace_id) WHERE revoked_at IS NULL;
+    CREATE TABLE IF NOT EXISTS mcp_oauth_codes (
+      code_hash text PRIMARY KEY,
+      client_id text NOT NULL,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      user_id uuid NOT NULL,
+      redirect_uri text NOT NULL,
+      code_challenge text NOT NULL,
+      code_challenge_method text NOT NULL DEFAULT 'S256',
+      scopes jsonb NOT NULL DEFAULT '["mcp:tools"]'::jsonb,
+      expires_at timestamptz NOT NULL,
+      used_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_oauth_codes_client ON mcp_oauth_codes(client_id);
+    CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
+      token_hash text PRIMARY KEY,
+      client_id text NOT NULL,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      user_id uuid,
+      scopes jsonb NOT NULL DEFAULT '["mcp:tools"]'::jsonb,
+      expires_at timestamptz NOT NULL,
+      revoked_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_workspace
+      ON mcp_oauth_tokens(workspace_id) WHERE revoked_at IS NULL;
+    INSERT INTO mcp_oauth_client_grants (client_id, workspace_id, granted_by)
+      SELECT client_id, workspace_id, created_by
+        FROM mcp_oauth_clients
+       WHERE workspace_id IS NOT NULL
+      UNION
+      SELECT client_id, workspace_id, user_id FROM mcp_oauth_codes
+      UNION
+      SELECT client_id, workspace_id, user_id FROM mcp_oauth_tokens
+      ON CONFLICT (client_id, workspace_id) DO NOTHING;
     -- An agent becomes claimable over MCP once its registration is approved.
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS mcp_approved boolean NOT NULL DEFAULT false;
     CREATE TABLE IF NOT EXISTS agent_registrations (
@@ -2598,25 +2670,60 @@ ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_controllers_id_workspace_key') THEN
         ALTER TABLE workspace_controllers ADD CONSTRAINT workspace_controllers_id_workspace_key UNIQUE (id, workspace_id);
       END IF;
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'workspace_controllers_parent_workspace_fkey'
+          AND confdeltype = 'n' AND confdelsetcols IS NULL
+      ) THEN
+        ALTER TABLE workspace_controllers DROP CONSTRAINT workspace_controllers_parent_workspace_fkey;
+      END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_controllers_parent_workspace_fkey') THEN
         ALTER TABLE workspace_controllers ADD CONSTRAINT workspace_controllers_parent_workspace_fkey
-          FOREIGN KEY (parent_controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+          FOREIGN KEY (parent_controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL (parent_controller_id);
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'workspace_agents_controller_workspace_fkey'
+          AND confdeltype = 'n' AND confdelsetcols IS NULL
+      ) THEN
+        ALTER TABLE workspace_agents DROP CONSTRAINT workspace_agents_controller_workspace_fkey;
       END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_agents_controller_workspace_fkey') THEN
         ALTER TABLE workspace_agents ADD CONSTRAINT workspace_agents_controller_workspace_fkey
-          FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+          FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL (controller_id);
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'workspace_resources_controller_workspace_fkey'
+          AND confdeltype = 'n' AND confdelsetcols IS NULL
+      ) THEN
+        ALTER TABLE workspace_resources DROP CONSTRAINT workspace_resources_controller_workspace_fkey;
       END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_resources_controller_workspace_fkey') THEN
         ALTER TABLE workspace_resources ADD CONSTRAINT workspace_resources_controller_workspace_fkey
-          FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+          FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL (controller_id);
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'agent_registrations_controller_workspace_fkey'
+          AND confdeltype = 'n' AND confdelsetcols IS NULL
+      ) THEN
+        ALTER TABLE agent_registrations DROP CONSTRAINT agent_registrations_controller_workspace_fkey;
       END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_registrations_controller_workspace_fkey') THEN
         ALTER TABLE agent_registrations ADD CONSTRAINT agent_registrations_controller_workspace_fkey
-          FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+          FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL (controller_id);
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'workspace_join_links_redeemed_controller_workspace_fkey'
+          AND confdeltype = 'n' AND confdelsetcols IS NULL
+      ) THEN
+        ALTER TABLE workspace_join_links DROP CONSTRAINT workspace_join_links_redeemed_controller_workspace_fkey;
       END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_join_links_redeemed_controller_workspace_fkey') THEN
         ALTER TABLE workspace_join_links ADD CONSTRAINT workspace_join_links_redeemed_controller_workspace_fkey
-          FOREIGN KEY (redeemed_controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+          FOREIGN KEY (redeemed_controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL (redeemed_controller_id);
       END IF;
     END $$;
   `);
@@ -3211,6 +3318,9 @@ const readReceiptRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 // channel or a Telegram group mid-argument outruns a human webhook by a lot.
 const bridgeRateLimiter = createRateLimiter({ windowMs: 60_000, max: 600 });
 const mcpRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// Dynamic OAuth client registration is unauthenticated and creates durable
+// rows, so it has its own smaller per-IP budget rather than sharing MCP calls.
+const mcpOauthDcrRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 // A credentialed outbound call is not comparable to the DB reads the rest of the
 // MCP surface makes: it spends a provider's rate limit, it can provision billable
 // infrastructure, and a loop stuck on a 500 would hammer someone else's API with
@@ -3621,7 +3731,15 @@ function publicWorkspace(row) {
   project_kind: row.project_kind || '',
   git_root: row.git_root || '',
   git_remote: row.git_remote || '',
+  // Server-computed role for the authenticated caller (`owner` when
+  // workspaces.user_id matches). Settings → Connections gates the MCP
+  // credential on this — not on a client-side user_id compare against a
+  // field this projection used to omit, which made the tab look blank for
+  // the actual owner.
   role: row.role || 'viewer',
+  // Present when the SELECT includes it (generic /backend/db path). The list
+  // route may omit it and rely on `role` alone.
+  user_id: row.user_id || null,
   created_at: row.created_at,
   updated_at: row.updated_at,
  };
@@ -3949,12 +4067,53 @@ function resolveExecutionModel(model, runtime) {
   : resolveAnthropicModel(value);
 }
 
-function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode, runtime = null, profile = null }) {
+// An ACP harness runs its OWN model. A Claude or Codex id means nothing to it,
+// and forcing one is how a Grok agent ended up launched with
+// `--model claude-opus-5` and then describing itself as Claude and listing
+// Claude models as its own.
+//
+// The harness is pinned on the agent's metadata as `acp_harness`, which is a
+// SEPARATE axis from the claude|codex|amp execution runtime — the agents that
+// hit this had acp_harness set and runtime unset, so normalizeExecutionRuntime
+// returned '' and every one of them fell through to resolveAnthropicModel.
+//
+// A harness absent from this table still works: it simply takes no --model and
+// lets the local harness choose, which is the honest default (the same choice
+// Amp already makes) rather than inventing a model id we cannot verify.
+const ACP_HARNESS_MODELS = {
+ grok: { default: 'grok-4.5', owns: /^grok[-.]/i },
+};
+
+function acpHarnessOf(metadata) {
+ const harness = String(metadata?.acp_harness || metadata?.acpHarness || '').trim().toLowerCase();
+ // claude/codex/amp are execution runtimes with their own model handling.
+ return harness && harness !== 'claude' && harness !== 'codex' && harness !== 'amp' ? harness : '';
+}
+
+/** The model a harness-pinned agent should actually run. '' means "send no --model". */
+function resolveAcpHarnessModel(harness, model) {
+ const spec = ACP_HARNESS_MODELS[String(harness || '').trim().toLowerCase()] || null;
+ const value = String(model || '').trim();
+ if (!value || value === 'auto') return spec ? spec.default : '';
+ // An id the harness plainly does not own is a leftover default, not a choice a
+ // human made — every one of these agents was carrying claude-opus-5.
+ if (spec) return spec.owns.test(value) ? value : spec.default;
+ return /^(claude|gpt)[-.]/i.test(value) ? '' : value;
+}
+
+function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode, runtime = null, acpHarness = null, profile = null }) {
  const resolvedRuntime = normalizeExecutionRuntime(runtime);
- const resolvedModel = resolveExecutionModel(model, resolvedRuntime);
+ const harness = String(acpHarness || '').trim().toLowerCase();
+ const resolvedModel = harness
+  ? resolveAcpHarnessModel(harness, model)
+  : resolveExecutionModel(model, resolvedRuntime);
  const resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode);
  const commandPermissionArgs = ['--permission-mode', shellQuote(resolvedPermissionMode)];
- const commandModelArgs = resolvedRuntime === 'amp' || (resolvedRuntime === 'codex' && resolvedModel === 'auto')
+ // No model at all when the harness owns that choice and we have no id we can
+ // stand behind — better than shipping a Claude id to something that is not Claude.
+ const commandModelArgs = !resolvedModel
+  || resolvedRuntime === 'amp'
+  || (resolvedRuntime === 'codex' && resolvedModel === 'auto')
   ? []
   : ['--model', shellQuote(resolvedModel)];
  const displayName = String(name || handle || 'Agensis Agent').trim() || 'Agensis Agent';
@@ -4041,8 +4200,15 @@ async function buildAgentConnectionCommand({
  if (!isAgentEnabled(agent)) throw new Error('Agent is deactivated');
  const token = createAgentConnectToken();
  const resolvedHandle = slugHandle(handle || agent.handle || agent.name);
- const resolvedRuntime = normalizeExecutionRuntime(parseJsonObject(agent.metadata).runtime);
- const resolvedModel = resolveExecutionModel(model || agent.model, resolvedRuntime);
+ const agentMetadata = parseJsonObject(agent.metadata);
+ const resolvedRuntime = normalizeExecutionRuntime(agentMetadata.runtime);
+ // A harness-pinned agent (acp_harness) resolves its model from the harness, not
+ // from the Anthropic catalog — otherwise the minted command, and the model
+ // written back to the row below, both say claude-opus-5 for a Grok agent.
+ const resolvedAcpHarness = acpHarnessOf(agentMetadata);
+ const resolvedModel = resolvedAcpHarness
+  ? resolveAcpHarnessModel(resolvedAcpHarness, model || agent.model)
+  : resolveExecutionModel(model || agent.model, resolvedRuntime);
  // Mode changes are manage-gated. Minting a connect token is NOT by itself a
  // mode grant: only an explicit override when allowPermissionModeChange is true
  // (caller already proved manage) may change permission_mode. actorUserId is for
@@ -4098,6 +4264,7 @@ async function buildAgentConnectionCommand({
   model: resolvedModel,
   permissionMode: resolvedPermissionMode,
   runtime: resolvedRuntime,
+  acpHarness: resolvedAcpHarness,
   profile: profile === null ? resolvedHandle : profile,
  });
  return {
@@ -4202,15 +4369,34 @@ async function verifyFlowConnectionToken(token) {
 }
 
 // The MCP endpoint accepts, in priority order: a per-agent connect token (acts AS
-// that agent), a flow token, the one workspace MCP token, or the user's agensis
-// login. The latter two authenticate into the workspace; the client then calls
-// register_agent to become an agent. Legacy workspace_invites remain human-accept
-// URLs only and deliberately do not authenticate here.
+// that agent), a Flow token, a scoped controller token, the singleton workspace
+// token, an OAuth access token, or the user's agensis login. Workspace/user OAuth
+// identities retain their existing kinds and pass through the same tool
+// authorization chokepoint. Legacy workspace_invites and workspace_join_links
+// deliberately do not authenticate here.
+let _mcpOauthStore = null;
+function getMcpOauthStore() {
+ if (!_mcpOauthStore) {
+  _mcpOauthStore = createMcpOauthStore({ getDb, hashAgentToken });
+ }
+ return _mcpOauthStore;
+}
+
+async function verifyOauthAccessToken(token) {
+ if (!mcpOauthShared.isOauthAccessToken(token)) return null;
+ try {
+  return await getMcpOauthStore().verifyAccessToken(token);
+ } catch {
+  return null;
+ }
+}
+
 async function verifyMcpToken(token, req = null) {
  return (await verifyAgentConnectToken(token, req))
   || (await verifyFlowConnectionToken(token))
   || (await verifyControllerToken(token))
   || (await verifyWorkspaceMcpToken(token))
+  || (await verifyOauthAccessToken(token))
   || (await verifyUserAuthMcpToken(token));
 }
 
@@ -4373,9 +4559,7 @@ function agentRuntimePayload(agent) {
   // and canvas_id each got shipped broken.
   identity: parseJsonObject(agent.identity),
   model: resolveExecutionModel(agent.model, runtime),
-  run_mode: agent.run_mode === 'daemon' ? 'daemon'
-   : agent.run_mode === 'sandbox' ? 'sandbox'
-    : 'builtin',
+  run_mode: normalizeAgentRunMode(agent.run_mode),
   sandbox_provider: agent.sandbox_provider || null,
   sandbox_config: parseJsonObject(agent.sandbox_config),
   permissionMode,
@@ -8180,6 +8364,14 @@ async function logMessageActivity(rows) {
    if (inserted.length > 0) {
     // table is 'activity_events' here, so this cannot re-trigger message logging.
     notifyDbSubscribers('activity_events', 'INSERT', inserted);
+
+    // Bump the session's updated_at so the Threads panel sorts correctly.
+    // This is the single chokepoint for all message INSERTs (via realtime.cjs),
+    // so every conversation — including sub-threads — stays fresh in the list.
+    getDb().unsafe(
+     'update chat_sessions set updated_at = now() where id = $1 and deleted_at is null',
+     [String(sessionId)],
+    ).catch(() => {});
    }
   } catch (error) {
    console.error('logMessageActivity failed', error);
@@ -8577,6 +8769,9 @@ const builtinTurn = createBuiltinTurn({
  hasMcpPresence: (...a) => agentConnections.hasMcpPresence(...a),
  findConnectedAgent: (...a) => agentConnections.findConnectedAgent(...a),
  updateAgentHeartbeat: (...a) => agentConnections.updateAgentHeartbeat(...a),
+ grantAgentPermissionRule: (...a) => grantAgentPermissionRule(...a),
+ listAgentPermissionRules: (...a) => listAgentPermissionRules(...a),
+ revokeAgentPermissionRule: (...a) => revokeAgentPermissionRule(...a),
 });
 const {
  runToolUseLoop, toolResultText, mcpToolDeps, getBuiltinToolset,
@@ -8693,6 +8888,7 @@ const agentJobs = createAgentJobs({
  updateAgentHeartbeat: (...a) => agentConnections.updateAgentHeartbeat(...a),
  getConnectedAgents: () => agentConnections.connectedAgents,
  scheduleTaskQueueDrain: (...a) => taskDispatch.scheduleTaskQueueDrain(...a),
+ recordAnthropicUsage: (...a) => recordAnthropicUsage(...a),
 });
 const {
  insertActiveAgentJob, agentHasActiveJob, agentHasAnyActiveJob,
@@ -8700,7 +8896,7 @@ const {
  clearStrandedPlaceholders, handleAgentJobResult, handleAgentJobDelta,
  handleAgentJobStep, handleAgentJobSegment, agentStepParts, agentStepContent,
  finalizeAgentJobResult, ampResultMetadata, validateAmpJobResult, claimMcpJob, submitMcpJobResult, reapStuckMcpJobs,
- normalizeStopReason, stopResultMetadata, failureSentence,
+ normalizeStopReason, stopResultMetadata, failureSentence, daemonStopUsage,
  dispatchFarmAgentJob, getFarmAgentJob, cancelFarmAgentJob,
 } = agentJobs;
 
@@ -8720,8 +8916,9 @@ const agentPermissions = createAgentPermissions({
 const {
  decideAgentPermissionRequest, expireConnectionPermissionRequests,
  expireStalePermissionRequests, handleAgentPermissionPrepared, handleAgentPermissionRequest,
- listAgentPermissionRequests, publicPermissionRequest, rehomePendingPermissionRequests,
- replayPermissionDecisions, revokeAgentPermissionRule, setAgentPermissionMode,
+ grantAgentPermissionRule, listAgentPermissionRequests, listAgentPermissionRules,
+ publicPermissionRequest, rehomePendingPermissionRequests, replayPermissionDecisions,
+ revokeAgentPermissionRule, setAgentPermissionMode,
 } = agentPermissions;
 
 // Task dispatch owns four of the maps resetTestState() clears, and the cadence
@@ -9013,6 +9210,8 @@ function createApp() {
   limit: '50mb',
   verify: (req, _res, buf) => { req.rawBody = buf; },
  }));
+ // OAuth token/register endpoints use form-encoded bodies (RFC 6749).
+ app.use(express.urlencoded({ extended: false }));
  // Runtime schema fallback (ensureRuntimeSchema) runs by default so dev bootstrap
  // keeps working with zero config. Set AGENSIS_RUNTIME_SCHEMA=false in production
  // and run `npm run migrate` instead, once the supabase/migrations/*.sql files are
@@ -9130,6 +9329,7 @@ function createApp() {
  mountAgentPermissionRoutes(app, {
   ...coreDeps(),
   decideAgentPermissionRequest,
+  grantAgentPermissionRule,
   listAgentPermissionRequests,
   revokeAgentPermissionRule,
   setAgentPermissionMode,
@@ -9218,7 +9418,29 @@ function createApp() {
   recordAudit,
  });
 
- mountMcpDoorsRoutes(app, { ...coreDeps(), mcpHandler, normalizeBaseUrl, renderSkillMd, requestBaseUrl, skillManifest, skillRateLimiter });
+ mountMcpDoorsRoutes(app, {
+  ...coreDeps(),
+  mcpHandler,
+  normalizeBaseUrl,
+  renderSkillMd,
+  requestBaseUrl,
+  skillManifest,
+  skillRateLimiter,
+  oauthWwwAuthenticate: (req) => {
+   const base = normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL)
+    || normalizeBaseUrl(process.env.AGENSIS_PUBLIC_URL)
+    || requestBaseUrl(req);
+   return mcpOauthShared.wwwAuthenticateHeader(base);
+  },
+ });
+ mountMcpOauthRoutes(app, {
+  ...coreDeps(),
+  dcrRateLimiter: mcpOauthDcrRateLimiter,
+  hashAgentToken,
+  normalizeBaseUrl,
+  requestBaseUrl,
+  verifyToken,
+ });
 
  mountAuthRoutes(app, {
   ...coreDeps(),
@@ -9417,17 +9639,27 @@ function createApp() {
     }
     const columns = validateUniformInsertRows(effectiveRows);
     const params = [];
-    const valueSql = effectiveRows.map((row) => `(${columns.map((column) => {
+    const valueBindings = effectiveRows.map((row) => columns.map((column) => {
      return bindDbParam(params, table, column, row[column]);
-    }).join(', ')})`).join(', ');
+    }));
+    const insertSource = buildGenericInsertSource({
+     table,
+     columns,
+     valueBindings,
+     rows: effectiveRows,
+     params,
+    });
     // Session membership settlement needs the authoritative id/visibility
     // before commit. The internal return uses the complete reviewed public
     // session shape; the caller's narrower projection is applied after commit.
     const returningColumns = table === 'chat_sessions' ? '*' : returning;
     const inserted = await db(
-     `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(safeSelectColumns(table, returningColumns))}`,
+     `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) ${insertSource} returning ${normalizeColumns(safeSelectColumns(table, returningColumns))}`,
      params,
     );
+    if (table === 'messages' && inserted.length !== effectiveRows.length) {
+     throw forbidden('Message parent must belong to the target conversation');
+    }
     if (table === 'chat_sessions') {
      await installCreatedSessionMemberships({
       db,
@@ -9654,13 +9886,14 @@ function createApp() {
    let scrubbedActivity = [];
    let sessionClosureEffects = null;
    let canonicalClosedSessionRows = [];
+   const projectedReturning = normalizeColumns(safeSelectColumns(table, returning));
    const integrityReturning = editsMessageContent
-    ? `${normalizeColumns(returning)}, id as "__integrity_id", session_id as "__integrity_session_id"`
+    ? `${projectedReturning}, id as "__integrity_id", session_id as "__integrity_session_id"`
     : closesSessions
-     ? `${normalizeColumns(returning)}, id as "__integrity_id"`
+     ? `${projectedReturning}, id as "__integrity_id"`
      : changesSessionPrivacy
-      ? `${normalizeColumns(returning)}, id as "__integrity_id", visibility as "__integrity_visibility", folder as "__integrity_folder"`
-      : normalizeColumns(returning);
+      ? `${projectedReturning}, id as "__integrity_id", visibility as "__integrity_visibility", folder as "__integrity_folder"`
+      : projectedReturning;
    const rawResult = editsMessageContent || changesSessionPrivacy || closesSessions
     ? await getDb().begin(async (transaction) => {
      let lockedSessionIds = [];
@@ -9854,6 +10087,7 @@ function createApp() {
     return jsonError(res, 400, new Error('Delete requires a non-empty where clause'));
    }
    await enforceDbOperationAccess(req.userId, table, 'delete', { filters });
+   const deleteReturning = normalizeColumns(safeSelectColumns(table, '*'));
    // Physical message deletion is not author-local: FK cascades would also
    // erase other people's replies and whole subthread sessions. A user's
    // delete therefore retains the row and only hides it from normal reads.
@@ -9867,7 +10101,7 @@ function createApp() {
       `update ${tableSql}
           set deleted_at = coalesce(deleted_at, now())
           ${where.clause} and deleted_at is null
-        returning *`,
+        returning ${deleteReturning}`,
       where.params,
      );
      if (deleted.length === 0) {
@@ -9880,7 +10114,10 @@ function createApp() {
      });
      return deleted;
     })
-    : await getDb().unsafe(`delete from ${tableSql}${where.clause} returning *`, where.params);
+    : await getDb().unsafe(
+     `delete from ${tableSql}${where.clause} returning ${deleteReturning}`,
+     where.params,
+    );
    if (table === 'messages' && result.length === 0) {
     throw forbidden('Message access changed before the delete completed');
    }
@@ -10446,6 +10683,7 @@ module.exports = {
   ampResultMetadata,
   normalizeStopReason,
   stopResultMetadata,
+  daemonStopUsage,
   failureSentence,
   validateAmpJobResult,
   dispatchFarmAgentJob,
@@ -10462,6 +10700,8 @@ module.exports = {
   expireConnectionPermissionRequests,
   rehomePendingPermissionRequests,
   replayPermissionDecisions,
+  grantAgentPermissionRule,
+  listAgentPermissionRules,
   revokeAgentPermissionRule,
   setAgentPermissionMode,
   publicPermissionRequest,

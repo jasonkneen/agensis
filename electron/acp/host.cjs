@@ -5,8 +5,9 @@
 // Prompt = session/prompt. Stop = kill.
 
 const path = require('path');
-const { createAcpClient } = require('./client.cjs');
+const { createAcpClient, isElevatedAccessMode } = require('./client.cjs');
 const { listHarnesses, resolveHarness } = require('./harnesses.cjs');
+const { buildAgensisMcpServers } = require('./mcpConfig.cjs');
 const { refreshLoginShellPath } = require('../../shared/local-agent-discovery.cjs');
 
 /** @type {Map<string, { agentId: string, harnessId: string, client: ReturnType<typeof createAcpClient>, cwd: string, startedAt: string, label: string, path: string }>} */
@@ -24,6 +25,9 @@ function publicStatus(entry) {
     pid: entry.client.pid,
     startedAt: entry.startedAt,
     running: !entry.client.closed,
+    // What ACCESS was applied at start (yolo→bypassPermissions via set_mode).
+    permissionMode: entry.permissionMode || null,
+    acpSessionMode: entry.client?.acpSessionMode || null,
   };
 }
 
@@ -42,6 +46,7 @@ function status(agentId) {
  *   cwd?: string,
  *   model?: string,
  *   autoApprove?: boolean,
+ *   permissionMode?: 'default'|'acceptEdits'|'yolo',
  *   onUpdate?: (params: object) => void,
  *   onLog?: (line: string) => void,
  * }} opts
@@ -76,18 +81,35 @@ async function start(opts) {
     if (harness.id === 'claude') env.ANTHROPIC_MODEL = model;
     env.AGENSIS_AGENT_MODEL = model;
   }
+  // Prefer explicit ACCESS from the agent row (default | accept_edits | yolo).
+  // Do NOT default unknown → yolo. accept_edits (DB) and acceptEdits (legacy)
+  // both elevate via isElevatedAccessMode.
+  const permissionMode = String(opts.permissionMode || opts.permission_mode || '').trim()
+    || (opts.autoApprove === true ? 'yolo' : 'default');
+  // When Start also mints an agent token, wire authenticated workspace MCP into
+  // session/new so Grok/Claude ACP do not probe Fly with a naked HTTP client
+  // and log AuthRequired against realm=agensis-mcp.
+  const mcpServers = Array.isArray(opts.mcpServers) && opts.mcpServers.length
+    ? opts.mcpServers
+    : buildAgensisMcpServers({
+      baseUrl: opts.baseUrl || opts.mcpBaseUrl,
+      token: opts.token || opts.mcpToken,
+    });
   const client = createAcpClient({
     command: harness.command,
     args: harness.args,
     cwd,
     env,
-    autoApprove: opts.autoApprove !== false,
+    autoApprove: isElevatedAccessMode(permissionMode) || opts.autoApprove === true,
+    permissionMode,
+    mcpServers,
     onUpdate: opts.onUpdate,
     onLog: opts.onLog,
   });
 
   try {
     await client.initialize();
+    // newSession applies session/set_mode for yolo→bypassPermissions / acceptEdits.
     await client.newSession(cwd);
   } catch (err) {
     client.dispose();
@@ -102,6 +124,7 @@ async function start(opts) {
     client,
     cwd,
     model,
+    permissionMode,
     startedAt: new Date().toISOString(),
   };
   sessions.set(agentId, entry);
@@ -144,7 +167,10 @@ async function stop(agentId) {
 /**
  * @param {string} agentId
  * @param {string} text
- * @param {{ onChunk?: (t: string) => void }} [opts]
+ * @param {{
+ *   onChunk?: (t: string) => void,
+ *   onPermissionRequest?: (params: object, optionsList: object[]) => Promise<object|null>,
+ * }} [opts]
  */
 async function prompt(agentId, text, opts = {}) {
   const entry = sessions.get(String(agentId || ''));

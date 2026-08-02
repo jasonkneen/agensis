@@ -109,6 +109,107 @@ test('a session that cannot be resolved writes nothing at all', async () => {
   assert.equal(inserts.length, 0);
 });
 
+test('activity history is append-only through generic client mutations', async () => {
+  const db = async () => {
+    throw new Error('activity mutation refusal must run before any row or role lookup');
+  };
+
+  for (const op of ['update', 'delete']) {
+    await assert.rejects(
+      () => core.enforceDbOperationAccess({
+        userId: 'workspace-owner',
+        table: 'activity_events',
+        op,
+        filters: [{ column: 'id', operator: 'eq', value: 'private-activity' }],
+        payload: op === 'update' ? { values: { title: SECRET } } : undefined,
+        db,
+      }),
+      {
+        status: 403,
+        message: 'Activity history is append-only',
+      },
+      `${op} must not expose an affected-row oracle or returned private activity row`,
+    );
+  }
+
+  const ownerDb = async (sql) => (
+    /select 1 from workspaces where id = \$1 and user_id = \$2/i.test(sql)
+      ? [{ ok: 1 }]
+      : []
+  );
+  await assert.doesNotReject(() => core.enforceDbOperationAccess({
+    userId: 'workspace-owner',
+    table: 'activity_events',
+    op: 'insert',
+    payload: { values: { workspace_id: 'ws-1', event_type: 'task_created' } },
+    db: ownerDb,
+  }), 'the browser must retain its legitimate append path');
+});
+
+test('activity selects scope message events to readers of their source session', () => {
+  const scoped = core.appendSessionAccessClause(
+    { clause: ' WHERE "activity_events"."workspace_id" = $1', params: ['ws-1'] },
+    'reader-1',
+    'activity_events',
+  );
+
+  assert.match(scoped.clause, /"activity_events"\."event_type" IS DISTINCT FROM 'message_sent'/i);
+  assert.match(scoped.clause, /"activity_events"\."event_type" IS DISTINCT FROM 'chat_created'/i);
+  assert.match(scoped.clause, /when "activity_events"\."event_type" = 'message_sent' then nullif\("activity_events"\."metadata"->>'session_id', ''\)/i);
+  assert.match(scoped.clause, /when "activity_events"\."event_type" = 'chat_created' then nullif\("activity_events"\."entity_id", ''\)/i);
+  assert.match(
+    scoped.clause,
+    /cs\.id::text = case/i,
+    'session activity must resolve its source without casting free-form metadata to uuid',
+  );
+  assert.match(scoped.clause, /chat_session_members/i, 'private activity must use the canonical session membership rule');
+  assert.deepEqual(scoped.params, ['ws-1', 'reader-1']);
+});
+
+test('activity realtime sends private message markers only to the current session audience', async () => {
+  const { createRealtime } = require('../server/realtime.cjs');
+  const realtime = createRealtime({
+    enqueueFlowWebhookEvents: async () => [],
+    enqueueAutomationRuns: async () => [],
+    refreshConnectedAgentConfigs: () => {},
+    sessionRealtimeAudience: async (sessionId) => {
+      if (sessionId === 'public-session') return { memberUserIds: null };
+      if (sessionId === 'private-session') return { memberUserIds: new Set(['member-1']) };
+      return null;
+    },
+  });
+  const client = (userId) => realtime.registerTestWebsocketClient({
+    userId,
+    readyState: 1,
+    subscriptions: [{
+      type: 'db_changes',
+      table: 'activity_events',
+      event: '*',
+      schema: 'public',
+      filter: 'workspace_id=eq.ws-1',
+    }],
+    sent: [],
+    send(raw) { this.sent.push(JSON.parse(raw)); },
+  });
+  const member = client('member-1');
+  const other = client('other-1');
+
+  realtime.notifyDbSubscribers('activity_events', 'INSERT', [
+    { id: 'public-message', workspace_id: 'ws-1', event_type: 'message_sent', entity_type: 'message', metadata: { session_id: 'public-session' } },
+    { id: 'private-message', workspace_id: 'ws-1', event_type: 'message_sent', entity_type: 'message', metadata: JSON.stringify({ session_id: 'private-session' }) },
+    { id: 'orphan-message', workspace_id: 'ws-1', event_type: 'message_sent', entity_type: 'message', metadata: {} },
+    { id: 'public-chat', workspace_id: 'ws-1', event_type: 'chat_created', entity_type: 'chat', entity_id: 'public-session', metadata: {} },
+    { id: 'private-chat', workspace_id: 'ws-1', event_type: 'chat_created', entity_type: 'chat', entity_id: 'private-session', metadata: {} },
+    { id: 'orphan-chat', workspace_id: 'ws-1', event_type: 'chat_created', entity_type: 'chat', entity_id: null, metadata: {} },
+    { id: 'ordinary-activity', workspace_id: 'ws-1', event_type: 'task_created', entity_type: 'task', metadata: {} },
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  const ids = (socket) => socket.sent.map((frame) => frame.payload?.new?.id).sort();
+  assert.deepEqual(ids(member), ['ordinary-activity', 'private-chat', 'private-message', 'public-chat', 'public-message']);
+  assert.deepEqual(ids(other), ['ordinary-activity', 'public-chat', 'public-message']);
+});
+
 // ---------------------------------------------------------------------------
 // The backfill. Rows written before the fix still hold the bodies, so the code
 // change alone leaves the exposure in place.

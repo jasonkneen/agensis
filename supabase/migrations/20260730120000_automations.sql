@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS automation_runs (
   -- The projected event the run saw, so a run stays readable after the source
   -- row has changed or been deleted.
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  -- Frozen at enqueue so retries cannot resume against an edited definition.
+  definition jsonb,
   steps jsonb NOT NULL DEFAULT '[]'::jsonb,
   error text,
   created_at timestamptz NOT NULL DEFAULT now(),

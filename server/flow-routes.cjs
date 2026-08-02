@@ -34,7 +34,7 @@ function mountFlowRoutes(app, deps = {}) {
    const created = await getFlowConnectionCore().create({
     workspaceId,
     channelId,
-    name: req.body?.name || 'Flows',
+    name: req.body?.name || 'Event webhook',
     webhookUrl: normalizeFlowWebhookUrl(req.body?.webhookUrl),
     events: req.body?.events,
     createdBy: req.userId,
@@ -96,7 +96,7 @@ function mountFlowRoutes(app, deps = {}) {
     'select id from flow_connections where id = $1 and workspace_id = $2 limit 1',
     [req.params.connectionId, workspaceId],
    );
-   if (!rows[0]) return jsonError(res, 404, new Error('Flows connection not found'));
+   if (!rows[0]) return jsonError(res, 404, new Error('Event webhook not found'));
    await getFlowConnectionCore().revoke(req.params.connectionId);
    return res.json({ data: { id: req.params.connectionId, revoked: true }, error: null });
   } catch (error) {

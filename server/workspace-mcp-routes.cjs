@@ -37,6 +37,52 @@ function mountWorkspaceMcpRoutes(app, deps = {}) {
   return rows[0];
  }
 
+ function mcpPublicBaseUrl(req) {
+  return normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL)
+   || normalizeBaseUrl(req.body?.baseUrl)
+   || requestBaseUrl(req);
+ }
+
+ function mcpConnectionPayload(baseUrl, { configured, autoApprove, token = null }) {
+  // ONE SECRET PER RESPONSE when minting: live token only in `token`.
+  // Config / CLI snippets always use the placeholder so copy buttons cannot
+  // smuggle a working credential into a transcript.
+  return {
+   configured: Boolean(configured),
+   autoApprove: Boolean(autoApprove),
+   endpoint: mcpEndpoint(baseUrl),
+   config: configBlock(baseUrl),
+   claudeMcpAdd: claudeMcpAddCommand(baseUrl),
+   ...(token ? { token } : {}),
+  };
+ }
+
+ // Status only — never returns the live bearer (only a hash is stored).
+ // Settings → Connections loads this on open so the endpoint and recipes are
+ // visible without minting/rotating first.
+ app.get('/backend/workspaces/:id/mcp-connection', requireAuth, async (req, res) => {
+  try {
+   const workspaceId = String(req.params.id || '').trim();
+   await requireWorkspaceOwner(req.userId, workspaceId);
+   const rows = await getDb().unsafe(
+    `select id, mcp_auto_approve,
+            (coalesce(mcp_token_hash, '') <> '') as configured
+       from workspaces where id = $1 limit 1`,
+    [workspaceId],
+   );
+   if (!rows[0]) return jsonError(res, 404, new Error('Workspace not found'));
+   res.json({
+    data: mcpConnectionPayload(mcpPublicBaseUrl(req), {
+     configured: rows[0].configured === true || rows[0].configured === 't' || rows[0].configured === 1,
+     autoApprove: rows[0].mcp_auto_approve,
+    }),
+    error: null,
+   });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  app.post('/backend/workspaces/:id/mcp-token', requireAuth, async (req, res) => {
   try {
    const workspaceId = String(req.params.id || '').trim();
@@ -64,30 +110,12 @@ function mountWorkspaceMcpRoutes(app, deps = {}) {
     target: { type: 'workspace', id: workspaceId },
     detail: { autoApprove: Boolean(rows[0].mcp_auto_approve), rotated: true },
    });
-   const baseUrl = normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || normalizeBaseUrl(req.body?.baseUrl) || requestBaseUrl(req);
    res.json({
-    data: {
+    data: mcpConnectionPayload(mcpPublicBaseUrl(req), {
+     configured: true,
+     autoApprove: rows[0].mcp_auto_approve,
      token,
-     autoApprove: Boolean(rows[0].mcp_auto_approve),
-     endpoint: mcpEndpoint(baseUrl),
-     // PLACEHOLDER too, matching `claudeMcpAdd` below and matching every other
-     // caller of configBlock (server/skills.cjs passes TOKEN_PLACEHOLDER at all
-     // three of its call sites). This was built with the LIVE token: it carries
-     // no copy button, so it is not the leak that was reported — it is the same
-     // mistake in a second place, shipping a working credential inside a
-     // convenience payload the UI is free to render anywhere it likes. `token`
-     // is returned as its own field two lines up, masked on screen and copied
-     // deliberately, so this response now has exactly ONE field a secret can be
-     // taken from.
-     config: configBlock(baseUrl),
-     // PLACEHOLDER, not the live token. This one-liner is displayed in full and
-     // has a copy button, so embedding the real bearer token put it on the
-     // clipboard as plain text — and it has already been pasted into a
-     // transcript that way. The endpoint and the token are separate fields
-     // right beside it (the token masked, copied deliberately), so nothing is
-     // lost by making the convenience string non-secret.
-     claudeMcpAdd: claudeMcpAddCommand(baseUrl),
-    },
+    }),
     error: null,
    });
   } catch (error) {

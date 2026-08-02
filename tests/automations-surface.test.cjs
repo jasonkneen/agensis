@@ -22,6 +22,7 @@ const { ensureTable } = require('../server/lib/db-sql.cjs');
 const root = path.resolve(__dirname, '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const MIGRATION = 'supabase/migrations/20260730120000_automations.sql';
+const DEFINITION_MIGRATION = 'supabase/migrations/20260802130000_automation_run_definition.sql';
 
 // --- three-place schema ------------------------------------------------------
 
@@ -48,6 +49,25 @@ test('the enqueue dedupe index exists in all three places', () => {
  // idempotency: without it a retried write enqueues the automation twice.
  for (const [place, source] of Object.entries(sources())) {
   assert.match(source, /CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_runs_event\s+ON automation_runs\(automation_id, event_id\)/, place);
+ }
+});
+
+test('run definitions are frozen by a deploy-safe forward migration', () => {
+ for (const [place, source] of Object.entries(sources())) {
+  const table = source.slice(source.indexOf('CREATE TABLE IF NOT EXISTS automation_runs ('));
+  const body = table.slice(0, table.indexOf(');'));
+  assert.match(body, /definition jsonb/, `${place}: fresh automation_runs definition`);
+ }
+ for (const [place, source] of [
+  ['runtime', read('server/index.cjs')],
+  ['canonical', read('database/neon-schema.sql')],
+  ['forward migration', read(DEFINITION_MIGRATION)],
+ ]) {
+  assert.match(
+   source,
+   /ALTER TABLE automation_runs\s+ADD COLUMN IF NOT EXISTS definition jsonb/i,
+   `${place}: existing automation_runs definition`,
+  );
  }
 });
 
@@ -119,6 +139,7 @@ test('both tables are workspace-scoped and reachable for READS', () => {
 test('the jsonb columns are declared so they bind as jsonb, not as strings', () => {
  assert.equal(core.JSON_COLUMNS_BY_TABLE.automations.has('definition'), true);
  assert.equal(core.JSON_COLUMNS_BY_TABLE.automation_runs.has('payload'), true);
+ assert.equal(core.JSON_COLUMNS_BY_TABLE.automation_runs.has('definition'), true);
  assert.equal(core.JSON_COLUMNS_BY_TABLE.automation_runs.has('steps'), true);
 });
 
@@ -155,6 +176,11 @@ function makeDb({ role = 'owner' } = {}) {
    if (q.startsWith('select 1 from workspaces where id')) return role === 'owner' && String(params[1]) === USER ? [{ ok: 1 }] : [];
    if (q.startsWith('select role from workspace_members')) return role && role !== 'owner' && role !== 'none' ? [{ role }] : [];
    if (q.includes('with recursive chain as')) return [];
+   if (q.startsWith('select id, workspace_id, visibility, folder, deleted_at from chat_sessions where id = $1')) {
+    return params[0] === 'chan-2'
+     ? [{ id: 'chan-2', workspace_id: WORKSPACE, visibility: 'workspace', folder: 'General', deleted_at: null }]
+     : [];
+   }
    if (q.startsWith('select * from automations where workspace_id')) return [];
    if (q.startsWith('insert into automations')) return [{ id: 'auto-1', workspace_id: WORKSPACE, definition: {}, trigger_event: 'message.created' }];
    return [];

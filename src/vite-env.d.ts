@@ -82,6 +82,8 @@ interface Window {
         harnessId: string;
         cwd?: string;
         autoApprove?: boolean;
+        /** Agent ACCESS: default=Ask, accept_edits, yolo=Full access (acceptEdits legacy alias ok) */
+        permissionMode?: 'default' | 'accept_edits' | 'acceptEdits' | 'yolo';
         token?: string;
         baseUrl?: string;
         workspaceId?: string;

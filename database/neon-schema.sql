@@ -548,11 +548,15 @@ CREATE TABLE IF NOT EXISTS automation_runs (
   claim_token uuid,
   lease_expires_at timestamptz,
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  -- Frozen at enqueue so a reclaimed run cannot resume against edited steps.
+  -- Nullable for runs created before the forward migration.
+  definition jsonb,
   steps jsonb NOT NULL DEFAULT '[]'::jsonb,
   error text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE automation_runs ADD COLUMN IF NOT EXISTS definition jsonb;
 -- Idempotent enqueue. This index IS the deduplication.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_automation_runs_event ON automation_runs(automation_id, event_id);
 CREATE INDEX IF NOT EXISTS idx_automation_runs_pending ON automation_runs(status, created_at);
@@ -1124,21 +1128,49 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_controllers_id_workspace_key') THEN
     ALTER TABLE workspace_controllers ADD CONSTRAINT workspace_controllers_id_workspace_key UNIQUE (id, workspace_id);
   END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'workspace_controllers_parent_workspace_fkey'
+      AND confdeltype = 'n' AND confdelsetcols IS NULL
+  ) THEN
+    ALTER TABLE workspace_controllers DROP CONSTRAINT workspace_controllers_parent_workspace_fkey;
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_controllers_parent_workspace_fkey') THEN
     ALTER TABLE workspace_controllers ADD CONSTRAINT workspace_controllers_parent_workspace_fkey
-      FOREIGN KEY (parent_controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+      FOREIGN KEY (parent_controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL (parent_controller_id);
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'workspace_agents_controller_workspace_fkey'
+      AND confdeltype = 'n' AND confdelsetcols IS NULL
+  ) THEN
+    ALTER TABLE workspace_agents DROP CONSTRAINT workspace_agents_controller_workspace_fkey;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_agents_controller_workspace_fkey') THEN
     ALTER TABLE workspace_agents ADD CONSTRAINT workspace_agents_controller_workspace_fkey
-      FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+      FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL (controller_id);
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'workspace_resources_controller_workspace_fkey'
+      AND confdeltype = 'n' AND confdelsetcols IS NULL
+  ) THEN
+    ALTER TABLE workspace_resources DROP CONSTRAINT workspace_resources_controller_workspace_fkey;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_resources_controller_workspace_fkey') THEN
     ALTER TABLE workspace_resources ADD CONSTRAINT workspace_resources_controller_workspace_fkey
-      FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+      FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL (controller_id);
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'workspace_join_links_redeemed_controller_workspace_fkey'
+      AND confdeltype = 'n' AND confdelsetcols IS NULL
+  ) THEN
+    ALTER TABLE workspace_join_links DROP CONSTRAINT workspace_join_links_redeemed_controller_workspace_fkey;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspace_join_links_redeemed_controller_workspace_fkey') THEN
     ALTER TABLE workspace_join_links ADD CONSTRAINT workspace_join_links_redeemed_controller_workspace_fkey
-      FOREIGN KEY (redeemed_controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+      FOREIGN KEY (redeemed_controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL (redeemed_controller_id);
   END IF;
 END $$;
 
@@ -1376,9 +1408,16 @@ CREATE INDEX IF NOT EXISTS idx_agent_registrations_workspace ON agent_registrati
 CREATE INDEX IF NOT EXISTS idx_agent_registrations_controller ON agent_registrations(controller_id, status);
 DO $$
 BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'agent_registrations_controller_workspace_fkey'
+      AND confdeltype = 'n' AND confdelsetcols IS NULL
+  ) THEN
+    ALTER TABLE agent_registrations DROP CONSTRAINT agent_registrations_controller_workspace_fkey;
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_registrations_controller_workspace_fkey') THEN
     ALTER TABLE agent_registrations ADD CONSTRAINT agent_registrations_controller_workspace_fkey
-      FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL;
+      FOREIGN KEY (controller_id, workspace_id) REFERENCES workspace_controllers(id, workspace_id) ON DELETE SET NULL (controller_id);
   END IF;
 END $$;
 
@@ -2107,3 +2146,59 @@ CREATE INDEX IF NOT EXISTS idx_agent_permission_requests_job
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS permission_request_id uuid;
 CREATE INDEX IF NOT EXISTS idx_messages_permission_request
   ON messages(permission_request_id) WHERE permission_request_id IS NOT NULL;
+
+-- MCP OAuth 2.1 (authorization-code + PKCE) for remote MCP clients.
+CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id text NOT NULL UNIQUE,
+  client_secret_hash text NOT NULL DEFAULT '',
+  workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL DEFAULT '',
+  token_endpoint_auth_method text NOT NULL DEFAULT 'none',
+  redirect_uris jsonb NOT NULL DEFAULT '[]'::jsonb,
+  scopes jsonb NOT NULL DEFAULT '["mcp:tools"]'::jsonb,
+  created_by uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  revoked_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_oauth_clients_workspace
+  ON mcp_oauth_clients(workspace_id) WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS mcp_oauth_client_grants (
+  client_id text NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  granted_by uuid,
+  granted_at timestamptz NOT NULL DEFAULT now(),
+  revoked_at timestamptz,
+  PRIMARY KEY (client_id, workspace_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_oauth_client_grants_workspace
+  ON mcp_oauth_client_grants(workspace_id) WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS mcp_oauth_codes (
+  code_hash text PRIMARY KEY,
+  client_id text NOT NULL,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL,
+  redirect_uri text NOT NULL,
+  code_challenge text NOT NULL,
+  code_challenge_method text NOT NULL DEFAULT 'S256',
+  scopes jsonb NOT NULL DEFAULT '["mcp:tools"]'::jsonb,
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_oauth_codes_client ON mcp_oauth_codes(client_id);
+
+CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
+  token_hash text PRIMARY KEY,
+  client_id text NOT NULL,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id uuid,
+  scopes jsonb NOT NULL DEFAULT '["mcp:tools"]'::jsonb,
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_workspace
+  ON mcp_oauth_tokens(workspace_id) WHERE revoked_at IS NULL;

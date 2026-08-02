@@ -164,6 +164,10 @@ function installDb({
           metadata: agentMetadata,
         }];
       }
+      if (n.startsWith('select id, metadata from workspace_agents')) {
+        if (!decisionAgentEnabled || !job || params[0] !== job.agent_id || params[1] !== job.workspace_id) return [];
+        return [{ id: job.agent_id, metadata: agentMetadata }];
+      }
       if (n.startsWith('select id, workspace_id, agent_id, session_id, connection_id, status from agent_jobs')) {
         if (!job
           || decisionJobStatus !== 'running'
@@ -1226,6 +1230,51 @@ test('an unrecognised mode is rejected rather than quietly downgraded to default
       userId: 'user-1', workspaceId: 'ws-1', agentId: 'agent-1', permissionMode: 'yolo!',
     }),
     /permission_mode must be/,
+  );
+});
+
+// --- managing standing permission rules -----------------------------------
+
+test('a workspace MCP identity can list and grant a standing rule without impersonating a user', async () => {
+  const calls = installDb({
+    agentMetadata: { host_folders: ['/srv/project'], permission_rules: ['WebFetch'] },
+  });
+  const actor = { kind: 'workspace', workspaceId: 'ws-1' };
+
+  assert.deepEqual(await __test.listAgentPermissionRules({
+    workspaceId: 'ws-1', agentId: 'agent-1', actor,
+  }), ['WebFetch']);
+  assert.deepEqual(await __test.grantAgentPermissionRule({
+    workspaceId: 'ws-1', agentId: 'agent-1', rule: 'Bash(git status:*)', actor,
+  }), ['WebFetch', 'Bash(git status:*)']);
+
+  assert.equal(
+    calls.some((call) => call.n.startsWith('select 1 from workspaces where id = $1 and user_id = $2')),
+    false,
+    'a workspace credential has no user id and must not be authorized by impersonating an owner',
+  );
+  const audit = calls.find((call) => call.n.startsWith('insert into audit_log'));
+  assert.ok(audit, 'the MCP privilege grant must use the same audit-writing service as the HTTP route');
+  assert.equal(audit.params[1], null);
+  assert.equal(audit.params[2], null);
+  assert.equal(audit.params[3], 'workspace:ws-1');
+  assert.equal(audit.params[4], 'agent.permission_rule_granted');
+});
+
+test('standing-rule services reject non-user identities and cross-workspace workspace credentials', async () => {
+  installDb({ agentMetadata: { permission_rules: ['WebFetch'] } });
+  await assert.rejects(
+    () => __test.listAgentPermissionRules({
+      workspaceId: 'ws-1', agentId: 'agent-1', actor: { kind: 'agent', workspaceId: 'ws-1', agentId: 'agent-1' },
+    }),
+    /permission to manage/i,
+  );
+  await assert.rejects(
+    () => __test.grantAgentPermissionRule({
+      workspaceId: 'ws-1', agentId: 'agent-1', rule: 'WebFetch',
+      actor: { kind: 'workspace', workspaceId: 'ws-2' },
+    }),
+    /different workspace/i,
   );
 });
 

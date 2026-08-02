@@ -1,5 +1,5 @@
 import { DEFAULT_BACKGROUND_OPACITY } from '../../lib/wallpaperDefaults';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   Check,
@@ -14,6 +14,7 @@ import {
   Palette,
   Plug,
   Plus,
+  RefreshCw,
   ScrollText,
   Trash2,
   Settings as SettingsIcon,
@@ -29,9 +30,22 @@ import { NEO_THEMES, NEO_GROUPS, applyNeoTheme, resolveNeoStyle } from '../../sh
 import { NORMAL_THEMES, NORMAL_GROUPS, applyNormalTheme, clearNormalTheme, getStoredNormalTheme } from '../../showcase/normalThemes';
 import { TW_WORLDS, applyTwTheme, getStoredTwTheme } from '../../showcase/twThemes';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
-import { generateMcpToken, setMcpAutoApprove, type McpConnectInfo } from '../../lib/mcpConnect';
+import {
+  createMcpOauthClient,
+  generateMcpToken,
+  getMcpConnection,
+  getMcpOauthCatalog,
+  setMcpAutoApprove,
+  type McpConnectInfo,
+  type McpOauthCatalog,
+  type McpOauthClientMinted,
+} from '../../lib/mcpConnect';
+import { getBackendBaseUrl } from '../../lib/backendClient';
 import { WORKSPACE_UNAVAILABLE, describeWriteFailure } from '../../lib/writeFeedback';
 import { useWorkspaceVault } from '../../hooks/useWorkspaceVault';
+import { useAgentConnections } from '../../hooks/useAgentConnections';
+import { useAgentRegistrations } from '../../hooks/useAgentRegistrations';
+import type { AgentConnection } from '../../types';
 import { AuditLogPanel } from './AuditLogPanel';
 import { useGateways } from '../../hooks/useGateways';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
@@ -60,6 +74,7 @@ import { Slider } from '@/components/ui/slider';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { cn } from '@/lib/utils';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -331,6 +346,28 @@ function GeneralPanel({
   );
 }
 
+const NOTIFICATION_LEVELS: Array<{
+  id: NotificationLevel;
+  title: string;
+  description: string;
+}> = [
+  {
+    id: 'all',
+    title: 'All new messages',
+    description: 'Every message in your channels and DMs.',
+  },
+  {
+    id: 'mentions',
+    title: 'Direct messages & mentions',
+    description: 'DMs, @mentions, and agent broadcasts only.',
+  },
+  {
+    id: 'none',
+    title: 'Nothing',
+    description: 'No notifications — catch up in the app.',
+  },
+];
+
 function NotificationsPanel() {
   const settings = getSettings();
   const [level, setLevel] = useState<NotificationLevel>(settings.notifications_level);
@@ -352,68 +389,99 @@ function NotificationsPanel() {
     if (key === 'notifications_task_reminders') setTaskReminders(value);
   };
 
+  // Same FieldGroup / text-sm / text-xs rhythm as General, Connections, Appearance —
+  // not the older settings-panel-* CSS that used heavier titles and mixed rem sizes.
   return (
-    <div className="settings-panel-stack">
-      <SettingsPanelHeader title="Notifications" description="Choose what pulls your attention." />
-      <div className="settings-card-grid">
-        <SettingsChoiceCard
-          title="All new messages"
-          description="Every message in your channels and DMs."
-          selected={level === 'all'}
-          onClick={() => setNotificationLevel('all')}
-        />
-        <SettingsChoiceCard
-          title="Direct messages & mentions"
-          description="DMs, @mentions, and agent broadcasts only."
-          selected={level === 'mentions'}
-          onClick={() => setNotificationLevel('mentions')}
-        />
-        <SettingsChoiceCard
-          title="Nothing"
-          description="No notifications — catch up in the app."
-          selected={level === 'none'}
-          onClick={() => setNotificationLevel('none')}
-        />
-      </div>
-      <div className="settings-toggle-list">
-        <SettingsToggleRow title="Play a sound" description="A soft chime when a notification arrives." checked={sound} onCheckedChange={checked => toggle('notifications_sound', checked)} />
-        <SettingsToggleRow title="Desktop notifications" description="Show OS notifications when agensis is in the background." checked={desktop} onCheckedChange={checked => toggle('notifications_desktop', checked)} />
-        <SettingsToggleRow title="Agent events" description="Notify when Relay or Connector agents connect, finish, or need attention." checked={agentEvents} onCheckedChange={checked => toggle('notifications_agent_events', checked)} />
-        <SettingsToggleRow title="Task reminders" description="Notify when assigned tasks are due soon." checked={taskReminders} onCheckedChange={checked => toggle('notifications_task_reminders', checked)} />
-      </div>
-    </div>
-  );
-}
-
-function SettingsPanelHeader({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="settings-panel-header">
-      <h2>{title}</h2>
-      <p>{description}</p>
-    </div>
-  );
-}
-
-function SettingsChoiceCard({ title, description, selected, onClick }: { title: string; description: string; selected: boolean; onClick: () => void }) {
-  return (
-    <button type="button" className="settings-choice-card" data-selected={selected ? 'true' : undefined} onClick={onClick}>
-      <span className="settings-choice-radio" />
-      <span className="settings-choice-copy">
-        <span>{title}</span>
-        <small>{description}</small>
-      </span>
-    </button>
-  );
-}
-
-function SettingsToggleRow({ title, description, checked, onCheckedChange }: { title: string; description: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) {
-  return (
-    <div className="settings-toggle-row">
+    <FieldGroup>
       <div>
-        <div className="settings-toggle-title">{title}</div>
-        <div className="settings-toggle-description">{description}</div>
+        <div className="mb-1 text-sm font-medium">When to notify</div>
+        <FieldDescription>Choose what pulls your attention.</FieldDescription>
       </div>
-      <Switch checked={checked} onCheckedChange={onCheckedChange} />
+
+      <div className="flex flex-col gap-2" role="radiogroup" aria-label="Notification level">
+        {NOTIFICATION_LEVELS.map(option => {
+          const selected = level === option.id;
+          return (
+            <button
+              key={option.id}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => setNotificationLevel(option.id)}
+              className={cn(
+                'flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                selected
+                  ? 'border-primary bg-primary/10'
+                  : 'border-border bg-card/50 hover:bg-muted/40',
+              )}
+            >
+              <span
+                className={cn(
+                  'mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border-2',
+                  selected ? 'border-primary' : 'border-muted-foreground/40',
+                )}
+                aria-hidden
+              >
+                {selected ? <span className="size-2 rounded-full bg-primary" /> : null}
+              </span>
+              <span className="min-w-0 flex-1 space-y-0.5">
+                <span className="block text-sm font-medium leading-snug">{option.title}</span>
+                <span className="block text-xs leading-normal text-muted-foreground">{option.description}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="border-t border-border pt-4 space-y-0 divide-y divide-border">
+        <SettingsToggleRow
+          title="Play a sound"
+          description="A soft chime when a notification arrives."
+          checked={sound}
+          onCheckedChange={checked => toggle('notifications_sound', checked)}
+        />
+        <SettingsToggleRow
+          title="Desktop notifications"
+          description="Show OS notifications when agensis is in the background."
+          checked={desktop}
+          onCheckedChange={checked => toggle('notifications_desktop', checked)}
+        />
+        <SettingsToggleRow
+          title="Agent events"
+          description="Notify when Relay or Connector agents connect, finish, or need attention."
+          checked={agentEvents}
+          onCheckedChange={checked => toggle('notifications_agent_events', checked)}
+        />
+        <SettingsToggleRow
+          title="Task reminders"
+          description="Notify when assigned tasks are due soon."
+          checked={taskReminders}
+          onCheckedChange={checked => toggle('notifications_task_reminders', checked)}
+        />
+      </div>
+    </FieldGroup>
+  );
+}
+
+function SettingsToggleRow({
+  title,
+  description,
+  checked,
+  onCheckedChange,
+}: {
+  title: string;
+  description: string;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 py-3">
+      <div className="min-w-0 space-y-0.5">
+        <div className="text-sm font-medium leading-snug">{title}</div>
+        <div className="text-xs leading-normal text-muted-foreground">{description}</div>
+      </div>
+      <Switch checked={checked} onCheckedChange={onCheckedChange} aria-label={title} />
     </div>
   );
 }
@@ -1148,10 +1216,29 @@ function ToolsPanel({ workspace }: { workspace: Workspace | null }) {
   );
 }
 
-// Workspace control — mint the ONE owner-issued workspace MCP token, show the
-// paste-able config, and toggle auto-approve. It can register agents and create
-// workspace-visible resources, but it is not a human identity and does not
-// inherit the owner's private-session access.
+function formatSeenAt(value?: string | null): string {
+  if (!value) return 'never';
+  const at = new Date(value).getTime();
+  if (Number.isNaN(at)) return 'unknown';
+  const deltaSec = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (deltaSec < 15) return 'just now';
+  if (deltaSec < 60) return `${deltaSec}s ago`;
+  if (deltaSec < 3600) return `${Math.floor(deltaSec / 60)}m ago`;
+  if (deltaSec < 86400) return `${Math.floor(deltaSec / 3600)}h ago`;
+  return new Date(at).toLocaleString();
+}
+
+function connectionStatusLabel(status: AgentConnection['status']): string {
+  if (status === 'online') return 'Online';
+  if (status === 'busy') return 'Busy';
+  return 'Offline';
+}
+
+// Workspace MCP connection — owner-only control credential for clients
+// (Grok, Claude Code, Cursor, Codex, …). Status + endpoint load immediately;
+// the live bearer is only available right after mint/rotate (hash at rest).
+// Connected clients (agent sockets + pending MCP registrations) are listed for
+// anyone who can open this tab.
 function ConnectionsPanel({
   workspaceId,
   isWorkspaceOwner,
@@ -1160,116 +1247,593 @@ function ConnectionsPanel({
   isWorkspaceOwner: boolean;
 }) {
   const [info, setInfo] = useState<McpConnectInfo | null>(null);
+  const [liveToken, setLiveToken] = useState<string | null>(null);
+  const [showToken, setShowToken] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [auto, setAuto] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [flowsOpen, setFlowsOpen] = useState(false);
+  const [webhookOpen, setWebhookOpen] = useState(false);
+  const [oauthCatalog, setOauthCatalog] = useState<McpOauthCatalog | null>(null);
+  const [oauthMinted, setOauthMinted] = useState<McpOauthClientMinted | null>(null);
+  const [showOauthSecret, setShowOauthSecret] = useState(false);
+  const [oauthBusy, setOauthBusy] = useState(false);
+  const workspaceRequestRef = useRef({ workspaceId, generation: 0 });
+  const copiedTimeoutRef = useRef<number | null>(null);
+  if (workspaceRequestRef.current.workspaceId !== workspaceId) {
+    workspaceRequestRef.current = {
+      workspaceId,
+      generation: workspaceRequestRef.current.generation + 1,
+    };
+  }
 
-  useEffect(() => {
-    // A token is shown once. It must never remain on screen after the person
-    // switches to another workspace, where it would look like that workspace's
-    // credential and could be copied under the wrong name.
-    setInfo(null);
-    setAuto(false);
-    setCopied(null);
+  const { connections, loading: clientsLoading, refetch: refetchClients } = useAgentConnections(workspaceId);
+  const { pending, approve, deny, refresh: refreshRegistrations } = useAgentRegistrations(
+    isWorkspaceOwner ? workspaceId : null,
+  );
+
+  const liveClients = connections.filter(c => c.status === 'online' || c.status === 'busy');
+  const recentClients = connections.filter(c => c.status === 'offline').slice(0, 8);
+
+  // Always-visible MCP/OAuth URLs from the app's backend base (works even when
+  // status APIs 404 on an older server build).
+  const mcpFallback = useMemo(() => {
+    const base = String(getBackendBaseUrl() || '').replace(/\/+$/, '')
+      || 'https://agensis-backend.fly.dev';
+    return {
+      endpoint: `${base}/backend/mcp`,
+      claudeMcpAdd: `claude mcp add --transport http agensis ${base}/backend/mcp --header "Authorization: Bearer aga_YOUR_AGENT_TOKEN"`,
+      resource: `${base}/backend/mcp`,
+      authorizationEndpoint: `${base}/backend/oauth/authorize`,
+      tokenEndpoint: `${base}/backend/oauth/token`,
+      registrationEndpoint: `${base}/backend/oauth/register`,
+      scopes: ['mcp:tools'],
+      tokenEndpointAuthMethods: ['none', 'client_secret_post', 'client_secret_basic'],
+      clients: [] as McpOauthCatalog['clients'],
+    };
+  }, []);
+
+  const loadStatus = useCallback(async () => {
+    const request = workspaceRequestRef.current;
+    const isCurrent = () => workspaceRequestRef.current === request;
+    if (!workspaceId || !isWorkspaceOwner) {
+      setInfo(null);
+      setLiveToken(null);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     setErr(null);
-    setFlowsOpen(false);
-  }, [workspaceId]);
-
-  const generate = async () => {
-    // No workspace id means the workspace list never loaded. The button used to
-    // be silently `disabled` in that state, so clicking it did nothing at all
-    // and nothing said why. Say why instead.
-    if (!workspaceId) { setErr(WORKSPACE_UNAVAILABLE.reason); return; }
-    if (!isWorkspaceOwner) { setErr('Only the workspace owner can issue its control credential.'); return; }
-    setBusy(true); setErr(null);
+    // Seed UI immediately so OAuth fields are never blank while/if status 404s.
+    setInfo((prev) => prev || {
+      configured: false,
+      autoApprove: false,
+      endpoint: mcpFallback.endpoint,
+      claudeMcpAdd: mcpFallback.claudeMcpAdd,
+      config: null,
+    });
+    setOauthCatalog((prev) => prev || {
+      resource: mcpFallback.resource,
+      authorizationEndpoint: mcpFallback.authorizationEndpoint,
+      tokenEndpoint: mcpFallback.tokenEndpoint,
+      registrationEndpoint: mcpFallback.registrationEndpoint,
+      scopes: mcpFallback.scopes,
+      tokenEndpointAuthMethods: mcpFallback.tokenEndpointAuthMethods,
+      clients: [],
+    });
     try {
-      const next = await generateMcpToken(workspaceId);
+      const next = await getMcpConnection(workspaceId);
+      if (!isCurrent()) return;
       setInfo(next);
       setAuto(next.autoApprove);
+      setLiveToken(null);
+      setShowToken(false);
     } catch (e) {
-      setErr(describeWriteFailure('generate a connection token', e).description);
-    } finally { setBusy(false); }
+      if (!isCurrent()) return;
+      // Status GET may 404 on a backend that has not been redeployed yet.
+      // Keep fallback endpoints visible; do not map that to "no longer exists".
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/404|not found|no longer exists/i.test(msg)) {
+        setErr(describeWriteFailure('load MCP connection', e).description);
+      }
+    }
+    try {
+      const catalog = await getMcpOauthCatalog(workspaceId);
+      if (!isCurrent()) return;
+      setOauthCatalog(catalog);
+    } catch {
+      // keep fallback catalog
+    }
+    if (!isCurrent()) return;
+    setOauthMinted(null);
+    setShowOauthSecret(false);
+    setLoading(false);
+  }, [workspaceId, isWorkspaceOwner, mcpFallback]);
+
+  useEffect(() => {
+    if (copiedTimeoutRef.current !== null) {
+      window.clearTimeout(copiedTimeoutRef.current);
+      copiedTimeoutRef.current = null;
+    }
+    setInfo(null);
+    setLiveToken(null);
+    setShowToken(false);
+    setCopied(null);
+    setErr(null);
+    setWebhookOpen(false);
+    setAuto(false);
+    setBusy(false);
+    setOauthCatalog(null);
+    setOauthMinted(null);
+    setShowOauthSecret(false);
+    setOauthBusy(false);
+    void loadStatus();
+  }, [workspaceId, isWorkspaceOwner, loadStatus]);
+
+  const mintOauthClient = async () => {
+    if (!workspaceId) { setErr(WORKSPACE_UNAVAILABLE.reason); return; }
+    const request = workspaceRequestRef.current;
+    const isCurrent = () => workspaceRequestRef.current === request;
+    setOauthBusy(true);
+    setErr(null);
+    try {
+      const minted = await createMcpOauthClient(workspaceId, {
+        name: 'MCP OAuth client',
+        tokenEndpointAuthMethod: 'none',
+      });
+      if (!isCurrent()) return;
+      setOauthMinted(minted);
+      setShowOauthSecret(false);
+      const catalog = await getMcpOauthCatalog(workspaceId);
+      if (!isCurrent()) return;
+      setOauthCatalog(catalog);
+    } catch (e) {
+      if (isCurrent()) setErr(describeWriteFailure('create OAuth client', e).description);
+    } finally {
+      if (isCurrent()) setOauthBusy(false);
+    }
+  };
+
+  const mintOrRotate = async () => {
+    if (!workspaceId) { setErr(WORKSPACE_UNAVAILABLE.reason); return; }
+    if (!isWorkspaceOwner) { setErr('Only the workspace owner can issue its control credential.'); return; }
+    const request = workspaceRequestRef.current;
+    const isCurrent = () => workspaceRequestRef.current === request;
+    setBusy(true);
+    setErr(null);
+    try {
+      const next = await generateMcpToken(workspaceId);
+      if (!isCurrent()) return;
+      setInfo(next);
+      setAuto(next.autoApprove);
+      setLiveToken(next.token || null);
+      setShowToken(false);
+    } catch (e) {
+      if (isCurrent()) setErr(describeWriteFailure('issue MCP credential', e).description);
+    } finally {
+      if (isCurrent()) setBusy(false);
+    }
   };
 
   const toggleAuto = async (next: boolean) => {
     if (!workspaceId) { setErr(WORKSPACE_UNAVAILABLE.reason); return; }
     if (!isWorkspaceOwner) { setErr('Only the workspace owner can change workspace credential policy.'); return; }
+    const request = workspaceRequestRef.current;
+    const isCurrent = () => workspaceRequestRef.current === request;
     setAuto(next);
     setErr(null);
     try {
       await setMcpAutoApprove(workspaceId, next);
     } catch (e) {
-      // The switch snapping back on its own is not an explanation.
+      if (!isCurrent()) return;
       setAuto(!next);
       setErr(describeWriteFailure('change auto-approve', e).description);
     }
   };
 
   const copy = async (key: string, value: string) => {
-    try { await navigator.clipboard.writeText(value); setCopied(key); setTimeout(() => setCopied(null), 1500); } catch { /* ignore */ }
+    const request = workspaceRequestRef.current;
+    try {
+      await navigator.clipboard.writeText(value);
+      if (workspaceRequestRef.current !== request) return;
+      setCopied(key);
+      if (copiedTimeoutRef.current !== null) window.clearTimeout(copiedTimeoutRef.current);
+      copiedTimeoutRef.current = window.setTimeout(() => {
+        if (workspaceRequestRef.current === request) setCopied(null);
+        copiedTimeoutRef.current = null;
+      }, 1500);
+    } catch { /* ignore */ }
   };
 
   return (
     <FieldGroup>
       {isWorkspaceOwner ? (
         <>
-          <FieldDescription>
-            Issue the owner-only workspace control credential for an MCP client such as Claude Code, Cursor, or Codex.
-            A holder may register agents and create workspace-visible resources, but does not become you and cannot silently read private conversations.
-          </FieldDescription>
+          <div>
+            <div className="mb-1 text-sm font-medium">MCP connection</div>
+            <FieldDescription>
+              Point an MCP client at this workspace. The credential can register agents and create
+              workspace-visible resources; it is not your login and cannot read private conversations.
+            </FieldDescription>
+          </div>
 
-          {!info ? (
-            <Button type="button" onClick={generate} disabled={busy}>{busy ? 'Generating…' : 'Generate workspace control credential'}</Button>
-          ) : (
+          {loading && !info ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner className="size-4" />
+              Loading connection…
+            </div>
+          ) : null}
+
+          {/* Always show MCP + OAuth for owners — do not hide behind a successful status GET. */}
+          {(info || !loading) && (
             <div className="space-y-3 overflow-hidden">
-              {/* Placeholder token, never the live one — see ConnectMcpDialog. */}
-              <ConnectionRow label="claude mcp add" value={info.claudeMcpAdd} copied={copied === 'cmd'} onCopy={() => copy('cmd', info.claudeMcpAdd)} />
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={info?.configured || liveToken ? 'default' : 'secondary'}>
+                  {info?.configured || liveToken ? 'Credential issued' : 'No credential yet'}
+                </Badge>
+                {liveToken && (
+                  <span className="text-xs text-amber-600 dark:text-amber-400">
+                    New token shown below — copy it now; it is not stored in plain text.
+                  </span>
+                )}
+              </div>
+
+              <ConnectionRow
+                label="Endpoint"
+                value={info?.endpoint || mcpFallback.endpoint}
+                copied={copied === 'ep'}
+                onCopy={() => copy('ep', info?.endpoint || mcpFallback.endpoint)}
+              />
+              <ConnectionRow
+                label="claude mcp add"
+                value={info?.claudeMcpAdd || mcpFallback.claudeMcpAdd}
+                copied={copied === 'cmd'}
+                onCopy={() => copy('cmd', info?.claudeMcpAdd || mcpFallback.claudeMcpAdd)}
+              />
               <p className="pl-[7.5rem] text-xs text-muted-foreground">
-                Replace <code className="rounded bg-muted px-1">aga_YOUR_AGENT_TOKEN</code> with the bearer token below.
+                Replace <code className="rounded bg-muted px-1">aga_YOUR_AGENT_TOKEN</code> with the bearer token
+                (or paste the token into your client&apos;s Authorization header).
               </p>
-              <ConnectionRow label="Endpoint" value={info.endpoint} copied={copied === 'ep'} onCopy={() => copy('ep', info.endpoint)} />
-              <ConnectionRow label="Bearer token" value={info.token} secret copied={copied === 'tok'} onCopy={() => copy('tok', info.token)} />
+
+              {liveToken ? (
+                <ConnectionRow
+                  label="Bearer token"
+                  value={liveToken}
+                  secret
+                  revealed={showToken}
+                  onToggleReveal={() => setShowToken(v => !v)}
+                  copied={copied === 'tok'}
+                  onCopy={() => copy('tok', liveToken)}
+                />
+              ) : info?.configured ? (
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="w-28 shrink-0 text-xs text-muted-foreground">Bearer token</span>
+                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                    Issued earlier and not re-displayed. Rotate to mint a new token (invalidates the old one).
+                  </p>
+                </div>
+              ) : (
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="w-28 shrink-0 text-xs text-muted-foreground">Bearer token</span>
+                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                    Issue a credential to get a token you can paste into any MCP client.
+                  </p>
+                </div>
+              )}
+
               <div className="flex items-center justify-between rounded-md border bg-card/50 px-3 py-2">
                 <div>
                   <div className="text-sm">Auto-approve new agents</div>
-                  <div className="text-xs text-muted-foreground">Skip the popup — a registering client is approved instantly.</div>
+                  <div className="text-xs text-muted-foreground">
+                    Skip the popup — a registering client is approved instantly.
+                  </div>
                 </div>
                 <Switch checked={auto} onCheckedChange={toggleAuto} aria-label="Auto-approve new agents" />
               </div>
-              <Button type="button" variant="ghost" size="sm" onClick={generate} disabled={busy}>Rotate credential</Button>
+
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" onClick={() => void mintOrRotate()} disabled={busy}>
+                  {busy ? (
+                    <>
+                      <Spinner data-icon="inline-start" />
+                      {info?.configured || liveToken ? 'Rotating…' : 'Issuing…'}
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw data-icon="inline-start" />
+                      {info?.configured || liveToken ? 'Rotate credential' : 'Issue credential'}
+                    </>
+                  )}
+                </Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => void loadStatus()} disabled={loading || busy}>
+                  Refresh status
+                </Button>
+              </div>
+
+              <div className="border-t border-border pt-4 space-y-3" data-testid="mcp-oauth-fields">
+                <div>
+                  <div className="mb-1 text-sm font-medium">OAuth 2.1 (MCP)</div>
+                  <FieldDescription>
+                    Authorization-code + PKCE for remote MCP clients. Server URL is the MCP resource;
+                    use the endpoints below with client id (and optional secret).
+                  </FieldDescription>
+                </div>
+                <div className="space-y-2 overflow-hidden">
+                  <ConnectionRow
+                    label="Server URL"
+                    value={(oauthCatalog || mcpFallback).resource}
+                    copied={copied === 'oauth-res'}
+                    onCopy={() => copy('oauth-res', (oauthCatalog || mcpFallback).resource)}
+                  />
+                  <ConnectionRow
+                    label="Authorize"
+                    value={(oauthCatalog || mcpFallback).authorizationEndpoint}
+                    copied={copied === 'oauth-auth'}
+                    onCopy={() => copy('oauth-auth', (oauthCatalog || mcpFallback).authorizationEndpoint)}
+                  />
+                  <ConnectionRow
+                    label="Token"
+                    value={(oauthCatalog || mcpFallback).tokenEndpoint}
+                    copied={copied === 'oauth-tok'}
+                    onCopy={() => copy('oauth-tok', (oauthCatalog || mcpFallback).tokenEndpoint)}
+                  />
+                  <ConnectionRow
+                    label="Register"
+                    value={(oauthCatalog || mcpFallback).registrationEndpoint}
+                    copied={copied === 'oauth-reg'}
+                    onCopy={() => copy('oauth-reg', (oauthCatalog || mcpFallback).registrationEndpoint)}
+                  />
+                  <ConnectionRow
+                    label="Scopes"
+                    value={(oauthCatalog || mcpFallback).scopes.join(' ')}
+                    copied={copied === 'oauth-scopes'}
+                    onCopy={() => copy('oauth-scopes', (oauthCatalog || mcpFallback).scopes.join(' '))}
+                  />
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="w-28 shrink-0 text-xs text-muted-foreground">Token auth</span>
+                    <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 text-xs">
+                      none (PKCE) · client_secret_post · client_secret_basic
+                    </code>
+                  </div>
+                </div>
+                {oauthMinted && (
+                  <div className="space-y-2 rounded-md border border-border bg-card/50 p-3">
+                    <ConnectionRow
+                      label="Client ID"
+                      value={oauthMinted.clientId}
+                      copied={copied === 'oauth-cid'}
+                      onCopy={() => copy('oauth-cid', oauthMinted.clientId)}
+                    />
+                    {oauthMinted.clientSecret && (
+                      <ConnectionRow
+                        label="Client secret"
+                        value={oauthMinted.clientSecret}
+                        secret
+                        revealed={showOauthSecret}
+                        onToggleReveal={() => setShowOauthSecret(v => !v)}
+                        copied={copied === 'oauth-csec'}
+                        onCopy={() => copy('oauth-csec', oauthMinted.clientSecret || '')}
+                      />
+                    )}
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      Client secret is shown once. Token auth method: {oauthMinted.tokenEndpointAuthMethod}.
+                    </p>
+                  </div>
+                )}
+                {!oauthMinted && (oauthCatalog?.clients?.length || 0) > 0 && (
+                  <ul className="space-y-1 text-xs text-muted-foreground">
+                    {oauthCatalog!.clients.map(c => (
+                      <li key={c.clientId} className="flex flex-wrap gap-2">
+                        <code className="rounded bg-muted px-1">{c.clientId}</code>
+                        <span>{c.tokenEndpointAuthMethod}</span>
+                        {c.hasSecret ? <span>has secret</span> : <span>public (PKCE)</span>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <Button type="button" variant="outline" onClick={() => void mintOauthClient()} disabled={oauthBusy}>
+                  {oauthBusy ? 'Creating OAuth client…' : 'Create OAuth client'}
+                </Button>
+              </div>
             </div>
           )}
-          {err && <p className="text-xs text-destructive">{err}</p>}
+
+          {err && <p className="text-xs text-destructive" role="alert">{err}</p>}
         </>
       ) : (
         <FieldDescription>
-          Workspace control credentials are owner-only because they can register agents and create shared resources.
-          Ask the owner for an individual join URL when you only need to invite one person or agent.
+          MCP credentials are owner-only. Connected clients below are still visible for this workspace.
+          Ask the owner for a join URL when you need an individual invite.
         </FieldDescription>
       )}
 
-      <div className="border-t border-border pt-4">
-        <div className="mb-2 text-sm font-medium">Connect Flows</div>
-        <p className="mb-3 text-xs text-muted-foreground">
-          Create a workspace-scoped MCP connection with an optional signed event webhook.
-        </p>
-        <Button type="button" variant="outline" onClick={() => setFlowsOpen(true)} disabled={!workspaceId}>
-          Connect Flows workspace
-        </Button>
+      <div className="border-t border-border pt-4 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <div className="text-sm font-medium">Connected clients</div>
+            <p className="text-xs text-muted-foreground">
+              Live Relay / desktop / MCP agent sockets, and clients waiting for approval.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              void refetchClients();
+              void refreshRegistrations();
+            }}
+            disabled={!workspaceId}
+          >
+            <RefreshCw data-icon="inline-start" />
+            Refresh
+          </Button>
+        </div>
+
+        {isWorkspaceOwner && pending.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-muted-foreground">Waiting for approval</div>
+            <ul className="space-y-2">
+              {pending.map(reg => (
+                <li
+                  key={reg.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-card/50 px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium">
+                      {reg.requested_name || reg.requested_handle || 'Unknown client'}
+                      {reg.requested_handle ? (
+                        <span className="ml-1 font-normal text-muted-foreground">@{reg.requested_handle}</span>
+                      ) : null}
+                    </div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {reg.client_label?.trim() || 'MCP client'}
+                      {' · '}
+                      {formatSeenAt(reg.created_at)}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <Button type="button" size="sm" variant="outline" onClick={() => void deny(reg.id)}>
+                      Deny
+                    </Button>
+                    <Button type="button" size="sm" onClick={() => void approve(reg.id)}>
+                      Approve
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {clientsLoading && connections.length === 0 ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Spinner className="size-4" />
+            Loading clients…
+          </div>
+        ) : liveClients.length === 0 && recentClients.length === 0 && pending.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No clients connected in the last 24 hours. Connect a Relay agent or MCP client to see it here.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {liveClients.length > 0 && (
+              <>
+                <div className="text-xs font-medium text-muted-foreground">
+                  Live now ({liveClients.length})
+                </div>
+                <ul className="space-y-2">
+                  {liveClients.map(conn => (
+                    <ConnectedClientRow key={conn.id} connection={conn} />
+                  ))}
+                </ul>
+              </>
+            )}
+            {recentClients.length > 0 && (
+              <>
+                <div className="text-xs font-medium text-muted-foreground pt-1">
+                  Recently seen
+                </div>
+                <ul className="space-y-2">
+                  {recentClients.map(conn => (
+                    <ConnectedClientRow key={conn.id} connection={conn} />
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
       </div>
-      <ConnectFlowsDialog workspaceId={workspaceId} channelId={null} open={flowsOpen} onOpenChange={setFlowsOpen} />
+
+      {isWorkspaceOwner && (
+        <>
+          <div className="border-t border-border pt-4">
+            <div className="mb-2 text-sm font-medium">Event webhooks</div>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Optional outbound signed deliveries when workspace events fire. Separate from the MCP credential above.
+            </p>
+            <Button type="button" variant="outline" onClick={() => setWebhookOpen(true)} disabled={!workspaceId}>
+              Add event webhook
+            </Button>
+          </div>
+          <ConnectFlowsDialog workspaceId={workspaceId} channelId={null} open={webhookOpen} onOpenChange={setWebhookOpen} />
+        </>
+      )}
     </FieldGroup>
   );
 }
 
-function ConnectionRow({ label, value, secret, copied, onCopy }: { label: string; value: string; secret?: boolean; copied: boolean; onCopy: () => void }) {
+function ConnectedClientRow({ connection }: { connection: AgentConnection }) {
+  const title = connection.name?.trim()
+    || (connection.handle ? `@${connection.handle}` : null)
+    || connection.host
+    || 'Client';
+  const handle = connection.handle?.trim() ? `@${connection.handle.replace(/^@/, '')}` : null;
+  const hostLine = [connection.host, connection.cwd].filter(Boolean).join(' · ');
+  const status = connection.status;
+  const badgeVariant = status === 'online' ? 'default' : status === 'busy' ? 'secondary' : 'outline';
+
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-card/50 px-3 py-2">
+      <div className="min-w-0">
+        <div className="truncate text-sm font-medium">
+          {title}
+          {handle && title !== handle ? (
+            <span className="ml-1 font-normal text-muted-foreground">{handle}</span>
+          ) : null}
+        </div>
+        <div className="truncate text-xs text-muted-foreground">
+          {hostLine || 'No host info'}
+          {' · seen '}
+          {formatSeenAt(connection.last_seen_at)}
+        </div>
+      </div>
+      <Badge variant={badgeVariant} className="shrink-0">
+        {connectionStatusLabel(status)}
+      </Badge>
+    </li>
+  );
+}
+
+function ConnectionRow({
+  label,
+  value,
+  secret,
+  revealed,
+  onToggleReveal,
+  copied,
+  onCopy,
+}: {
+  label: string;
+  value: string;
+  secret?: boolean;
+  revealed?: boolean;
+  onToggleReveal?: () => void;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  const display = secret && !revealed
+    ? `${value.slice(0, 10)}…${value.slice(-4)}`
+    : value;
   return (
     <div className="flex min-w-0 items-center gap-2">
       <span className="w-28 shrink-0 text-xs text-muted-foreground">{label}</span>
-      <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 text-xs">{secret ? `${value.slice(0, 10)}…${value.slice(-4)}` : value}</code>
-      <Button type="button" size="sm" variant="ghost" onClick={onCopy} aria-label={`Copy ${label}`}>{copied ? <Check /> : <Copy />}</Button>
+      <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 text-xs">{display}</code>
+      {secret && onToggleReveal && (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={onToggleReveal}
+          aria-label={revealed ? `Hide ${label}` : `Show ${label}`}
+        >
+          {revealed ? <EyeOff /> : <Eye />}
+        </Button>
+      )}
+      <Button type="button" size="sm" variant="ghost" onClick={onCopy} aria-label={`Copy ${label}`}>
+        {copied ? <Check /> : <Copy />}
+      </Button>
     </div>
   );
 }

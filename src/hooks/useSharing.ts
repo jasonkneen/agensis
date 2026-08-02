@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { backendClient } from '../lib/backendClient';
+import { useWorkspaceListState, useWorkspaceState } from './useWorkspaceState';
 
 export interface WorkspaceMember {
   id: string;
@@ -14,33 +15,44 @@ export interface WorkspaceMember {
 export type WorkspaceMemberRole = 'owner' | 'admin' | 'editor' | 'commenter' | 'viewer';
 
 export function useSharing(workspaceId: string | null, currentUserId: string | undefined) {
-  const [members, setMembers] = useState<WorkspaceMember[]>([]);
-  const [autoShare, setAutoShareState] = useState(false);
+  const [members, setMembers, beginMembersRequest] = useWorkspaceListState<WorkspaceMember>(workspaceId, []);
+  const [autoShare, setAutoShareState, beginAutoShareRequest] = useWorkspaceState(workspaceId, false, false);
   const [loading, setLoading] = useState(false);
 
   const fetchMembers = useCallback(async () => {
-    if (!workspaceId) return;
+    const isCurrent = beginMembersRequest();
+    if (!workspaceId) {
+      setMembers([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    try {
+      const { data } = await backendClient
+        .from<WorkspaceMember[]>('workspace_members')
+        .select('*')
+        .eq('workspace_id', workspaceId)
+        .order('created_at', { ascending: true });
 
-    const { data } = await backendClient
-      .from<WorkspaceMember[]>('workspace_members')
-      .select('*')
-      .eq('workspace_id', workspaceId)
-      .order('created_at', { ascending: true });
-
-    if (data) setMembers(data);
-    setLoading(false);
-  }, [workspaceId]);
+      if (isCurrent() && data) setMembers(data);
+    } finally {
+      if (isCurrent()) setLoading(false);
+    }
+  }, [beginMembersRequest, setMembers, workspaceId]);
 
   const fetchAutoShare = useCallback(async () => {
-    if (!workspaceId) return;
+    const isCurrent = beginAutoShareRequest();
+    if (!workspaceId) {
+      setAutoShareState(false);
+      return;
+    }
     const { data } = await backendClient
       .from<{ auto_share?: boolean }>('workspaces')
       .select('auto_share')
       .eq('id', workspaceId)
       .maybeSingle();
-    if (data) setAutoShareState(data.auto_share ?? false);
-  }, [workspaceId]);
+    if (isCurrent() && data) setAutoShareState(data.auto_share ?? false);
+  }, [beginAutoShareRequest, setAutoShareState, workspaceId]);
 
   useEffect(() => {
     fetchMembers();
@@ -49,6 +61,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
 
   const toggleAutoShare = useCallback(async () => {
     if (!workspaceId) return;
+    const isCurrent = beginAutoShareRequest();
     const newValue = !autoShare;
     setAutoShareState(newValue);
     const { error } = await backendClient
@@ -57,12 +70,12 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
       .eq('id', workspaceId);
 
     if (error) {
-      setAutoShareState(!newValue);
+      if (isCurrent()) setAutoShareState(!newValue);
       return;
     }
 
-    await fetchAutoShare();
-  }, [workspaceId, autoShare, fetchAutoShare]);
+    if (isCurrent()) await fetchAutoShare();
+  }, [autoShare, beginAutoShareRequest, fetchAutoShare, setAutoShareState, workspaceId]);
 
   const inviteByEmail = useCallback(async (email: string): Promise<{ error: string | null }> => {
     if (!workspaceId || !currentUserId) return { error: 'Not ready' };
@@ -107,7 +120,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
       .delete()
       .eq('id', memberId);
     setMembers(prev => prev.filter(m => m.id !== memberId));
-  }, []);
+  }, [setMembers]);
 
   const updateMemberRole = useCallback(async (memberId: string, role: Extract<WorkspaceMemberRole, 'editor' | 'viewer'>) => {
     await backendClient
@@ -117,7 +130,7 @@ export function useSharing(workspaceId: string | null, currentUserId: string | u
     setMembers(prev =>
       prev.map(m => m.id === memberId ? { ...m, role } : m)
     );
-  }, []);
+  }, [setMembers]);
 
   return {
     members,

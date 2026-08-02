@@ -39,6 +39,7 @@ import {
 import { reconcileWorkspaceSessions } from '../lib/sessionRealtime';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import { useSessionRevocationSignal } from './useSessionRevocationSignal';
+import { useWorkspaceListState, useWorkspaceState } from './useWorkspaceState';
 import type { ChannelParticipant, ChatSession, Message, MemoryFact, MessageAttachment, Document, WorkspaceAgent } from '../types';
 import type { WorkspaceContextSnapshot } from './useWorkspaceContext';
 
@@ -130,11 +131,11 @@ export function useChat(
   seedSessions?: ChatSession[] | null,
   currentUserId?: string,
 ) {
-  const [sessions, setSessions] = useState<ChatSession[]>(() => {
-    if (!seedSessions?.length) return [];
-    return mainSessionsOf(seedSessions);
-  });
-  const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
+  const [sessions, setSessions, beginSessionsRequest] = useWorkspaceListState<ChatSession>(
+    workspaceId,
+    mainSessionsOf(seedSessions || []).filter(session => session.workspace_id === workspaceId),
+  );
+  const [activeSession, setActiveSession] = useWorkspaceState<ChatSession | null>(workspaceId, null, null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [, forceStreamingRender] = useState(0);
@@ -167,15 +168,21 @@ export function useChat(
 
   useEffect(() => {
     if (!seedSessions) return;
-    const mainSessions = mainSessionsOf(seedSessions);
+    const mainSessions = mainSessionsOf(seedSessions)
+      .filter(session => session.workspace_id === workspaceId);
     setSessions(mainSessions);
     if (mainSessions.length > 0) {
       setActiveSession(prev => prev ?? mainSessions[0]);
     }
-  }, [seedSessions]);
+  }, [seedSessions, setActiveSession, setSessions, workspaceId]);
 
   const fetchSessions = useCallback(async () => {
-    if (!workspaceId) return;
+    const isCurrent = beginSessionsRequest();
+    if (!workspaceId) {
+      setSessions([]);
+      setActiveSession(null);
+      return;
+    }
     const data = await cachedFetch<ChatSession[]>(`sessions_${workspaceId}`, async () => {
       const { data } = await backendClient
         .from('chat_sessions')
@@ -184,14 +191,14 @@ export function useChat(
         .order('updated_at', { ascending: false });
       return data;
     });
-    if (data) {
+    if (isCurrent() && data) {
       const mainSessions = mainSessionsOf(data);
       setSessions(mainSessions);
       if (mainSessions.length > 0) {
         setActiveSession(prev => prev ?? mainSessions[0]);
       }
     }
-  }, [workspaceId]);
+  }, [beginSessionsRequest, setActiveSession, setSessions, workspaceId]);
 
   // Tracks the session currently on screen, synced DURING render so an in-flight
   // fetchMessages from a previously-active session is ignored when its response
@@ -268,7 +275,7 @@ export function useChat(
     setLoadingEarlier(false);
     setActiveThreadId(null);
     setActiveSession(previous => (previous?.id === targetSessionId ? null : previous));
-  }, [setSessionStreaming]);
+  }, [setActiveSession, setSessionStreaming, setSessions]);
 
   useSessionRevocationSignal(activeSessionId, clearSessionState);
 
@@ -362,7 +369,7 @@ export function useChat(
     setActiveSession(null);
     closedSessionIdsRef.current.clear();
     setClosedSessionIds([]);
-  }, [workspaceId]);
+  }, [setActiveSession, workspaceId]);
 
   useEffect(() => {
     fetchSessions();
@@ -488,7 +495,7 @@ export function useChat(
       return { session: data, failure: null };
     }
     return { session: null, failure: classifyWriteFailure(error, { online: navigator.onLine }) };
-  }, [workspaceId]);
+  }, [setActiveSession, setSessions, workspaceId]);
 
   // Split a thread: clone the session as a new top-level thread and carry its
   // recent channel-visible transcript as one explicit quoted-context message.
@@ -513,7 +520,7 @@ export function useChat(
       prev.some(session => session.id === forked.id) ? prev : [forked, ...prev]
     ));
     return forked;
-  }, [workspaceId]);
+  }, [setSessions, workspaceId]);
 
   // Escalate a thread into an existing channel as one bounded, clearly-labelled
   // quoted-context message. It is a normal human-authored message in the target,
@@ -536,7 +543,7 @@ export function useChat(
       setActiveSession(prev => prev?.id === id ? data : prev);
     }
     return data as ChatSession | null;
-  }, []);
+  }, [setActiveSession, setSessions]);
 
   /**
    * Patch a session already saved elsewhere into the local list.
@@ -551,7 +558,7 @@ export function useChat(
     if (!id) return;
     setSessions(prev => prev.map(session => (session.id === id ? { ...session, ...patch } : session)));
     setActiveSession(prev => (prev?.id === id ? { ...prev, ...patch } : prev));
-  }, []);
+  }, [setActiveSession, setSessions]);
 
   const archiveSession = useCallback((id: string, archived = true) => {
     return updateSession(id, { archived_at: archived ? new Date().toISOString() : null });
@@ -685,7 +692,7 @@ export function useChat(
       .eq('id', session.id);
     setSessions(prev => prev.map(s => s.id === session.id ? { ...s, title } : s));
     setActiveSession(prev => prev?.id === session.id ? { ...prev, title } : prev);
-  }, []);
+  }, [setActiveSession, setSessions]);
 
   const buildContextStrings = useCallback((
     memoryFacts?: MemoryFact[],
@@ -1299,6 +1306,8 @@ export function useChat(
     dispatchToAgent,
     applyScopedMessage,
     clearSessionState,
+    setActiveSession,
+    setSessions,
   ]);
 
   // Soft delete: never hard-delete a session — stamp deleted_at so the data

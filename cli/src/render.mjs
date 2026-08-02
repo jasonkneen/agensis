@@ -7,8 +7,10 @@
 //   agw_  workspace MCP token       (server/index.cjs createWorkspaceMcpToken)
 //   agx_  Flows connection token    (server/flow-integration.cjs)
 //   agf_  farm token                (server/farm-integration.cjs)
+//   agc_  workspace controller      (shared/workspaceControl.cjs)
+//   ago_  OAuth access token        (shared/mcp-oauth.cjs)
 //   cbk_  cursor-buddy key          (server/index.cjs)
-const TOKEN_PATTERN = /\b(?:aga|agw|agx|agf|cbk)_[A-Za-z0-9_-]+/g;
+const TOKEN_PATTERN = /\b(?:aga|agw|agx|agf|agc|ago|cbk)_[A-Za-z0-9_-]+/g;
 
 /**
  * Strip credentials from anything about to be written to a stream.

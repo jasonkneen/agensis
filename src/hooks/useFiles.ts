@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useEffect, useCallback } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
 import { normalizeUploadedFile, normalizeUploadedFiles } from '../lib/uploadedFiles';
+import { useWorkspaceListState, useWorkspaceState } from './useWorkspaceState';
 import type { UploadedFile } from '../types';
 
 function fileToBase64(file: File): Promise<string> {
@@ -21,27 +22,42 @@ function fileToBase64(file: File): Promise<string> {
 // neither driver parses, so without this the whole app holds a string in a field
 // typed `number` — see the header of lib/uploadedFiles.ts.
 export function useFiles(workspaceId: string | null, seed?: UploadedFile[] | null) {
-  const [files, setFiles] = useState<UploadedFile[]>(() => normalizeUploadedFiles(seed));
-  const [loading, setLoading] = useState(!seed?.length);
+  const [files, setFiles, beginFilesRequest] = useWorkspaceListState<UploadedFile>(
+    workspaceId,
+    normalizeUploadedFiles(seed).filter(file => file.workspace_id === workspaceId),
+  );
+  const [loading, setLoading] = useWorkspaceState(
+    workspaceId,
+    !seed?.length,
+    Boolean(workspaceId),
+  );
 
   useEffect(() => {
-    if (seed) setFiles(normalizeUploadedFiles(seed));
-  }, [seed]);
+    if (seed) setFiles(normalizeUploadedFiles(seed).filter(file => file.workspace_id === workspaceId));
+  }, [seed, setFiles, workspaceId]);
 
   const fetchFiles = useCallback(async () => {
-    if (!workspaceId) return;
+    const isCurrent = beginFilesRequest();
+    if (!workspaceId) {
+      setFiles([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-    const data = await cachedFetch<UploadedFile[]>(`files_${workspaceId}`, async () => {
-      const { data } = await backendClient
-        .from('uploaded_files')
-        .select('*')
-        .eq('workspace_id', workspaceId)
-        .order('created_at', { ascending: false });
-      return data;
-    });
-    if (data) setFiles(normalizeUploadedFiles(data));
-    setLoading(false);
-  }, [workspaceId]);
+    try {
+      const data = await cachedFetch<UploadedFile[]>(`files_${workspaceId}`, async () => {
+        const { data } = await backendClient
+          .from('uploaded_files')
+          .select('*')
+          .eq('workspace_id', workspaceId)
+          .order('created_at', { ascending: false });
+        return data;
+      });
+      if (isCurrent() && data) setFiles(normalizeUploadedFiles(data));
+    } finally {
+      if (isCurrent()) setLoading(false);
+    }
+  }, [beginFilesRequest, setFiles, setLoading, workspaceId]);
 
   useEffect(() => {
     fetchFiles();
@@ -68,7 +84,7 @@ export function useFiles(workspaceId: string | null, seed?: UploadedFile[] | nul
     }
     if (uploaded.length > 0) setFiles(prev => [...uploaded, ...prev]);
     return uploaded;
-  }, [workspaceId]);
+  }, [setFiles, workspaceId]);
 
   // M4: deleting through the generic /backend/db/delete dropped the uploaded_files
   // row but left the blob on disk forever. The bespoke route removes both.
@@ -80,7 +96,7 @@ export function useFiles(workspaceId: string | null, seed?: UploadedFile[] | nul
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(payload?.error?.message || `Delete file HTTP ${response.status}`);
     setFiles(prev => prev.filter(f => f.id !== id));
-  }, []);
+  }, [setFiles]);
 
   return { files, loading, uploadFiles, deleteFile };
 }

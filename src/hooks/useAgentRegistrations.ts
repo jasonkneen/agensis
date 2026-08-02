@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
+import { useWorkspaceListState } from './useWorkspaceState';
 
 export interface AgentRegistration {
   id: string;
@@ -16,18 +17,27 @@ export interface AgentRegistration {
 // Loads pending agent-registration requests and keeps them live over realtime, so the
 // owner gets the "X wants to register as @q — Allow?" popup the moment a client asks.
 export function useAgentRegistrations(workspaceId: string | null) {
-  const [pending, setPending] = useState<AgentRegistration[]>([]);
+  const [pending, setPending] = useWorkspaceListState<AgentRegistration>(workspaceId, []);
+  const workspaceRequestRef = useRef({ workspaceId, generation: 0 });
+  if (workspaceRequestRef.current.workspaceId !== workspaceId) {
+    workspaceRequestRef.current = {
+      workspaceId,
+      generation: workspaceRequestRef.current.generation + 1,
+    };
+  }
 
   const refresh = useCallback(async () => {
+    const request = workspaceRequestRef.current;
+    const isCurrent = () => workspaceRequestRef.current === request;
     if (!workspaceId) { setPending([]); return; }
     try {
       const res = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/agent-registrations?status=pending`), { headers: apiAuthHeaders() });
       const body = await res.json().catch(() => null);
-      if (res.ok && body?.data?.registrations) setPending(body.data.registrations);
+      if (isCurrent() && res.ok && body?.data?.registrations) setPending(body.data.registrations);
     } catch {
       // best effort — realtime keeps it fresh
     }
-  }, [workspaceId]);
+  }, [setPending, workspaceId]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -42,6 +52,9 @@ export function useAgentRegistrations(workspaceId: string | null) {
       filter: `workspace_id=eq.${workspaceId}`,
     },
     (payload) => {
+      if (workspaceRequestRef.current.workspaceId !== workspaceId) return;
+      const rowWorkspaceId = payload.new?.workspace_id || payload.old?.workspace_id;
+      if (rowWorkspaceId !== workspaceId) return;
       if (!deduper.shouldProcess(payload)) return;
       const row = payload.new || payload.old;
       if (!row) return;
@@ -55,18 +68,20 @@ export function useAgentRegistrations(workspaceId: string | null) {
   );
 
   const decide = useCallback(async (id: string, action: 'approve' | 'deny') => {
+    const request = workspaceRequestRef.current;
     // Optimistic: drop it from the list immediately.
     setPending((prev) => prev.filter((r) => r.id !== id));
     try {
-      await fetch(apiUrl(`/backend/agent-registrations/${encodeURIComponent(id)}/${action}`), {
+      const response = await fetch(apiUrl(`/backend/agent-registrations/${encodeURIComponent(id)}/${action}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
         body: JSON.stringify({}),
       });
+      if (!response.ok) throw new Error(`Registration decision failed (${response.status})`);
     } catch {
-      void refresh(); // restore on failure
+      if (workspaceRequestRef.current === request) void refresh(); // restore on failure
     }
-  }, [refresh]);
+  }, [refresh, setPending]);
 
   return { pending, approve: (id: string) => decide(id, 'approve'), deny: (id: string) => decide(id, 'deny'), refresh };
 }

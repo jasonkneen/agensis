@@ -406,11 +406,11 @@ const codexRuntime: WireframeScene = {
 
 export const WIREFRAME_SCENES = {
   // In the gallery today.
-  socialSignInGuard, dmPrivacy, automationRule, codexRuntime, savedTemplate, connectionResources, stewardedResourceWork, auditLog, typingDots, stopReason,
+  socialSignInGuard, dmPrivacy, automationRule, codexRuntime, connectionResources, stewardedResourceWork, auditLog, typingDots, stopReason, toolLoop,
   // Retired from the gallery when their feature stopped being news. Kept as
   // authored vocabulary — a scene costs nothing and is the reference for how
   // this format is meant to read.
-  splitView, chips, cadence, toolLoop, preview, showDesktop
+  splitView, chips, cadence, savedTemplate, preview, showDesktop
 } as const;
 
 export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
@@ -428,6 +428,12 @@ export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
  * its scene stays in WIREFRAME_SCENES.
  */
 export const GALLERY_SLIDES: GallerySlide[] = [
+  {
+    note: 'connector-oauth-and-runtime-reliability',
+    title: 'Permission tools with guardrails',
+    body: 'Workspace managers can review, grant, and revoke Relay permission rules through audited MCP tools; agent credentials cannot grant themselves access.',
+    scene: toolLoop,
+  },
   {
     note: 'stewarded-resource-workflows',
     title: 'Protected work, visible progress',
@@ -457,12 +463,6 @@ export const GALLERY_SLIDES: GallerySlide[] = [
     title: 'Direct messages are private',
     body: 'A DM is readable only by the people in it. An admin can grant access to one conversation, and every grant is recorded.',
     scene: dmPrivacy,
-  },
-  {
-    note: 'agent-templates',
-    title: 'Save an agent as a template',
-    body: 'Tune an agent once, save it, and start the next one from it. Your own templates sit alongside the built-in ones.',
-    scene: savedTemplate,
   },
 ];
 

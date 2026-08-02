@@ -1,11 +1,12 @@
 import type { WorkspaceAgent, AgentConnection } from '../../types';
 
-export type ConnKind = 'builtin' | 'remote' | 'sandbox';
+export type ConnKind = 'builtin' | 'remote' | 'sandbox' | 'external';
 
 export const KIND_META: Record<ConnKind, { label: string; color: string }> = {
   builtin: { label: 'Direct', color: '#00a95c' },
   remote: { label: 'Relay', color: '#38bdf8' },
   sandbox: { label: 'Sandbox', color: '#a78bfa' },
+  external: { label: 'Connector', color: '#f97316' },
 };
 
 export type NodeStatus = 'busy' | 'idle' | 'disconnected' | 'inactive';
@@ -70,6 +71,7 @@ export function computeLayout(count: number): NetworkLayout {
 export function agentKind(agent: WorkspaceAgent): ConnKind {
   if (agent.run_mode === 'sandbox') return 'sandbox';
   if (agent.run_mode === 'daemon') return 'remote';
+  if (agent.run_mode === 'external') return 'external';
   return 'builtin';
 }
 
@@ -89,6 +91,7 @@ export function providerLabel(agent: WorkspaceAgent): string {
   const kind = agentKind(agent);
   if (kind === 'sandbox') return (agent.sandbox_provider || 'e2b').toUpperCase();
   if (kind === 'remote') return 'Relay host';
+  if (kind === 'external') return 'Connector (external)';
   return 'Direct (agensis)';
 }
 

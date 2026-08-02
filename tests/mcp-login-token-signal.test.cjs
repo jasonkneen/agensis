@@ -30,6 +30,12 @@ const { createFirstUseWindow, AUDIT_ACTIONS, FIRST_USE_WINDOW_MS } = require('..
 const WS = 'ws-1';
 const USER_TOKEN = 'session-token-for-a-human';
 const USER_IDENTITY = { kind: 'user', userId: 'user-1', workspaceId: WS, name: 'MCP client', autoApprove: false };
+const OAUTH_IDENTITY = {
+  ...USER_IDENTITY,
+  clientId: 'oauth-client-1',
+  name: 'OAuth MCP client',
+  auth: 'oauth',
+};
 const OTHER_USER_IDENTITY = { kind: 'user', userId: 'user-2', workspaceId: WS, name: 'MCP client', autoApprove: false };
 const AGENT_IDENTITY = { kind: 'agent', agentId: 'agent-1', workspaceId: WS, name: 'Coder', handle: 'coder', agent: {} };
 const WORKSPACE_IDENTITY = { kind: 'workspace', workspaceId: WS, name: 'MCP client', autoApprove: false };
@@ -37,6 +43,7 @@ const WORKSPACE_IDENTITY = { kind: 'workspace', workspaceId: WS, name: 'MCP clie
 function makeRes() {
   const res = { statusCode: 200, headers: {}, body: undefined, ended: false };
   res.setHeader = (k, v) => { res.headers[k] = v; };
+  res.getHeader = (k) => res.headers[k];
   res.status = (code) => { res.statusCode = code; return res; };
   res.json = (value) => { res.body = value; return res; };
   res.end = () => { res.ended = true; return res; };
@@ -95,10 +102,29 @@ test('the recorded row cannot reconstruct the credential', async () => {
   // mint row is held to.
   const serialized = JSON.stringify(audits[0]);
   assert.ok(!serialized.includes(USER_TOKEN), 'the token must never reach the row');
-  assert.ok(!/aga_|agw_|agx_|agf_|cbk_/.test(serialized), 'nor any credential prefix');
+  assert.ok(!/aga_|agw_|agx_|agf_|agc_|ago_|cbk_/.test(serialized), 'nor any credential prefix');
   const hash = require('node:crypto').createHash('sha256').update(USER_TOKEN).digest('hex');
   assert.ok(!serialized.includes(hash), 'nor its hash -- a verifier is still a secret');
   assert.deepEqual(Object.keys(audits[0].detail).sort(), ['firstUseInWindowHours', 'kind']);
+});
+
+test('an OAuth bearer emits an OAuth-specific audit signal, not a login-token signal', async () => {
+  const { handler, audits } = makeHandler({ tokenMap: { 'oauth-token': OAUTH_IDENTITY } });
+  const res = await call(handler, 'oauth-token');
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0].action, 'mcp.oauth_access_token_used');
+  assert.equal(audits[0].actor.userId, 'user-1');
+  assert.equal(audits[0].target.id, 'oauth-client-1');
+  assert.deepEqual(audits[0].detail, {
+    kind: 'user',
+    auth: 'oauth',
+    clientId: 'oauth-client-1',
+    firstUseInWindowHours: 24,
+  });
+  assert.ok(AUDIT_ACTIONS.has('mcp.oauth_access_token_used'));
+  assert.ok(!audits.some((entry) => entry.action === 'mcp.login_token_used'));
 });
 
 // ---------------------------------------------------------------------------

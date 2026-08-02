@@ -44,13 +44,25 @@ export interface AgentTemplate {
   skills: string[];
   purpose: AgentPurpose;
   resourceFacets: ResourceFacet[];
-  runMode: 'builtin' | 'daemon' | 'sandbox';
+  runMode: 'builtin' | 'daemon' | 'sandbox' | 'external';
   runtime?: AgentExecutionRuntime;
   metadata?: Record<string, unknown>;
   icon: LucideIcon;
   /** Bundled avatar (from AGENT_AVATAR_CHOICES) used by one-click creation flows
    *  like onboarding. The Agents window form keeps its own avatar default. */
   avatar?: string;
+}
+
+export type AgentRunMode = AgentTemplate['runMode'];
+
+export function normalizeAgentRunMode(runMode?: string | null): AgentRunMode {
+  if (runMode === 'daemon' || runMode === 'sandbox' || runMode === 'external') return runMode;
+  return 'builtin';
+}
+
+/** Connector clients and Amp own model selection outside the web picker. */
+export function agentModelPickerCanSwitch(runMode: AgentRunMode, runtime: AgentExecutionRuntime): boolean {
+  return runMode !== 'external' && !(runMode === 'daemon' && runtime === 'amp');
 }
 
 /**
@@ -213,7 +225,7 @@ export function runtimeChoicesFromAcpHarnesses(harnesses: Array<{
 export function agentMetadataWithRuntime(
   metadata: Record<string, unknown> | null | undefined,
   runtime: AgentExecutionRuntime,
-  runMode: AgentTemplate['runMode'] | 'external',
+  runMode: AgentTemplate['runMode'],
   acpHarness?: string | null,
 ): Record<string, unknown> {
   const next = { ...(metadata || {}) };
@@ -274,6 +286,12 @@ export function resolveAgentAcpHarness(input: {
 }): string {
   const fromMeta = agentAcpHarnessFromMetadata(input.metadata);
   if (fromMeta) return fromMeta;
+
+  // Guard: classic claude pin should not silently pick a non-claude harness like Grok.
+  const runtimePin = String(input.metadata?.runtime || '').trim().toLowerCase();
+  if (runtimePin === 'claude' && input.liveHarness) {
+    return '';
+  }
 
   const live = normalizeAcpHarnessId(input.liveHarness);
   if (live) return live;

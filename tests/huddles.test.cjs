@@ -243,6 +243,7 @@ function makeDb({
         return (sessionMembers[params[0]] || []).includes(String(params[1])) ? [{ ok: 1 }] : [];
       }
       if (n.startsWith('select user_id, source, granted_by, expires_at from chat_session_members')) {
+        if (blocked.has('roster-lock')) return [];
         return (state.chatSessionMembers[params[0]] || []).map((row) => ({ ...row }));
       }
       if (n.startsWith('select count(*)::int as count from messages where session_id = $1')) {
@@ -324,11 +325,8 @@ function makeDb({
       if (n.startsWith('select id, huddle_id, workspace_id, session_id, kind, identity, display_name, event_id, seq, created_at from huddle_events')) {
         return state.events.filter((e) => e.huddle_id === params[0]);
       }
-      if (n.startsWith('update huddles h set transcript_session_id')) {
-        const row = state.huddles.find((h) => (
-          h.id === params[1] && h.workspace_id === params[2] && h.session_id === params[3]
-          && !h.ended_at && !privacyFor(h.session_id).deleted_at
-        ));
+      if (n.startsWith('update huddles set transcript_session_id')) {
+        const row = state.huddles.find((h) => h.id === params[1]);
         if (!row) return [];
         row.transcript_session_id = params[0];
         return [row];
@@ -850,11 +848,14 @@ test('a member of another workspace cannot borrow this workspace session id', as
 });
 
 test('start and join refuse when the final live scope disappears before authority is granted', async () => {
-  // Start: the early row/read check succeeds, but the INSERT ... SELECT sees no
-  // authorized live host. No orphan huddle and, critically, no LiveKit bearer.
+  // Start: preflight sees private membership, then the member-row lock returns
+  // zero as if a revoke won before the creation transaction acquired authority.
+  // No orphan huddle and, critically, no LiveKit bearer.
   const startDb = makeDb({
     roles: { [`${WS}:${MEMBER}`]: 'editor' },
-    blockedFinalScopes: ['start-insert'],
+    sessionPrivacy: { [SESSION]: { visibility: 'private', folder: 'Direct messages' } },
+    sessionMembers: { [SESSION]: [MEMBER] },
+    blockedFinalScopes: ['roster-lock'],
   });
   __test.setTestDb(startDb);
   const startApp = makeApp(startDb);
@@ -963,17 +964,20 @@ test('transcript linking takes the same host-to-huddle write lock order', () => 
   assert.match(actorLock, /forUpdate \? 'for update of h' : 'for share of h'/);
   assert.equal(/for share of h,\s*host/.test(actorLock), false, 'actor mutations must not use a combined SHARE lock');
 
-  const transcript = source.slice(
-    source.indexOf('async function createTranscriptSession'),
-    source.indexOf('async function transcriptMessageCount'),
+  const creation = source.slice(
+    source.indexOf("app.post('/backend/workspaces/:id/sessions/:sessionId/huddle'"),
+    source.indexOf("app.post('/backend/workspaces/:id/huddles/:huddleId/join'"),
   );
-  const hostLock = transcript.indexOf('for share of host');
-  const huddleLock = transcript.indexOf('for update of h');
-  const huddleUpdate = transcript.indexOf('update huddles h');
-  assert.ok(hostLock >= 0, 'transcript creation must stabilize the live host');
-  assert.ok(huddleLock > hostLock, 'transcript creation must lock host before huddle');
-  assert.ok(huddleUpdate > huddleLock, 'transcript linking must acquire FOR UPDATE before UPDATE');
-  assert.equal(/for share of h,\s*host/.test(transcript), false, 'transcript linking must not upgrade a SHARE lock');
+  const workspaceLock = creation.indexOf('await assertWorkspaceRoleLocked');
+  const hostLock = creation.indexOf('for share of host');
+  const rosterLock = creation.indexOf('await lockPrivateSessionRoster');
+  const huddleInsert = creation.indexOf('insert into huddles');
+  const transcriptLink = creation.indexOf('createTranscriptSession(');
+  assert.ok(workspaceLock >= 0, 'creation must lock workspace authority');
+  assert.ok(hostLock > workspaceLock, 'creation must lock the host after workspace authority');
+  assert.ok(rosterLock > hostLock, 'private roster lock must follow the host lock');
+  assert.ok(huddleInsert > rosterLock, 'the huddle insert must follow every authority lock');
+  assert.ok(transcriptLink > huddleInsert, 'transcript creation must run after the huddle insert in the same transaction');
 
   for (const route of ['/end', '/notes']) {
     const start = source.indexOf(`huddles/:huddleId${route}`);

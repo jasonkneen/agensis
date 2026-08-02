@@ -56,26 +56,26 @@ export function ConnectFlowsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Link2 className="size-4" />Connect Flows</DialogTitle>
+          <DialogTitle className="flex items-center gap-2"><Link2 className="size-4" />Event webhook</DialogTitle>
           <DialogDescription>
-            Create a revocable connection limited to {scopeLabel}. MCP handles reads and actions; signed webhooks trigger workflows when subscribed events occur.
+            Create a revocable outbound webhook for {scopeLabel}. Agensis signs each delivery; the companion MCP credential is for reads and actions.
           </DialogDescription>
         </DialogHeader>
 
         {!info ? (
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <label htmlFor="flows-webhook-url" className="text-sm font-medium">Flows event webhook URL</label>
+              <label htmlFor="event-webhook-url" className="text-sm font-medium">Webhook URL</label>
               <Input
-                id="flows-webhook-url"
+                id="event-webhook-url"
                 value={webhookUrl}
                 onChange={event => setWebhookUrl(event.target.value)}
-                placeholder="https://flows.example.com/api/integrations/agensis/events/..."
+                placeholder="https://example.com/hooks/agensis/..."
               />
-              <p className="text-xs text-muted-foreground">Optional now. Add it to subscribe this connection to Agensis events.</p>
+              <p className="text-xs text-muted-foreground">Optional now. Add a URL to receive signed workspace events.</p>
             </div>
             <Button type="button" onClick={() => void create()} disabled={busy || !workspaceId}>
-              {busy ? 'Creating connection…' : `Create ${channelId ? 'channel' : 'workspace'} connection`}
+              {busy ? 'Creating…' : `Create ${channelId ? 'channel' : 'workspace'} webhook`}
             </Button>
           </div>
         ) : (
@@ -87,7 +87,7 @@ export function ConnectFlowsDialog({
             <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
               Granted: {info.scopes.join(', ')}
             </div>
-            <p className="text-xs text-destructive">The token and signing secret are shown once. Save both in the Flows Agensis integration.</p>
+            <p className="text-xs text-destructive">Token and signing secret are shown once — save them where you receive events.</p>
           </div>
         )}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}

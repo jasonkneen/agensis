@@ -32,17 +32,18 @@ When you read "silo" in Farm docs and "agent" in Agensis code, they are the same
 running thing viewed through two lenses. Do not introduce a `silo` concept into
 the Agensis data model; keep it as a projection at the integration boundary.
 
-## The three ways inference actually runs
+## The four ways inference actually runs
 
-Agensis agents resolve to exactly one of three runtimes (`run_mode`):
+Agensis agents resolve to exactly one of four runtimes (`run_mode`):
 
 | `run_mode` | Who runs the model | Credentials | Example |
 |---|---|---|---|
 | `builtin` | The **agensis server itself**, on the platform (or per-workspace) `ANTHROPIC_API_KEY` | Held by agensis (Fly env / workspace vault) | General, Scout, seeded Claude agents |
 | `daemon` | A **remote machine's coding CLI** reached over the daemon WebSocket | Stay on that machine; never touch agensis | `@coder` on a laptop, a Farm-enrolled box |
 | `sandbox` | A **managed cloud runtime** (E2B/Daytona) running the daemon inside it | Baked into the sandbox template/snapshot | `farm silo create e2b …` |
+| `external` | An **external Connector client** acting as the agent through MCP | Held by that client; agensis queues work until it polls | A registered MCP Connector |
 
-Plus a fourth, orthogonal path added recently — **gateway configs**
+There is also a separate, orthogonal path — **gateway configs**
 (`gateway_configs`): a workspace-level named route to an external
 OpenAI-compatible endpoint, selected per-chat as `gateway:<id>`. This is not an
 agent; it is a direct server→upstream inference route (see

@@ -65,6 +65,13 @@ test('stopResultMetadata keeps only what it recognises, and caps the numbers', (
   numTurns: 7,
   costUsd: 1.25,
   permissionDenials: 2,
+  usage: {
+   input_tokens: 100,
+   output_tokens: 20,
+   cache_creation_input_tokens: 5,
+   cache_read_input_tokens: 40,
+   evil: 999,
+  },
   // Not in the accepted set: an attacker-chosen key must not reach the row.
   responseMessageId: 'attacker-controlled',
   mode: 'farm',
@@ -75,7 +82,23 @@ test('stopResultMetadata keeps only what it recognises, and caps the numbers', (
   numTurns: 7,
   costUsd: 1.25,
   permissionDenials: 2,
+  usage: {
+   input_tokens: 100,
+   output_tokens: 20,
+   cache_creation_input_tokens: 5,
+   cache_read_input_tokens: 40,
+  },
  });
+});
+
+test('daemonStopUsage drops junk and keeps only Anthropic count fields', () => {
+ assert.equal(__test.daemonStopUsage(null), null);
+ assert.equal(__test.daemonStopUsage({}), null);
+ assert.equal(__test.daemonStopUsage({ usage: { input_tokens: 0, output_tokens: -1 } }), null);
+ assert.deepEqual(
+  __test.daemonStopUsage({ usage: { input_tokens: 12.7, output_tokens: '3', secret: 'x' } }),
+  { input_tokens: 13, output_tokens: 3 },
+ );
 });
 
 test('stopResultMetadata rejects a detail that is not a plain token, and clamps numbers', () => {
@@ -111,12 +134,17 @@ test('a result frame with NO stopReason produces no stop metadata at all', () =>
 
 test('finalizeAgentJobResult persists a validated stop reason as an OBJECT bind', async () => {
  const updates = [];
+ const usageInserts = [];
  __test.setTestDb({
   async unsafe(sql, params) {
    const n = String(sql).replace(/\s+/g, ' ').trim();
    if (n.startsWith('update agent_jobs set status')) {
     updates.push(params);
     return [{ id: 'job-1', workspace_id: 'w1', agent_id: 'a1', session_id: null, metadata: params[4] }];
+   }
+   if (n.includes('insert into usage_events')) {
+    usageInserts.push(params);
+    return [];
    }
    return [];
   },
@@ -126,7 +154,16 @@ test('finalizeAgentJobResult persists a validated stop reason as an OBJECT bind'
   // session_id null: this test is about the ROW, so it returns before touching
   // messages/activity. The chat sentence has its own test below.
   { id: 'job-1', workspace_id: 'w1', agent_id: 'a1', session_id: null, metadata: { handle: 'scout' } },
-  { errorText: 'claude-agent-sdk result error: error_max_turns', resultStop: { stopReason: 'max_turns', stopDetail: 'error_max_turns', costUsd: 0.5 } },
+  {
+   errorText: 'claude-agent-sdk result error: error_max_turns',
+   resultStop: {
+    stopReason: 'max_turns',
+    stopDetail: 'error_max_turns',
+    costUsd: 0.5,
+    model: 'claude-opus-5',
+    usage: { input_tokens: 100, output_tokens: 20 },
+   },
+  },
  );
 
  assert.equal(updates.length, 1);
@@ -138,8 +175,41 @@ test('finalizeAgentJobResult persists a validated stop reason as an OBJECT bind'
  assert.equal(metadataParam.stopReason, 'max_turns');
  assert.equal(metadataParam.stopDetail, 'error_max_turns');
  assert.equal(metadataParam.costUsd, 0.5);
+ assert.deepEqual(metadataParam.usage, { input_tokens: 100, output_tokens: 20 });
  // Pre-existing metadata survives the merge.
  assert.equal(metadataParam.handle, 'scout');
+ // Daemon token counts land in usage_events (counts, never dollars).
+ assert.equal(usageInserts.length, 1);
+ assert.equal(usageInserts[0][0], 'w1'); // workspace_id
+ assert.equal(usageInserts[0][1], 'anthropic');
+ assert.equal(usageInserts[0][2], 'claude-opus-5');
+ assert.equal(usageInserts[0][3], 'agent_job');
+ assert.equal(usageInserts[0][5], 100); // input
+ assert.equal(usageInserts[0][6], 20); // output
+});
+
+test('finalizeAgentJobResult does not invent a usage_events row without token counts', async () => {
+ const usageInserts = [];
+ __test.setTestDb({
+  async unsafe(sql, params) {
+   const n = String(sql).replace(/\s+/g, ' ').trim();
+   if (n.startsWith('update agent_jobs set status')) {
+    return [{ id: 'job-1', workspace_id: 'w1', agent_id: 'a1', session_id: null, metadata: params[4] }];
+   }
+   if (n.includes('insert into usage_events')) {
+    usageInserts.push(params);
+    return [];
+   }
+   return [];
+  },
+ });
+
+ await __test.finalizeAgentJobResult(
+  { id: 'job-1', workspace_id: 'w1', agent_id: 'a1', session_id: null, metadata: {} },
+  { resultStop: { stopReason: 'completed', costUsd: 1.5, model: 'claude-opus-5' } },
+ );
+
+ assert.equal(usageInserts.length, 0, 'costUsd alone is not enough — counts only');
 });
 
 test('finalizeAgentJobResult ignores a stop reason it does not recognise', async () => {

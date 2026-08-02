@@ -227,6 +227,14 @@ function upsertLayer(layers: CanvasLayer[], layer: CanvasLayer): CanvasLayer[] {
 }
 
 export function useCanvasLayers(workspaceId: string | null) {
+  const workspaceIdentityRef = useRef({ workspaceId, generation: 0 });
+  if (workspaceIdentityRef.current.workspaceId !== workspaceId) {
+    workspaceIdentityRef.current = {
+      workspaceId,
+      generation: workspaceIdentityRef.current.generation + 1,
+    };
+  }
+  const workspaceIdentity = workspaceIdentityRef.current;
   // Shared layer definitions. `minimized` on these is meaningless — the rendered
   // list below derives it from activeLayerId, which is the single source of
   // truth for which layer this browser has open.
@@ -331,6 +339,7 @@ export function useCanvasLayers(workspaceId: string | null) {
       filter: `workspace_id=eq.${workspaceId}`,
     },
     (payload) => {
+      if (workspaceIdentityRef.current !== workspaceIdentity) return;
       if (!deduper.shouldProcess(payload)) return;
       if (payload.eventType === 'DELETE') {
         const row = payload.old;
@@ -345,14 +354,14 @@ export function useCanvasLayers(workspaceId: string | null) {
   );
 
   useEffect(() => {
-    if (!workspaceId) return;
+    if (!workspaceId || layersWorkspaceId !== workspaceId) return;
     localStorage.setItem(storageKey(workspaceId), JSON.stringify(layers));
-  }, [workspaceId, layers]);
+  }, [workspaceId, layers, layersWorkspaceId]);
 
   useEffect(() => {
-    if (!workspaceId) return;
+    if (!workspaceId || layersWorkspaceId !== workspaceId) return;
     localStorage.setItem(activeStorageKey(workspaceId), activeLayerId);
-  }, [workspaceId, activeLayerId]);
+  }, [workspaceId, activeLayerId, layersWorkspaceId]);
 
   // Only once the shared list has loaded — before that the saved active layer
   // may simply not be in the mirror yet.
@@ -425,6 +434,7 @@ export function useCanvasLayers(workspaceId: string | null) {
   }, [workspaceId, activeLayerId, layers]);
 
   const updateLayer = useCallback((id: string, updates: Partial<CanvasLayer>) => {
+    const existing = layersRef.current.find(layer => layer.id === id) || defaultLayers()[0];
     setDefinitions(prev => prev.map(layer => layer.id === id ? {
       ...layer,
       ...updates,
@@ -434,22 +444,26 @@ export function useCanvasLayers(workspaceId: string | null) {
     const values = layerRowValues(updates);
     if (!workspaceId || Object.keys(values).length === 0) return;
     void (async () => {
-      const { data } = await backendClient
+      const { data, error } = await backendClient
         .from('canvas_layers')
         .update(values)
         .eq('workspace_id', workspaceId)
-        .eq('layer_id', id);
-      if (Array.isArray(data) && data.length > 0) return;
+        .eq('layer_id', id)
+        .select('layer_id');
+      if (
+        workspaceIdentityRef.current !== workspaceIdentity
+        || error
+        || (Array.isArray(data) && data.length > 0)
+      ) return;
       // Nothing to update: the layer has no row yet (the default `base` layer of
       // a workspace nobody has edited since canvas_layers shipped). Create it
       // with the merged definition so the edit is shared, not lost.
-      const existing = layersRef.current.find(layer => layer.id === id) || defaultLayers()[0];
       await backendClient
         .from('canvas_layers')
         .insert(layerInsertValues(workspaceId, { ...existing, ...updates, id }))
         .select('layer_id');
     })();
-  }, [workspaceId]);
+  }, [workspaceId, workspaceIdentity]);
 
   return {
     layers,

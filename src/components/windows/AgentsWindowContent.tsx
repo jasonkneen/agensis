@@ -1676,8 +1676,9 @@ function AgentForm({
    */
   extraSections?: React.ReactNode;
 }) {
-  const executionRuntime = resolveFormRuntimeSelection(runtime).runtime;
-  const options = modelOptionsForRuntime(model, runMode, executionRuntime);
+  const { runtime: executionRuntime, acpHarness: formAcpHarness } = resolveFormRuntimeSelection(runtime);
+  // The harness is what decides which models mean anything for this agent.
+  const options = modelOptionsForRuntime(model, runMode, executionRuntime, formAcpHarness);
   const canSubmit = Boolean(
     name.trim() && (purpose === 'collaborator' || resourceFacets.length > 0),
   );
@@ -2810,11 +2811,15 @@ async function restartDesktopAcpForAgent(
   const pinnedRuntime = agentExecutionRuntimeFromMetadata(agent.metadata as Record<string, unknown> | undefined);
   const requiredRuntime = pinnedRuntime === 'desktop' ? undefined : pinnedRuntime;
   const model = modelOverride || agent.model || 'auto';
+  // Product values: default | accept_edits | yolo (never camelCase acceptEdits).
+  const permissionMode = agent.permission_mode || 'default';
   const result = await acp.start({
     agentId: agent.id,
     harnessId,
     cwd,
-    autoApprove: true,
+    // Honor ACCESS: yolo / accept_edits elevate; default (Ask) shows a dialog.
+    permissionMode,
+    autoApprove: permissionMode === 'yolo' || permissionMode === 'accept_edits',
     token,
     baseUrl: backendBase,
     workspaceId: agent.workspace_id,
@@ -3027,11 +3032,15 @@ function AgentConnectDialog({
       const backendBase = mintBase || apiBaseUrl() || 'http://127.0.0.1:3142';
       // Starting an ACP harness clears the classic pin so the agent form labels
       // this agent as Hermes/Grok/… instead of "Claude — ready".
+      // Product values: default | accept_edits | yolo.
+      const permissionMode = agent.permission_mode || 'default';
       const result = await window.electronAPI!.acp!.start({
         agentId: agent.id,
         harnessId: acpHarnessId,
         cwd,
-        autoApprove: true,
+        // ACCESS: Full access / auto-accept edits elevate; Ask shows a real prompt.
+        permissionMode,
+        autoApprove: permissionMode === 'yolo' || permissionMode === 'accept_edits',
         token: newToken,
         baseUrl: backendBase,
         workspaceId: agent.workspace_id,
@@ -3873,6 +3882,8 @@ function AccessSection({
   const rules = normalizeList((agent.metadata as Record<string, unknown> | null)?.permission_rules);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [newRule, setNewRule] = useState('');
+  const [adding, setAdding] = useState(false);
 
   // Through a dedicated route, NOT onUpdateAgent. `permission_mode` is in
   // PRIVILEGED_DB_COLUMNS_BY_TABLE, so the generic /backend/db/update path
@@ -3930,6 +3941,33 @@ function AccessSection({
     onUpdateAgent(agent.id, { metadata });
   };
 
+  const grant = async () => {
+    const rule = newRule.trim();
+    if (!workspaceId || !rule) return;
+    setError('');
+    setAdding(true);
+    try {
+      const response = await fetch(
+        apiUrl(`/backend/workspaces/${workspaceId}/agents/${agent.id}/permission-rules`),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
+          body: JSON.stringify({ rule }),
+        },
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.error) {
+        setError(String(payload.error || 'Could not grant that rule'));
+        return;
+      }
+      const metadata = { ...(agent.metadata || {}), permission_rules: payload.data?.rules ?? [] };
+      onUpdateAgent(agent.id, { metadata });
+      setNewRule('');
+    } finally {
+      setAdding(false);
+    }
+  };
+
   return (
     <AgentDetailSection title="Access">
       <p className="mb-2 text-xs text-muted-foreground">
@@ -3980,9 +4018,42 @@ function AccessSection({
       ) : (
         <p className="text-xs text-muted-foreground/70">
           Nothing granted permanently. Rules land here when someone answers an approval request
-          with &ldquo;Always allow&rdquo;.
+          with &ldquo;Always allow&rdquo;, or add one manually below.
         </p>
       )}
+
+      <div className="mt-3 flex items-center gap-2">
+        <Input
+          type="text"
+          placeholder="e.g. Edit, Bash(git:*), Write"
+          className="h-8 flex-1 font-mono text-xs"
+          value={newRule}
+          onChange={(e) => setNewRule(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && newRule.trim()) {
+              e.preventDefault();
+              void grant();
+            }
+          }}
+          disabled={adding}
+        />
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => void grant()}
+          disabled={adding || !newRule.trim()}
+        >
+          {adding ? <RefreshCw className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+          Add
+        </Button>
+      </div>
+      <p className="mt-1.5 text-[10px] text-muted-foreground/60">
+        Common rules: <code className="rounded bg-muted/40 px-1">Edit</code>,{' '}
+        <code className="rounded bg-muted/40 px-1">Write</code>,{' '}
+        <code className="rounded bg-muted/40 px-1">Bash(git:*)</code>,{' '}
+        <code className="rounded bg-muted/40 px-1">Bash(npm:*)</code>
+      </p>
       {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
     </AgentDetailSection>
   );

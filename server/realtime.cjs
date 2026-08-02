@@ -104,6 +104,27 @@ function createRealtime(deps = {}) {
  // it is unprovable and leaves through no fanout lane.
  const WORKSPACE_VISIBLE_WITHOUT_SESSION = new Set(['agent_permission_requests']);
 
+ function activityEventSessionId(row) {
+  if (row?.event_type === 'chat_created') {
+   const sessionId = String(row?.entity_id || '').trim();
+   return sessionId || null;
+  }
+  if (row?.event_type !== 'message_sent') return null;
+  let metadata = row?.metadata;
+  for (let depth = 0; depth < 2 && typeof metadata === 'string'; depth += 1) {
+   try { metadata = JSON.parse(metadata); } catch { return null; }
+  }
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const sessionId = String(metadata.session_id || '').trim();
+  return sessionId || null;
+ }
+
+ function sessionAudienceId(table, row) {
+  return table === 'activity_events'
+   ? activityEventSessionId(row)
+   : String(row?.session_id || '').trim() || null;
+ }
+
  // Heartbeat cadence for agent sockets. An ungraceful drop (laptop sleep, network
  // loss) leaves ws.readyState === 1 until a ping goes unanswered, so detection
  // latency is ~1-2x this interval. 15s → a dead socket is terminated within ~30s,
@@ -276,6 +297,10 @@ function createRealtime(deps = {}) {
   // notifyDbSubscribers was still fanning full `returning *` rows workspace-wide
   // (autosave ~800ms). Strip at the chokepoint; REST still fetches bodies on demand.
   documents: ['content'],
+  // The run already exposes the compact step outcomes needed by the UI. The
+  // triggering event and frozen definition can each be large and are fetched
+  // through the bounded run route instead of broadcast on every checkpoint.
+  automation_runs: ['payload', 'definition'],
   // Server-owned routing provenance for queued agent task work. It identifies
   // the human whose private per-human agent DM receives the eventual run.
   // Task mention paths broadcast raw `returning *` rows, so the generic REST
@@ -499,10 +524,13 @@ function createRealtime(deps = {}) {
   // these rows leave through an async lane instead.
   const privateRows = table === 'chat_sessions' ? rowList.filter(isPrivateSessionRow) : [];
   const hasSessionAudience = SESSION_AUDIENCE_TABLES.has(table);
-  const sessionAudienceRows = hasSessionAudience
-   ? rowList.filter((row) => row?.session_id)
+  const isActivityFeed = table === 'activity_events';
+  const sessionAudienceRows = hasSessionAudience || isActivityFeed
+   ? rowList.filter((row) => sessionAudienceId(table, row))
    : [];
-  const openRows = hasSessionAudience
+  const openRows = isActivityFeed
+   ? rowList.filter((row) => row?.event_type !== 'message_sent' && row?.event_type !== 'chat_created')
+   : hasSessionAudience
    ? (WORKSPACE_VISIBLE_WITHOUT_SESSION.has(table)
       ? rowList.filter((row) => !row?.session_id)
       : [])
@@ -647,7 +675,7 @@ function createRealtime(deps = {}) {
   for (const row of rows) {
    let audience;
    try {
-    audience = await sessionRealtimeAudience(row?.session_id);
+    audience = await sessionRealtimeAudience(sessionAudienceId(table, row));
    } catch (error) {
     console.error(`${table} fanout audience lookup failed`, error?.message || error);
     continue;

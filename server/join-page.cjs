@@ -1,7 +1,8 @@
 'use strict';
 
 // ============================================================================
-// server/join-page.cjs — the ONE join URL, rendered for two audiences.
+// server/join-page.cjs — the ONE join URL, rendered for human, agent, or
+// controller redemption.
 // ----------------------------------------------------------------------------
 // Why this exists at all:
 //
@@ -16,8 +17,8 @@
 // So this removes the premise. A join link is:
 //   - short-lived (minutes, not weeks)
 //   - single-use (the redeeming UPDATE is itself the guard)
-//   - not a credential in its own right — it cannot be used as an MCP bearer,
-//     unlike workspace_invites, which doubles as one for its full 14 days
+//   - not a credential in its own right — it cannot be used as an MCP bearer;
+//     legacy workspace_invites are also redemption-only, but live up to 14 days
 //   - redeemed server-side; the long-lived credential is provisioned at that
 //     moment and returned exactly once, in the redemption RESPONSE
 //

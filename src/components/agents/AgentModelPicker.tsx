@@ -12,7 +12,10 @@ import { ChevronDown, Sparkles, Zap } from 'lucide-react';
 import type { WorkspaceAgent } from '../../types';
 import { modelOptionsForRuntime } from '../../lib/runtimeModels';
 import {
+  agentModelPickerCanSwitch,
+  agentAcpHarnessFromMetadata,
   agentExecutionRuntimeFromMetadata,
+  normalizeAgentRunMode,
   type AgentExecutionRuntime,
 } from '../../lib/agentTemplates';
 import { Button } from '@/components/ui/button';
@@ -29,9 +32,8 @@ function executionRuntime(agent: WorkspaceAgent): AgentExecutionRuntime {
   return agentExecutionRuntimeFromMetadata(agent.metadata as Record<string, unknown> | undefined);
 }
 
-function runModeOf(agent: WorkspaceAgent): 'builtin' | 'daemon' | 'sandbox' {
-  if (agent.run_mode === 'daemon' || agent.run_mode === 'sandbox') return agent.run_mode;
-  return 'builtin';
+function runModeOf(agent: WorkspaceAgent) {
+  return normalizeAgentRunMode(agent.run_mode);
 }
 
 export function AgentModelPicker({
@@ -59,17 +61,20 @@ export function AgentModelPicker({
 
   const runtime = executionRuntime(agent);
   const runMode = runModeOf(agent);
+  // The pinned harness decides which models are even meaningful here — a Grok
+  // agent must not be offered (or pinned to) a Claude id.
+  const acpHarness = agentAcpHarnessFromMetadata(agent.metadata as Record<string, unknown> | undefined);
   const current = pendingModel ?? (agent.model || 'auto');
   const options = useMemo(
-    () => modelOptionsForRuntime(current, runMode, runtime),
-    [current, runMode, runtime],
+    () => modelOptionsForRuntime(current, runMode, runtime, acpHarness),
+    [current, runMode, runtime, acpHarness],
   );
   const selected = options.find(o => o.id === current) || options[0];
   const displayLabel = selected?.label || current || 'Auto';
 
-  // Amp manages its own model — picker is display-only.
+  // Amp and Connector clients manage their own model — picker is display-only.
   // Desktop ACP (Hermes/Grok/…) can freeform via the option list + saved ids.
-  const canSwitch = !(runMode === 'daemon' && runtime === 'amp');
+  const canSwitch = agentModelPickerCanSwitch(runMode, runtime);
 
   const handleChange = async (modelId: string) => {
     if (!canSwitch || modelId === (agent.model || 'auto') || disabled) return;

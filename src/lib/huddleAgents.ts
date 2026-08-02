@@ -1,4 +1,4 @@
-import { readAgentVoice } from './agentVoice';
+import { assignAgentVoices, readAgentVoice, type VoiceAgent } from './agentVoice';
 import { agentAccentColor, agentHandle } from './agentAccent';
 import type { ChannelParticipant, WorkspaceAgent } from '../types';
 
@@ -85,10 +85,15 @@ function resolveAgent(participant: ChannelParticipant, agents: WorkspaceAgent[])
 export function huddleAgentOptions(
   agents: WorkspaceAgent[],
   participants: ChannelParticipant[],
+  voiceIds: string[] = [],
 ): HuddleAgentOption[] {
   const list = Array.isArray(participants) ? participants : [];
   const pool = Array.isArray(agents) ? agents : [];
   const out: HuddleAgentOption[] = [];
+  // Parallel to `out`, same id per entry: what assignAgentVoices resolves over
+  // to hand every agent a DISTINCT voice below. A chosen voice rides along as
+  // identity.voice so it is honoured and never reassigned.
+  const voiceAgents: VoiceAgent[] = [];
   const seen = new Set<string>();
 
   for (const participant of list) {
@@ -103,6 +108,10 @@ export function huddleAgentOptions(
     const id = String(agent?.id || participant.agent_id || participant.id || handle);
     if (seen.has(id)) continue;
     seen.add(id);
+    // Read from the resolved AGENT row, never the participant: participant rows
+    // are denormalised snapshots taken when someone joined a channel and do not
+    // carry identity, so a voice chosen afterwards would never appear.
+    const chosen = readAgentVoice(agent).cartesia_voice_id || '';
     out.push({
       id,
       name: String(rawName || handle),
@@ -111,11 +120,22 @@ export function huddleAgentOptions(
       accent: agent
         ? agentAccentColor(agent)
         : agentAccentColor({ id, name: rawName, handle, accent_color: null }),
-      // Read from the resolved AGENT row, never the participant: participant
-      // rows are denormalised snapshots taken when someone joined a channel and
-      // do not carry identity, so a voice chosen afterwards would never appear.
-      voiceId: readAgentVoice(agent).cartesia_voice_id || '',
+      voiceId: chosen,
     });
+    voiceAgents.push(chosen ? { id, identity: { voice: { cartesia_voice_id: chosen } } } : { id });
+  }
+
+  // Fill each UNCONFIGURED agent a distinct default voice rather than leaving it
+  // '' — which the speaker collapses onto one shared workspace default, so two
+  // agents in a call come out sounding identical. Only once the catalogue has
+  // loaded: an empty list means "not fetched yet", where '' still degrades to
+  // the old shared-default behaviour instead of guessing a voice. A chosen voice
+  // is kept as-is; only derived defaults step aside to avoid collisions.
+  if (voiceIds.length > 0) {
+    const assigned = assignAgentVoices(voiceAgents, voiceIds);
+    for (const option of out) {
+      option.voiceId = assigned.get(option.id)?.voiceId || option.voiceId;
+    }
   }
 
   return out;

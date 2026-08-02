@@ -331,12 +331,24 @@ ipcMain.handle('acp:status', async (event, agentId) => {
 ipcMain.handle('acp:start', async (event, options = {}) => {
   if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
   try {
+    // Prefer the Agents ACCESS setting (default | accept_edits | yolo).
+    // Only treat autoApprove:true as Full access when permissionMode is omitted.
+    // Never default unknown → yolo.
+    const { isElevatedAccessMode } = require('./acp/client.cjs');
+    const permissionMode = String(options.permissionMode || options.permission_mode || '').trim()
+      || (options.autoApprove === true ? 'yolo' : 'default');
     const session = await acpHost.start({
       agentId: options.agentId,
       harnessId: options.harnessId,
       cwd: options.cwd,
       model: options.model,
-      autoApprove: options.autoApprove !== false,
+      // ACCESS UI: yolo → bypassPermissions; accept_edits → acceptEdits; default → Ask dialog.
+      permissionMode,
+      autoApprove: isElevatedAccessMode(permissionMode) || options.autoApprove === true,
+      // Same connect token as the WS bridge — authenticates workspace MCP for
+      // harnesses (Grok) that load /backend/mcp on session start.
+      token: options.token,
+      baseUrl: options.baseUrl,
       onUpdate: (params) => {
         if (!event.sender.isDestroyed()) {
           event.sender.send(`acp:update:${options.agentId}`, params);
@@ -379,6 +391,7 @@ ipcMain.handle('acp:start', async (event, options = {}) => {
             cwd: options.cwd,
             baseUrl: options.baseUrl,
             requiredRuntime: options.requiredRuntime,
+            permissionMode,
             autoStart: true,
           }, options.token);
           syncLoginItemFromAutostart();

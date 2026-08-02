@@ -9,6 +9,8 @@ export interface Workspace {
  description: string;
  icon: string;
  user_id?: string | null;
+ /** Caller role on this workspace from GET /backend/workspaces (`owner` | `admin` | …). */
+ role?: string | null;
  auto_share?: boolean;
  local_path?: string;
  project_kind?: string;
@@ -648,6 +650,21 @@ export const CODEX_MODELS: AIModel[] = [
  { id: 'gpt-5.4', label: 'GPT-5.4', description: 'Strong model for everyday coding' },
  { id: 'gpt-5.4-mini', label: 'GPT-5.4-Mini', description: 'Small, fast, and cost-efficient model for simpler coding tasks' },
  { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3-Codex-Spark', description: 'Ultra-fast coding model' },
+];
+
+/**
+ * Models a Grok ACP-harness agent can be pinned to.
+ *
+ * Deliberately short: only ids we can actually stand behind go here. The harness
+ * accepts any string it recognises and the picker keeps whatever is already
+ * saved on an agent, so this is the OFFERED set, not a whitelist.
+ *
+ * It exists because the harness branch of the model picker used to offer
+ * AI_MODELS + CODEX_MODELS to every ACP agent — so a Grok agent was shown, and
+ * got pinned to, `claude-opus-5`.
+ */
+export const GROK_MODELS: AIModel[] = [
+ { id: 'grok-4.5', label: 'Grok 4.5', description: 'Default Grok Build model' },
 ];
 
 export type AgentPermissionMode = 'default' | 'accept_edits' | 'yolo';

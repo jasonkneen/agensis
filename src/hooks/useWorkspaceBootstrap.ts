@@ -13,25 +13,32 @@ export type WorkspaceBootstrap = {
   limits?: Record<string, number>
 }
 
+type WorkspaceBootstrapState = {
+  workspaceId: string | null
+  data: WorkspaceBootstrap | null
+  loading: boolean
+  error: string | null
+}
+
 /**
  * Fetch the workspace cold-load snapshot once per workspace id.
  * Hooks that accept `seed` can paint immediately while their own fetch refreshes.
  */
 export function useWorkspaceBootstrap(workspaceId: string | null) {
-  const [data, setData] = useState<WorkspaceBootstrap | null>(null)
-  const [loading, setLoading] = useState(Boolean(workspaceId))
-  const [error, setError] = useState<string | null>(null)
+  const [state, setState] = useState<WorkspaceBootstrapState>(() => ({
+    workspaceId,
+    data: null,
+    loading: Boolean(workspaceId),
+    error: null,
+  }))
 
   useEffect(() => {
     if (!workspaceId) {
-      setData(null)
-      setLoading(false)
-      setError(null)
+      setState({ workspaceId: null, data: null, loading: false, error: null })
       return
     }
     let cancelled = false
-    setLoading(true)
-    setError(null)
+    setState({ workspaceId, data: null, loading: true, error: null })
     ;(async () => {
       try {
         const response = await fetch(
@@ -42,15 +49,21 @@ export function useWorkspaceBootstrap(workspaceId: string | null) {
         if (!response.ok) {
           throw new Error(payload?.error?.message || `Bootstrap HTTP ${response.status}`)
         }
+        const data = (payload?.data as WorkspaceBootstrap) || null
+        if (data && String(data.workspace?.id || '') !== workspaceId) {
+          throw new Error('Bootstrap workspace mismatch')
+        }
         if (!cancelled) {
-          setData((payload?.data as WorkspaceBootstrap) || null)
-          setLoading(false)
+          setState({ workspaceId, data, loading: false, error: null })
         }
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Bootstrap failed')
-          setData(null)
-          setLoading(false)
+          setState({
+            workspaceId,
+            data: null,
+            loading: false,
+            error: err instanceof Error ? err.message : 'Bootstrap failed',
+          })
         }
       }
     })()
@@ -59,5 +72,8 @@ export function useWorkspaceBootstrap(workspaceId: string | null) {
     }
   }, [workspaceId])
 
-  return { data, loading, error }
+  if (state.workspaceId === workspaceId) {
+    return { data: state.data, loading: state.loading, error: state.error }
+  }
+  return { data: null, loading: Boolean(workspaceId), error: null }
 }

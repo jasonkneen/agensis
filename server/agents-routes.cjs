@@ -115,6 +115,36 @@ function mountAgentsRoutes(app, deps = {}) {
   }
  });
 
+ // Tell a linked host to replace its own process.
+ //
+ // A running daemon has its module graph already loaded, so publishing a new CLI
+ // changes nothing for it until the process itself is replaced. Without this the
+ // only way to adopt a fix was to go and find the terminal the daemon was launched
+ // in, which is a genuinely bad answer when the fix is the one that stops agents
+ // answering at all.
+ //
+ // Manage-gated, like disconnect: it is disruptive, not a read. Every connection
+ // for the agent is told, because a host that is merely stale is exactly the one
+ // this is for. The daemon drains its in-flight turns before it goes.
+ app.post('/backend/agents/:id/restart', requireAuth, async (req, res) => {
+  try {
+   const agentId = String(req.params.id || '').trim();
+   const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [agentId]);
+   const agent = rows[0];
+   if (!agent) return jsonError(res, 404, new Error('Agent not found'));
+   await enforceWorkspaceRole(req.userId, agent.workspace_id, 'manage');
+   const reason = String(req.body?.reason || '').trim().slice(0, 200);
+   const targets = [...connectedAgents.values()].filter(
+    entry => String(entry.agentId) === String(agent.id)
+      && String(entry.workspaceId) === String(agent.workspace_id),
+   );
+   for (const entry of targets) sendWs(entry.ws, { type: 'agent_restart', reason });
+   res.json({ data: { id: agentId, restarted: targets.length }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  app.post('/backend/agents/:id/capabilities-refresh', requireAuth, async (req, res) => {
   try {
    const agentId = String(req.params.id || '').trim();

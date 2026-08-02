@@ -77,20 +77,21 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
   }
 
   return (
-    <FieldGroup>
+    <FieldGroup className="gap-3 text-[11px]">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm font-semibold">Audit log</div>
-        <div className="flex items-center gap-2">
+        <div className="text-xs font-medium">Audit log</div>
+        <div className="flex items-center gap-1.5">
           <NativeSelect
             value={filter}
             onChange={event => setFilter(event.target.value as '' | AuditAction)}
             aria-label="Filter by action"
+            className="h-7 text-[11px]"
           >
             {FILTERS.map(option => (
               <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>
             ))}
           </NativeSelect>
-          <Button type="button" variant="ghost" size="sm" onClick={refresh} disabled={loading}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[11px]" onClick={refresh} disabled={loading}>
             Refresh
           </Button>
         </div>
@@ -100,56 +101,69 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
           social: "audit log" invites the assumption of tamper-PROOF. Say what it
           actually guarantees, in the panel, rather than letting someone rely on
           it in a dispute. */}
-      <FieldDescription>{AUDIT_TRUST_NOTE}</FieldDescription>
+      <p className="text-[10px] leading-snug text-muted-foreground">{AUDIT_TRUST_NOTE}</p>
 
       {loading && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner /> Loading the audit log
+        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <Spinner className="size-3.5" /> Loading…
         </div>
       )}
 
-      {error && <FieldDescription className="text-destructive">{error}</FieldDescription>}
+      {error && <p className="text-[11px] text-destructive">{error}</p>}
 
       {!loading && !error && rows.length === 0 && (
-        <FieldDescription>{AUDIT_EMPTY_STATE}</FieldDescription>
+        <p className="text-[11px] text-muted-foreground">{AUDIT_EMPTY_STATE}</p>
       )}
 
       {rows.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[44rem] border-collapse text-sm">
+        <div className="overflow-x-auto rounded-md border border-border/60">
+          <table className="w-full min-w-[34rem] border-collapse text-[10px] leading-tight">
             <thead>
-              <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                <th className="py-2 pr-3 font-medium">Time</th>
-                <th className="py-2 pr-3 font-medium">Actor</th>
-                <th className="py-2 pr-3 font-medium">Action</th>
-                <th className="py-2 pr-3 font-medium">Target</th>
-                <th className="py-2 font-medium">Change</th>
+              <tr className="border-b border-border bg-muted/30 text-left text-[9px] uppercase tracking-wide text-muted-foreground">
+                <th className="px-2 py-1 font-medium">Time</th>
+                <th className="px-2 py-1 font-medium">Actor</th>
+                <th className="px-2 py-1 font-medium">Action</th>
+                <th className="px-2 py-1 font-medium">Target</th>
+                <th className="px-2 py-1 font-medium">Change</th>
               </tr>
             </thead>
             <tbody>
               {rows.map(row => (
-                <tr key={row.entry.id} className="border-b border-border/60 align-top">
-                  <td className="whitespace-nowrap py-2 pr-3 text-muted-foreground tabular-nums">{row.time}</td>
-                  <td className="py-2 pr-3">{row.actor}</td>
-                  <td className="py-2 pr-3">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span>{row.action}</span>
+                <tr key={row.entry.id} className="border-b border-border/50 align-top last:border-0">
+                  <td
+                    className="whitespace-nowrap px-2 py-0.5 text-[10px] text-muted-foreground tabular-nums"
+                    title={row.entry.created_at}
+                  >
+                    {row.time}
+                  </td>
+                  <td className="max-w-[7rem] truncate px-2 py-0.5 text-[10px]" title={row.actor}>
+                    {row.actor}
+                  </td>
+                  <td className="px-2 py-0.5">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span className="text-[10px]">{row.action}</span>
                       {row.unrestricted && (
-                        <Badge variant="destructive" title="Unrestricted shell on the daemon host">
-                          <ShieldAlert />
+                        <Badge variant="destructive" className="h-3.5 gap-0.5 px-1 text-[8px] font-normal leading-none" title="Unrestricted shell on the daemon host">
+                          <ShieldAlert className="size-2" />
                           Unrestricted
                         </Badge>
                       )}
                       {!row.unrestricted && row.escalation && (
-                        <Badge variant="secondary" title="This widened someone's access">Escalation</Badge>
+                        <Badge variant="secondary" className="h-3.5 px-1 text-[8px] font-normal leading-none" title="This widened someone's access">
+                          Escalation
+                        </Badge>
                       )}
                     </div>
                     {row.detail && (
-                      <div className="mt-0.5 text-xs text-muted-foreground">{row.detail}</div>
+                      <div className="mt-0.5 text-[9px] text-muted-foreground">{row.detail}</div>
                     )}
                   </td>
-                  <td className="py-2 pr-3">{row.target}</td>
-                  <td className="py-2">{row.change}</td>
+                  <td className="max-w-[8rem] truncate px-2 py-0.5 text-[10px]" title={row.target}>
+                    {row.target}
+                  </td>
+                  <td className="max-w-[9rem] truncate px-2 py-0.5 text-[10px] text-muted-foreground" title={row.change}>
+                    {row.change}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -159,8 +173,8 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
 
       {hasMore && (
         <div>
-          <Button type="button" variant="secondary" size="sm" onClick={loadMore} disabled={loadingMore}>
-            {loadingMore ? <><Spinner /> Loading</> : 'Load more'}
+          <Button type="button" variant="secondary" size="sm" className="h-7 text-[11px]" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? <><Spinner className="size-3.5" /> Loading</> : 'Load more'}
           </Button>
         </div>
       )}

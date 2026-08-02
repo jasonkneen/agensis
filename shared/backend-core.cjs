@@ -200,7 +200,7 @@ const JSON_COLUMNS_BY_TABLE = {
  workspace_agent_templates: new Set(['tools', 'skills', 'resource_facets', 'origin']),
  workspace_skills: new Set(['origin']),
  automations: new Set(['definition']),
- automation_runs: new Set(['payload', 'steps']),
+ automation_runs: new Set(['payload', 'definition', 'steps']),
 };
 
 // Columns that are Postgres native arrays (NOT jsonb). The generic /backend/db
@@ -311,7 +311,11 @@ const DB_TABLE_ACCESS = {
  agent_connections: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
  cursorbuddy_connection_keys: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_jobs: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
- activity_events: DEFAULT_TABLE_ACCESS,
+ // The browser still appends a small set of UI events, but history is immutable:
+ // enforceDbOperationAccess explicitly refuses UPDATE/DELETE below. Keeping the
+ // capabilities explicit documents that distinction and makes an accidental
+ // removal of the refusal fail closed for ordinary writers.
+ activity_events: { select: 'read', insert: 'write', update: 'manage', delete: 'manage' },
  document_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  task_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  workspace_members: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
@@ -1855,6 +1859,16 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   throw forbidden('Direct user table access is not allowed');
  }
 
+ // Activity is an append-only history feed. In particular, session-derived
+ // rows inherit the source session's current audience on SELECT and realtime;
+ // allowing a generic UPDATE or DELETE before that gate would expose both an
+ // affected-row oracle and the RETURNING row to unrelated workspace members.
+ // Server-side redaction/repair uses direct SQL and does not pass this client
+ // authorization surface.
+ if (table === 'activity_events' && (op === 'update' || op === 'delete')) {
+  throw forbidden('Activity history is append-only');
+ }
+
  if (table === 'workspaces') {
   if (op === 'select') return;
   if (op === 'insert') {
@@ -2053,6 +2067,23 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
 // the readability rule to keep correct. Legacy permission rows with no session
 // retain their workspace visibility; a non-null orphan is withheld.
 function appendSessionAccessClause(where, userId, table) {
+ if (table === 'activity_events') {
+  const params = where.params || [];
+  params.push(userId);
+  const userParam = `$${params.length}`;
+  const sessionId = `case
+    when "activity_events"."event_type" = 'message_sent' then nullif("activity_events"."metadata"->>'session_id', '')
+    when "activity_events"."event_type" = 'chat_created' then nullif("activity_events"."entity_id", '')
+    else null
+   end`;
+  const sessionExists = `EXISTS (SELECT 1 FROM chat_sessions cs WHERE cs.id::text = ${sessionId} AND ${sessionReadableSql('cs', userParam)})`;
+  const unscoped = `("activity_events"."event_type" IS DISTINCT FROM 'message_sent' AND "activity_events"."event_type" IS DISTINCT FROM 'chat_created')`;
+  const accessClause = `(${unscoped} OR (${sessionId} IS NOT NULL AND ${sessionExists}))`;
+  return {
+   clause: where.clause ? `${where.clause} AND ${accessClause}` : ` WHERE ${accessClause}`,
+   params,
+  };
+ }
  if (![
   'chat_sessions',
   'messages',
@@ -2260,12 +2291,11 @@ async function logMessageActivityIdempotent(rows, { db }) {
 
    const messageId = message.id != null ? String(message.id) : null;
 
-   // `visibility` and `folder` come back with the workspace because this feed
-   // row outlives the caller's knowledge of where the message came from:
-   // `activity_events` is workspace-scoped, `appendSessionAccessClause` skips
-   // every table but chat_sessions/messages, and the realtime private lane only
-   // splits chat_sessions. Nothing downstream can tell that a row began life in
-   // a members-only conversation, so the check has to happen here, at write.
+   // Keep the canonical session privacy signals beside the workspace lookup.
+   // The generic SELECT and realtime fanout now re-authorize the session_id in
+   // metadata, while this write-time check remains defense in depth so even an
+   // authorized participant never receives private message text through the
+   // workspace activity row.
    const sessionRows = await db(
     'select workspace_id, visibility, folder, deleted_at from chat_sessions where id = $1 limit 1',
     [sessionId],
@@ -2728,7 +2758,7 @@ const REDACTED_PLACEHOLDER = '[redacted]';
 
 const FEEDBACK_REDACTION_PATTERNS = [
  { name: 'agensis-session-token', pattern: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.\d+\.\d+\.[A-Za-z0-9_-]{16,}/gi, replacement: REDACTED_PLACEHOLDER },
- { name: 'agensis-agent-token', pattern: /\baga_[A-Za-z0-9_-]{8,}/g, replacement: REDACTED_PLACEHOLDER },
+ { name: 'agensis-agent-token', pattern: /\b(?:aga|agw|agx|agf|agc|ago|cbk)_[A-Za-z0-9_-]{8,}/g, replacement: REDACTED_PLACEHOLDER },
  { name: 'bearer-header', pattern: /\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: `$1 ${REDACTED_PLACEHOLDER}` },
  { name: 'jwt', pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, replacement: REDACTED_PLACEHOLDER },
  { name: 'anthropic-key', pattern: /\bsk-ant-[A-Za-z0-9_-]{10,}/g, replacement: REDACTED_PLACEHOLDER },
@@ -3048,13 +3078,15 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  'agent.connect_token_minted',
  'chat_session.cleared',
  // The workspace MCP token (agw_) is the control-plane secret for the whole
- // workspace: a bearer reaches all 29 MCP tools, can register_agent, and can
- // mint an agent's daemon connect token via get_connect_command. Minting it
+ // workspace: a bearer reaches its full allowed MCP surface, can register_agent,
+ // and can mint an agent's daemon connect token via get_connect_command. Minting it
  // ROTATES it, which silently breaks every MCP client still holding the old
  // one — so "who reissued this, and when" is exactly the question this log
  // exists to answer. Its sibling agent.connect_token_minted was recorded from
  // the start; this one was not, which is the only reason it is a separate line.
  'workspace.mcp_token_minted',
+ // Static OAuth client for MCP (authorization-code + PKCE). Secret shown once.
+ 'workspace.mcp_oauth_client_created',
  // Named workspace-control credentials. Issuance and redemption are separate
  // events: the owner may create a five-minute grant that is never redeemed.
  'controller.enrollment_created',
@@ -3080,6 +3112,10 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  // PER USER PER 24h PER PROCESS via createFirstUseWindow below. Never remove
  // that dedup and leave the call site in place.
  'mcp.login_token_used',
+ // An OAuth MCP access token retains kind=user to share the existing tool RBAC
+ // surface, but its use must remain distinguishable from an ordinary agensis
+ // login token. Emitted under the same bounded first-use window.
+ 'mcp.oauth_access_token_used',
  'vault.secret_set',
  'vault.secret_deleted',
  // Authoring an automation is a STANDING grant to write into the workspace

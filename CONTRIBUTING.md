@@ -52,14 +52,15 @@ AGENTS.md for why that has not been a reliable signal on this repository.
 
 ## The test-glob trap
 
-**This is the one that catches everyone.** There are two runners with two
-non-overlapping, non-recursive globs, and a test file outside both is not an
-error — it silently never runs, forever, while `npm run ci` stays green.
+**This is the one that catches everyone.** There are three runners with three
+non-overlapping globs, and a test file outside all three is not an error — it
+silently never runs, forever, while `npm run ci` stays green.
 
 | Runner | Command | Glob | Framework |
 | --- | --- | --- | --- |
 | Backend | `npm test` | `tests/*.test.cjs` | `node:test` |
 | Frontend | `npm run test:unit` | `tests/unit/**/*.test.ts` | Vitest (jsdom) |
+| Smoke | `npm run smoke` | `tests/smoke/**/*.smoke.ts` | Vitest (jsdom, separate config) |
 
 Read those globs literally:
 
@@ -68,18 +69,18 @@ Read those globs literally:
 - `tests/unit/**/*.test.ts` is recursive but rooted at `tests/unit/`. A
   `.test.ts` anywhere else — `tests/foo.test.ts`, `src/**/*.test.ts` — is not
   matched.
-- `.test.tsx` is not matched by either. Name frontend tests `.test.ts`.
+- `.test.tsx` is not matched by any runner. Name frontend tests `.test.ts`.
+- Smoke tests must live under `tests/smoke/` and end in `.smoke.ts`; an ordinary
+  `.test.ts` in that directory is not collected.
 
 This has already cost this project a 34-test suite that sat in the tree looking
 like coverage while never executing once. If you add a test, **make it fail on
 purpose first** and confirm the runner reports the failure. If it stays green,
 your test is not running.
 
-Two further runners exist and are wired into `npm run ci`:
-
-| Runner | Command | Scope |
-| --- | --- | --- |
-| Smoke | `npm run smoke` | `vitest.smoke.config.ts` — renders the app. Not optional; it catches the class of bug where every other check is green and the UI is broken. |
+The smoke runner uses `vitest.smoke.config.ts` and renders the app. It is not
+optional: it catches the class of bug where every other check is green and the
+UI is broken.
 
 ## Working on the code
 

@@ -27,7 +27,7 @@ describe('createFlowConnection', () => {
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ Authorization: 'Bearer session' }),
-        body: JSON.stringify({ channelId: 'ch-1', name: 'Flows', webhookUrl: 'https://flows.example.test/events' }),
+        body: JSON.stringify({ channelId: 'ch-1', name: 'Event webhook', webhookUrl: 'https://flows.example.test/events' }),
       }),
     );
   });
