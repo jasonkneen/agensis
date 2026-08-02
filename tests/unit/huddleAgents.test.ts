@@ -263,6 +263,36 @@ describe('huddleAgentOptions carries the agent voice', () => {
     // read it from the participant snapshot.
     expect(huddleAgentOptions([], [participant])[0].voiceId).toBe('');
   });
+
+  it('assigns distinct defaults once the voice catalogue is available', () => {
+    const agents = [
+      { id: 'a1', name: 'Coder', handle: 'coder', accent_color: null },
+      { id: 'a2', name: 'Reviewer', handle: 'reviewer', accent_color: null },
+    ] as unknown as Parameters<typeof huddleAgentOptions>[0];
+    const participants = [
+      participant,
+      { ...participant, id: 'agent:a2', name: 'Reviewer', handle: 'reviewer', agent_id: 'a2' },
+    ];
+
+    const options = huddleAgentOptions(
+      agents,
+      participants,
+      ['voice-0001', 'voice-0002', 'voice-0003'],
+    );
+
+    expect(options.every(option => option.voiceId)).toBe(true);
+    expect(new Set(options.map(option => option.voiceId)).size).toBe(2);
+  });
+
+  it('never replaces a voice explicitly chosen for an agent', () => {
+    const chosen = 'chosen-voice-0001';
+    const agents = [{
+      id: 'a1', name: 'Coder', handle: 'coder', accent_color: null,
+      identity: { voice: { cartesia_voice_id: chosen } },
+    }] as unknown as Parameters<typeof huddleAgentOptions>[0];
+
+    expect(huddleAgentOptions(agents, [participant], ['voice-0001'])[0].voiceId).toBe(chosen);
+  });
 });
 
 // A DM's huddle has ONE agent, and the roster is where the SPEAKER finds whose
