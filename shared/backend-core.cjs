@@ -311,7 +311,11 @@ const DB_TABLE_ACCESS = {
  agent_connections: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
  cursorbuddy_connection_keys: { select: 'manage', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_jobs: { select: 'read', insert: 'run_agents', update: 'run_agents', delete: 'manage' },
- activity_events: DEFAULT_TABLE_ACCESS,
+ // The browser still appends a small set of UI events, but history is immutable:
+ // enforceDbOperationAccess explicitly refuses UPDATE/DELETE below. Keeping the
+ // capabilities explicit documents that distinction and makes an accidental
+ // removal of the refusal fail closed for ordinary writers.
+ activity_events: { select: 'read', insert: 'write', update: 'manage', delete: 'manage' },
  document_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  task_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  workspace_members: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
@@ -1853,6 +1857,16 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   const idFilter = findFilterValue(flt, 'id');
   if (op === 'select' && idFilter && String(idFilter) === String(userId)) return;
   throw forbidden('Direct user table access is not allowed');
+ }
+
+ // Activity is an append-only history feed. In particular, session-derived
+ // rows inherit the source session's current audience on SELECT and realtime;
+ // allowing a generic UPDATE or DELETE before that gate would expose both an
+ // affected-row oracle and the RETURNING row to unrelated workspace members.
+ // Server-side redaction/repair uses direct SQL and does not pass this client
+ // authorization surface.
+ if (table === 'activity_events' && (op === 'update' || op === 'delete')) {
+  throw forbidden('Activity history is append-only');
  }
 
  if (table === 'workspaces') {

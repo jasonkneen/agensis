@@ -131,6 +131,19 @@ test('activity history is append-only through generic client mutations', async (
       `${op} must not expose an affected-row oracle or returned private activity row`,
     );
   }
+
+  const ownerDb = async (sql) => (
+    /select 1 from workspaces where id = \$1 and user_id = \$2/i.test(sql)
+      ? [{ ok: 1 }]
+      : []
+  );
+  await assert.doesNotReject(() => core.enforceDbOperationAccess({
+    userId: 'workspace-owner',
+    table: 'activity_events',
+    op: 'insert',
+    payload: { values: { workspace_id: 'ws-1', event_type: 'task_created' } },
+    db: ownerDb,
+  }), 'the browser must retain its legitimate append path');
 });
 
 test('activity selects scope message events to readers of their source session', () => {
