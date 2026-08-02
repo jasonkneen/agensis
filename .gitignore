@@ -53,3 +53,5 @@ SCRATCHPAD.md
 
 # Internal cleanup plan. Stays on disk, never in the published snapshot — it
 # names the products being removed and describes the scrub itself.
+/.pi-subagents
+/.grok
