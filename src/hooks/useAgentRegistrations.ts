@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
+import { useWorkspaceListState } from './useWorkspaceState';
 
 export interface AgentRegistration {
   id: string;
@@ -16,7 +17,7 @@ export interface AgentRegistration {
 // Loads pending agent-registration requests and keeps them live over realtime, so the
 // owner gets the "X wants to register as @q — Allow?" popup the moment a client asks.
 export function useAgentRegistrations(workspaceId: string | null) {
-  const [pending, setPending] = useState<AgentRegistration[]>([]);
+  const [pending, setPending] = useWorkspaceListState<AgentRegistration>(workspaceId, []);
   const workspaceRequestRef = useRef({ workspaceId, generation: 0 });
   if (workspaceRequestRef.current.workspaceId !== workspaceId) {
     workspaceRequestRef.current = {
@@ -36,7 +37,7 @@ export function useAgentRegistrations(workspaceId: string | null) {
     } catch {
       // best effort — realtime keeps it fresh
     }
-  }, [workspaceId]);
+  }, [setPending, workspaceId]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -80,7 +81,7 @@ export function useAgentRegistrations(workspaceId: string | null) {
     } catch {
       if (workspaceRequestRef.current === request) void refresh(); // restore on failure
     }
-  }, [refresh]);
+  }, [refresh, setPending]);
 
   return { pending, approve: (id: string) => decide(id, 'approve'), deny: (id: string) => decide(id, 'deny'), refresh };
 }

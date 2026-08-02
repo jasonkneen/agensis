@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
+import { useWorkspaceListState } from './useWorkspaceState';
 import type { AgentConnection } from '../types';
 
 // The daemon heartbeats every 15s (AGENSIS_HEARTBEAT_MS). A connection whose
@@ -28,10 +29,13 @@ function withEffectiveStatus(connection: AgentConnection, nowMs: number): AgentC
 }
 
 export function useAgentConnections(workspaceId: string | null, seed?: AgentConnection[] | null) {
-  const [connections, setConnections] = useState<AgentConnection[]>(() => seed || []);
+  const workspaceKey = normalizeWorkspaceId(workspaceId);
+  const [connections, setConnections] = useWorkspaceListState<AgentConnection>(
+    workspaceKey || null,
+    (seed || []).filter(connection => connection.workspace_id === workspaceKey),
+  );
   const [loading, setLoading] = useState(false);
   const [realtimeWorkspaceId, setRealtimeWorkspaceId] = useState<string | null>(null);
-  const workspaceKey = normalizeWorkspaceId(workspaceId);
   const workspaceRequestRef = useRef({ workspaceKey, generation: 0 });
   if (workspaceRequestRef.current.workspaceKey !== workspaceKey) {
     workspaceRequestRef.current = {
@@ -54,8 +58,8 @@ export function useAgentConnections(workspaceId: string | null, seed?: AgentConn
   useEffect(() => {
     if (!seed) return;
     if (fetchedForWorkspaceRef.current === workspaceKey) return;
-    setConnections(seed);
-  }, [seed, workspaceKey]);
+    setConnections(seed.filter(connection => connection.workspace_id === workspaceKey));
+  }, [seed, setConnections, workspaceKey]);
 
   const fetchConnections = useCallback(async () => {
     const request = workspaceRequestRef.current;
@@ -92,7 +96,7 @@ export function useAgentConnections(workspaceId: string | null, seed?: AgentConn
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [workspaceKey]);
+  }, [setConnections, workspaceKey]);
 
   useEffect(() => {
     void fetchConnections();

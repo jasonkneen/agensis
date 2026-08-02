@@ -232,4 +232,48 @@ describe('useCanvasLayers persistence identity', () => {
     expect(inserts).toEqual([]);
     act(() => root.unmount());
   });
+
+  it('never writes workspace A layer definitions into workspace B local storage', async () => {
+    moduleMocks.from.mockImplementation((table: string) => {
+      let workspaceId = '';
+      const query = {
+        select: () => query,
+        eq: (column: string, value: string) => {
+          if (column === 'workspace_id') workspaceId = value;
+          return query;
+        },
+        order: () => Promise.resolve({
+          data: [{ layer_id: 'base', workspace_id: workspaceId, name: `${workspaceId} Main` }],
+        }),
+        then: (resolve: (value: unknown) => void, reject: (reason: unknown) => void) => Promise.resolve(
+          table === 'canvas_objects'
+            ? { data: [] }
+            : { data: [{ layer_id: 'base', workspace_id: workspaceId, name: `${workspaceId} Main` }] },
+        ).then(resolve, reject),
+      };
+      return query;
+    });
+    localStorage.setItem('canvas_layers:A', JSON.stringify([layer({ id: 'base', name: 'A Main' })]));
+    localStorage.setItem('canvas_layers:B', JSON.stringify([layer({ id: 'base', name: 'B Main' })]));
+    localStorage.setItem('canvas_layers_adopted:A', '1');
+    localStorage.setItem('canvas_layers_adopted:B', '1');
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+
+    function Probe({ workspaceId }: { workspaceId: string }) {
+      useCanvasLayers(workspaceId);
+      return null;
+    }
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    act(() => root.render(createElement(Probe, { workspaceId: 'A' })));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    setItem.mockClear();
+    act(() => root.render(createElement(Probe, { workspaceId: 'B' })));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    const crossWorkspaceWrites = setItem.mock.calls.filter(([key, value]) =>
+      key === 'canvas_layers:B' && String(value).includes('A Main'));
+    expect(crossWorkspaceWrites).toEqual([]);
+    act(() => root.unmount());
+  });
 })
