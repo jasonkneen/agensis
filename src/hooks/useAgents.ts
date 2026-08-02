@@ -3,6 +3,7 @@ import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import { cachedFetch, offlineInsertResult, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import { WORKSPACE_UNAVAILABLE, classifyWriteFailure, type WriteFailure } from '../lib/writeFeedback';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
+import { useWorkspaceListState } from './useWorkspaceState';
 import type { WorkspaceAgent } from '../types';
 import type { AgentPurpose, ResourceFacet } from '../lib/agentPurpose';
 
@@ -43,31 +44,38 @@ function agentHandle(value: string) {
 }
 
 export function useAgents(workspaceId: string | null, userId?: string, seed?: WorkspaceAgent[] | null) {
-  const [agents, setAgents] = useState<WorkspaceAgent[]>(() => seed || []);
+  const [agents, setAgents, beginAgentsRequest] = useWorkspaceListState<WorkspaceAgent>(
+    workspaceId,
+    (seed || []).filter(agent => agent.workspace_id === workspaceId),
+  );
   const [loading, setLoading] = useState(!seed?.length);
 
   useEffect(() => {
-    if (seed) setAgents(seed);
-  }, [seed]);
+    if (seed) setAgents(seed.filter(agent => agent.workspace_id === workspaceId));
+  }, [seed, setAgents, workspaceId]);
 
   const fetchAgents = useCallback(async () => {
+    const isCurrent = beginAgentsRequest();
     if (!workspaceId) {
       setAgents([]);
       setLoading(false);
       return;
     }
     setLoading(true);
-    const data = await cachedFetch<WorkspaceAgent[]>(`agents_${workspaceId}`, async () => {
-      const response = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/agents`), {
-        headers: apiAuthHeaders(),
+    try {
+      const data = await cachedFetch<WorkspaceAgent[]>(`agents_${workspaceId}`, async () => {
+        const response = await fetch(apiUrl(`/backend/workspaces/${encodeURIComponent(workspaceId)}/agents`), {
+          headers: apiAuthHeaders(),
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(payload?.error?.message || `Agents HTTP ${response.status}`);
+        return payload?.data ?? [];
       });
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(payload?.error?.message || `Agents HTTP ${response.status}`);
-      return payload?.data ?? [];
-    });
-    if (data) setAgents(data);
-    setLoading(false);
-  }, [workspaceId]);
+      if (isCurrent() && data) setAgents(data);
+    } finally {
+      if (isCurrent()) setLoading(false);
+    }
+  }, [beginAgentsRequest, setAgents, workspaceId]);
 
   useEffect(() => {
     fetchAgents();

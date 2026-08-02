@@ -21,6 +21,13 @@ const progressMigration = fs.readFileSync(
  path.join(root, 'supabase/migrations/20260801120000_resource_operation_progress.sql'),
  'utf8',
 );
+const controllerFkRepairPath = path.join(
+ root,
+ 'supabase/migrations/20260802120000_controller_composite_fk_set_null.sql',
+);
+const controllerFkRepair = fs.existsSync(controllerFkRepairPath)
+ ? fs.readFileSync(controllerFkRepairPath, 'utf8')
+ : '';
 const netlify = fs.readFileSync(path.join(root, 'netlify/functions/backend.mjs'), 'utf8');
 
 test('controller/resource schema exists in runtime, canonical, and migration owners', () => {
@@ -58,6 +65,49 @@ test('resource-operation progress migration is forward-only and constrained', ()
  assert.match(progressMigration, /ADD COLUMN IF NOT EXISTS progress_seq bigint/i);
  assert.match(progressMigration, /resource_operations_progress_object_check/i);
  assert.match(progressMigration, /resource_operations_progress_seq_check/i);
+});
+
+test('composite controller foreign keys null only their nullable controller column', () => {
+ const constraints = [
+  ['workspace_controllers_parent_workspace_fkey', 'parent_controller_id'],
+  ['workspace_agents_controller_workspace_fkey', 'controller_id'],
+  ['workspace_resources_controller_workspace_fkey', 'controller_id'],
+  ['agent_registrations_controller_workspace_fkey', 'controller_id'],
+  ['workspace_join_links_redeemed_controller_workspace_fkey', 'redeemed_controller_id'],
+ ];
+ for (const [where, source] of [
+  ['runtime', runtime],
+  ['canonical', canonical],
+  ['original migration', migration],
+ ]) {
+  for (const [constraint, nullableColumn] of constraints) {
+   const definition = new RegExp(
+    `${constraint}[\\s\\S]{0,300}FOREIGN KEY \\(${nullableColumn}, workspace_id\\)[\\s\\S]{0,160}ON DELETE SET NULL \\(${nullableColumn}\\)`,
+    'i',
+   );
+   assert.match(source, definition, `${where}: ${constraint}`);
+  }
+ }
+});
+
+test('a forward migration repairs already-installed composite controller foreign keys', () => {
+ assert.notEqual(controllerFkRepair, '', 'missing forward controller FK repair migration');
+ for (const [constraint, nullableColumn] of [
+  ['workspace_controllers_parent_workspace_fkey', 'parent_controller_id'],
+  ['workspace_agents_controller_workspace_fkey', 'controller_id'],
+  ['workspace_resources_controller_workspace_fkey', 'controller_id'],
+  ['agent_registrations_controller_workspace_fkey', 'controller_id'],
+  ['workspace_join_links_redeemed_controller_workspace_fkey', 'redeemed_controller_id'],
+ ]) {
+  assert.match(controllerFkRepair, new RegExp(`DROP CONSTRAINT IF EXISTS ${constraint}`, 'i'));
+  assert.match(
+   controllerFkRepair,
+   new RegExp(
+    `${constraint}[\\s\\S]{0,300}FOREIGN KEY \\(${nullableColumn}, workspace_id\\)[\\s\\S]{0,160}ON DELETE SET NULL \\(${nullableColumn}\\)`,
+    'i',
+   ),
+  );
+ }
 });
 
 test('controller scope shape cannot express owner, private-read, vault, role, or escalation authority', () => {

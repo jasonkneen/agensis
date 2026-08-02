@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
+import { useWorkspaceListState } from './useWorkspaceState';
 import type { Task, TaskStatus, TaskPriority, TaskSourceType } from '../types';
 
 export interface CreateTaskInput {
@@ -17,31 +18,38 @@ export interface CreateTaskInput {
 }
 
 export function useTasks(workspaceId: string | null, userId?: string, seed?: Task[] | null) {
-  const [tasks, setTasks] = useState<Task[]>(() => seed || []);
+  const [tasks, setTasks, beginTasksRequest] = useWorkspaceListState<Task>(
+    workspaceId,
+    (seed || []).filter(task => task.workspace_id === workspaceId),
+  );
   const [loading, setLoading] = useState(!seed?.length);
 
   useEffect(() => {
-    if (seed) setTasks(seed);
-  }, [seed]);
+    if (seed) setTasks(seed.filter(task => task.workspace_id === workspaceId));
+  }, [seed, setTasks, workspaceId]);
 
   const fetchTasks = useCallback(async () => {
+    const isCurrent = beginTasksRequest();
     if (!workspaceId) {
       setTasks([]);
       setLoading(false);
       return;
     }
     setLoading(true);
-    const data = await cachedFetch<Task[]>(`tasks_${workspaceId}`, async () => {
-      const { data } = await backendClient
-        .from('tasks')
-        .select('*')
-        .eq('workspace_id', workspaceId)
-        .order('created_at', { ascending: false });
-      return data;
-    });
-    if (data) setTasks(data);
-    setLoading(false);
-  }, [workspaceId]);
+    try {
+      const data = await cachedFetch<Task[]>(`tasks_${workspaceId}`, async () => {
+        const { data } = await backendClient
+          .from('tasks')
+          .select('*')
+          .eq('workspace_id', workspaceId)
+          .order('created_at', { ascending: false });
+        return data;
+      });
+      if (isCurrent() && data) setTasks(data);
+    } finally {
+      if (isCurrent()) setLoading(false);
+    }
+  }, [beginTasksRequest, setTasks, workspaceId]);
 
   useEffect(() => {
     fetchTasks();

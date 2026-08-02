@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
+import { useWorkspaceListState } from './useWorkspaceState';
 import type { Document } from '../types';
 
 // NET-06: the documents LIST is metadata-only — pulling every doc's full HTML
@@ -49,7 +50,10 @@ export function applyDocumentRealtimeToContentCache(
 }
 
 export function useDocuments(workspaceId: string | null, seed?: Document[] | null) {
-  const [documents, setDocuments] = useState<Document[]>(() => (seed || []).map(toListDocument));
+  const [documents, setDocuments, beginDocumentsRequest] = useWorkspaceListState<Document>(
+    workspaceId,
+    (seed || []).filter(doc => doc.workspace_id === workspaceId).map(toListDocument),
+  );
   const [loading, setLoading] = useState(!seed?.length);
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Per-doc content cache (id -> body). Populated by fetchDocumentContent and
@@ -57,23 +61,31 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
   const contentCache = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
-    if (seed) setDocuments(seed.map(toListDocument));
-  }, [seed]);
+    if (seed) setDocuments(seed.filter(doc => doc.workspace_id === workspaceId).map(toListDocument));
+  }, [seed, setDocuments, workspaceId]);
 
   const fetchDocuments = useCallback(async () => {
-    if (!workspaceId) return;
+    const isCurrent = beginDocumentsRequest();
+    if (!workspaceId) {
+      setDocuments([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-    const data = await cachedFetch<Document[]>(`documents_meta_${workspaceId}`, async () => {
-      const { data } = await backendClient
-        .from('documents')
-        .select(DOCUMENT_LIST_COLUMNS)
-        .eq('workspace_id', workspaceId)
-        .order('updated_at', { ascending: false });
-      return data;
-    });
-    if (data) setDocuments(data.map(toListDocument));
-    setLoading(false);
-  }, [workspaceId]);
+    try {
+      const data = await cachedFetch<Document[]>(`documents_meta_${workspaceId}`, async () => {
+        const { data } = await backendClient
+          .from('documents')
+          .select(DOCUMENT_LIST_COLUMNS)
+          .eq('workspace_id', workspaceId)
+          .order('updated_at', { ascending: false });
+        return data;
+      });
+      if (isCurrent() && data) setDocuments(data.map(toListDocument));
+    } finally {
+      if (isCurrent()) setLoading(false);
+    }
+  }, [beginDocumentsRequest, setDocuments, workspaceId]);
 
   useEffect(() => {
     fetchDocuments();
