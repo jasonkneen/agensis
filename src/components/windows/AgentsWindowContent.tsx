@@ -1676,8 +1676,9 @@ function AgentForm({
    */
   extraSections?: React.ReactNode;
 }) {
-  const executionRuntime = resolveFormRuntimeSelection(runtime).runtime;
-  const options = modelOptionsForRuntime(model, runMode, executionRuntime);
+  const { runtime: executionRuntime, acpHarness: formAcpHarness } = resolveFormRuntimeSelection(runtime);
+  // The harness is what decides which models mean anything for this agent.
+  const options = modelOptionsForRuntime(model, runMode, executionRuntime, formAcpHarness);
   const canSubmit = Boolean(
     name.trim() && (purpose === 'collaborator' || resourceFacets.length > 0),
   );

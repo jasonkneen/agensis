@@ -4067,12 +4067,53 @@ function resolveExecutionModel(model, runtime) {
   : resolveAnthropicModel(value);
 }
 
-function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode, runtime = null, profile = null }) {
+// An ACP harness runs its OWN model. A Claude or Codex id means nothing to it,
+// and forcing one is how a Grok agent ended up launched with
+// `--model claude-opus-5` and then describing itself as Claude and listing
+// Claude models as its own.
+//
+// The harness is pinned on the agent's metadata as `acp_harness`, which is a
+// SEPARATE axis from the claude|codex|amp execution runtime — the agents that
+// hit this had acp_harness set and runtime unset, so normalizeExecutionRuntime
+// returned '' and every one of them fell through to resolveAnthropicModel.
+//
+// A harness absent from this table still works: it simply takes no --model and
+// lets the local harness choose, which is the honest default (the same choice
+// Amp already makes) rather than inventing a model id we cannot verify.
+const ACP_HARNESS_MODELS = {
+ grok: { default: 'grok-4.5', owns: /^grok[-.]/i },
+};
+
+function acpHarnessOf(metadata) {
+ const harness = String(metadata?.acp_harness || metadata?.acpHarness || '').trim().toLowerCase();
+ // claude/codex/amp are execution runtimes with their own model handling.
+ return harness && harness !== 'claude' && harness !== 'codex' && harness !== 'amp' ? harness : '';
+}
+
+/** The model a harness-pinned agent should actually run. '' means "send no --model". */
+function resolveAcpHarnessModel(harness, model) {
+ const spec = ACP_HARNESS_MODELS[String(harness || '').trim().toLowerCase()] || null;
+ const value = String(model || '').trim();
+ if (!value || value === 'auto') return spec ? spec.default : '';
+ // An id the harness plainly does not own is a leftover default, not a choice a
+ // human made — every one of these agents was carrying claude-opus-5.
+ if (spec) return spec.owns.test(value) ? value : spec.default;
+ return /^(claude|gpt)[-.]/i.test(value) ? '' : value;
+}
+
+function agentConnectionCommand({ baseUrl, token, workspaceId, agentId, handle, name, model, permissionMode, runtime = null, acpHarness = null, profile = null }) {
  const resolvedRuntime = normalizeExecutionRuntime(runtime);
- const resolvedModel = resolveExecutionModel(model, resolvedRuntime);
+ const harness = String(acpHarness || '').trim().toLowerCase();
+ const resolvedModel = harness
+  ? resolveAcpHarnessModel(harness, model)
+  : resolveExecutionModel(model, resolvedRuntime);
  const resolvedPermissionMode = normalizeAgentPermissionMode(permissionMode);
  const commandPermissionArgs = ['--permission-mode', shellQuote(resolvedPermissionMode)];
- const commandModelArgs = resolvedRuntime === 'amp' || (resolvedRuntime === 'codex' && resolvedModel === 'auto')
+ // No model at all when the harness owns that choice and we have no id we can
+ // stand behind — better than shipping a Claude id to something that is not Claude.
+ const commandModelArgs = !resolvedModel
+  || resolvedRuntime === 'amp'
+  || (resolvedRuntime === 'codex' && resolvedModel === 'auto')
   ? []
   : ['--model', shellQuote(resolvedModel)];
  const displayName = String(name || handle || 'Agensis Agent').trim() || 'Agensis Agent';
@@ -4159,8 +4200,15 @@ async function buildAgentConnectionCommand({
  if (!isAgentEnabled(agent)) throw new Error('Agent is deactivated');
  const token = createAgentConnectToken();
  const resolvedHandle = slugHandle(handle || agent.handle || agent.name);
- const resolvedRuntime = normalizeExecutionRuntime(parseJsonObject(agent.metadata).runtime);
- const resolvedModel = resolveExecutionModel(model || agent.model, resolvedRuntime);
+ const agentMetadata = parseJsonObject(agent.metadata);
+ const resolvedRuntime = normalizeExecutionRuntime(agentMetadata.runtime);
+ // A harness-pinned agent (acp_harness) resolves its model from the harness, not
+ // from the Anthropic catalog — otherwise the minted command, and the model
+ // written back to the row below, both say claude-opus-5 for a Grok agent.
+ const resolvedAcpHarness = acpHarnessOf(agentMetadata);
+ const resolvedModel = resolvedAcpHarness
+  ? resolveAcpHarnessModel(resolvedAcpHarness, model || agent.model)
+  : resolveExecutionModel(model || agent.model, resolvedRuntime);
  // Mode changes are manage-gated. Minting a connect token is NOT by itself a
  // mode grant: only an explicit override when allowPermissionModeChange is true
  // (caller already proved manage) may change permission_mode. actorUserId is for
@@ -4216,6 +4264,7 @@ async function buildAgentConnectionCommand({
   model: resolvedModel,
   permissionMode: resolvedPermissionMode,
   runtime: resolvedRuntime,
+  acpHarness: resolvedAcpHarness,
   profile: profile === null ? resolvedHandle : profile,
  });
  return {
