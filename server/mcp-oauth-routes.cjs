@@ -9,6 +9,11 @@ const {
   oauth,
 } = require('./mcp-oauth.cjs');
 
+const DCR_MAX_NAME = 120;
+const DCR_MAX_REDIRECTS = 10;
+const DCR_MAX_REDIRECT_URI = 2048;
+const DCR_MAX_REDIRECT_TOTAL = 8192;
+
 function mountMcpOauthRoutes(app, deps = {}) {
   const {
     requireAuth,
@@ -20,6 +25,8 @@ function mountMcpOauthRoutes(app, deps = {}) {
     requestBaseUrl,
     verifyToken,
     recordAudit,
+    dcrRateLimiter,
+    clientIpFromReq,
   } = deps;
 
   const store = createMcpOauthStore({ getDb, hashAgentToken });
@@ -60,18 +67,44 @@ function mountMcpOauthRoutes(app, deps = {}) {
 
   app.post('/backend/oauth/register', async (req, res) => {
     try {
+      if (dcrRateLimiter) {
+        const result = dcrRateLimiter.check(
+          `oauth-register:${clientIpFromReq ? clientIpFromReq(req) : req.socket?.remoteAddress || 'unknown'}`,
+        );
+        if (!result.allowed) {
+          res.setHeader('Retry-After', String(Math.max(1, Math.ceil(result.retryAfterMs / 1000))));
+          return oauthJsonError(res, 429, 'temporarily_unavailable', 'Registration rate limit exceeded');
+        }
+      }
       const body = req.body || {};
-      const redirectUris = oauth.normalizeRedirectUris(body.redirect_uris || body.redirectUris);
+      const rawName = String(body.client_name || body.clientName || 'Registered MCP client');
+      const rawRedirects = body.redirect_uris || body.redirectUris;
+      if (rawName.length > DCR_MAX_NAME || !Array.isArray(rawRedirects)
+          || rawRedirects.length > DCR_MAX_REDIRECTS
+          || rawRedirects.some((uri) => String(uri).length > DCR_MAX_REDIRECT_URI)
+          || rawRedirects.reduce((sum, uri) => sum + String(uri).length, 0) > DCR_MAX_REDIRECT_TOTAL) {
+        return oauthJsonError(res, 400, 'invalid_client_metadata', 'Client metadata exceeds allowed limits');
+      }
+      const redirectUris = oauth.normalizeRedirectUris(rawRedirects);
+      if (redirectUris.length !== rawRedirects.length) {
+        return oauthJsonError(res, 400, 'invalid_client_metadata', 'Every redirect_uri must be valid');
+      }
       if (!redirectUris.length) {
         return oauthJsonError(res, 400, 'invalid_client_metadata', 'redirect_uris required');
       }
       const method = oauth.normalizeTokenAuthMethod(
-        body.token_endpoint_auth_method || body.tokenEndpointAuthMethod || 'none',
+        body.token_endpoint_auth_method ?? body.tokenEndpointAuthMethod,
+      );
+      if (!method) return oauthJsonError(res, 400, 'invalid_client_metadata', 'Unsupported token_endpoint_auth_method');
+      await getDb().unsafe(
+        `delete from mcp_oauth_clients c where c.workspace_id is null
+          and c.created_at < now() - interval '24 hours'
+          and not exists (select 1 from mcp_oauth_client_grants g where g.client_id = c.client_id)`,
       );
       // DCR clients are not workspace-bound until consent; workspace is chosen at authorize.
       const created = await store.insertClient({
         workspaceId: null,
-        name: body.client_name || body.clientName || 'Registered MCP client',
+        name: rawName,
         redirectUris,
         tokenEndpointAuthMethod: method,
         createdBy: null,
@@ -112,16 +145,27 @@ function mountMcpOauthRoutes(app, deps = {}) {
   }
 
   async function assertWorkspaceConsent(userId, workspaceId) {
-    // Owner or admin (manage) may grant MCP OAuth for a workspace.
-    try {
-      await enforceWorkspaceRole(userId, workspaceId, 'manage');
-    } catch (error) {
-      // Owners always have manage via workspaces.user_id path.
-      const owned = await getDb().unsafe(
-        'select 1 from workspaces where id = $1 and user_id = $2 limit 1',
-        [workspaceId, userId],
-      );
-      if (!owned[0]) throw error;
+    // Consent is deliberately direct-owner/admin only. General workspace
+    // management can be inherited from an ancestor, but access-token checks
+    // revalidate a direct owner/admin row on every request; accepting inherited
+    // consent here would issue a token that immediately fails authentication.
+    const rows = await getDb().unsafe(
+      `select 1
+         from workspaces w
+        where w.id = $1
+          and (w.user_id = $2 or exists (
+            select 1 from workspace_members wm
+             where wm.workspace_id = w.id
+               and wm.user_id = $2
+               and wm.role in ('owner', 'admin')
+          ))
+        limit 1`,
+      [workspaceId, userId],
+    );
+    if (!rows[0]) {
+      const error = new Error('Only a workspace owner or admin can authorize an OAuth client');
+      error.status = 403;
+      throw error;
     }
   }
 
@@ -259,6 +303,8 @@ function mountMcpOauthRoutes(app, deps = {}) {
         codeChallengeMethod: body.code_challenge_method || 'S256',
         scopes: body.scope,
       });
+      // Consent is the durable client-to-workspace authorization boundary.
+      await store.grantClient(workspaceId, clientId, userId);
 
       const loc = oauth.buildAuthorizeRedirect({ redirectUri, code, state });
       if (wantsJson(req) || String(req.headers.accept || '').includes('application/json')) {
@@ -281,34 +327,31 @@ function mountMcpOauthRoutes(app, deps = {}) {
         return oauthJsonError(res, 400, 'unsupported_grant_type', 'Only authorization_code is supported');
       }
 
-      let clientId = String(body.client_id || '');
-      let clientSecret = body.client_secret != null ? String(body.client_secret) : '';
-
-      // client_secret_basic
       const basic = parseBasicAuth(req.headers.authorization);
-      if (basic) {
-        clientId = basic.user || clientId;
-        clientSecret = basic.pass || clientSecret;
-      }
+      const bodyClientId = String(body.client_id || '');
+      const bodyHasSecret = body.client_secret != null;
+      const clientId = basic ? basic.user : bodyClientId;
 
       const client = await store.getClient(clientId);
       if (!client) return oauthJsonError(res, 401, 'invalid_client', 'Unknown client');
-      if (!store.clientSecretMatches(client, clientSecret)) {
+      const method = oauth.normalizeTokenAuthMethod(client.token_endpoint_auth_method);
+      const mechanismValid = method === 'none'
+        ? !basic && !bodyHasSecret
+        : method === 'client_secret_post'
+          ? !basic && bodyHasSecret && Boolean(bodyClientId)
+          : method === 'client_secret_basic'
+            ? Boolean(basic) && !bodyHasSecret && (!bodyClientId || bodyClientId === basic.user)
+            : false;
+      const presentedSecret = basic ? basic.pass : String(body.client_secret || '');
+      if (!mechanismValid || !store.clientSecretMatches(client, presentedSecret)) {
         return oauthJsonError(res, 401, 'invalid_client', 'Client authentication failed');
       }
 
-      const codeRow = await store.consumeCode({
+      const issued = await store.redeemCode({
         code: body.code,
         clientId,
         redirectUri: body.redirect_uri,
         codeVerifier: body.code_verifier,
-      });
-
-      const issued = await store.issueAccessToken({
-        clientId,
-        workspaceId: codeRow.workspace_id,
-        userId: codeRow.user_id,
-        scopes: parseJson(codeRow.scopes),
       });
 
       res.setHeader('Cache-Control', 'no-store');
@@ -357,13 +400,18 @@ function mountMcpOauthRoutes(app, deps = {}) {
       // Same owner-or-manage bar as consent: manage capability.
       await enforceWorkspaceRole(req.userId, workspaceId, 'manage');
       const body = req.body || {};
+      const requestedMethod = body.token_endpoint_auth_method ?? body.tokenEndpointAuthMethod;
+      if (requestedMethod != null && !oauth.normalizeTokenAuthMethod(requestedMethod)) {
+        return oauthJsonError(res, 400, 'invalid_client_metadata', 'Unsupported token_endpoint_auth_method');
+      }
       const created = await store.insertClient({
         workspaceId,
         name: body.name || 'Workspace MCP OAuth client',
         redirectUris: body.redirect_uris || body.redirectUris || defaultRedirects(),
-        tokenEndpointAuthMethod: body.token_endpoint_auth_method || body.tokenEndpointAuthMethod || 'none',
+        tokenEndpointAuthMethod: requestedMethod,
         createdBy: req.userId,
       });
+      await store.grantClient(workspaceId, created.clientId, req.userId);
       if (recordAudit) {
         await recordAudit({
           workspaceId,

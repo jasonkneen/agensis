@@ -32,6 +32,13 @@ export function useAgentConnections(workspaceId: string | null, seed?: AgentConn
   const [loading, setLoading] = useState(false);
   const [realtimeWorkspaceId, setRealtimeWorkspaceId] = useState<string | null>(null);
   const workspaceKey = normalizeWorkspaceId(workspaceId);
+  const workspaceRequestRef = useRef({ workspaceKey, generation: 0 });
+  if (workspaceRequestRef.current.workspaceKey !== workspaceKey) {
+    workspaceRequestRef.current = {
+      workspaceKey,
+      generation: workspaceRequestRef.current.generation + 1,
+    };
+  }
   // Bootstrap seed is a one-shot cold paint. Once the dedicated connections
   // endpoint has answered for this workspace, it is authoritative (it reconciles
   // against live sockets). Letting seed re-apply after that fetch was the
@@ -51,6 +58,8 @@ export function useAgentConnections(workspaceId: string | null, seed?: AgentConn
   }, [seed, workspaceKey]);
 
   const fetchConnections = useCallback(async () => {
+    const request = workspaceRequestRef.current;
+    const isCurrent = () => workspaceRequestRef.current === request;
     if (!workspaceKey) {
       setConnections([]);
       setRealtimeWorkspaceId(null);
@@ -65,6 +74,7 @@ export function useAgentConnections(workspaceId: string | null, seed?: AgentConn
         headers: apiAuthHeaders(),
       });
       const payload = await response.json().catch(() => null);
+      if (!isCurrent()) return;
       if (response.ok && Array.isArray(payload?.data)) {
         fetchedForWorkspaceRef.current = workspaceKey;
         setConnections(payload.data);
@@ -75,11 +85,12 @@ export function useAgentConnections(workspaceId: string | null, seed?: AgentConn
       setConnections([]);
       setRealtimeWorkspaceId(null);
     } catch {
+      if (!isCurrent()) return;
       // Keep seed / last good paint on transient network errors — do not mark
       // fetched, so a later seed can still apply if we never got a 2xx.
       setRealtimeWorkspaceId(null);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [workspaceKey]);
 
@@ -115,6 +126,9 @@ export function useAgentConnections(workspaceId: string | null, seed?: AgentConn
       filter: `workspace_id=eq.${workspaceKey}`,
     },
     (payload) => {
+      if (workspaceRequestRef.current.workspaceKey !== workspaceKey) return;
+      const rowWorkspaceId = payload.new?.workspace_id || payload.old?.workspace_id;
+      if (rowWorkspaceId !== workspaceKey) return;
       if (!deduper.shouldProcess(payload)) return;
       if (payload.eventType === 'INSERT') {
         const row = payload.new;

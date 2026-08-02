@@ -181,7 +181,7 @@ const TOOLS_ARE_ADVISORY = true;
 /** Closed set. 'authored' here, 'derived' from an agent, 'imported' from outside. */
 const TEMPLATE_SOURCES = Object.freeze(new Set(['authored', 'derived', 'imported']));
 
-const RUN_MODES = Object.freeze(new Set(['builtin', 'daemon', 'sandbox']));
+const RUN_MODES = Object.freeze(new Set(['builtin', 'daemon', 'sandbox', 'external']));
 const RUNTIMES = Object.freeze(new Set(['', 'claude', 'codex', 'amp']));
 const PURPOSES = Object.freeze(new Set(['collaborator', 'resource']));
 const RESOURCE_FACETS = Object.freeze(['context', 'knowledge', 'tooling', 'code']);
@@ -200,6 +200,11 @@ const MAX_DESCRIPTION = 600;
 const MAX_PROSE = 20_000;
 const MAX_LIST_ITEMS = 64;
 const MAX_LIST_ITEM = 120;
+
+/** Normalize the persisted wire value at projection boundaries. */
+function normalizeAgentRunMode(value) {
+ return RUN_MODES.has(String(value)) ? String(value) : 'builtin';
+}
 
 /**
  * The daemon's lean-prompt ceiling, mirrored here as a literal.
@@ -374,7 +379,7 @@ function agentToTemplateDraft(row = {}) {
    ? RESOURCE_FACETS.filter((facet) => new Set(parseList(row.resource_facets)).has(facet))
    : [],
   model: text(row.model, MAX_NAME) || 'auto',
-  runMode: RUN_MODES.has(String(row.run_mode)) ? String(row.run_mode) : 'builtin',
+  runMode: normalizeAgentRunMode(row.run_mode),
   runtime: '',
   avatar: text(row.avatar, MAX_NAME),
   accentColor: text(row.accent_color, 32),
@@ -416,7 +421,7 @@ function templateToAgentDraft(template = {}) {
    ? RESOURCE_FACETS.filter((facet) => template.resourceFacets.includes(facet))
    : [],
   model: template.model || 'auto',
-  runMode: template.runMode || 'builtin',
+  runMode: normalizeAgentRunMode(template.runMode),
   runtime: template.runtime || '',
   avatar: template.avatar || '',
   accentColor: template.accentColor || '',
@@ -592,6 +597,7 @@ module.exports = {
  NEVER_CARRIED_FIELDS,
  TEMPLATE_SOURCES,
  RUN_MODES,
+ normalizeAgentRunMode,
  RUNTIMES,
  PURPOSES,
  RESOURCE_FACETS,

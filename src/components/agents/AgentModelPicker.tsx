@@ -12,7 +12,9 @@ import { ChevronDown, Sparkles, Zap } from 'lucide-react';
 import type { WorkspaceAgent } from '../../types';
 import { modelOptionsForRuntime } from '../../lib/runtimeModels';
 import {
+  agentModelPickerCanSwitch,
   agentExecutionRuntimeFromMetadata,
+  normalizeAgentRunMode,
   type AgentExecutionRuntime,
 } from '../../lib/agentTemplates';
 import { Button } from '@/components/ui/button';
@@ -29,9 +31,8 @@ function executionRuntime(agent: WorkspaceAgent): AgentExecutionRuntime {
   return agentExecutionRuntimeFromMetadata(agent.metadata as Record<string, unknown> | undefined);
 }
 
-function runModeOf(agent: WorkspaceAgent): 'builtin' | 'daemon' | 'sandbox' {
-  if (agent.run_mode === 'daemon' || agent.run_mode === 'sandbox') return agent.run_mode;
-  return 'builtin';
+function runModeOf(agent: WorkspaceAgent) {
+  return normalizeAgentRunMode(agent.run_mode);
 }
 
 export function AgentModelPicker({
@@ -67,9 +68,9 @@ export function AgentModelPicker({
   const selected = options.find(o => o.id === current) || options[0];
   const displayLabel = selected?.label || current || 'Auto';
 
-  // Amp manages its own model — picker is display-only.
+  // Amp and Connector clients manage their own model — picker is display-only.
   // Desktop ACP (Hermes/Grok/…) can freeform via the option list + saved ids.
-  const canSwitch = !(runMode === 'daemon' && runtime === 'amp');
+  const canSwitch = agentModelPickerCanSwitch(runMode, runtime);
 
   const handleChange = async (modelId: string) => {
     if (!canSwitch || modelId === (agent.model || 'auto') || disabled) return;

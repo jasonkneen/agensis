@@ -92,9 +92,16 @@ test('a login token reaches exactly the tools the agw_ workspace token reaches',
     + 'if that changed, re-read AGENTS.md "Login tokens at the MCP door" before proceeding.',
   );
   // Pinned literally, so "both shrank to zero" cannot pass this test.
-  assert.equal(byUser.length, 38);
+  assert.equal(byUser.length, 41);
   assert.ok(byUser.includes('get_connect_command'), 'including the tool that mints an aga_ daemon token');
   assert.ok(byUser.includes('register_agent'));
+  for (const standingRuleTool of [
+    'list_agent_permission_rules',
+    'grant_agent_permission_rule',
+    'revoke_agent_permission_rule',
+  ]) {
+    assert.ok(byWorkspace.includes(standingRuleTool), `the workspace credential must retain ${standingRuleTool}`);
+  }
   for (const resourceLifecycleTool of ['delete_workspace_resource', 'restore_workspace_resource']) {
     assert.ok(byWorkspace.includes(resourceLifecycleTool), `the workspace credential must retain ${resourceLifecycleTool}`);
   }

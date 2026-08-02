@@ -54,6 +54,7 @@ function createBuiltinTurn(deps = {}) {
   claimMcpJob, submitMcpJobResult, agentStepParts, agentStepContent,
   dispatchTaskAssignment, scheduleTaskQueueDrain, hasMcpPresence,
   findConnectedAgent, updateAgentHeartbeat,
+  grantAgentPermissionRule, listAgentPermissionRules, revokeAgentPermissionRule,
   isAgentEnabled,
   listConfiguredSandboxCredentialKeys,
   listWorkspaceSkills,
@@ -303,6 +304,9 @@ function createBuiltinTurn(deps = {}) {
    enforceWorkspaceRole,
    roleHasWorkspaceCapability,
    workspaceResources,
+   grantAgentPermissionRule,
+   listAgentPermissionRules,
+   revokeAgentPermissionRule,
    // The credential-injecting provider proxy. Passed in (rather than reached for)
    // so mcp.cjs stays unit-testable with a mocked fetch and no live provider.
    callProviderOperation,

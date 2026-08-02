@@ -1259,6 +1259,14 @@ function ConnectionsPanel({
   const [oauthMinted, setOauthMinted] = useState<McpOauthClientMinted | null>(null);
   const [showOauthSecret, setShowOauthSecret] = useState(false);
   const [oauthBusy, setOauthBusy] = useState(false);
+  const workspaceRequestRef = useRef({ workspaceId, generation: 0 });
+  const copiedTimeoutRef = useRef<number | null>(null);
+  if (workspaceRequestRef.current.workspaceId !== workspaceId) {
+    workspaceRequestRef.current = {
+      workspaceId,
+      generation: workspaceRequestRef.current.generation + 1,
+    };
+  }
 
   const { connections, loading: clientsLoading, refetch: refetchClients } = useAgentConnections(workspaceId);
   const { pending, approve, deny, refresh: refreshRegistrations } = useAgentRegistrations(
@@ -1287,6 +1295,8 @@ function ConnectionsPanel({
   }, []);
 
   const loadStatus = useCallback(async () => {
+    const request = workspaceRequestRef.current;
+    const isCurrent = () => workspaceRequestRef.current === request;
     if (!workspaceId || !isWorkspaceOwner) {
       setInfo(null);
       setLiveToken(null);
@@ -1314,11 +1324,13 @@ function ConnectionsPanel({
     });
     try {
       const next = await getMcpConnection(workspaceId);
+      if (!isCurrent()) return;
       setInfo(next);
       setAuto(next.autoApprove);
       setLiveToken(null);
       setShowToken(false);
     } catch (e) {
+      if (!isCurrent()) return;
       // Status GET may 404 on a backend that has not been redeployed yet.
       // Keep fallback endpoints visible; do not map that to "no longer exists".
       const msg = e instanceof Error ? e.message : String(e);
@@ -1327,16 +1339,23 @@ function ConnectionsPanel({
       }
     }
     try {
-      setOauthCatalog(await getMcpOauthCatalog(workspaceId));
+      const catalog = await getMcpOauthCatalog(workspaceId);
+      if (!isCurrent()) return;
+      setOauthCatalog(catalog);
     } catch {
       // keep fallback catalog
     }
+    if (!isCurrent()) return;
     setOauthMinted(null);
     setShowOauthSecret(false);
     setLoading(false);
   }, [workspaceId, isWorkspaceOwner, mcpFallback]);
 
   useEffect(() => {
+    if (copiedTimeoutRef.current !== null) {
+      window.clearTimeout(copiedTimeoutRef.current);
+      copiedTimeoutRef.current = null;
+    }
     setInfo(null);
     setLiveToken(null);
     setShowToken(false);
@@ -1344,14 +1363,18 @@ function ConnectionsPanel({
     setErr(null);
     setWebhookOpen(false);
     setAuto(false);
+    setBusy(false);
     setOauthCatalog(null);
     setOauthMinted(null);
     setShowOauthSecret(false);
+    setOauthBusy(false);
     void loadStatus();
   }, [workspaceId, isWorkspaceOwner, loadStatus]);
 
   const mintOauthClient = async () => {
     if (!workspaceId) { setErr(WORKSPACE_UNAVAILABLE.reason); return; }
+    const request = workspaceRequestRef.current;
+    const isCurrent = () => workspaceRequestRef.current === request;
     setOauthBusy(true);
     setErr(null);
     try {
@@ -1359,52 +1382,67 @@ function ConnectionsPanel({
         name: 'MCP OAuth client',
         tokenEndpointAuthMethod: 'none',
       });
+      if (!isCurrent()) return;
       setOauthMinted(minted);
       setShowOauthSecret(false);
-      setOauthCatalog(await getMcpOauthCatalog(workspaceId));
+      const catalog = await getMcpOauthCatalog(workspaceId);
+      if (!isCurrent()) return;
+      setOauthCatalog(catalog);
     } catch (e) {
-      setErr(describeWriteFailure('create OAuth client', e).description);
+      if (isCurrent()) setErr(describeWriteFailure('create OAuth client', e).description);
     } finally {
-      setOauthBusy(false);
+      if (isCurrent()) setOauthBusy(false);
     }
   };
 
   const mintOrRotate = async () => {
     if (!workspaceId) { setErr(WORKSPACE_UNAVAILABLE.reason); return; }
     if (!isWorkspaceOwner) { setErr('Only the workspace owner can issue its control credential.'); return; }
+    const request = workspaceRequestRef.current;
+    const isCurrent = () => workspaceRequestRef.current === request;
     setBusy(true);
     setErr(null);
     try {
       const next = await generateMcpToken(workspaceId);
+      if (!isCurrent()) return;
       setInfo(next);
       setAuto(next.autoApprove);
       setLiveToken(next.token || null);
       setShowToken(false);
     } catch (e) {
-      setErr(describeWriteFailure('issue MCP credential', e).description);
+      if (isCurrent()) setErr(describeWriteFailure('issue MCP credential', e).description);
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
 
   const toggleAuto = async (next: boolean) => {
     if (!workspaceId) { setErr(WORKSPACE_UNAVAILABLE.reason); return; }
     if (!isWorkspaceOwner) { setErr('Only the workspace owner can change workspace credential policy.'); return; }
+    const request = workspaceRequestRef.current;
+    const isCurrent = () => workspaceRequestRef.current === request;
     setAuto(next);
     setErr(null);
     try {
       await setMcpAutoApprove(workspaceId, next);
     } catch (e) {
+      if (!isCurrent()) return;
       setAuto(!next);
       setErr(describeWriteFailure('change auto-approve', e).description);
     }
   };
 
   const copy = async (key: string, value: string) => {
+    const request = workspaceRequestRef.current;
     try {
       await navigator.clipboard.writeText(value);
+      if (workspaceRequestRef.current !== request) return;
       setCopied(key);
-      setTimeout(() => setCopied(null), 1500);
+      if (copiedTimeoutRef.current !== null) window.clearTimeout(copiedTimeoutRef.current);
+      copiedTimeoutRef.current = window.setTimeout(() => {
+        if (workspaceRequestRef.current === request) setCopied(null);
+        copiedTimeoutRef.current = null;
+      }, 1500);
     } catch { /* ignore */ }
   };
 

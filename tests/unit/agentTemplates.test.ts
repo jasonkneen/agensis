@@ -32,6 +32,14 @@ describe('agentRunModeLabel', () => {
   });
 });
 
+describe('Connector run mode contract', () => {
+  it('keeps external metadata separate from daemon runtime metadata', () => {
+    expect(agentMetadataWithRuntime({ runtime: 'codex', acp_harness: 'grok', custom: true }, 'claude', 'external')).toEqual({
+      custom: true,
+    });
+  });
+});
+
 describe('dedupeHandle', () => {
   it('returns the base handle when it is free', () => {
     expect(dedupeHandle('coder-cli', ['scout', 'research'])).toBe('coder-cli');

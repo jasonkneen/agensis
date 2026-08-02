@@ -76,6 +76,12 @@ const MUST_BE_LINTED = [
   'shared/reaction-events.cjs',
   'server/index.cjs',
   'server/mcp.cjs',
+  // OAuth is an unauthenticated registration/authorization door plus the token
+  // verifier that maps a bearer onto the MCP authorization surface. The shared
+  // module validates redirect URIs, PKCE, scopes, and client auth methods.
+  'server/mcp-oauth-routes.cjs',
+  'server/mcp-oauth.cjs',
+  'shared/mcp-oauth.cjs',
   'server/skills.cjs',
   // Mints LiveKit join tokens and verifies the LiveKit webhook signature.
   'server/huddles.cjs',

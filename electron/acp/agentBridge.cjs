@@ -75,6 +75,8 @@ function createBridgeState(config) {
     activeJobId: null,
     /** createPermissionBroker for in-chat PermissionRequestCard path. */
     permissionBroker: null,
+    /** Promise tail serializing jobs for this agent's single ACP session. */
+    jobQueue: Promise.resolve(),
   };
 }
 
@@ -99,6 +101,9 @@ function sendRegister(ws, state) {
     name: state.config.name || state.config.handle || 'Desktop ACP',
     host: os.hostname(),
     cwd: state.config.cwd || process.cwd(),
+    // Proof that this same desktop process still owns these parked promises.
+    // The server re-homes only these ids onto the replacement connection.
+    permissionRequestIds: state.permissionBroker?.parkedRequestIds() || [],
     metadata: {
       runtime: 'agensis-desktop-acp',
       ...(state.executionRuntime ? { executionRuntime: state.executionRuntime } : {}),
@@ -346,7 +351,7 @@ function connect(state) {
     }
 
     if (message.type === 'agent_job' && message.job?.id) {
-      void runJob(state, message.job);
+      void enqueueAgentJob(state, message.job);
       return;
     }
 
@@ -525,6 +530,14 @@ async function runJob(state, job) {
   }
 }
 
+function enqueueAgentJob(state, job, runner = runJob) {
+  const execution = state.jobQueue.then(() => runner(state, job));
+  state.jobQueue = execution.catch((error) => {
+    console.error(`[desktop-acp:${state.agentId}] queued job failed:`, error?.message || error);
+  });
+  return execution;
+}
+
 function stopBridge(agentId) {
   const key = String(agentId || '');
   const state = bridges.get(key);
@@ -571,4 +584,5 @@ module.exports = {
   resolveHttpBackendBase,
   mapHarnessToRuntime,
   resolveDeclaredRuntime,
+  enqueueAgentJob,
 };

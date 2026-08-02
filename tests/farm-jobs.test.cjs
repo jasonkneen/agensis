@@ -39,6 +39,52 @@ test('Farm dispatch creates a sessionless job and sends it to the selected daemo
   assert.equal(sent[0].job.sessionId, null);
 });
 
+test('simultaneous Farm dispatch atomically reserves one active job per agent', async () => {
+  const sent = [];
+  let activeJob = null;
+  let releaseFirst;
+  const firstAtBarrier = new Promise((resolve) => { releaseFirst = resolve; });
+  let lock = Promise.resolve();
+  const db = {
+    calls: [],
+    async begin(callback) {
+      const previous = lock;
+      let unlock;
+      lock = new Promise((resolve) => { unlock = resolve; });
+      await previous;
+      try { return await callback(db); } finally { unlock(); }
+    },
+    async unsafe(sql, params = []) {
+      const normalized = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+      db.calls.push({ sql: normalized, params });
+      if (/select \* from workspace_agents/.test(normalized)) {
+        return [{ id: 'agent-1', workspace_id: 'workspace-1', name: 'Coder', handle: 'coder', model: 'auto', run_mode: 'daemon', enabled: true }];
+      }
+      if (/pg_advisory_xact_lock/.test(normalized)) return [];
+      if (/select \* from agent_jobs/.test(normalized) && /status in \('queued', 'running'\)/.test(normalized)) {
+        if (!activeJob) releaseFirst();
+        return activeJob ? [activeJob] : [];
+      }
+      if (/insert into agent_jobs/.test(normalized)) {
+        await firstAtBarrier;
+        activeJob = { id: 'job-1', workspace_id: params[0], agent_id: params[1], connection_id: params[2], session_id: null, prompt: params[3], status: 'running', metadata: params[4] };
+        return [activeJob];
+      }
+      return [];
+    },
+  };
+  __test.setTestDb(db);
+  const connection = { connectionId: 'connection-1', ws: { readyState: 1, send: (value) => sent.push(JSON.parse(value)) } };
+  const dispatch = () => __test.dispatchFarmAgentJob({ workspaceId: 'workspace-1', agentId: 'agent-1', prompt: 'work', connection });
+  const results = await Promise.allSettled([dispatch(), dispatch()]);
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+  const rejected = results.find((result) => result.status === 'rejected');
+  assert.equal(rejected.reason.status, 409);
+  assert.equal(rejected.reason.code, 'agent_busy');
+  assert.equal(db.calls.filter((call) => /insert into agent_jobs/.test(call.sql)).length, 1);
+  assert.equal(sent.filter((frame) => frame.type === 'agent_job').length, 1);
+});
+
 test('Farm dispatch rejects a connected daemon that does not advertise coding support', async () => {
   const connection = { connectionId: 'connection-1', capabilities: { codingRoute: false }, ws: { readyState: 1, send: () => {} } };
   const db = makeDb([

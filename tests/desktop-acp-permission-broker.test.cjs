@@ -114,6 +114,23 @@ test('broker sends agent_permission_request and settles on prepare+commit', asyn
   assert.deepEqual(broker.getPermanentRules(), []);
 });
 
+test('broker enumerates durable request ids during prepare and commit phases', async () => {
+  const outbound = [];
+  const broker = createPermissionBroker({
+    send: (frame) => { outbound.push(frame); return true; },
+    idFactory: () => 'durable-request-1',
+  });
+  const pending = broker.request({ jobId: 'job-1', toolName: 'Edit', title: 'Edit file' });
+  assert.deepEqual(broker.parkedRequestIds(), ['durable-request-1']);
+  broker.handleServerFrame({
+    type: 'agent_permission_prepare', requestId: 'durable-request-1', behavior: 'allow', scope: 'once',
+  });
+  assert.deepEqual(broker.parkedRequestIds(), ['durable-request-1']);
+  broker.handleServerFrame({ type: 'agent_permission_commit', requestId: 'durable-request-1' });
+  await pending;
+  assert.deepEqual(broker.parkedRequestIds(), []);
+});
+
 test('session grant is remembered for the rest of the job; always sticks permanently', async () => {
   const outbound = [];
   const broker = createPermissionBroker({
@@ -299,6 +316,8 @@ test('bridge register metadata advertises permissionDecisionReceipts and seeds r
   assert.match(src, /jobPermissionRules/);
   assert.match(src, /initialRules/);
   assert.match(src, /PermissionRequestCard|permissionBroker/);
+  assert.match(src, /permissionRequestIds/);
+  assert.match(src, /parkedRequestIds/);
 });
 
 test('client prefers onPermissionRequest over silent cancel', () => {

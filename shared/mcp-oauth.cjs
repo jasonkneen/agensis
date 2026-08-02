@@ -64,15 +64,21 @@ function timingSafeEqualHex(a, b) {
 
 /** Normalize space-delimited scope string; only closed allowlist survives. */
 function normalizeScopes(input) {
+  const omitted = input == null || String(input).trim() === '';
   const raw = Array.isArray(input)
     ? input.map(String)
-    : String(input || DEFAULT_SCOPE).split(/[\s+]+/).filter(Boolean);
+    : String(omitted ? DEFAULT_SCOPE : input).split(/[\s+]+/).filter(Boolean);
   const allowed = new Set(MCP_OAUTH_SCOPES);
   const out = [];
   for (const scope of raw) {
     if (allowed.has(scope) && !out.includes(scope)) out.push(scope);
   }
-  return out.length ? out : [DEFAULT_SCOPE];
+  if (out.length) return out;
+  if (omitted) return [DEFAULT_SCOPE];
+  const error = new Error('invalid_scope: no supported scopes requested');
+  error.status = 400;
+  error.oauthError = 'invalid_scope';
+  throw error;
 }
 
 function scopesToString(scopes) {
@@ -88,8 +94,9 @@ function verifyPkceS256(codeVerifier, codeChallenge) {
 }
 
 function normalizeTokenAuthMethod(value) {
-  const method = String(value || 'none').trim();
-  return AUTH_METHODS.includes(method) ? method : 'none';
+  if (value == null || String(value).trim() === '') return 'none';
+  const method = String(value).trim();
+  return AUTH_METHODS.includes(method) ? method : null;
 }
 
 function normalizeRedirectUris(input) {

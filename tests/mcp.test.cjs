@@ -173,6 +173,7 @@ function makeRes() {
     json(o) { this.body = o; return this; },
     end() { this.ended = true; return this; },
     setHeader(k, v) { this.headers[k] = v; },
+    getHeader(k) { return this.headers[k]; },
   };
 }
 
@@ -234,6 +235,80 @@ test('tools/list exposes the full surface', async () => {
   // Every tool must carry an inputSchema object.
   for (const t of res.body.result.tools) {
     assert.equal(t.inputSchema.type, 'object', `${t.name} schema`);
+  }
+});
+
+test('standing permission-rule tools are manage-only and dispatch through the audited services', async () => {
+  const db = makeDb();
+  const calls = [];
+  const { deps } = makeDeps({
+    db,
+    deps: {
+      listAgentPermissionRules: async (input) => {
+        calls.push({ operation: 'list', input });
+        return ['WebFetch'];
+      },
+      grantAgentPermissionRule: async (input) => {
+        calls.push({ operation: 'grant', input });
+        return ['WebFetch', input.rule];
+      },
+      revokeAgentPermissionRule: async (input) => {
+        calls.push({ operation: 'revoke', input });
+        return ['WebFetch'];
+      },
+    },
+  });
+  const handler = createMcpHandler(deps);
+
+  const agentList = await call(handler, { token: 'good-token', body: rpc('tools/list') });
+  const agentTools = agentList.body.result.tools.map((tool) => tool.name);
+  assert.ok(!agentTools.includes('list_agent_permission_rules'));
+  assert.ok(!agentTools.includes('grant_agent_permission_rule'));
+  assert.ok(!agentTools.includes('revoke_agent_permission_rule'));
+
+  const denied = await call(handler, {
+    token: 'good-token',
+    body: rpc('tools/call', {
+      name: 'grant_agent_permission_rule',
+      arguments: { agent_id: 'agent-1', rule: 'Bash(git status:*)' },
+    }),
+  });
+  assert.equal(denied.body.result.isError, true);
+  assert.match(denied.body.result.content[0].text, /not available for a agent token/i);
+  assert.equal(calls.length, 0, 'an agent credential must be refused before the service runs');
+
+  for (const token of ['ws-token', 'user-token']) {
+    const listed = await call(handler, {
+      token,
+      body: rpc('tools/call', {
+        name: 'list_agent_permission_rules', arguments: { agent_id: 'agent-1' },
+      }),
+    });
+    assert.deepEqual(JSON.parse(listed.body.result.content[0].text).rules, ['WebFetch']);
+  }
+  const granted = await call(handler, {
+    token: 'ws-token',
+    body: rpc('tools/call', {
+      name: 'grant_agent_permission_rule',
+      arguments: { agent_id: 'agent-1', rule: 'Bash(git status:*)' },
+    }),
+  });
+  assert.deepEqual(JSON.parse(granted.body.result.content[0].text).rules, ['WebFetch', 'Bash(git status:*)']);
+  const revoked = await call(handler, {
+    token: 'ws-token',
+    body: rpc('tools/call', {
+      name: 'revoke_agent_permission_rule',
+      arguments: { agent_id: 'agent-1', rule: 'Bash(git status:*)' },
+    }),
+  });
+  assert.deepEqual(JSON.parse(revoked.body.result.content[0].text).rules, ['WebFetch']);
+
+  assert.deepEqual(calls.map((entry) => entry.operation), ['list', 'list', 'grant', 'revoke']);
+  assert.equal(calls[0].input.actor.kind, 'workspace');
+  assert.equal(calls[1].input.actor.kind, 'user');
+  for (const entry of calls) {
+    assert.equal(entry.input.workspaceId, WS);
+    assert.equal(entry.input.agentId, 'agent-1');
   }
 });
 

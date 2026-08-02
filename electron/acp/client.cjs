@@ -306,6 +306,9 @@ function createAcpClient(options) {
      * When set, preferred over the native Electron dialog for Ask / residual shell.
      */
     onPermissionRequest = null,
+    requestTimeoutMs = 30_000,
+    promptTimeoutMs = 30 * 60_000,
+    terminateGraceMs = 2_000,
   } = options;
   // yolo / Full access → set_mode bypassPermissions + auto-allow any residual asks.
   // acceptEdits → set_mode acceptEdits; residual shell asks still show a dialog.
@@ -317,7 +320,7 @@ function createAcpClient(options) {
   let permissionRequestHandler = typeof onPermissionRequest === 'function' ? onPermissionRequest : null;
 
   let nextId = 1;
-  /** @type {Map<number, { resolve: Function, reject: Function }>} */
+  /** @type {Map<number, { resolve: Function, reject: Function, timer: NodeJS.Timeout|null }>} */
   const pending = new Map();
   /** @type {Set<(params: object) => void>} */
   const updateHandlers = new Set();
@@ -342,6 +345,23 @@ function createAcpClient(options) {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
+  function rejectPending(error) {
+    for (const [, entry] of pending) {
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.reject(error);
+    }
+    pending.clear();
+  }
+
+  function terminateChild() {
+    try { child.kill('SIGTERM'); } catch { /* ignore */ }
+    const timer = setTimeout(() => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      try { child.kill('SIGKILL'); } catch { /* ignore */ }
+    }, terminateGraceMs);
+    if (typeof timer.unref === 'function') timer.unref();
+  }
+
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk) => {
     for (const line of String(chunk || '').split('\n')) {
@@ -351,15 +371,13 @@ function createAcpClient(options) {
 
   child.on('error', (err) => {
     closed = true;
-    for (const [, p] of pending) p.reject(err);
-    pending.clear();
+    rejectPending(err);
   });
 
   child.on('exit', (code, signal) => {
     closed = true;
     const err = new Error(`ACP process exited (code=${code}, signal=${signal || 'none'})`);
-    for (const [, p] of pending) p.reject(err);
-    pending.clear();
+    rejectPending(err);
   });
 
   child.stdout.setEncoding('utf8');
@@ -395,15 +413,27 @@ function createAcpClient(options) {
     child.stdin.write(`${JSON.stringify(msg)}\n`);
   }
 
-  function request(method, params = {}) {
+  function request(method, params = {}, requestOptions = {}) {
     if (closed) return Promise.reject(new Error('ACP process is closed'));
     const id = nextId++;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      const timeoutMs = Number(requestOptions.timeoutMs ?? requestTimeoutMs);
+      const timer = Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? setTimeout(() => {
+          const entry = pending.get(id);
+          if (!entry) return;
+          pending.delete(id);
+          try { requestOptions.onTimeout?.(); } catch { /* timeout cleanup is best effort */ }
+          reject(new Error(`ACP request ${method} timed out after ${timeoutMs}ms`));
+        }, timeoutMs)
+        : null;
+      if (timer && typeof timer.unref === 'function') timer.unref();
+      pending.set(id, { resolve, reject, timer });
       try {
         write({ jsonrpc: '2.0', id, method, params });
       } catch (err) {
         pending.delete(id);
+        if (timer) clearTimeout(timer);
         reject(err);
       }
     });
@@ -429,6 +459,7 @@ function createAcpClient(options) {
       const waiter = pending.get(msg.id);
       if (!waiter) return;
       pending.delete(msg.id);
+      if (waiter.timer) clearTimeout(waiter.timer);
       if (msg.error) {
         const err = new Error(msg.error.message || JSON.stringify(msg.error));
         err.code = msg.error.code;
@@ -653,6 +684,16 @@ function createAcpClient(options) {
       const result = await request('session/prompt', {
         sessionId,
         prompt: [{ type: 'text', text: String(text || '') }],
+      }, {
+        timeoutMs: promptTimeoutMs,
+        onTimeout: () => {
+          try { notify('session/cancel', { sessionId }); } catch { /* process may already be gone */ }
+          // Give a cancellation-aware harness a grace interval to unwind the
+          // prompt. Only then terminate it; SIGTERM at the same instant as the
+          // cancel notification would make the notification ceremonial.
+          const timer = setTimeout(terminateChild, terminateGraceMs);
+          if (typeof timer.unref === 'function') timer.unref();
+        },
       });
       const reply = chunks.join('') || extractTextFromResult(result) || '';
       return {
@@ -680,15 +721,11 @@ function createAcpClient(options) {
   }
 
   function dispose() {
+    if (closed && child.exitCode !== null) return;
     closed = true;
+    rejectPending(new Error('ACP client disposed'));
     try { child.stdin.end(); } catch { /* ignore */ }
-    try { child.kill('SIGTERM'); } catch { /* ignore */ }
-    const t = setTimeout(() => {
-      try {
-        if (!child.killed) child.kill('SIGKILL');
-      } catch { /* ignore */ }
-    }, 2000);
-    if (typeof t.unref === 'function') t.unref();
+    terminateChild();
   }
 
   return {

@@ -16,10 +16,7 @@ import {
  createDbRateLimiter,
  evaluatePasswordServerSide,
  createTokenVersionCache,
- ALLOWED_TABLES,
  VERSIONED_TABLES,
- JSON_COLUMNS_BY_TABLE,
- arrayColumnElemType,
  toPgArrayLiteral,
  stripPrivilegedDbValues,
  validateUniformInsertRows,
@@ -124,13 +121,13 @@ import {
  quoteIdent,
  ensureTable,
  normalizeColumns,
- isJsonColumn,
  invalidJsonValue,
  createBindDbParam,
  buildWhereClause,
  buildOrderClause,
  mapDbError,
 } from '../../server/lib/db-sql.cjs';
+import { normalizeAgentRunMode } from '../../shared/agentTemplates.cjs';
 import { voiceCapabilities, unavailableReason, mintCartesiaToken, scrubError } from '../../shared/voice-core.cjs';
 // Reaction flow events. This lane can write `messages.reactions` through the
 // same generic /backend/db/update route the Fly lane serves, so it queues the
@@ -1116,9 +1113,7 @@ function publicWorkspaceAgent(row) {
   metadata: parseJsonObject(row.metadata),
   identity: parseJsonObject(row.identity),
   model: resolveExecutionModel(row.model, runtime),
-  run_mode: row.run_mode === 'daemon' ? 'daemon'
-   : row.run_mode === 'sandbox' ? 'sandbox'
-    : 'builtin',
+  run_mode: normalizeAgentRunMode(row.run_mode),
   sandbox_provider: row.sandbox_provider || null,
   sandbox_config: parseJsonObject(row.sandbox_config),
   permissionMode,

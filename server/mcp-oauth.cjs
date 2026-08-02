@@ -18,6 +18,12 @@ function createMcpOauthStore({ getDb, hashAgentToken }) {
   }) {
     const clientId = oauth.createClientId();
     const method = oauth.normalizeTokenAuthMethod(tokenEndpointAuthMethod);
+    if (!method) {
+      const err = new Error('Unsupported token_endpoint_auth_method');
+      err.status = 400;
+      err.oauthError = 'invalid_client_metadata';
+      throw err;
+    }
     const uris = oauth.normalizeRedirectUris(redirectUris);
     if (!uris.length) {
       const err = new Error('At least one valid redirect_uri is required');
@@ -74,12 +80,14 @@ function createMcpOauthStore({ getDb, hashAgentToken }) {
 
   async function listWorkspaceClients(workspaceId) {
     const rows = await getDb().unsafe(
-      `select id, client_id, workspace_id, name, token_endpoint_auth_method,
-              redirect_uris, scopes, created_at,
-              (client_secret_hash <> '') as has_secret
-         from mcp_oauth_clients
-        where workspace_id = $1 and revoked_at is null
-        order by created_at desc
+      `select c.id, c.client_id, g.workspace_id, c.name, c.token_endpoint_auth_method,
+              c.redirect_uris, c.scopes, c.created_at,
+              (c.client_secret_hash <> '') as has_secret
+         from mcp_oauth_clients c
+         join mcp_oauth_client_grants g on g.client_id = c.client_id
+          and g.workspace_id = $1 and g.revoked_at is null
+        where c.revoked_at is null
+        order by c.created_at desc
         limit 50`,
       [workspaceId],
     );
@@ -96,15 +104,38 @@ function createMcpOauthStore({ getDb, hashAgentToken }) {
     }));
   }
 
-  async function revokeClient(workspaceId, clientId) {
-    const rows = await getDb().unsafe(
-      `update mcp_oauth_clients
-          set revoked_at = now()
-        where workspace_id = $1 and client_id = $2 and revoked_at is null
-        returning client_id`,
-      [workspaceId, clientId],
+  async function grantClient(workspaceId, clientId, userId) {
+    await getDb().unsafe(
+      `insert into mcp_oauth_client_grants (client_id, workspace_id, granted_by)
+       values ($1, $2, $3)
+       on conflict (client_id, workspace_id) do update
+         set granted_by = excluded.granted_by, granted_at = now(), revoked_at = null`,
+      [clientId, workspaceId, userId || null],
     );
-    return Boolean(rows[0]);
+  }
+
+  async function revokeClient(workspaceId, clientId) {
+    const db = getDb();
+    return db.begin(async (tx) => {
+      const rows = await tx.unsafe(
+        `update mcp_oauth_client_grants set revoked_at = now()
+          where workspace_id = $1 and client_id = $2 and revoked_at is null
+          returning client_id`,
+        [workspaceId, clientId],
+      );
+      if (!rows[0]) return false;
+      await tx.unsafe(
+        `update mcp_oauth_tokens set revoked_at = now()
+          where workspace_id = $1 and client_id = $2 and revoked_at is null`,
+        [workspaceId, clientId],
+      );
+      await tx.unsafe(
+        `update mcp_oauth_codes set used_at = now()
+          where workspace_id = $1 and client_id = $2 and used_at is null`,
+        [workspaceId, clientId],
+      );
+      return true;
+    });
   }
 
   function clientSecretMatches(row, presentedSecret) {
@@ -160,17 +191,26 @@ function createMcpOauthStore({ getDb, hashAgentToken }) {
     return { code, expiresAt };
   }
 
-  async function consumeCode({
+  async function redeemCode({
     code,
     clientId,
     redirectUri,
     codeVerifier,
   }) {
     const codeHash = hash(code);
-    const rows = await getDb().unsafe(
-      `select * from mcp_oauth_codes where code_hash = $1 limit 1`,
-      [codeHash],
-    );
+    const db = getDb();
+    return db.begin(async (tx) => {
+    const existing = await tx.unsafe(
+      `select code_challenge from mcp_oauth_codes where code_hash = $1 limit 1`, [codeHash]);
+    if (!existing[0] || !oauth.verifyPkceS256(codeVerifier, existing[0].code_challenge)) {
+      const err = new Error('Invalid authorization code or PKCE verification failed');
+      err.status = 400; err.oauthError = 'invalid_grant'; throw err;
+    }
+    const rows = await tx.unsafe(
+      `update mcp_oauth_codes set used_at = now()
+        where code_hash = $1 and client_id = $2 and redirect_uri = $3
+          and used_at is null and expires_at > now()
+        returning *`, [codeHash, clientId, redirectUri]);
     const row = rows[0];
     if (!row) {
       const err = new Error('Invalid authorization code');
@@ -178,56 +218,16 @@ function createMcpOauthStore({ getDb, hashAgentToken }) {
       err.oauthError = 'invalid_grant';
       throw err;
     }
-    if (row.used_at) {
-      const err = new Error('Authorization code already used');
-      err.status = 400;
-      err.oauthError = 'invalid_grant';
-      throw err;
-    }
-    if (new Date(row.expires_at).getTime() <= Date.now()) {
-      const err = new Error('Authorization code expired');
-      err.status = 400;
-      err.oauthError = 'invalid_grant';
-      throw err;
-    }
-    if (String(row.client_id) !== String(clientId)) {
-      const err = new Error('client_id mismatch');
-      err.status = 400;
-      err.oauthError = 'invalid_grant';
-      throw err;
-    }
-    if (String(row.redirect_uri) !== String(redirectUri)) {
-      const err = new Error('redirect_uri mismatch');
-      err.status = 400;
-      err.oauthError = 'invalid_grant';
-      throw err;
-    }
-    if (!oauth.verifyPkceS256(codeVerifier, row.code_challenge)) {
-      const err = new Error('PKCE verification failed');
-      err.status = 400;
-      err.oauthError = 'invalid_grant';
-      throw err;
-    }
-    await getDb().unsafe(
-      `update mcp_oauth_codes set used_at = now() where code_hash = $1 and used_at is null`,
-      [codeHash],
-    );
-    return row;
-  }
-
-  async function issueAccessToken({ clientId, workspaceId, userId, scopes }) {
     const token = oauth.createAccessToken();
     const expiresAt = new Date(Date.now() + oauth.ACCESS_TOKEN_TTL_SEC * 1000).toISOString();
-    await getDb().unsafe(
+    await tx.unsafe(
       `insert into mcp_oauth_tokens
          (token_hash, client_id, workspace_id, user_id, scopes, expires_at)
        values ($1, $2, $3, $4, $5::jsonb, $6::timestamptz)`,
       [
         hash(token),
-        clientId,
-        workspaceId,
-        userId || null,
-        JSON.stringify(oauth.normalizeScopes(scopes)),
+        clientId, row.workspace_id, row.user_id || null,
+        JSON.stringify(parseJsonArray(row.scopes)),
         expiresAt,
       ],
     );
@@ -235,18 +235,23 @@ function createMcpOauthStore({ getDb, hashAgentToken }) {
       accessToken: token,
       tokenType: 'Bearer',
       expiresIn: oauth.ACCESS_TOKEN_TTL_SEC,
-      scope: oauth.scopesToString(scopes),
+      scope: oauth.scopesToString(parseJsonArray(row.scopes)),
       expiresAt,
     };
+    });
   }
 
   async function verifyAccessToken(token) {
     if (!oauth.isOauthAccessToken(token)) return null;
     const rows = await getDb().unsafe(
-      `select t.*, c.revoked_at as client_revoked_at, w.mcp_auto_approve
+      `select t.*, c.revoked_at as client_revoked_at, w.mcp_auto_approve,
+              (w.user_id = t.user_id or wm.role in ('owner', 'admin')) as can_manage
          from mcp_oauth_tokens t
          join mcp_oauth_clients c on c.client_id = t.client_id
          join workspaces w on w.id = t.workspace_id
+         left join workspace_members wm on wm.workspace_id = t.workspace_id and wm.user_id = t.user_id
+         join mcp_oauth_client_grants g on g.client_id = t.client_id
+          and g.workspace_id = t.workspace_id and g.revoked_at is null
         where t.token_hash = $1
           and t.revoked_at is null
           and c.revoked_at is null
@@ -255,7 +260,7 @@ function createMcpOauthStore({ getDb, hashAgentToken }) {
       [hash(token)],
     );
     const row = rows[0];
-    if (!row) return null;
+    if (!row || !(row.can_manage === true || row.can_manage === 't' || row.can_manage === 1)) return null;
     // Map onto existing MCP identity kinds (agent|workspace|user|invite|integration).
     // `oauth` is not in CONNECTED — tools/list would be empty and every tools/call
     // would fail. Consent always stamps user_id; fall back to workspace control.
@@ -288,10 +293,10 @@ function createMcpOauthStore({ getDb, hashAgentToken }) {
     getClient,
     listWorkspaceClients,
     revokeClient,
+    grantClient,
     clientSecretMatches,
     createCode,
-    consumeCode,
-    issueAccessToken,
+    redeemCode,
     verifyAccessToken,
   };
 }

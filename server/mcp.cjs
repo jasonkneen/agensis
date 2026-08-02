@@ -11,11 +11,10 @@ const {
 const { toPgArrayLiteral, createFirstUseWindow } = require('../shared/backend-core.cjs');
 const { controllerHasScope } = require('../shared/workspaceControl.cjs');
 
-// Which identity kinds get a "this credential was seen today" audit row. Only
-// the login-token path, because it is the only one with an open question
-// attached (see noteLoginTokenUse). Every other kind is a purpose-built MCP
-// credential whose use is not in doubt, and recording those would add rows
-// without changing any decision.
+// Which identity kinds get a "this login credential was seen today" audit row.
+// OAuth identities retain kind=user for tool authorization, but carry
+// auth=oauth and are recorded under their own action instead (see
+// noteLoginTokenUse). Other purpose-built MCP credentials add no useful signal.
 const KINDS_TO_RECORD = Object.freeze(new Set(['user']));
 const { normalizeTaskTitle, resolveTaskParentByTitle } = require('../shared/taskTitle.cjs');
 const { normalizeConversationMode } = require('../shared/channelMentions.cjs');
@@ -2269,6 +2268,104 @@ function buildTools() {
   },
  });
 
+ // -- Standing Relay permission rules -------------------------------------
+
+ add({
+  name: 'list_agent_permission_rules',
+  kinds: ['workspace', 'user'],
+  description: 'List the standing tool-permission rules stored for one agent. Requires workspace manage authority; agent and invite credentials cannot inspect or alter permanent grants.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    agent_id: { type: 'string', description: 'Agent id from list_agents.' },
+   },
+   required: ['agent_id'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   const agentId = requireString(args, 'agent_id');
+   if (typeof deps.listAgentPermissionRules !== 'function') {
+    throw new ToolError('This server does not support standing permission rules.');
+   }
+   try {
+    const rules = await deps.listAgentPermissionRules({
+     workspaceId: identity.workspaceId,
+     agentId,
+     actor: identity,
+    });
+    return { agent_id: agentId, rules };
+   } catch (err) {
+    throw new ToolError(err && err.message ? err.message : 'Could not list permission rules');
+   }
+  },
+ });
+
+ add({
+  name: 'grant_agent_permission_rule',
+  kinds: ['workspace', 'user'],
+  description: 'Add one standing tool-permission rule to an agent. This is a persistent privilege grant and requires workspace manage authority; agent and invite credentials cannot self-grant.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    agent_id: { type: 'string', description: 'Agent id from list_agents.' },
+    rule: { type: 'string', description: 'Exact standing rule to grant, such as Bash(git status:*).' },
+   },
+   required: ['agent_id', 'rule'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   const agentId = requireString(args, 'agent_id');
+   const rule = requireString(args, 'rule');
+   if (typeof deps.grantAgentPermissionRule !== 'function') {
+    throw new ToolError('This server does not support standing permission rules.');
+   }
+   try {
+    const rules = await deps.grantAgentPermissionRule({
+     workspaceId: identity.workspaceId,
+     agentId,
+     rule,
+     actor: identity,
+    });
+    return { agent_id: agentId, rules };
+   } catch (err) {
+    throw new ToolError(err && err.message ? err.message : 'Could not grant permission rule');
+   }
+  },
+ });
+
+ add({
+  name: 'revoke_agent_permission_rule',
+  kinds: ['workspace', 'user'],
+  description: 'Remove one standing tool-permission rule from an agent. Requires workspace manage authority; agent and invite credentials cannot change permanent grants.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    agent_id: { type: 'string', description: 'Agent id from list_agents.' },
+    rule: { type: 'string', description: 'Exact standing rule to revoke.' },
+   },
+   required: ['agent_id', 'rule'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   const agentId = requireString(args, 'agent_id');
+   const rule = requireString(args, 'rule');
+   if (typeof deps.revokeAgentPermissionRule !== 'function') {
+    throw new ToolError('This server does not support standing permission rules.');
+   }
+   try {
+    const rules = await deps.revokeAgentPermissionRule({
+     workspaceId: identity.workspaceId,
+     agentId,
+     rule,
+     actor: identity,
+    });
+    return { agent_id: agentId, rules };
+   } catch (err) {
+    throw new ToolError(err && err.message ? err.message : 'Could not revoke permission rule');
+   }
+  },
+ });
+
  // Bootstrap a Relay host over MCP: instead of an interactive client trying to
  // hold the agent's connection itself (a turn-based client can't keep claim_job
  // presence alive, so DMs hang), it asks here for the Relay CLI connect command
@@ -2720,16 +2817,26 @@ function createMcpHandler(deps) {
   * line and visibly the only thing that changes.
   */
  function noteLoginTokenUse(identity) {
-  if (!recordAudit || !identity || !KINDS_TO_RECORD.has(identity.kind)) return;
+  if (!recordAudit || !identity) return;
+  const isOauth = identity.auth === 'oauth';
+  if (!isOauth && !KINDS_TO_RECORD.has(identity.kind)) return;
   if (!identity.userId) return;
-  if (!loginTokenWindow.shouldRecord(`${identity.kind}:${identity.userId}`)) return;
+  const auditKind = isOauth ? 'oauth' : identity.kind;
+  const windowKey = isOauth
+   ? `${auditKind}:${identity.clientId || 'unknown'}:${identity.userId}`
+   : `${auditKind}:${identity.userId}`;
+  if (!loginTokenWindow.shouldRecord(windowKey)) return;
   try {
    Promise.resolve(recordAudit({
     workspaceId: identity.workspaceId || null,
     actor: { userId: identity.userId },
-    action: 'mcp.login_token_used',
-    target: { type: 'mcp_endpoint', label: 'POST /backend/mcp' },
-    detail: { kind: identity.kind, firstUseInWindowHours: 24 },
+    action: isOauth ? 'mcp.oauth_access_token_used' : 'mcp.login_token_used',
+    target: isOauth
+     ? { type: 'mcp_oauth_client', id: identity.clientId || null, label: 'POST /backend/mcp' }
+     : { type: 'mcp_endpoint', label: 'POST /backend/mcp' },
+    detail: isOauth
+     ? { kind: identity.kind, auth: 'oauth', clientId: identity.clientId || null, firstUseInWindowHours: 24 }
+     : { kind: identity.kind, firstUseInWindowHours: 24 },
    })).catch(() => {});
   } catch {
    // Measurement must never be able to fail an authenticated request.

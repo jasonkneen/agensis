@@ -23,7 +23,7 @@ const { createAutomations, mountAutomationRoutes } = require('./automations.cjs'
 const { createAgentTemplates, mountAgentTemplateRoutes } = require('./agent-templates-routes.cjs');
 const { createWorkspaceSkills, mountWorkspaceSkillRoutes } = require('./workspace-skills-routes.cjs');
 const {
- normalizeAgentTemplate, normalizeAgentIntent, agentToTemplateDraft, readTemplateExport, templateFingerprint,
+ normalizeAgentTemplate, normalizeAgentIntent, normalizeAgentRunMode, agentToTemplateDraft, readTemplateExport, templateFingerprint,
 } = require('../shared/agentTemplates.cjs');
 // Reactions are written through the generic /backend/db/update route as a whole
 // jsonb map, so their flow events come from diffing that map — see the module
@@ -2564,6 +2564,16 @@ ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_
     );
     CREATE INDEX IF NOT EXISTS idx_mcp_oauth_clients_workspace
       ON mcp_oauth_clients(workspace_id) WHERE revoked_at IS NULL;
+    CREATE TABLE IF NOT EXISTS mcp_oauth_client_grants (
+      client_id text NOT NULL REFERENCES mcp_oauth_clients(client_id) ON DELETE CASCADE,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      granted_by uuid,
+      granted_at timestamptz NOT NULL DEFAULT now(),
+      revoked_at timestamptz,
+      PRIMARY KEY (client_id, workspace_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_oauth_client_grants_workspace
+      ON mcp_oauth_client_grants(workspace_id) WHERE revoked_at IS NULL;
     CREATE TABLE IF NOT EXISTS mcp_oauth_codes (
       code_hash text PRIMARY KEY,
       client_id text NOT NULL,
@@ -2590,6 +2600,15 @@ ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_
     );
     CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_workspace
       ON mcp_oauth_tokens(workspace_id) WHERE revoked_at IS NULL;
+    INSERT INTO mcp_oauth_client_grants (client_id, workspace_id, granted_by)
+      SELECT client_id, workspace_id, created_by
+        FROM mcp_oauth_clients
+       WHERE workspace_id IS NOT NULL
+      UNION
+      SELECT client_id, workspace_id, user_id FROM mcp_oauth_codes
+      UNION
+      SELECT client_id, workspace_id, user_id FROM mcp_oauth_tokens
+      ON CONFLICT (client_id, workspace_id) DO NOTHING;
     -- An agent becomes claimable over MCP once its registration is approved.
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS mcp_approved boolean NOT NULL DEFAULT false;
     CREATE TABLE IF NOT EXISTS agent_registrations (
@@ -3259,6 +3278,9 @@ const readReceiptRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 // channel or a Telegram group mid-argument outruns a human webhook by a lot.
 const bridgeRateLimiter = createRateLimiter({ windowMs: 60_000, max: 600 });
 const mcpRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// Dynamic OAuth client registration is unauthenticated and creates durable
+// rows, so it has its own smaller per-IP budget rather than sharing MCP calls.
+const mcpOauthDcrRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 // A credentialed outbound call is not comparable to the DB reads the rest of the
 // MCP surface makes: it spends a provider's rate limit, it can provision billable
 // infrastructure, and a loop stuck on a 500 would hammer someone else's API with
@@ -4448,9 +4470,7 @@ function agentRuntimePayload(agent) {
   // and canvas_id each got shipped broken.
   identity: parseJsonObject(agent.identity),
   model: resolveExecutionModel(agent.model, runtime),
-  run_mode: agent.run_mode === 'daemon' ? 'daemon'
-   : agent.run_mode === 'sandbox' ? 'sandbox'
-    : 'builtin',
+  run_mode: normalizeAgentRunMode(agent.run_mode),
   sandbox_provider: agent.sandbox_provider || null,
   sandbox_config: parseJsonObject(agent.sandbox_config),
   permissionMode,
@@ -8660,6 +8680,9 @@ const builtinTurn = createBuiltinTurn({
  hasMcpPresence: (...a) => agentConnections.hasMcpPresence(...a),
  findConnectedAgent: (...a) => agentConnections.findConnectedAgent(...a),
  updateAgentHeartbeat: (...a) => agentConnections.updateAgentHeartbeat(...a),
+ grantAgentPermissionRule: (...a) => grantAgentPermissionRule(...a),
+ listAgentPermissionRules: (...a) => listAgentPermissionRules(...a),
+ revokeAgentPermissionRule: (...a) => revokeAgentPermissionRule(...a),
 });
 const {
  runToolUseLoop, toolResultText, mcpToolDeps, getBuiltinToolset,
@@ -8803,8 +8826,9 @@ const agentPermissions = createAgentPermissions({
 const {
  decideAgentPermissionRequest, expireConnectionPermissionRequests,
  expireStalePermissionRequests, handleAgentPermissionPrepared, handleAgentPermissionRequest,
- listAgentPermissionRequests, publicPermissionRequest, rehomePendingPermissionRequests,
- replayPermissionDecisions, revokeAgentPermissionRule, setAgentPermissionMode,
+ grantAgentPermissionRule, listAgentPermissionRequests, listAgentPermissionRules,
+ publicPermissionRequest, rehomePendingPermissionRequests, replayPermissionDecisions,
+ revokeAgentPermissionRule, setAgentPermissionMode,
 } = agentPermissions;
 
 // Task dispatch owns four of the maps resetTestState() clears, and the cadence
@@ -9215,6 +9239,7 @@ function createApp() {
  mountAgentPermissionRoutes(app, {
   ...coreDeps(),
   decideAgentPermissionRequest,
+  grantAgentPermissionRule,
   listAgentPermissionRequests,
   revokeAgentPermissionRule,
   setAgentPermissionMode,
@@ -9320,6 +9345,7 @@ function createApp() {
  });
  mountMcpOauthRoutes(app, {
   ...coreDeps(),
+  dcrRateLimiter: mcpOauthDcrRateLimiter,
   hashAgentToken,
   normalizeBaseUrl,
   requestBaseUrl,
@@ -10568,6 +10594,8 @@ module.exports = {
   expireConnectionPermissionRequests,
   rehomePendingPermissionRequests,
   replayPermissionDecisions,
+  grantAgentPermissionRule,
+  listAgentPermissionRules,
   revokeAgentPermissionRule,
   setAgentPermissionMode,
   publicPermissionRequest,

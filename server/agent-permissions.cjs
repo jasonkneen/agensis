@@ -175,6 +175,32 @@ function createAgentPermissions(deps = {}) {
   recordAudit = async () => null,
  } = deps;
 
+ /**
+  * Authenticate a permanent-rule management call and return its audit actor.
+  *
+  * HTTP callers arrive with a verified user id and still pass through the
+  * canonical manage-capability check. MCP's workspace credential is itself the
+  * owner-level control-plane secret, so it has no user id to check; accepting it
+  * requires the verified identity object, pinned to this exact workspace. Agent,
+  * invite, integration, and controller identities never pass this boundary.
+  */
+ async function authorizePermissionRuleManagement({ userId, workspaceId, actor } = {}) {
+  const targetWorkspaceId = String(workspaceId || '');
+  const actorWorkspaceId = String(actor?.workspaceId || '');
+  if (actorWorkspaceId && actorWorkspaceId !== targetWorkspaceId) {
+   throw forbidden('The authenticated identity belongs to a different workspace');
+  }
+  const actorUserId = String(userId || (actor?.kind === 'user' ? actor.userId : '') || '');
+  if (actorUserId) {
+   await enforceWorkspaceRole(actorUserId, targetWorkspaceId, 'manage');
+   return { userId: actorUserId };
+  }
+  if (actor?.kind === 'workspace' && actorWorkspaceId === targetWorkspaceId && targetWorkspaceId) {
+   return { label: `workspace:${targetWorkspaceId}` };
+  }
+  throw forbidden('You do not have permission to manage this workspace');
+ }
+
  /** The shape any route hands back — never a raw row, so a column added later is a deliberate exposure. */
  function publicPermissionRequest(row) {
   if (!row) return null;
@@ -1259,10 +1285,10 @@ function createAgentPermissions(deps = {}) {
  }
 
  /** Drop a permanent grant. Manage-only, same as making one. */
- async function revokeAgentPermissionRule({ userId, workspaceId, agentId, rule } = {}) {
+ async function revokeAgentPermissionRule({ userId, workspaceId, agentId, rule, actor } = {}) {
   const target = line(rule, MAX_RULE_LENGTH);
   if (!target) throw badRequest('rule is required');
-  await enforceWorkspaceRole(userId, workspaceId, 'manage');
+  const auditActor = await authorizePermissionRuleManagement({ userId, workspaceId, actor });
   // `metadata` is one jsonb document shared with host_folders, sandbox_skills,
   // identity hints and permanent permission grants. Read/merge/write without a
   // row lock loses whichever concurrent change commits first. Permanent grants
@@ -1342,7 +1368,7 @@ function createAgentPermissions(deps = {}) {
   }
   await recordAudit({
    workspaceId: String(workspaceId || ''),
-   actor: { userId: String(userId || '') },
+   actor: auditActor,
    action: 'agent.permission_rule_revoked',
    target: {
     type: 'agent',
@@ -1359,10 +1385,10 @@ function createAgentPermissions(deps = {}) {
   * Manually grant a permanent permission rule.
   * Manage-only, same capability as making one via the approval card.
   */
- async function grantAgentPermissionRule({ userId, workspaceId, agentId, rule } = {}) {
+ async function grantAgentPermissionRule({ userId, workspaceId, agentId, rule, actor } = {}) {
   const target = line(rule, MAX_RULE_LENGTH);
   if (!target) throw badRequest('rule is required');
-  await enforceWorkspaceRole(userId, workspaceId, 'manage');
+  const auditActor = await authorizePermissionRuleManagement({ userId, workspaceId, actor });
   const outcome = await getDb().begin(async (tx) => {
    const agentRows = await tx.unsafe(
     `select id, workspace_id, name, handle, metadata
@@ -1399,7 +1425,7 @@ function createAgentPermissions(deps = {}) {
   if (outcome.added) {
    await recordAudit({
     workspaceId: String(workspaceId || ''),
-    actor: { userId: String(userId || '') },
+    actor: auditActor,
     action: 'agent.permission_rule_granted',
     target: {
      type: 'agent',
@@ -1413,6 +1439,21 @@ function createAgentPermissions(deps = {}) {
   return outcome.rules;
  }
 
+ /** Read an agent's standing permission rules. Manage-only, like mutations. */
+ async function listAgentPermissionRules({ userId, workspaceId, agentId, actor } = {}) {
+  await authorizePermissionRuleManagement({ userId, workspaceId, actor });
+  const rows = await getDb().unsafe(
+   `select id, metadata
+      from workspace_agents
+     where id = $1 and workspace_id = $2
+     limit 1`,
+   [String(agentId || ''), String(workspaceId || '')],
+  );
+  if (!rows[0]) throw Object.assign(new Error('Agent was not found'), { status: 404 });
+  const metadata = parseJsonObject(rows[0].metadata);
+  return Array.isArray(metadata.permission_rules) ? metadata.permission_rules.map(String) : [];
+ }
+
  return {
   decideAgentPermissionRequest,
   expireConnectionPermissionRequests,
@@ -1421,6 +1462,7 @@ function createAgentPermissions(deps = {}) {
   handleAgentPermissionPrepared,
   handleAgentPermissionRequest,
   listAgentPermissionRequests,
+  listAgentPermissionRules,
   publicPermissionRequest,
   replayPermissionDecisions,
   rehomePendingPermissionRequests,

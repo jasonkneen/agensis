@@ -541,3 +541,16 @@ test('the import audit action is registered, or the row would record as unknown'
  // useless row in the log weeks later.
  assert.equal(core.AUDIT_ACTIONS.has('agent_template.imported'), true);
 });
+
+test('template projections preserve every accepted run mode and default unknown agent modes', () => {
+ for (const runMode of ['builtin', 'daemon', 'sandbox', 'external']) {
+  const normalized = normalizeAgentTemplate({ name: `${runMode} agent`, runMode });
+  assert.equal(normalized.ok, true, `${runMode} validates`);
+  assert.equal(normalized.template.runMode, runMode);
+  assert.equal(agentToTemplateDraft({ name: 'Agent', run_mode: runMode }).runMode, runMode);
+  assert.equal(templateToAgentDraft(normalized.template).runMode, runMode);
+ }
+ assert.equal(agentToTemplateDraft({ name: 'Agent', run_mode: 'future-mode' }).runMode, 'builtin');
+ assert.equal(templateToAgentDraft({ name: 'Agent', runMode: 'future-mode' }).runMode, 'builtin');
+ assert.equal(normalizeAgentTemplate({ name: 'Agent', runMode: 'future-mode' }).ok, false);
+});

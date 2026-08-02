@@ -3082,6 +3082,10 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  // PER USER PER 24h PER PROCESS via createFirstUseWindow below. Never remove
  // that dedup and leave the call site in place.
  'mcp.login_token_used',
+ // An OAuth MCP access token retains kind=user to share the existing tool RBAC
+ // surface, but its use must remain distinguishable from an ordinary agensis
+ // login token. Emitted under the same bounded first-use window.
+ 'mcp.oauth_access_token_used',
  'vault.secret_set',
  'vault.secret_deleted',
  // Authoring an automation is a STANDING grant to write into the workspace

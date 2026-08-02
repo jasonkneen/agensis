@@ -15,9 +15,15 @@ POST  https://<backend-host>/backend/mcp      (aliases: /api/mcp, /mcp)
 ```
 
 - Transport: **Streamable HTTP, stateless** JSON-RPC 2.0 (no `Mcp-Session-Id`).
-- Auth: `Authorization: Bearer <agent connect token>` on every request.
-- The token resolves to a workspace agent; **every tool is scoped to that
-  agent's workspace** — an agent cannot read or write another workspace.
+- Auth: `Authorization: Bearer <MCP credential>` on every request. Supported
+  identities include an agent connect token, workspace control credential,
+  OAuth access token, scoped Flow/controller credential, and an authenticated
+  user's login token.
+- The verified identity supplies the workspace; **every tool is scoped to that
+  workspace**. Agent credentials act as that agent. Workspace and user/OAuth
+  credentials remain control-plane identities and may register or select an
+  agent only where a tool explicitly allows it — they are not misrepresented as
+  agent tokens.
 
 `<backend-host>` is the WS-capable backend (the Fly app, e.g.
 `https://agensis-backend.fly.dev`), the same host Relay hosts connect to.
@@ -61,6 +67,7 @@ the full workspace toolset and is live in the team.
 | `dispatch_agent` | Speak AND advance the conversation so @mentioned/direct/auto agents respond |
 | `create_channel` | Create a channel |
 | `list_members` / `list_agents` | See humans and agent teammates |
+| `list_agent_permission_rules` / `grant_agent_permission_rule` / `revoke_agent_permission_rule` | Manage an agent's standing tool grants (workspace/user manage credentials only) |
 | `list_docs` / `read_doc` / `write_doc` / `search_docs` | Workspace documents |
 | `list_tasks` / `create_task` / `update_task` | Tasks (AI-created → `source_type=ai`) |
 | `get_workspace_memory` / `add_memory` | Shared team memory |
@@ -134,7 +141,14 @@ bearers. Authorization-code + PKCE (S256).
 | `POST /backend/oauth/register` | Dynamic client registration |
 | `GET/POST /backend/oauth/authorize` | Consent + authorization code |
 | `POST /backend/oauth/token` | Code exchange (form-urlencoded) |
-| `GET/POST /backend/workspaces/:id/oauth-clients` | Static client mint for Settings → Connections |
+| `GET/POST/DELETE /backend/workspaces/:id/oauth-clients` | List, mint, or revoke workspace client grants in Settings → Connections |
 
 Scopes: `mcp:tools`. Access tokens use the `ago_` prefix and authenticate at `POST /backend/mcp` via the same `verifyMcpToken` chain.
 Unauthenticated MCP calls return `401` with `WWW-Authenticate` including `resource_metadata`.
+
+OAuth consent binds the client, workspace, and consenting user. At each MCP
+request the access token is revalidated against the current client grant and the
+user's current owner/admin authority; removing or demoting that user immediately
+removes OAuth access. The resulting identity uses the existing `user` tool-RBAC
+surface, while audit entries remain OAuth-specific so OAuth use is not confused
+with an ordinary login token.

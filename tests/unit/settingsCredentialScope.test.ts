@@ -10,16 +10,17 @@ describe('workspace credential UI scope', () => {
     const app = read('src/App.tsx');
     const settings = read('src/components/settings/SettingsDialog.tsx');
 
-    expect(app).toContain('isWorkspaceOwner={Boolean(activeWorkspace?.user_id && activeWorkspace.user_id === user.id)}');
+    expect(app).toContain("activeWorkspace.role === 'owner'");
+    expect(app).toContain('activeWorkspace.user_id === user.id');
     expect(settings).toContain('{isWorkspaceOwner ? (');
     expect(settings).toContain('Only the workspace owner can issue its control credential.');
-    expect(settings).toContain('cannot silently read private conversations');
+    expect(settings).toContain('cannot read private conversations');
   });
 
   it('clears one-time credentials and plaintext vault drafts on workspace change', () => {
     const settings = read('src/components/settings/SettingsDialog.tsx');
 
-    expect(settings).toMatch(/setInfo\(null\);[\s\S]*?setAuto\(false\);[\s\S]*?}, \[workspaceId\]\);/);
+    expect(settings).toMatch(/setInfo\(null\);[\s\S]*?setAuto\(false\);[\s\S]*?}, \[workspaceId, isWorkspaceOwner, loadStatus\]\);/);
     expect(settings).toMatch(/setDrafts\(\{\}\);[\s\S]*?setReveal\(\{\}\);[\s\S]*?}, \[workspaceId\]\);/);
   });
 });

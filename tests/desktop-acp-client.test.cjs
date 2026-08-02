@@ -14,6 +14,7 @@ const {
 } = require('../electron/acp/client.cjs');
 const { listHarnesses, resolveHarness } = require('../electron/acp/harnesses.cjs');
 const acpHost = require('../electron/acp/host.cjs');
+const { enqueueAgentJob } = require('../electron/acp/agentBridge.cjs');
 
 const FAKE_AGENT = path.join(__dirname, 'fixtures', 'fake-acp-agent.mjs');
 
@@ -163,6 +164,71 @@ test('Ask mode denies permission when no dialog is available (no silent hang)', 
   } finally {
     client.dispose();
   }
+});
+
+test('a stuck prompt times out, sends session/cancel, and terminates the child after grace', async () => {
+  const outbound = [];
+  const script = `
+    process.on('SIGTERM', () => {});
+    let buffer = '';
+    process.stdin.on('data', (chunk) => {
+      buffer += chunk;
+      let newline;
+      while ((newline = buffer.indexOf('\\n')) >= 0) {
+        const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
+        if (!line) continue;
+        const message = JSON.parse(line);
+        if (message.method === 'initialize') console.log(JSON.stringify({jsonrpc:'2.0', id:message.id, result:{protocolVersion:1}}));
+        if (message.method === 'session/new') console.log(JSON.stringify({jsonrpc:'2.0', id:message.id, result:{sessionId:'stuck-session'}}));
+      }
+    });
+    setInterval(() => {}, 1000);
+  `;
+  const client = createAcpClient({
+    command: process.execPath,
+    args: ['-e', script],
+    requestTimeoutMs: 500,
+    promptTimeoutMs: 30,
+    terminateGraceMs: 20,
+    onOutbound: (frame) => outbound.push(frame),
+  });
+  try {
+    await client.initialize();
+    await client.newSession(process.cwd());
+    const killSignals = [];
+    const kill = client._child.kill.bind(client._child);
+    client._child.kill = (signal) => {
+      killSignals.push(signal);
+      return kill(signal);
+    };
+    await assert.rejects(() => client.prompt('never answer'), /session\/prompt timed out/i);
+    assert.ok(outbound.some((frame) => frame.method === 'session/cancel'));
+    assert.deepEqual(killSignals, [], 'the cancellation grace must elapse before SIGTERM');
+    await new Promise((resolve) => client._child.once('exit', resolve));
+    assert.equal(killSignals[0], 'SIGTERM');
+    assert.equal(client.closed, true);
+  } finally {
+    client.dispose();
+  }
+});
+
+test('desktop bridge serializes overlapping jobs for one agent state', async () => {
+  const events = [];
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  const state = { agentId: 'agent-1', jobQueue: Promise.resolve() };
+  const runner = async (_state, job) => {
+    events.push(`start:${job.id}`);
+    if (job.id === 'job-1') await firstGate;
+    events.push(`end:${job.id}`);
+  };
+  const first = enqueueAgentJob(state, { id: 'job-1' }, runner);
+  const second = enqueueAgentJob(state, { id: 'job-2' }, runner);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, ['start:job-1']);
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(events, ['start:job-1', 'end:job-1', 'start:job-2', 'end:job-2']);
 });
 
 test('acpHost start/prompt/stop with fake harness override via resolve path', async () => {

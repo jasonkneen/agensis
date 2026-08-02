@@ -114,6 +114,24 @@ test('both agent projections resolve automatic models for the selected runtime',
   }
 });
 
+test('both agent projections preserve the four-mode run_mode contract and default unknown values', () => {
+  const fly = require('../server/index.cjs').__test.agentRuntimePayload;
+  for (const mode of ['builtin', 'daemon', 'sandbox', 'external']) {
+    assert.equal(fly({ run_mode: mode }).run_mode, mode, `Fly preserves ${mode}`);
+  }
+  assert.equal(fly({ run_mode: 'future-mode' }).run_mode, 'builtin');
+
+  const netlifyStart = netlifySource.indexOf('function publicWorkspaceAgent(');
+  const netlifyMapper = netlifySource.slice(netlifyStart, netlifyStart + 1800);
+  assert.match(netlifyMapper, /run_mode: normalizeAgentRunMode\(row\.run_mode\)/,
+    'Netlify must use the shared closed normalizer');
+  const { normalizeAgentRunMode } = require('../shared/agentTemplates.cjs');
+  for (const mode of ['builtin', 'daemon', 'sandbox', 'external']) {
+    assert.equal(normalizeAgentRunMode(mode), mode, `shared contract preserves ${mode}`);
+  }
+  assert.equal(normalizeAgentRunMode('future-mode'), 'builtin');
+});
+
 test('the identity fields that already shipped broken stay in both projections', () => {
   // Belt and braces: the generic diffs above would catch these too, but if
   // someone ever "simplifies" both sides at once, this names the exact fields

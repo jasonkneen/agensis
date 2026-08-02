@@ -1067,11 +1067,35 @@ function createAgentJobs(deps = {}) {
    throw Object.assign(new Error('The selected agent does not advertise coding support'), { status: 409, code: 'coding_route_unavailable' });
   }
   const metadata = { mode: 'farm', source: 'agensis-farm', cwd: String(cwd || '').slice(0, 1000) || null };
-  const jobRows = await getDb().unsafe(
-   `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, prompt, status, started_at, metadata)
-      values ($1, $2, $3, null, $4, 'running', now(), $5::jsonb) returning *`,
-   [String(workspaceId), String(agentId), target.connectionId, String(prompt).trim(), metadata],
-  );
+  const jobRows = await getDb().begin(async (tx) => {
+   // Sessionless Farm jobs cannot use the normal partial uniqueness constraint.
+   // A transaction-scoped advisory lock makes the check+insert atomic across all
+   // server processes without runtime DDL. Include workspace to avoid cross-
+   // workspace UUID assumptions and keep the chosen connection on the row.
+   await tx.unsafe(
+    'select pg_advisory_xact_lock(hashtextextended($1, 0))',
+    [`farm:${String(workspaceId)}:${String(agentId)}`],
+   );
+   const active = await tx.unsafe(
+    `select * from agent_jobs
+       where workspace_id = $1 and agent_id = $2
+         and session_id is null and (metadata->>'mode') = 'farm'
+         and status in ('queued', 'running')
+       limit 1`,
+    [String(workspaceId), String(agentId)],
+   );
+   if (active[0]) {
+    throw Object.assign(new Error('The selected Relay agent is already running a Farm job'), {
+     status: 409,
+     code: 'agent_busy',
+    });
+   }
+   return tx.unsafe(
+    `insert into agent_jobs (workspace_id, agent_id, connection_id, session_id, prompt, status, started_at, metadata)
+       values ($1, $2, $3, null, $4, 'running', now(), $5::jsonb) returning *`,
+    [String(workspaceId), String(agentId), target.connectionId, String(prompt).trim(), metadata],
+   );
+  });
   const job = jobRows[0];
   notifyDbSubscribers('agent_jobs', 'INSERT', jobRows);
   const agentPayload = agentRuntimePayload(agent);
