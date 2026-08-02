@@ -7,7 +7,38 @@ const test = require('node:test');
 
 const ROOT = path.resolve(__dirname, '..');
 const core = require('../shared/backend-core.cjs');
+const { buildGenericInsertSource } = require('../server/lib/db-sql.cjs');
 const read = (relative) => fs.readFileSync(path.join(ROOT, relative), 'utf8');
+
+test('message insert derived rows preserve PostgreSQL target types', () => {
+  const columns = [
+    'id', 'session_id', 'role', 'content', 'thread_parent_id',
+    'pinned', 'attachments', 'created_at',
+  ];
+  const params = columns.map((column) => column);
+  const source = buildGenericInsertSource({
+    table: 'messages',
+    columns,
+    valueBindings: [[
+      '$1', '$2', '$3', '$4', '$5', '$6', '$7::jsonb', '$8',
+    ]],
+    rows: [{ thread_parent_id: null }],
+    params,
+  });
+
+  assert.match(source, /\$1::uuid, \$2::uuid, \$3::text, \$4::text/);
+  assert.match(source, /\$5::uuid, \$6::boolean, \$7::jsonb, \$8::timestamptz/);
+  assert.throws(
+    () => buildGenericInsertSource({
+      table: 'messages',
+      columns: ['session_id', 'future_column'],
+      valueBindings: [['$1', '$2']],
+      rows: [{}],
+      params: [],
+    }),
+    /future_column/,
+  );
+});
 
 test('generic projections exclude workspace and agent credential material', () => {
   for (const [table, forbidden] of [
@@ -45,13 +76,23 @@ test('Fly and Netlify project insert, update, and delete RETURNING clauses', () 
     );
     assert.match(
       source,
-      /update \$\{tableSql\}[^`]+returning \$\{normalizeColumns\(safeSelectColumns\(table, returning\)\)\}/s,
-      `${relative} generic update must use the safe projection`,
+      /const projectedReturning = normalizeColumns\(safeSelectColumns\(table, returning\)\);/,
+      `${relative} generic update must derive its response from the safe projection`,
     );
     assert.match(
       source,
-      /delete from \$\{tableSql\}[^`]+returning \$\{normalizeColumns\(safeSelectColumns\(table, '\*'\)\)\}/s,
-      `${relative} generic delete must use the safe projection`,
+      /update \$\{tableSql\}[^`]+returning \$\{integrityReturning\}/s,
+      `${relative} generic update must use the projected returning clause`,
+    );
+    assert.match(
+      source,
+      /const deleteReturning = normalizeColumns\(safeSelectColumns\(table, '\*'\)\);/,
+      `${relative} generic delete must derive its response from the safe projection`,
+    );
+    assert.match(
+      source,
+      /delete from \$\{tableSql\}[^`]+returning \$\{deleteReturning\}/s,
+      `${relative} generic delete must use the projected returning clause`,
     );
   }
 });

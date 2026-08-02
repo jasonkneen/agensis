@@ -155,6 +155,11 @@ function makeDb({ role = 'owner' } = {}) {
    if (q.startsWith('select 1 from workspaces where id')) return role === 'owner' && String(params[1]) === USER ? [{ ok: 1 }] : [];
    if (q.startsWith('select role from workspace_members')) return role && role !== 'owner' && role !== 'none' ? [{ role }] : [];
    if (q.includes('with recursive chain as')) return [];
+   if (q.startsWith('select id, workspace_id, visibility, folder, deleted_at from chat_sessions where id = $1')) {
+    return params[0] === 'chan-2'
+     ? [{ id: 'chan-2', workspace_id: WORKSPACE, visibility: 'workspace', folder: 'General', deleted_at: null }]
+     : [];
+   }
    if (q.startsWith('select * from automations where workspace_id')) return [];
    if (q.startsWith('insert into automations')) return [{ id: 'auto-1', workspace_id: WORKSPACE, definition: {}, trigger_event: 'message.created' }];
    return [];

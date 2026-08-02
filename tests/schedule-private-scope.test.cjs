@@ -88,6 +88,7 @@ test('the schedule list SQL removes sessions the caller cannot read', async () =
     }),
     notifyDbSubscribers: () => {},
     runDueSchedules: async () => {},
+    roleHasWorkspaceCapability: core.roleHasWorkspaceCapability,
   });
 
   await withServer(app, async (baseUrl) => {
@@ -95,9 +96,12 @@ test('the schedule list SQL removes sessions the caller cannot read', async () =
     assert.equal(response.status, 200);
   });
 
-  const select = calls.find((call) => /from agent_schedules s/i.test(call.sql));
+  const select = calls.find((call) => /from agent_schedules schedule/i.test(call.sql));
   assert.ok(select);
-  assert.match(select.sql, /join chat_sessions cs on cs\.id = s\.session_id/i);
+  assert.match(
+    select.sql,
+    /join chat_sessions schedule_session\s+on schedule_session\.id = schedule\.session_id/i,
+  );
   assert.match(select.sql, /chat_session_members/i);
   assert.deepEqual(select.params, [WS, MEMBER]);
 });
@@ -113,8 +117,14 @@ test('every dedicated schedule read or mutation applies the target-session gate'
         return [{ workspace_id: WS, session_id: DM }];
       }
       if (n.startsWith('select 1 from workspace_agents')) return [{ ok: 1 }];
-      if (n.startsWith('select id, workspace_id, visibility, folder from chat_sessions')) {
-        return [{ id: DM, workspace_id: WS, visibility: 'private', folder: 'Direct messages' }];
+      if (n.startsWith('select id, workspace_id, visibility, folder, deleted_at from chat_sessions')) {
+        return [{
+          id: DM,
+          workspace_id: WS,
+          visibility: 'private',
+          folder: 'Direct messages',
+          deleted_at: null,
+        }];
       }
       if (/^(insert|update|delete) /.test(n)) {
         writes.push({ sql: String(sql), params });
@@ -138,6 +148,7 @@ test('every dedicated schedule read or mutation applies the target-session gate'
     getDb: () => db,
     notifyDbSubscribers: () => {},
     runDueSchedules: async () => { runnerCalls += 1; },
+    roleHasWorkspaceCapability: core.roleHasWorkspaceCapability,
   });
 
   const cases = [
@@ -173,11 +184,31 @@ test('a current private-session member can still update a schedule', async () =>
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
       if (n.startsWith('select * from agent_schedules where id = $1')) return [scheduleRow()];
+      if (n.startsWith('with recursive schedule_workspace_chain as')) {
+        return [{ id: WS, user_id: MEMBER, role: 'editor' }];
+      }
+      if (n.startsWith('select schedule_session_scope.id')) {
+        return [{
+          id: DM,
+          workspace_id: WS,
+          visibility: 'private',
+          folder: 'Direct messages',
+          participants: [{ kind: 'agent', agent_id: AGENT, direct: true }],
+          deleted_at: null,
+        }];
+      }
+      if (n.startsWith('select * from workspace_agents schedule_agent_scope')) {
+        return [{ id: AGENT, workspace_id: WS, enabled: true }];
+      }
+      if (n.startsWith('select * from agent_schedules schedule_scope')) return [scheduleRow()];
       if (n.startsWith('update agent_schedules')) {
         writes.push({ sql: String(sql), params });
         return [scheduleRow({ prompt: String(params[2]) })];
       }
       return [];
+    },
+    async begin(callback) {
+      return callback(db);
     },
   };
   const app = express();
@@ -191,6 +222,7 @@ test('a current private-session member can still update a schedule', async () =>
     getDb: () => db,
     notifyDbSubscribers: () => {},
     runDueSchedules: async () => {},
+    roleHasWorkspaceCapability: core.roleHasWorkspaceCapability,
   });
 
   await withServer(app, async (baseUrl) => {
@@ -212,24 +244,18 @@ test('the timer re-checks creator role and private-session membership before pos
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
       calls.push({ sql: String(sql), params });
-      if (n.startsWith('update agent_schedules s set running = true')) {
+      if (n.startsWith('with due_candidates as materialized')) {
         if (claimed) return [];
         claimed = true;
         return [due];
       }
-      if (n.startsWith('select 1 from workspaces where id = $1 and user_id = $2')) return [];
-      if (n.startsWith('select role from workspace_members where workspace_id = $1 and user_id = $2')) {
-        return [{ role: 'editor' }];
+      if (n.startsWith('with recursive schedule_workspace_chain as')) {
+        return [{ id: WS, user_id: null, role: 'editor' }];
       }
-      if (n.includes('with recursive chain as')) return [];
-      if (n.startsWith('select * from workspace_agents')) {
-        return [{ id: AGENT, workspace_id: WS, name: 'Coder', handle: 'coder', enabled: true }];
+      if (n.startsWith('select schedule_session_scope.id')) {
+        return []; // membership was revoked before the locked final check
       }
-      if (n.startsWith('select id, workspace_id, visibility, folder from chat_sessions')) {
-        return [{ id: DM, workspace_id: WS, visibility: 'private', folder: 'Direct messages' }];
-      }
-      if (n.startsWith('select 1 from chat_session_members')) return []; // membership was revoked
-      if (n.startsWith('update agent_schedules set running = false')) {
+      if (n.startsWith('update agent_schedules set running = false') && params.length === 4) {
         return [{ ...due, running: false, last_status: params[1] }];
       }
       if (n.startsWith('insert into agent_schedule_runs')) {
@@ -240,6 +266,9 @@ test('the timer re-checks creator role and private-session membership before pos
       }
       if (n.startsWith('select user_id from chat_session_members')) return [];
       return [];
+    },
+    async begin(callback) {
+      return callback(db);
     },
   };
   __test.setTestDb(db);
@@ -253,9 +282,15 @@ test('the timer re-checks creator role and private-session membership before pos
     'a revoked creator must not post the scheduled prompt',
   );
   const runInsert = calls.find((call) => /^\s*insert into agent_schedule_runs/i.test(call.sql));
-  assert.ok(runInsert, 'the failed attempt remains visible in schedule history');
-  assert.equal(runInsert.params[2], 'error');
-  assert.match(String(runInsert.params[3]), /private/i);
+  assert.ok(
+    runInsert,
+    `the failed attempt remains visible in schedule history; queries: ${calls.map((call) => String(call.sql).replace(/\s+/g, ' ').trim()).join(' | ')}`,
+  );
+  assert.equal(runInsert.params[3], 'error');
+  assert.match(String(runInsert.params[4]), /access/i);
+  const lockedSessionCheck = calls.find((call) => /select schedule_session_scope\.id/i.test(call.sql));
+  assert.ok(lockedSessionCheck);
+  assert.match(lockedSessionCheck.sql, /chat_session_members/i);
 });
 
 test.afterEach(() => __test.resetTestState());

@@ -1540,6 +1540,13 @@ function mountHuddleRoutes(app, deps = {}) {
    }
    if (!huddle) return jsonError(res, 409, new Error('Could not open a huddle for this session'));
 
+   // Creation committed before this external side effect. Re-lock the host,
+   // private membership (when applicable), and live huddle for both new and
+   // existing calls so a concurrent revoke has a serial order with token minting.
+   const lockedJoin = await mintLockedJoin({ huddle, workspaceId, userId: req.userId, name });
+   huddle = lockedJoin.huddle;
+   token = lockedJoin.token;
+
   if (created) {
     // The huddle, transcript, private member graph, and transcript link have
     // committed before any durable huddle state becomes visible to subscribers.
@@ -1550,12 +1557,6 @@ function mountHuddleRoutes(app, deps = {}) {
      { huddle, kind: 'started', identity: participantIdentity(req.userId) },
      { actorUserId: req.userId, requireLiveHuddle: true },
     );
-   }
-
-   if (!created) {
-    const lockedJoin = await mintLockedJoin({ huddle, workspaceId, userId: req.userId, name });
-    huddle = lockedJoin.huddle;
-    token = lockedJoin.token;
    }
 
    res.status(created ? 201 : 200).json({

@@ -121,6 +121,7 @@ import {
  quoteIdent,
  ensureTable,
  normalizeColumns,
+ buildGenericInsertSource,
  invalidJsonValue,
  createBindDbParam,
  buildWhereClause,
@@ -2609,14 +2610,24 @@ async function handleDb(pathname, req, userId) {
    }
    const columns = validateUniformInsertRows(effectiveRows);
    const params = [];
-   const valueSql = effectiveRows.map((row) => `(${columns.map((column) => {
+   const valueBindings = effectiveRows.map((row) => columns.map((column) => {
     return bindDbParam(params, table, column, row[column]);
-   }).join(', ')})`).join(', ');
+   }));
+   const insertSource = buildGenericInsertSource({
+    table,
+    columns,
+    valueBindings,
+    rows: effectiveRows,
+    params,
+   });
    const returningColumns = table === 'chat_sessions' ? '*' : returning;
    const inserted = await db(
-    `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) values ${valueSql} returning ${normalizeColumns(safeSelectColumns(table, returningColumns))}`,
+    `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) ${insertSource} returning ${normalizeColumns(safeSelectColumns(table, returningColumns))}`,
     params,
    );
+   if (table === 'messages' && inserted.length !== effectiveRows.length) {
+    throw forbidden('Message parent must belong to the target conversation');
+   }
    if (table === 'chat_sessions') {
     await installCreatedSessionMemberships({
      db,
@@ -2754,13 +2765,14 @@ async function handleDb(pathname, req, userId) {
     || Object.prototype.hasOwnProperty.call(safeValues, 'folder')
    );
   let canonicalClosedSessionRows = [];
+  const projectedReturning = normalizeColumns(safeSelectColumns(table, returning));
   const integrityReturning = editsMessageContent
-   ? `${normalizeColumns(returning)}, id as "__integrity_id", session_id as "__integrity_session_id"`
+   ? `${projectedReturning}, id as "__integrity_id", session_id as "__integrity_session_id"`
    : closesSessions
-    ? `${normalizeColumns(returning)}, id as "__integrity_id"`
+    ? `${projectedReturning}, id as "__integrity_id"`
     : changesSessionPrivacy
-     ? `${normalizeColumns(returning)}, id as "__integrity_id", visibility as "__integrity_visibility", folder as "__integrity_folder"`
-     : normalizeColumns(returning);
+     ? `${projectedReturning}, id as "__integrity_id", visibility as "__integrity_visibility", folder as "__integrity_folder"`
+     : projectedReturning;
   const rawResult = editsMessageContent || changesSessionPrivacy || closesSessions
    ? await withDbTransaction(async (transactionQuery) => {
     let lockedSessionIds = [];
@@ -2904,13 +2916,14 @@ async function handleDb(pathname, req, userId) {
    return jsonError(400, new Error('Delete requires a non-empty where clause'));
   }
   await enforceDbOperationAccess({ userId, table, op: 'delete', filters, db: query });
+  const deleteReturning = normalizeColumns(safeSelectColumns(table, '*'));
   const result = table === 'messages'
    ? await withDbTransaction(async (transactionQuery) => {
     const deleted = await transactionQuery(
      `update ${tableSql}
          set deleted_at = coalesce(deleted_at, now())
          ${where.clause} and deleted_at is null
-       returning *`,
+       returning ${deleteReturning}`,
      where.params,
     );
     if (deleted.length === 0) {
@@ -2923,7 +2936,10 @@ async function handleDb(pathname, req, userId) {
     });
     return deleted;
    })
-   : await query(`delete from ${tableSql}${where.clause} returning *`, where.params);
+   : await query(
+    `delete from ${tableSql}${where.clause} returning ${deleteReturning}`,
+    where.params,
+   );
   if (table === 'messages' && result.length === 0) {
    throw forbidden('Message access changed before the delete completed');
   }

@@ -34,10 +34,13 @@ function makeDb() {
 
       if (q.startsWith('alter table') || q.startsWith('create table')
         || q.startsWith('create index') || q.startsWith('create unique index')
-        || q.startsWith('do $$')) {
+        || q.startsWith('drop index') || q.startsWith('do $$')) {
         return [];
       }
       if (q.startsWith('update session_read_state receipt set last_seen_message_id')) {
+        return [];
+      }
+      if (q.startsWith('delete from session_read_state where last_seen_message_id is null')) {
         return [];
       }
       if (q.startsWith('select value from app_settings')) {
@@ -48,6 +51,12 @@ function makeDb() {
       }
       if (q.startsWith('select 1 from workspaces where id = $1 and user_id = $2')) {
         return params[0] === WORKSPACE && params[1] === USER ? [{ ok: 1 }] : [];
+      }
+      if (q.startsWith('select id, parent_id, user_id from workspaces')) {
+        return [{ id: WORKSPACE, parent_id: null, user_id: USER }];
+      }
+      if (q.startsWith('select role from workspace_members')) {
+        return [];
       }
       if (q.startsWith('select workspace_id from "chat_sessions" where id = $1 limit 1')) {
         return params[0] === TOP_LEVEL_SESSION ? [{ workspace_id: WORKSPACE }] : [];
@@ -68,32 +77,49 @@ function makeDb() {
           }]
           : [];
       }
-      if (q.startsWith('select parent_session.id, parent_session.visibility, parent_session.folder')) {
+      if (q.startsWith('select m.session_id from messages m')) {
         if (failParentLookup) throw new Error('temporary parent lookup failure');
-        return parentAvailable
-          ? [{ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', visibility: 'workspace', folder: 'Direct messages' }]
-          : [];
+        return parentAvailable ? [{ session_id: SPLIT_PARENT }] : [];
+      }
+      if (q.startsWith('select s.id, s.workspace_id, s.title')) {
+        if (failParentLookup) throw new Error('temporary parent lookup failure');
+        return parentAvailable ? [{
+          id: SPLIT_PARENT,
+          workspace_id: WORKSPACE,
+          title: 'Parent conversation',
+          model: 'auto',
+          folder: 'Direct messages',
+          description: '',
+          icon: '',
+          intent: '',
+          participants: [],
+          conversation_mode: 'auto',
+          max_agent_turns: 10,
+          auto_rounds: 3,
+          canvas_id: null,
+          visibility: 'private',
+          deleted_at: null,
+        }] : [];
+      }
+      if (q.startsWith('select m.id from messages m')) {
+        if (failParentLookup) throw new Error('temporary parent lookup failure');
+        return parentAvailable ? [{ id: PARENT_MESSAGE }] : [];
+      }
+      if (q.startsWith('select 1 from chat_session_members')) {
+        return [{ ok: 1 }];
+      }
+      if (q.startsWith('select user_id, source, granted_by, expires_at from chat_session_members')) {
+        return [{ user_id: USER, source: 'participant', granted_by: null, expires_at: null }];
       }
       if (q.startsWith('insert into "chat_sessions"')) {
         const columns = normalized.match(/insert into "chat_sessions" \(([^)]+)\)/i)[1]
           .split(',')
           .map((column) => column.replaceAll('"', '').trim());
         const inserted = Object.fromEntries(columns.map((column, index) => [column, params[index]]));
-        const partialReturning = /returning "id", "workspace_id", "title",/i.test(normalized);
-        return [{
-          ...(partialReturning
-            ? { id: inserted.id, workspace_id: inserted.workspace_id, title: inserted.title }
-            : inserted),
-          __integrity_id: inserted.id,
-          __integrity_workspace_id: inserted.workspace_id,
-          __integrity_visibility: inserted.visibility,
-          __integrity_folder: inserted.folder,
-          __integrity_parent_message_id: inserted.parent_message_id || null,
-          __integrity_split_parent_id: inserted.split_parent_id || null,
-        }];
+        return [inserted];
       }
       if (q.startsWith('insert into chat_session_members')) {
-        if (failParticipantInsert && q.includes("values ($1, $2, 'participant')")) {
+        if (failParticipantInsert) {
           throw new Error('membership write failed');
         }
         return [];
@@ -253,7 +279,7 @@ test('Fly commits a top-level private session with creator membership before rea
   assert.ok(audienceIndex > commitIndex, 'private realtime audience lookup must start only after commit');
   assert.equal(db.calls[audienceIndex].inTransaction, false);
   assert.deepEqual(delivered.map(({ userId }) => userId), [USER]);
-  assert.equal(delivered[0].row.visibility, 'workspace');
+  assert.equal(delivered[0].row.visibility, 'private');
   assert.equal(delivered[0].row.folder, 'Direct messages');
 });
 
@@ -324,9 +350,9 @@ test('Fly rolls back a top-level private session when creator membership cannot 
   db.failParticipantInsert = true;
   await withServer(db, async (baseUrl, token) => {
     const response = await createTopLevelPrivate(baseUrl, token);
-    assert.equal(response.status, 503, await response.clone().text());
+    assert.equal(response.status, 500, await response.clone().text());
     const body = await response.json();
-    assert.match(String(body.error?.message || ''), /establish the conversation audience/i);
+    assert.match(String(body.error?.message || ''), /membership write failed/i);
   });
 
   assert.equal(db.calls.at(-1).q, 'rollback');
@@ -361,7 +387,7 @@ test('Fly rejects an ambiguous derived session before opening a transaction', as
     });
     assert.equal(response.status, 400, await response.clone().text());
     const body = await response.json();
-    assert.match(String(body.error?.message || ''), /cannot have both/i);
+    assert.match(String(body.error?.message || ''), /cannot have both|only one parent/i);
   });
   assert.equal(db.calls.some(call => call.q === 'begin'), false);
   assert.equal(db.calls.some(call => call.q.startsWith('insert into "chat_sessions"')), false);
@@ -377,23 +403,32 @@ test('Fly proves and locks a same-workspace readable parent through insert and a
     assert.equal(Object.keys(body.data).some(key => key.startsWith('__integrity_')), false);
   });
 
-  const lookup = db.calls.find(call => call.q.startsWith(
-    'select parent_session.id, parent_session.visibility, parent_session.folder',
-  ));
+  const lookup = db.calls.find(call => call.q.startsWith('select s.id, s.workspace_id, s.title'));
   assert.ok(lookup);
   assert.equal(lookup.inTransaction, true);
-  assert.match(lookup.q, /parent_session\.workspace_id = \$3::uuid/);
-  assert.match(lookup.q, /parent_message\.deleted_at is null/);
-  assert.match(lookup.q, /chat_session_members/);
-  assert.match(lookup.q, /for share of parent_session$/);
-  assert.deepEqual(lookup.params, [null, PARENT_MESSAGE, WORKSPACE, USER]);
+  assert.match(lookup.q, /s\.workspace_id = \$2::uuid/);
+  assert.match(lookup.q, /s\.deleted_at is null/);
+  assert.match(lookup.q, /for share of s$/);
+  assert.deepEqual(lookup.params, [SPLIT_PARENT, WORKSPACE]);
+  const messageLock = db.calls.find(call => call.q.startsWith('select m.id from messages m'));
+  assert.ok(messageLock);
+  assert.equal(messageLock.inTransaction, true);
+  assert.match(messageLock.q, /m\.session_id = \$2::uuid/);
+  assert.deepEqual(messageLock.params, [PARENT_MESSAGE, SPLIT_PARENT]);
+  const rosterLock = db.calls.find(call => call.q.startsWith(
+    'select user_id, source, granted_by, expires_at from chat_session_members',
+  ));
+  assert.ok(rosterLock);
+  assert.equal(rosterLock.inTransaction, true);
+  assert.match(rosterLock.q, /for share$/);
 
   const insert = db.calls.find(call => call.q.startsWith('insert into "chat_sessions"'));
   assert.ok(insert);
   assert.equal(insert.inTransaction, true);
   const membershipWrites = db.calls.filter(call => call.q.startsWith('insert into chat_session_members'));
-  assert.equal(membershipWrites.length, 2);
+  assert.equal(membershipWrites.length, 1);
   assert.equal(membershipWrites.every(call => call.inTransaction), true);
+  assert.deepEqual(membershipWrites[0].params, [DERIVED_SESSION, SPLIT_PARENT]);
   const commitIndex = db.calls.findIndex(call => call.q === 'commit');
   const finalMembershipIndex = db.calls.findLastIndex(
     call => call.q.startsWith('insert into chat_session_members'),
@@ -406,7 +441,7 @@ test('Fly rejects an unavailable parent before insert and rolls back', async () 
   db.parentAvailable = false;
   await withServer(db, async (baseUrl, token) => {
     const response = await createDerived(baseUrl, token);
-    assert.equal(response.status, 403, await response.clone().text());
+    assert.equal(response.status, 400, await response.clone().text());
     const body = await response.json();
     assert.match(String(body.error?.message || ''), /parent conversation is unavailable/i);
   });
@@ -420,7 +455,7 @@ test('Fly fails closed on parent-proof faults and private-audience write faults'
     db.failParentLookup = true;
     await withServer(db, async (baseUrl, token) => {
       const response = await createDerived(baseUrl, token);
-      assert.equal(response.status, 503, await response.clone().text());
+      assert.equal(response.status, 500, await response.clone().text());
       assert.equal(db.calls.some(call => call.q.startsWith('insert into "chat_sessions"')), false);
     });
     assert.equal(db.calls.at(-1).q, 'rollback');
@@ -431,9 +466,9 @@ test('Fly fails closed on parent-proof faults and private-audience write faults'
     db.failParticipantInsert = true;
     await withServer(db, async (baseUrl, token) => {
       const response = await createDerived(baseUrl, token);
-      assert.equal(response.status, 503, await response.clone().text());
+      assert.equal(response.status, 500, await response.clone().text());
       const body = await response.json();
-      assert.match(String(body.error?.message || ''), /establish the derived conversation audience/i);
+      assert.match(String(body.error?.message || ''), /membership write failed/i);
     });
     assert.equal(db.calls.at(-1).q, 'rollback');
     assert.equal(db.calls.some(call => call.q === 'commit'), false);

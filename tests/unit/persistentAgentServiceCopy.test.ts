@@ -13,7 +13,7 @@ describe('persistent local agent service guidance', () => {
     for (const source of [agents, onboarding, readme]) {
       expect(source).toContain('agensis service install --profile');
     }
-    expect(agents).toContain('it never contains the token');
+    expect(agents).toContain('no token in the unit file');
     expect(onboarding).toContain('never the token');
     expect(readme).toContain('RunAtLoad');
     expect(readme).toContain('Restart=always');

@@ -46,6 +46,86 @@ function normalizeColumns(columns) {
  return list.map(quoteIdent).join(', ');
 }
 
+// A VALUES list directly under INSERT inherits types from the target columns.
+// Once the values move into a derived table for the same-session parent proof,
+// PostgreSQL instead resolves otherwise-untyped binds as text. Keep the full
+// messages row shape here so UUID/boolean/timestamp fields remain assignable.
+// An explicit failure for a future column is safer than a production-only 500
+// caused by silently treating its bind as text.
+const MESSAGE_INSERT_COLUMN_TYPES = Object.freeze({
+ id: 'uuid',
+ session_id: 'uuid',
+ role: 'text',
+ content: 'text',
+ message_kind: 'text',
+ tool_name: 'text',
+ tool_detail: 'text',
+ created_at: 'timestamptz',
+ thread_parent_id: 'uuid',
+ sender_kind: 'text',
+ sender_id: 'text',
+ sender_name: 'text',
+ pinned: 'boolean',
+ reactions: 'jsonb',
+ deleted_at: 'timestamptz',
+ attachments: 'jsonb',
+ broadcast_to_channel: 'boolean',
+ source_task_id: 'uuid',
+ huddle_id: 'uuid',
+ permission_request_id: 'uuid',
+});
+
+/**
+ * Build the source rows for a generic INSERT. Message replies need one extra
+ * invariant that a plain foreign key cannot express: thread_parent_id must
+ * name a message in the same session as the new row. Keep that proof inside
+ * the INSERT statement so a preflight check cannot race the write.
+ *
+ * Every parent check is combined into one predicate. A malformed row in a
+ * bulk insert therefore rejects the whole batch instead of inserting only the
+ * valid subset. The duplicate parent binds are intentional: they keep the
+ * caller-provided values in the derived table while giving PostgreSQL an
+ * explicit uuid type for the scope checks.
+ */
+function buildGenericInsertSource({ table, columns, valueBindings, rows, params }) {
+ const tuples = valueBindings.map((bindings) => `(${bindings.join(', ')})`).join(', ');
+ if (table !== 'messages') return `values ${tuples}`;
+
+ const sessionIndex = columns.indexOf('session_id');
+ if (sessionIndex < 0) throw new Error('Message inserts require session_id');
+
+ const typedTuples = valueBindings.map((bindings) => `(${bindings.map((binding, index) => {
+  const column = columns[index];
+  const type = MESSAGE_INSERT_COLUMN_TYPES[column];
+  if (!type) throw new Error(`Message insert column has no SQL type: ${column}`);
+  return binding.endsWith(`::${type}`) ? binding : `${binding}::${type}`;
+ }).join(', ')})`).join(', ');
+
+ const parentChecks = rows.map((row, index) => {
+  params.push(row.thread_parent_id ?? null);
+  const parentParam = `$${params.length}::uuid`;
+  const sessionParam = `${valueBindings[index][sessionIndex]}::uuid`;
+  return `(
+    ${parentParam} is null
+    or exists (
+      select 1
+        from messages message_parent_scope
+        join chat_sessions message_session_scope
+          on message_session_scope.id = ${sessionParam}
+       where message_parent_scope.id = ${parentParam}
+         and message_parent_scope.session_id = message_session_scope.id
+    )
+  )`;
+ });
+ const projectedColumns = columns
+  .map((column) => `message_input.${quoteIdent(column)}`)
+  .join(', ');
+ const inputColumns = columns.map(quoteIdent).join(', ');
+ return `select ${projectedColumns}
+    from (values ${typedTuples}) as message_input (${inputColumns})
+   where ${parentChecks.join('\n     and ')}`;
+}
+
 function isJsonColumn(table, column) {
  return Boolean(JSON_COLUMNS_BY_TABLE[table]?.has(column));
 }
@@ -190,6 +270,7 @@ module.exports = {
  quoteIdent,
  ensureTable,
  normalizeColumns,
+ buildGenericInsertSource,
  isJsonColumn,
  invalidJsonValue,
  normalizeJsonParam,

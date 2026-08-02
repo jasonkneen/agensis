@@ -13,7 +13,9 @@ describe('icon-only controls expose an accessible name', () => {
 
   it('names each automation delete button from the rule name', () => {
     const source = fs.readFileSync(path.join(root, 'src/components/windows/AutomationsWindowContent.tsx'), 'utf8');
-    expect(source).toContain('aria-label={`Delete ${automation.name || \'automation\'}`}');
-    expect(source).toContain('title={`Delete ${automation.name || \'automation\'}`}');
+    expect(source).toContain('aria-label={confirmDeleteId === automation.id');
+    expect(source).toContain('title={confirmDeleteId === automation.id');
+    expect(source).toContain('`Delete ${automation.name || \'automation\'}`');
+    expect(source).toContain('`Confirm delete ${automation.name || \'automation\'}`');
   });
 });
