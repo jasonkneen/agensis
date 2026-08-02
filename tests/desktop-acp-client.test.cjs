@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { createAcpClient, extractTextFromUpdate } = require('../electron/acp/client.cjs');
+const { createAcpClient, extractTextFromUpdate, quoteWindowsShellArg } = require('../electron/acp/client.cjs');
 const { listHarnesses, resolveHarness } = require('../electron/acp/harnesses.cjs');
 const acpHost = require('../electron/acp/host.cjs');
 
@@ -76,4 +76,27 @@ test('acpHost start/prompt/stop with fake harness override via resolve path', as
 
 test('resolveHarness returns null for unknown id', () => {
   assert.equal(resolveHarness('not-a-real-harness-xyz'), null);
+});
+
+test('quoteWindowsShellArg leaves plain args untouched', () => {
+  assert.equal(quoteWindowsShellArg('stdio'), 'stdio');
+  assert.equal(quoteWindowsShellArg(''), '""');
+});
+
+test('quoteWindowsShellArg quotes args with spaces', () => {
+  assert.equal(quoteWindowsShellArg('arg with spaces'), '"arg with spaces"');
+});
+
+test('quoteWindowsShellArg escapes double quotes', () => {
+  assert.equal(quoteWindowsShellArg('say "hi"'), '"say ""hi"""');
+});
+
+test('quoteWindowsShellArg refuses literal percent signs rather than pass through an unsafe escape', () => {
+  // cmd.exe expands %VAR% while parsing the command line even inside a
+  // double-quoted argument, and the usual %% escape does not survive the
+  // extra quoting layer Node's shell:true adds for `cmd /d /s /c "..."`
+  // (verified empirically against a real cmd.exe: %%USERPROFILE%% still
+  // expanded to the real path). Refuse rather than ship a broken escape.
+  assert.throws(() => quoteWindowsShellArg('%USERPROFILE%'), /Refusing to pass "%"/);
+  assert.throws(() => quoteWindowsShellArg('100%'), /Refusing to pass "%"/);
 });

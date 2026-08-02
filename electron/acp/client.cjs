@@ -40,9 +40,20 @@ function buildPathEnv() {
 // line, so any arg with a space or shell metacharacter needs its own
 // quoting. Our harness args are static literals, not user input, but this
 // is the correct way to invoke them under a shell regardless.
+//
+// cmd.exe expands %VAR% while it parses the command line, even inside a
+// double-quoted argument. The usual %% escape for a literal percent does
+// NOT survive here — Node's shell:true wraps the whole command line in an
+// extra layer of quoting for `cmd /d /s /c "..."`, and that extra layer
+// changes how the %-scan interacts with quote boundaries (verified
+// empirically: %%USERPROFILE%% still expands to the real path through it).
+// Rather than ship an escape that only looks safe, refuse a literal "%".
 function quoteWindowsShellArg(value) {
   const str = String(value);
   if (str === '') return '""';
+  if (str.includes('%')) {
+    throw new Error(`Refusing to pass "%" through the Windows shell (cmd.exe would expand it as %VAR%): ${str}`);
+  }
   if (!/[\s"^&|<>()]/.test(str)) return str;
   return `"${str.replace(/"/g, '""')}"`;
 }
@@ -409,4 +420,5 @@ module.exports = {
   extractTextFromUpdate,
   extractTextFromResult,
   buildPathEnv,
+  quoteWindowsShellArg,
 };
