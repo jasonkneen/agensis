@@ -1355,10 +1355,69 @@ function createAgentPermissions(deps = {}) {
   return outcome.rules;
  }
 
+ /**
+  * Manually grant a permanent permission rule.
+  * Manage-only, same capability as making one via the approval card.
+  */
+ async function grantAgentPermissionRule({ userId, workspaceId, agentId, rule } = {}) {
+  const target = line(rule, MAX_RULE_LENGTH);
+  if (!target) throw badRequest('rule is required');
+  await enforceWorkspaceRole(userId, workspaceId, 'manage');
+  const outcome = await getDb().begin(async (tx) => {
+   const agentRows = await tx.unsafe(
+    `select id, workspace_id, name, handle, metadata
+       from workspace_agents
+      where id = $1 and workspace_id = $2
+      for update`,
+    [String(agentId || ''), String(workspaceId || '')],
+   );
+   const agent = agentRows[0];
+   if (!agent) throw Object.assign(new Error('Agent was not found'), { status: 404 });
+   const metadata = parseJsonObject(agent.metadata);
+   const existing = Array.isArray(metadata.permission_rules) ? metadata.permission_rules.map(String) : [];
+   // If the rule already exists, return current list
+   if (existing.includes(target)) {
+    return { rows: [agent], rules: existing, added: false };
+   }
+   const next = [...existing, target];
+   const updated = await tx.unsafe(
+    `update workspace_agents set metadata = $3::jsonb, updated_at = now()
+       where id = $1 and workspace_id = $2 returning *`,
+    [String(agentId), String(workspaceId), { ...metadata, permission_rules: next }],
+   );
+   if (updated.length !== 1) {
+    throw Object.assign(new Error('The agent changed before the permission rule could be added'), {
+     status: 409,
+     code: 'permission_scope_changed',
+    });
+   }
+   return { rows: updated, rules: next, added: true };
+  });
+  if (outcome.rows.length) {
+   notifyDbSubscribers('workspace_agents', 'UPDATE', outcome.rows);
+  }
+  if (outcome.added) {
+   await recordAudit({
+    workspaceId: String(workspaceId || ''),
+    actor: { userId: String(userId || '') },
+    action: 'agent.permission_rule_granted',
+    target: {
+     type: 'agent',
+     id: String(agentId || ''),
+     label: String(outcome.rows[0]?.handle || outcome.rows[0]?.name || agentId || ''),
+    },
+    after: target,
+    detail: { rules: [target], rule_count: 1 },
+   });
+  }
+  return outcome.rules;
+ }
+
  return {
   decideAgentPermissionRequest,
   expireConnectionPermissionRequests,
   expireStalePermissionRequests,
+  grantAgentPermissionRule,
   handleAgentPermissionPrepared,
   handleAgentPermissionRequest,
   listAgentPermissionRequests,
@@ -1376,8 +1435,8 @@ function createAgentPermissions(deps = {}) {
 function mountAgentPermissionRoutes(app, deps = {}) {
  const {
   requireAuth, jsonError,
-  decideAgentPermissionRequest, revokeAgentPermissionRule, setAgentPermissionMode,
-  listAgentPermissionRequests,
+  decideAgentPermissionRequest, grantAgentPermissionRule, revokeAgentPermissionRule,
+  setAgentPermissionMode, listAgentPermissionRequests,
  } = deps;
 
  // Everything still awaiting an answer in this workspace. The card in the
@@ -1425,6 +1484,20 @@ function mountAgentPermissionRoutes(app, deps = {}) {
  app.delete('/backend/workspaces/:workspaceId/agents/:agentId/permission-rules', requireAuth, async (req, res) => {
   try {
    const rules = await revokeAgentPermissionRule({
+    userId: req.userId,
+    workspaceId: String(req.params.workspaceId || '').trim(),
+    agentId: String(req.params.agentId || '').trim(),
+    rule: req.body?.rule,
+   });
+   res.json({ data: { rules }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ app.post('/backend/workspaces/:workspaceId/agents/:agentId/permission-rules', requireAuth, async (req, res) => {
+  try {
+   const rules = await grantAgentPermissionRule({
     userId: req.userId,
     workspaceId: String(req.params.workspaceId || '').trim(),
     agentId: String(req.params.agentId || '').trim(),

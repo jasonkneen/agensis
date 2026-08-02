@@ -30,6 +30,12 @@ async function configFor(relativePath) {
 // problem, not a style one. Add to this list when a new backend entry point
 // lands; do not remove an entry to make the test pass.
 const MUST_BE_LINTED = [
+  // Desktop ACP ACCESS path: session/set_mode (yolo→bypassPermissions), nested
+  // permission outcomes, and the Ask dialog. A silent typo here ships as
+  // "Full access still rejects every command" with no approval UI — already
+  // regressed once. Pin via tests/acp-permission-contract.test.cjs as well.
+  'electron/acp/client.cjs',
+  'electron/acp/host.cjs',
   // Builds the SQL behind the sidebar's Threads list: which threads a person
   // follows, and the read-marker comparison that decides unread. A silent
   // change here does not error — it just quietly stops surfacing replies.

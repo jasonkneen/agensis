@@ -3055,6 +3055,8 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  // exists to answer. Its sibling agent.connect_token_minted was recorded from
  // the start; this one was not, which is the only reason it is a separate line.
  'workspace.mcp_token_minted',
+ // Static OAuth client for MCP (authorization-code + PKCE). Secret shown once.
+ 'workspace.mcp_oauth_client_created',
  // Named workspace-control credentials. Issuance and redemption are separate
  // events: the owner may create a five-minute grant that is never redeemed.
  'controller.enrollment_created',

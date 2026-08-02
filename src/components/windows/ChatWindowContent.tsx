@@ -2080,7 +2080,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 {!readOnly && !isDirectMessage && (
                   <DropdownMenuItem onSelect={() => { void handleOpenFlowConnect(); }}>
                     <Link2 data-icon="inline-start" />
-                    Connect
+                    Event webhook
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />

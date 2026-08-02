@@ -144,12 +144,23 @@ export function formatTarget(
 }
 
 /** Short absolute timestamp. Audit reading is forensic; '2 hours ago' is not. */
-export function formatAuditTime(iso: string, locale?: string): string {
+/**
+ * Compact absolute table timestamp for forensic reading.
+ * Same year → `2 Aug 21:37`; older years keep a 2-digit year.
+ * Full ISO stays on the cell `title` for copy/inspect.
+ * Not relative — "2 hours ago" is not an answer to "when".
+ */
+export function formatAuditTime(iso: string, locale?: string, nowMs = Date.now()): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '';
+  const sameYear = date.getFullYear() === new Date(nowMs).getFullYear();
   return date.toLocaleString(locale, {
-    year: 'numeric', month: 'short', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    ...(sameYear ? {} : { year: '2-digit' }),
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
   });
 }
 

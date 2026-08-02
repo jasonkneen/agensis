@@ -160,6 +160,9 @@ const { mountAgentsRoutes } = require('./agents-routes.cjs');
 const { mountJoinPagesRoutes } = require('./join-pages-routes.cjs');
 const { mountTtsRoutes } = require('./tts-routes.cjs');
 const { mountMcpDoorsRoutes } = require('./mcp-doors-routes.cjs');
+const { mountMcpOauthRoutes } = require('./mcp-oauth-routes.cjs');
+const { createMcpOauthStore } = require('./mcp-oauth.cjs');
+const mcpOauthShared = require('../shared/mcp-oauth.cjs');
 const { mountConnectionsRoutes } = require('./connections-routes.cjs');
 const { mountSessionsRoutes } = require('./sessions-routes.cjs');
 const { SESSION_RETURNING, settleSessionClosure } = require('../shared/session-close.cjs');
@@ -2542,6 +2545,48 @@ ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_
     -- agent (new or existing). You approve via a popup unless auto-approve / invite link.
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS mcp_token_hash text DEFAULT '';
     ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS mcp_auto_approve boolean NOT NULL DEFAULT false;
+    -- MCP OAuth 2.1 (authorization-code + PKCE). Additive to agw_/aga_ bearers.
+    CREATE TABLE IF NOT EXISTS mcp_oauth_clients (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      client_id text NOT NULL UNIQUE,
+      client_secret_hash text NOT NULL DEFAULT '',
+      workspace_id uuid REFERENCES workspaces(id) ON DELETE CASCADE,
+      name text NOT NULL DEFAULT '',
+      token_endpoint_auth_method text NOT NULL DEFAULT 'none',
+      redirect_uris jsonb NOT NULL DEFAULT '[]'::jsonb,
+      scopes jsonb NOT NULL DEFAULT '["mcp:tools"]'::jsonb,
+      created_by uuid,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      revoked_at timestamptz
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_oauth_clients_workspace
+      ON mcp_oauth_clients(workspace_id) WHERE revoked_at IS NULL;
+    CREATE TABLE IF NOT EXISTS mcp_oauth_codes (
+      code_hash text PRIMARY KEY,
+      client_id text NOT NULL,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      user_id uuid NOT NULL,
+      redirect_uri text NOT NULL,
+      code_challenge text NOT NULL,
+      code_challenge_method text NOT NULL DEFAULT 'S256',
+      scopes jsonb NOT NULL DEFAULT '["mcp:tools"]'::jsonb,
+      expires_at timestamptz NOT NULL,
+      used_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_oauth_codes_client ON mcp_oauth_codes(client_id);
+    CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
+      token_hash text PRIMARY KEY,
+      client_id text NOT NULL,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      user_id uuid,
+      scopes jsonb NOT NULL DEFAULT '["mcp:tools"]'::jsonb,
+      expires_at timestamptz NOT NULL,
+      revoked_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_workspace
+      ON mcp_oauth_tokens(workspace_id) WHERE revoked_at IS NULL;
     -- An agent becomes claimable over MCP once its registration is approved.
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS mcp_approved boolean NOT NULL DEFAULT false;
     CREATE TABLE IF NOT EXISTS agent_registrations (
@@ -3621,7 +3666,15 @@ function publicWorkspace(row) {
   project_kind: row.project_kind || '',
   git_root: row.git_root || '',
   git_remote: row.git_remote || '',
+  // Server-computed role for the authenticated caller (`owner` when
+  // workspaces.user_id matches). Settings → Connections gates the MCP
+  // credential on this — not on a client-side user_id compare against a
+  // field this projection used to omit, which made the tab look blank for
+  // the actual owner.
   role: row.role || 'viewer',
+  // Present when the SELECT includes it (generic /backend/db path). The list
+  // route may omit it and rely on `role` alone.
+  user_id: row.user_id || null,
   created_at: row.created_at,
   updated_at: row.updated_at,
  };
@@ -4206,11 +4259,29 @@ async function verifyFlowConnectionToken(token) {
 // login. The latter two authenticate into the workspace; the client then calls
 // register_agent to become an agent. Legacy workspace_invites remain human-accept
 // URLs only and deliberately do not authenticate here.
+let _mcpOauthStore = null;
+function getMcpOauthStore() {
+ if (!_mcpOauthStore) {
+  _mcpOauthStore = createMcpOauthStore({ getDb, hashAgentToken });
+ }
+ return _mcpOauthStore;
+}
+
+async function verifyOauthAccessToken(token) {
+ if (!mcpOauthShared.isOauthAccessToken(token)) return null;
+ try {
+  return await getMcpOauthStore().verifyAccessToken(token);
+ } catch {
+  return null;
+ }
+}
+
 async function verifyMcpToken(token, req = null) {
  return (await verifyAgentConnectToken(token, req))
   || (await verifyFlowConnectionToken(token))
   || (await verifyControllerToken(token))
   || (await verifyWorkspaceMcpToken(token))
+  || (await verifyOauthAccessToken(token))
   || (await verifyUserAuthMcpToken(token));
 }
 
@@ -8180,6 +8251,14 @@ async function logMessageActivity(rows) {
    if (inserted.length > 0) {
     // table is 'activity_events' here, so this cannot re-trigger message logging.
     notifyDbSubscribers('activity_events', 'INSERT', inserted);
+
+    // Bump the session's updated_at so the Threads panel sorts correctly.
+    // This is the single chokepoint for all message INSERTs (via realtime.cjs),
+    // so every conversation — including sub-threads — stays fresh in the list.
+    getDb().unsafe(
+     'update chat_sessions set updated_at = now() where id = $1 and deleted_at is null',
+     [String(sessionId)],
+    ).catch(() => {});
    }
   } catch (error) {
    console.error('logMessageActivity failed', error);
@@ -9013,6 +9092,8 @@ function createApp() {
   limit: '50mb',
   verify: (req, _res, buf) => { req.rawBody = buf; },
  }));
+ // OAuth token/register endpoints use form-encoded bodies (RFC 6749).
+ app.use(express.urlencoded({ extended: false }));
  // Runtime schema fallback (ensureRuntimeSchema) runs by default so dev bootstrap
  // keeps working with zero config. Set AGENSIS_RUNTIME_SCHEMA=false in production
  // and run `npm run migrate` instead, once the supabase/migrations/*.sql files are
@@ -9218,7 +9299,28 @@ function createApp() {
   recordAudit,
  });
 
- mountMcpDoorsRoutes(app, { ...coreDeps(), mcpHandler, normalizeBaseUrl, renderSkillMd, requestBaseUrl, skillManifest, skillRateLimiter });
+ mountMcpDoorsRoutes(app, {
+  ...coreDeps(),
+  mcpHandler,
+  normalizeBaseUrl,
+  renderSkillMd,
+  requestBaseUrl,
+  skillManifest,
+  skillRateLimiter,
+  oauthWwwAuthenticate: (req) => {
+   const base = normalizeBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL)
+    || normalizeBaseUrl(process.env.AGENSIS_PUBLIC_URL)
+    || requestBaseUrl(req);
+   return mcpOauthShared.wwwAuthenticateHeader(base);
+  },
+ });
+ mountMcpOauthRoutes(app, {
+  ...coreDeps(),
+  hashAgentToken,
+  normalizeBaseUrl,
+  requestBaseUrl,
+  verifyToken,
+ });
 
  mountAuthRoutes(app, {
   ...coreDeps(),

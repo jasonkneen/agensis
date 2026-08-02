@@ -9,6 +9,8 @@ export interface Workspace {
  description: string;
  icon: string;
  user_id?: string | null;
+ /** Caller role on this workspace from GET /backend/workspaces (`owner` | `admin` | …). */
+ role?: string | null;
  auto_share?: boolean;
  local_path?: string;
  project_kind?: string;

@@ -16,13 +16,41 @@ function mountMcpDoorsRoutes(app, deps = {}) {
  const {
   rateLimitBlocked, clientIpFromReq, mcpHandler, normalizeBaseUrl,
   renderSkillMd, requestBaseUrl, skillManifest,
-  skillRateLimiter,
+  skillRateLimiter, oauthWwwAuthenticate,
  } = deps;
 
- app.post(['/backend/mcp', '/api/mcp', '/mcp'], mcpHandler);
- app.get(['/backend/mcp', '/api/mcp', '/mcp'], (_req, res) => {
+ // Wrap so unauthenticated MCP calls advertise RFC 9728 protected-resource metadata.
+ function mcpHandlerWithOauthChallenge(req, res) {
+  const originalSetHeader = res.setHeader.bind(res);
+  const originalStatus = res.status.bind(res);
+  let statusCode = 200;
+  res.status = (code) => {
+   statusCode = code;
+   return originalStatus(code);
+  };
+  // After handler runs we cannot easily patch; instead patch setHeader when 401.
+  // Prefer: mcpHandler sets WWW-Authenticate — override via deps if provided.
+  const run = typeof mcpHandler === 'function' ? mcpHandler : async (_r, s) => s.status(500).end();
+  // Monkey-patch json to attach resource_metadata on 401 if missing.
+  const originalJson = res.json.bind(res);
+  res.json = (body) => {
+   if (statusCode === 401 && typeof oauthWwwAuthenticate === 'function') {
+    try {
+     originalSetHeader('WWW-Authenticate', oauthWwwAuthenticate(req));
+    } catch { /* ignore */ }
+   }
+   return originalJson(body);
+  };
+  return run(req, res);
+ }
+
+ app.post(['/backend/mcp', '/api/mcp', '/mcp'], mcpHandlerWithOauthChallenge);
+ app.get(['/backend/mcp', '/api/mcp', '/mcp'], (req, res) => {
+  if (typeof oauthWwwAuthenticate === 'function') {
+   res.setHeader('WWW-Authenticate', oauthWwwAuthenticate(req));
+  }
   res.status(405).json({
-   error: { message: 'MCP endpoint: use HTTP POST with JSON-RPC 2.0 and an Authorization: Bearer <agent token> header.' },
+   error: { message: 'MCP endpoint: use HTTP POST with JSON-RPC 2.0 and an Authorization: Bearer token (OAuth or workspace/agent credential).' },
   });
  });
 

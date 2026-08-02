@@ -44,6 +44,15 @@ function makeDb() {
      : [];
    }
    if (normalized.includes('with recursive chain as')) return [];
+   if (normalized.startsWith('select id, mcp_auto_approve')) {
+    return String(params[0]) === WORKSPACE
+     ? [{
+      id: WORKSPACE,
+      mcp_auto_approve: state.autoApprove,
+      configured: state.tokenRotations > 0,
+     }]
+     : [];
+   }
    if (normalized.startsWith('update workspaces set mcp_token_hash')) {
     state.tokenRotations += 1;
     return [{ id: WORKSPACE, mcp_auto_approve: state.autoApprove }];
@@ -90,6 +99,15 @@ test('the actual workspace owner can rotate the control-plane token and set auto
  const token = await __test.issueToken(OWNER, '1');
 
  await withServer(async (baseUrl) => {
+  const statusBefore = await fetch(`${baseUrl}/backend/workspaces/${WORKSPACE}/mcp-connection`, {
+   headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(statusBefore.status, 200);
+  const before = await statusBefore.json();
+  assert.equal(before.data.configured, false);
+  assert.ok(before.data.endpoint);
+  assert.equal(before.data.token, undefined);
+
   const mint = await request(
    baseUrl,
    'POST',
@@ -98,7 +116,17 @@ test('the actual workspace owner can rotate the control-plane token and set auto
    {},
   );
   assert.equal(mint.status, 200);
-  assert.match((await mint.json()).data.token, /^agw_/);
+  const minted = await mint.json();
+  assert.match(minted.data.token, /^agw_/);
+  assert.equal(minted.data.configured, true);
+
+  const statusAfter = await fetch(`${baseUrl}/backend/workspaces/${WORKSPACE}/mcp-connection`, {
+   headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(statusAfter.status, 200);
+  const after = await statusAfter.json();
+  assert.equal(after.data.configured, true);
+  assert.equal(after.data.token, undefined, 'status never re-discloses the live token');
 
   const approve = await request(
    baseUrl,
@@ -132,6 +160,11 @@ test('an admin with manage cannot rotate the token or enable auto-approve', asyn
  const token = await __test.issueToken(ADMIN, '1');
 
  await withServer(async (baseUrl) => {
+  const status = await fetch(`${baseUrl}/backend/workspaces/${WORKSPACE}/mcp-connection`, {
+   headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(status.status, 403);
+
   const mint = await request(
    baseUrl,
    'POST',

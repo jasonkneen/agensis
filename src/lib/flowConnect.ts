@@ -32,7 +32,7 @@ export async function createFlowConnection(input: {
     headers: { 'content-type': 'application/json', ...apiAuthHeaders() },
     body: JSON.stringify({
       channelId: input.channelId || null,
-      name: input.name || 'Flows',
+      name: input.name || 'Event webhook',
       webhookUrl: input.webhookUrl?.trim() || null,
     }),
   });

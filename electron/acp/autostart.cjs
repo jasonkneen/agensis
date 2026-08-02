@@ -135,6 +135,9 @@ function createAutostartStore(deps) {
       cwd: profile.cwd ? String(profile.cwd) : '',
       baseUrl: String(profile.baseUrl || 'http://127.0.0.1:3142').trim(),
       requiredRuntime: profile.requiredRuntime ? String(profile.requiredRuntime).trim() : '',
+      permissionMode: profile.permissionMode
+        ? String(profile.permissionMode).trim()
+        : (profile.permission_mode ? String(profile.permission_mode).trim() : 'yolo'),
       autoStart: profile.autoStart !== false,
       savedAt: new Date().toISOString(),
     };

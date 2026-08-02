@@ -157,12 +157,19 @@ describe('formatDetail', () => {
 });
 
 describe('formatAuditTime', () => {
-  it('renders an absolute timestamp, not a relative one', () => {
+  it('renders a compact absolute timestamp, not a relative one', () => {
     // Audit reading is forensic. '2 hours ago' is not an answer to "when".
-    const formatted = formatAuditTime('2026-07-29T10:30:05.000Z', 'en-GB');
-    expect(formatted).toMatch(/2026/);
-    expect(formatted).toMatch(/Jul/);
-    expect(formatted).not.toMatch(/ago/);
+    // Same-year rows drop the year to keep the Time column short.
+    const sameYear = formatAuditTime('2026-07-29T10:30:05.000Z', 'en-GB', Date.parse('2026-08-02T12:00:00.000Z'));
+    expect(sameYear).toMatch(/Jul/);
+    expect(sameYear).toMatch(/29/);
+    expect(sameYear).not.toMatch(/2026/);
+    expect(sameYear).not.toMatch(/ago/);
+    // Seconds are noise in a dense table.
+    expect(sameYear).not.toMatch(/:05/);
+
+    const olderYear = formatAuditTime('2025-07-29T10:30:05.000Z', 'en-GB', Date.parse('2026-08-02T12:00:00.000Z'));
+    expect(olderYear).toMatch(/25|2025/);
   });
 
   it('returns empty for an unparseable timestamp instead of Invalid Date', () => {

@@ -2800,7 +2800,10 @@ function createMcpHandler(deps) {
    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
    const identity = token ? await verifyMcpToken(token, req) : null;
    if (!identity) {
-    res.setHeader('WWW-Authenticate', 'Bearer realm="agensis-mcp"');
+    // Prefer a header already set by the door wrapper (RFC 9728 resource_metadata).
+    if (!res.getHeader('WWW-Authenticate')) {
+     res.setHeader('WWW-Authenticate', 'Bearer realm="agensis-mcp"');
+    }
     return res.status(401).json(jsonrpcError(null, -32001, 'Unauthorized: valid MCP Bearer token required'));
    }
 

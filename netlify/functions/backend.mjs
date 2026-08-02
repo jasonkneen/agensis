@@ -568,6 +568,11 @@ function isFlyOwnedControlPath(pathname) {
   || /^\/backend\/link-previews(?:\/|$)/.test(pathname)
   || /^\/backend\/system\/skill-content(?:\/|$)/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/flow-connections(?:\/|$)/.test(pathname)
+    || /^\/backend\/workspaces\/[^/]+\/mcp-connection$/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/oauth-clients(?:\/|$)/.test(pathname)
+  || /^\/backend\/oauth\/(?:authorize|token|register)$/.test(pathname)
+  || /^\/\.well-known\/oauth-(?:authorization-server|protected-resource)(?:\/|$)/.test(pathname)
+  || /^\/backend\/\.well-known\/oauth-(?:authorization-server|protected-resource)$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/mcp-token$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/mcp-auto-approve$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/agent-registrations(?:\/|$)/.test(pathname)
@@ -1072,7 +1077,9 @@ function publicWorkspace(row) {
   project_kind: row.project_kind || '',
   git_root: row.git_root || '',
   git_remote: row.git_remote || '',
+  // Mirrors server/index.cjs — Settings → Connections gates MCP on role.
   role: row.role || 'viewer',
+  user_id: row.user_id || null,
   created_at: row.created_at,
   updated_at: row.updated_at,
  };

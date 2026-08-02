@@ -112,11 +112,18 @@ async function restoreAutostartAgents(store, opts = {}) {
         }
 
         log(`[desktop-acp] restore start agent=${agentId} harness=${entry.harnessId} attempt=${attempt}`);
+        const { isElevatedAccessMode } = require('./client.cjs');
+        const permissionMode = String(entry.permissionMode || entry.permission_mode || 'yolo');
         await acpHost.start({
           agentId,
           harnessId: entry.harnessId,
           cwd: entry.cwd || process.cwd(),
-          autoApprove: true,
+          permissionMode,
+          // accept_edits (product) and acceptEdits (legacy) both elevate.
+          autoApprove: isElevatedAccessMode(permissionMode),
+          // Autostart has the stored connect token — wire authenticated MCP too.
+          token: entry.token,
+          baseUrl: entry.baseUrl || 'http://127.0.0.1:3142',
           onLog: (line) => log(`[desktop-acp:${agentId}] ${line}`),
         });
 

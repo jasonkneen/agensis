@@ -10,6 +10,7 @@
 const os = require('os');
 const WebSocket = require('ws');
 const acpHost = require('./host.cjs');
+const { createPermissionBroker, jobPermissionRules } = require('./permissionBroker.cjs');
 
 /** @type {Map<string, ReturnType<typeof createBridgeState>>} */
 const bridges = new Map();
@@ -70,6 +71,10 @@ function createBridgeState(config) {
     harnessId: config.harnessId || acpHost.status(config.agentId)?.harnessId || 'unknown',
     /** Server-enforced pin from agent.metadata.runtime when classic. */
     requiredRuntime: normalizeClassicRuntime(config.requiredRuntime),
+    /** Active job id while ACP is mid-prompt (permission cards need this). */
+    activeJobId: null,
+    /** createPermissionBroker for in-chat PermissionRequestCard path. */
+    permissionBroker: null,
   };
 }
 
@@ -100,6 +105,9 @@ function sendRegister(ws, state) {
       version: 'desktop-acp-0.1',
       model: state.config.model || 'auto',
       harnessId: state.harnessId,
+      // Required for decide route: without this, Allow/Deny returns 409
+      // permission_receipt_unsupported and the chat card cannot settle.
+      permissionDecisionReceipts: true,
     },
   });
 }
@@ -342,6 +350,16 @@ function connect(state) {
       return;
     }
 
+    // In-chat permission decision frames (prepare / commit / abort / legacy).
+    if (
+      message.type === 'agent_permission_prepare'
+      || message.type === 'agent_permission_commit'
+      || message.type === 'agent_permission_abort'
+      || message.type === 'agent_permission_decision'
+    ) {
+      if (state.permissionBroker?.handleServerFrame(message)) return;
+    }
+
     if (message.type === 'error') {
       state.lastError = message.message || 'server error';
       console.error('[desktop-acp] server error:', state.lastError, message.code || '');
@@ -420,6 +438,26 @@ async function runJob(state, job) {
     return;
   }
 
+  // One broker per job: parks tool calls until PermissionRequestCard answers.
+  // Seed permanent rules from the job payload so "Always allow" survives into
+  // later jobs (same field the Relay daemon reads: agent.metadata.permission_rules).
+  const storedRules = jobPermissionRules(job);
+  const broker = createPermissionBroker({
+    send: (frame) => {
+      if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return false;
+      return send(state.ws, frame);
+    },
+    log: (line) => console.log(`[desktop-acp:${state.agentId}] ${line}`),
+    initialRules: storedRules,
+  });
+  if (storedRules.length) {
+    console.log(
+      `[desktop-acp:${state.agentId}] loaded ${storedRules.length} permanent permission rule(s) for job ${jobId}`,
+    );
+  }
+  state.permissionBroker = broker;
+  state.activeJobId = jobId;
+
   try {
     let streamed = '';
     const result = await acpHost.prompt(state.agentId, promptText, {
@@ -430,6 +468,32 @@ async function runJob(state, job) {
           jobId,
           // Deltas accept content OR response; content matches the classic daemon.
           content: streamed,
+        });
+      },
+      // Product auth dialogs: raise agent_permission_request so the chat shows
+      // PermissionRequestCard (same UI as Relay/daemon), not a native OS box.
+      onPermissionRequest: async (params) => {
+        const toolCall = params?.toolCall || params?.tool_call || {};
+        const title = String(toolCall.title || toolCall.kind || 'Tool permission');
+        const toolName = String(
+          toolCall.toolName
+          || toolCall.name
+          || (title.match(/^([A-Za-z][\w-]*)/) || [])[1]
+          || toolCall.kind
+          || 'Tool',
+        );
+        let detail = '';
+        if (typeof toolCall.rawInput === 'string') detail = toolCall.rawInput;
+        else if (toolCall.rawInput && typeof toolCall.rawInput === 'object') {
+          detail = JSON.stringify(toolCall.rawInput).slice(0, 160);
+        }
+        return broker.request({
+          jobId,
+          toolName,
+          title,
+          description: '',
+          detail,
+          rawInput: toolCall.rawInput,
         });
       },
     });
@@ -446,6 +510,7 @@ async function runJob(state, job) {
       metadata: { harnessId: state.harnessId, executor: 'desktop-acp' },
     });
   } catch (err) {
+    broker.cancelJob(jobId, err?.message || 'The job failed before this was approved.');
     send(state.ws, {
       action: 'agent_job_result',
       jobId,
@@ -453,6 +518,10 @@ async function runJob(state, job) {
       error: err?.message || String(err),
       stopReason: 'agent_error',
     });
+  } finally {
+    broker.cancelJob(jobId);
+    if (state.permissionBroker === broker) state.permissionBroker = null;
+    if (state.activeJobId === jobId) state.activeJobId = null;
   }
 }
 
@@ -461,6 +530,10 @@ function stopBridge(agentId) {
   const state = bridges.get(key);
   if (!state) return { stopped: false };
   state.stopped = true;
+  try {
+    state.permissionBroker?.shutdown('The desktop ACP bridge stopped before this was approved.');
+  } catch { /* ignore */ }
+  state.permissionBroker = null;
   if (state.heartbeatTimer) clearInterval(state.heartbeatTimer);
   if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
   try {

@@ -121,3 +121,19 @@ curl -s localhost:<port>/backend/skill | jq .data.name    # skill manifest (publ
 
 Implementation: `server/mcp.cjs` (protocol + tools), wired in `server/index.cjs`
 `createApp` via `createMcpHandler`.
+
+## OAuth 2.1 (remote MCP clients)
+
+Additive to Bearer tokens (`agw_`, `aga_`, session). Authorization-code + PKCE (S256).
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /.well-known/oauth-authorization-server` | AS metadata (RFC 8414) |
+| `GET /.well-known/oauth-protected-resource` | PRM (RFC 9728) for the MCP resource |
+| `POST /backend/oauth/register` | Dynamic client registration |
+| `GET/POST /backend/oauth/authorize` | Consent + authorization code |
+| `POST /backend/oauth/token` | Code exchange (form-urlencoded) |
+| `GET/POST /backend/workspaces/:id/oauth-clients` | Static client mint for Settings → Connections |
+
+Scopes: `mcp:tools`. Access tokens use the `ago_` prefix and authenticate at `POST /backend/mcp` via the same `verifyMcpToken` chain.
+Unauthenticated MCP calls return `401` with `WWW-Authenticate` including `resource_metadata`.

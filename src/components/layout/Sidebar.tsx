@@ -422,7 +422,7 @@ export const Sidebar = React.memo(function Sidebar({
  // nests deeper). Each fork gets the SPLIT chip + a Merge-into-parent action,
  // wired to the same handlers SessionTree uses for channels/threads.
  const renderDmForks = (parentId: string, depth: number): React.ReactNode =>
-  (dmForksByParent.get(parentId) || []).map(fork => (
+  (dmForksByParent.get(parentId) || []).slice(0, 5).map(fork => (
    <React.Fragment key={fork.id}>
     <SessionRow
      session={fork}
@@ -1552,10 +1552,10 @@ function DirectAgentRow({
      </span>
     </span>
    </button>
-   {/* Most agent work happens in DMs, so the elapsed badge belongs here too —
-       keyed on the DM's session, same store, same conditional mount. */}
-   {agent.session ? <SessionWorkBadge sessionId={agent.session.id} /> : null}
-   <DropdownMenu>
+   {/* Badge + menu in one flex row so they share the grid's second column. */}
+   <span className="flex shrink-0 items-center gap-1">
+    {agent.session ? <SessionWorkBadge sessionId={agent.session.id} /> : null}
+    <DropdownMenu>
     <DropdownMenuTrigger asChild>
      <Button
       type="button"
@@ -1600,6 +1600,7 @@ function DirectAgentRow({
      )}
     </DropdownMenuContent>
    </DropdownMenu>
+   </span>
   </div>
  );
 }
