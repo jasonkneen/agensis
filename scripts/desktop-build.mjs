@@ -75,12 +75,18 @@ const hostArch = process.arch; // arm64 on Apple Silicon, x64 on Intel
  * and rebuilds native modules under Rosetta. package.json is arm64-only; we also
  * pass an explicit --arm64/--x64 matching the host unless the caller already
  * named an arch flag.
+ *
+ * Mac-only: package.json's win target is x64-only (no win-arm64 build config),
+ * so matching host arch on Windows would pass --arm64 to electron-builder on an
+ * ARM64 dev machine and fail — there's no win-arm64 target to build. Let
+ * electron-builder fall back to its own default (the configured win/linux
+ * targets) on non-Mac hosts.
  */
 function resolveBuilderArchArgs() {
   if (passthrough.some((a) => ARCH_FLAGS.has(a))) {
     return []; // caller owns arch selection
   }
-  if (hostArch === 'arm64' || hostArch === 'x64') {
+  if (isMac && (hostArch === 'arm64' || hostArch === 'x64')) {
     return [`--${hostArch}`];
   }
   return [];

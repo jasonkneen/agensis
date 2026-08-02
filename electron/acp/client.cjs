@@ -35,6 +35,18 @@ function buildPathEnv() {
   }).join(path.delimiter);
 }
 
+// child_process.spawn's shell:true does NOT escape args on Windows (Node
+// warns about this — DEP0190): it hands cmd.exe a plain space-joined command
+// line, so any arg with a space or shell metacharacter needs its own
+// quoting. Our harness args are static literals, not user input, but this
+// is the correct way to invoke them under a shell regardless.
+function quoteWindowsShellArg(value) {
+  const str = String(value);
+  if (str === '') return '""';
+  if (!/[\s"^&|<>()]/.test(str)) return str;
+  return `"${str.replace(/"/g, '""')}"`;
+}
+
 function extractTextFromUpdate(update) {
   if (!update || typeof update !== 'object') return '';
   const sessionUpdate = String(update.sessionUpdate || update.session_update || update.type || '');
@@ -104,15 +116,27 @@ function createAcpClient(options) {
     if (typeof onLog === 'function') onLog(line);
   };
 
-  const child = spawn(command, args, {
-    cwd,
-    env: {
-      ...process.env,
-      PATH: buildPathEnv(),
-      ...env,
+  // npm-installed CLI harnesses resolve to .cmd/.bat shims on Windows, and
+  // child_process.spawn cannot exec those directly without shell:true (they
+  // are batch files, not PE executables). Only shim extensions get shell:true
+  // — a resolved .exe still spawns directly, with no argument re-quoting risk.
+  const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
+
+  const child = spawn(
+    needsShell ? quoteWindowsShellArg(command) : command,
+    needsShell ? args.map(quoteWindowsShellArg) : args,
+    {
+      cwd,
+      env: {
+        ...process.env,
+        PATH: buildPathEnv(),
+        ...env,
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: needsShell,
+      windowsHide: true,
     },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  );
 
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk) => {
