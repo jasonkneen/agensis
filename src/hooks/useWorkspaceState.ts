@@ -22,7 +22,9 @@ type WorkspaceState<T> = {
  * The returned value becomes `emptyValue` during the render that switches
  * workspaces, before effects have a chance to clear the previous value. Setters
  * created by the old render are fenced too, so late mutations and realtime
- * callbacks cannot replace the new workspace's state.
+ * callbacks cannot replace the new workspace's state. Unlike React's native
+ * setter, this setter intentionally changes identity with the workspace; any
+ * callback that captures it must include it (or workspaceId) in its dependencies.
  */
 export function useWorkspaceState<T>(
   workspaceId: string | null,

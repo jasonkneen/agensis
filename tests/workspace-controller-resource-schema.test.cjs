@@ -110,6 +110,30 @@ test('a forward migration repairs already-installed composite controller foreign
  }
 });
 
+test('runtime and canonical schema bootstrap repair already-installed unqualified SET NULL constraints', () => {
+ for (const [where, source] of [
+  ['runtime', runtime],
+  ['canonical', canonical],
+ ]) {
+  for (const constraint of [
+   'workspace_controllers_parent_workspace_fkey',
+   'workspace_agents_controller_workspace_fkey',
+   'workspace_resources_controller_workspace_fkey',
+   'agent_registrations_controller_workspace_fkey',
+   'workspace_join_links_redeemed_controller_workspace_fkey',
+  ]) {
+   assert.match(
+    source,
+    new RegExp(
+     `conname = '${constraint}'[\\s\\S]{0,120}confdelsetcols IS NULL[\\s\\S]{0,180}DROP CONSTRAINT ${constraint}`,
+     'i',
+    ),
+    `${where}: ${constraint}`,
+   );
+  }
+ }
+});
+
 test('controller scope shape cannot express owner, private-read, vault, role, or escalation authority', () => {
  for (const source of [runtime, canonical, migration]) {
   const controller = source.slice(

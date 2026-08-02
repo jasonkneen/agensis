@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useEffect, useCallback } from 'react';
 import { apiAuthHeaders, apiUrl } from '../lib/backendClient';
 import { cachedFetch, offlineInsertResult, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import { WORKSPACE_UNAVAILABLE, classifyWriteFailure, type WriteFailure } from '../lib/writeFeedback';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
-import { useWorkspaceListState } from './useWorkspaceState';
+import { useWorkspaceListState, useWorkspaceState } from './useWorkspaceState';
 import type { WorkspaceAgent } from '../types';
 import type { AgentPurpose, ResourceFacet } from '../lib/agentPurpose';
 
@@ -48,7 +48,11 @@ export function useAgents(workspaceId: string | null, userId?: string, seed?: Wo
     workspaceId,
     (seed || []).filter(agent => agent.workspace_id === workspaceId),
   );
-  const [loading, setLoading] = useState(!seed?.length);
+  const [loading, setLoading] = useWorkspaceState(
+    workspaceId,
+    !seed?.length,
+    Boolean(workspaceId),
+  );
 
   useEffect(() => {
     if (seed) setAgents(seed.filter(agent => agent.workspace_id === workspaceId));
@@ -75,7 +79,7 @@ export function useAgents(workspaceId: string | null, userId?: string, seed?: Wo
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [beginAgentsRequest, setAgents, workspaceId]);
+  }, [beginAgentsRequest, setAgents, setLoading, workspaceId]);
 
   useEffect(() => {
     fetchAgents();
@@ -145,7 +149,7 @@ export function useAgents(workspaceId: string | null, userId?: string, seed?: Wo
       return { agent, failure: null };
     }
     return { agent: null, failure: classifyWriteFailure(error, { online: navigator.onLine }) };
-  }, [workspaceId, userId]);
+  }, [setAgents, workspaceId, userId]);
 
   const updateAgent = useCallback(async (id: string, updates: Partial<WorkspaceAgent>) => {
     const result = await offlineUpdate('workspace_agents', id, updates as Record<string, unknown>, `agents_${workspaceId}`);
@@ -153,13 +157,13 @@ export function useAgents(workspaceId: string | null, userId?: string, seed?: Wo
       setAgents(prev => prev.map(a => a.id === id ? { ...a, ...result } as WorkspaceAgent : a));
     }
     return result;
-  }, [workspaceId]);
+  }, [setAgents, workspaceId]);
 
   const deleteAgent = useCallback(async (id: string) => {
     await offlineDelete('workspace_agents', id, `agents_${workspaceId}`);
     setAgents(prev => prev.filter(a => a.id !== id));
     return true;
-  }, [workspaceId]);
+  }, [setAgents, workspaceId]);
 
   const disconnectAgent = useCallback(async (id: string) => {
     const response = await fetch(apiUrl(`/backend/agents/${encodeURIComponent(id)}/disconnect`), {

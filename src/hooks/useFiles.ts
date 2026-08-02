@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useEffect, useCallback } from 'react';
 import { apiAuthHeaders, apiUrl, backendClient } from '../lib/backendClient';
 import { cachedFetch } from '../lib/offlineBackend';
 import { normalizeUploadedFile, normalizeUploadedFiles } from '../lib/uploadedFiles';
-import { useWorkspaceListState } from './useWorkspaceState';
+import { useWorkspaceListState, useWorkspaceState } from './useWorkspaceState';
 import type { UploadedFile } from '../types';
 
 function fileToBase64(file: File): Promise<string> {
@@ -26,7 +26,11 @@ export function useFiles(workspaceId: string | null, seed?: UploadedFile[] | nul
     workspaceId,
     normalizeUploadedFiles(seed).filter(file => file.workspace_id === workspaceId),
   );
-  const [loading, setLoading] = useState(!seed?.length);
+  const [loading, setLoading] = useWorkspaceState(
+    workspaceId,
+    !seed?.length,
+    Boolean(workspaceId),
+  );
 
   useEffect(() => {
     if (seed) setFiles(normalizeUploadedFiles(seed).filter(file => file.workspace_id === workspaceId));
@@ -53,7 +57,7 @@ export function useFiles(workspaceId: string | null, seed?: UploadedFile[] | nul
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [beginFilesRequest, setFiles, workspaceId]);
+  }, [beginFilesRequest, setFiles, setLoading, workspaceId]);
 
   useEffect(() => {
     fetchFiles();
@@ -80,7 +84,7 @@ export function useFiles(workspaceId: string | null, seed?: UploadedFile[] | nul
     }
     if (uploaded.length > 0) setFiles(prev => [...uploaded, ...prev]);
     return uploaded;
-  }, [workspaceId]);
+  }, [setFiles, workspaceId]);
 
   // M4: deleting through the generic /backend/db/delete dropped the uploaded_files
   // row but left the blob on disk forever. The bespoke route removes both.
@@ -92,7 +96,7 @@ export function useFiles(workspaceId: string | null, seed?: UploadedFile[] | nul
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(payload?.error?.message || `Delete file HTTP ${response.status}`);
     setFiles(prev => prev.filter(f => f.id !== id));
-  }, []);
+  }, [setFiles]);
 
   return { files, loading, uploadFiles, deleteFile };
 }

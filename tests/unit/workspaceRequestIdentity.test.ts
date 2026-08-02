@@ -54,12 +54,15 @@ let latestConnections: ReturnType<typeof useAgentConnections>;
 let latestRegistrations: ReturnType<typeof useAgentRegistrations>;
 let latestBootstrap: ReturnType<typeof useWorkspaceBootstrap>;
 let latestSharing: ReturnType<typeof useSharing>;
+let latestFiles: ReturnType<typeof useFiles>;
+let listLoadingRenders: boolean[][] = [];
 let latestLists: {
   documentIds: string[];
   taskIds: string[];
   agentIds: string[];
   sessionIds: string[];
   fileIds: string[];
+  loading: boolean[];
 };
 
 function ConnectionsProbe({ workspaceId }: { workspaceId: string | null }) {
@@ -78,6 +81,10 @@ function SharingProbe({ workspaceId }: { workspaceId: string | null }) {
   latestSharing = useSharing(workspaceId, 'current-user');
   return null;
 }
+function FilesProbe({ workspaceId, seed }: { workspaceId: string; seed: Parameters<typeof useFiles>[1] }) {
+  latestFiles = useFiles(workspaceId, seed);
+  return null;
+}
 function ListsProbe({ workspaceId }: { workspaceId: string | null }) {
   const documents = useDocuments(workspaceId);
   const tasks = useTasks(workspaceId);
@@ -90,7 +97,9 @@ function ListsProbe({ workspaceId }: { workspaceId: string | null }) {
     agentIds: agents.agents.map(row => row.id),
     sessionIds: chat.sessions.map(row => row.id),
     fileIds: files.files.map(row => row.id),
+    loading: [documents.loading, tasks.loading, agents.loading, files.loading],
   };
+  listLoadingRenders.push(latestLists.loading);
   return null;
 }
 
@@ -105,6 +114,7 @@ beforeEach(() => {
   root = createRoot(container);
   moduleMocks.cachedFetch.mockReset();
   moduleMocks.from.mockReset();
+  listLoadingRenders = [];
 });
 afterEach(() => {
   act(() => root.unmount());
@@ -199,6 +209,7 @@ describe('workspace request identity', () => {
       agentIds: ['agent-B'],
       sessionIds: ['session-B'],
       fileIds: ['file-B'],
+      loading: [false, false, false, false],
     });
 
     const a = rows('A');
@@ -216,7 +227,54 @@ describe('workspace request identity', () => {
       agentIds: ['agent-B'],
       sessionIds: ['session-B'],
       fileIds: ['file-B'],
+      loading: [false, false, false, false],
     });
+  });
+
+  it('marks workspace lists loading during the first render after a workspace switch', async () => {
+    moduleMocks.cachedFetch.mockImplementation((key: string) => {
+      if (key.startsWith('messages_page_')) return Promise.resolve({ messages: [], hasMore: false });
+      const workspaceId = key.endsWith('_A') ? 'A' : 'B';
+      if (workspaceId === 'B') return new Promise(() => {});
+      if (key.startsWith('documents_meta_')) return Promise.resolve([{ id: 'document-A', workspace_id: 'A' }]);
+      if (key.startsWith('tasks_')) return Promise.resolve([{ id: 'task-A', workspace_id: 'A' }]);
+      if (key.startsWith('agents_')) return Promise.resolve([{ id: 'agent-A', workspace_id: 'A' }]);
+      if (key.startsWith('sessions_')) return Promise.resolve([]);
+      return Promise.resolve([{ id: 'file-A', workspace_id: 'A', size: 1 }]);
+    });
+
+    act(() => root.render(createElement(ListsProbe, { workspaceId: 'A' })));
+    await act(settle);
+    expect(latestLists.loading).toEqual([false, false, false, false]);
+
+    listLoadingRenders = [];
+    act(() => root.render(createElement(ListsProbe, { workspaceId: 'B' })));
+    expect(listLoadingRenders[0]).toEqual([true, true, true, true]);
+  });
+
+  it('uses the current workspace setter when deleting a file after a switch', async () => {
+    const file = (workspaceId: string) => ({
+      id: `file-${workspaceId}`,
+      workspace_id: workspaceId,
+      name: workspaceId,
+      size: 1,
+      type: 'text/plain',
+      storage_path: '',
+      created_at: '',
+    });
+    moduleMocks.cachedFetch.mockImplementation((key: string) => Promise.resolve([
+      file(key.endsWith('_A') ? 'A' : 'B'),
+    ]));
+    vi.stubGlobal('fetch', vi.fn(async () => response({ deleted: true })));
+
+    act(() => root.render(createElement(FilesProbe, { workspaceId: 'A', seed: [file('A')] })));
+    await act(settle);
+    act(() => root.render(createElement(FilesProbe, { workspaceId: 'B', seed: [file('B')] })));
+    await act(settle);
+    expect(latestFiles.files.map(row => row.id)).toEqual(['file-B']);
+
+    await act(async () => { await latestFiles.deleteFile('file-B'); });
+    expect(latestFiles.files).toEqual([]);
   });
 
   it('keeps workspace B sharing state when workspace A requests resolve last', async () => {

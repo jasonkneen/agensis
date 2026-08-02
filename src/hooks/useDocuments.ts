@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
-import { useWorkspaceListState } from './useWorkspaceState';
+import { useWorkspaceListState, useWorkspaceState } from './useWorkspaceState';
 import type { Document } from '../types';
 
 // NET-06: the documents LIST is metadata-only — pulling every doc's full HTML
@@ -54,7 +54,11 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
     workspaceId,
     (seed || []).filter(doc => doc.workspace_id === workspaceId).map(toListDocument),
   );
-  const [loading, setLoading] = useState(!seed?.length);
+  const [loading, setLoading] = useWorkspaceState(
+    workspaceId,
+    !seed?.length,
+    Boolean(workspaceId),
+  );
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Per-doc content cache (id -> body). Populated by fetchDocumentContent and
   // invalidated when a doc's realtime UPDATE arrives (its body may have changed).
@@ -85,7 +89,7 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [beginDocumentsRequest, setDocuments, workspaceId]);
+  }, [beginDocumentsRequest, setDocuments, setLoading, workspaceId]);
 
   useEffect(() => {
     fetchDocuments();
@@ -162,7 +166,7 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
       return doc;
     }
     return null;
-  }, [workspaceId]);
+  }, [setDocuments, workspaceId]);
 
   const saveDocument = useCallback(async (id: string, updates: { title?: string; content?: string; folder?: string | null }) => {
     const result = await offlineUpdate('documents', id, {
@@ -176,7 +180,7 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
       setDocuments(prev => prev.map(d => d.id === id ? stripContent({ ...d, ...(result as Record<string, unknown>) }) : d));
     }
     return result;
-  }, [workspaceId]);
+  }, [setDocuments, workspaceId]);
 
   const autoSave = useCallback((id: string, updates: { title?: string; content?: string; folder?: string | null }) => {
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
@@ -194,7 +198,7 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
     contentCache.current.delete(id);
     setDocuments(prev => prev.filter(d => d.id !== id));
     return true;
-  }, [workspaceId]);
+  }, [setDocuments, workspaceId]);
 
   const toggleFavorite = useCallback(async (id: string, currentValue: boolean) => {
     const result = await offlineUpdate('documents', id, {
@@ -204,7 +208,7 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
     if (result) {
       setDocuments(prev => prev.map(d => d.id === id ? stripContent({ ...d, ...(result as Record<string, unknown>) }) : d));
     }
-  }, [workspaceId]);
+  }, [setDocuments, workspaceId]);
 
   // Applet storage docs (folder === APPLETS_FOLDER) are real documents that also
   // back the Canvas Apps picker (see CanvasTemplatePicker) — they're shown in

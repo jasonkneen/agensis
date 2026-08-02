@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useEffect, useCallback, useMemo } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
-import { useWorkspaceListState } from './useWorkspaceState';
+import { useWorkspaceListState, useWorkspaceState } from './useWorkspaceState';
 import type { Task, TaskStatus, TaskPriority, TaskSourceType } from '../types';
 
 export interface CreateTaskInput {
@@ -22,7 +22,11 @@ export function useTasks(workspaceId: string | null, userId?: string, seed?: Tas
     workspaceId,
     (seed || []).filter(task => task.workspace_id === workspaceId),
   );
-  const [loading, setLoading] = useState(!seed?.length);
+  const [loading, setLoading] = useWorkspaceState(
+    workspaceId,
+    !seed?.length,
+    Boolean(workspaceId),
+  );
 
   useEffect(() => {
     if (seed) setTasks(seed.filter(task => task.workspace_id === workspaceId));
@@ -49,7 +53,7 @@ export function useTasks(workspaceId: string | null, userId?: string, seed?: Tas
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [beginTasksRequest, setTasks, workspaceId]);
+  }, [beginTasksRequest, setLoading, setTasks, workspaceId]);
 
   useEffect(() => {
     fetchTasks();
@@ -104,7 +108,7 @@ export function useTasks(workspaceId: string | null, userId?: string, seed?: Tas
       return task;
     }
     return null;
-  }, [workspaceId, userId]);
+  }, [setTasks, workspaceId, userId]);
 
   const updateTask = useCallback(async (id: string, updates: Partial<Task>) => {
     const patch: Partial<Task> = { ...updates };
@@ -119,7 +123,7 @@ export function useTasks(workspaceId: string | null, userId?: string, seed?: Tas
       setTasks(prev => prev.map(t => t.id === id ? { ...t, ...result } as Task : t));
     }
     return result;
-    }, [workspaceId]);
+  }, [setTasks, workspaceId]);
 
   const toggleTaskStatus = useCallback(async (task: Task) => {
     const next: TaskStatus = task.status === 'done' ? 'todo' : 'done';
@@ -130,7 +134,7 @@ export function useTasks(workspaceId: string | null, userId?: string, seed?: Tas
     await offlineDelete('tasks', id, `tasks_${workspaceId}`);
     setTasks(prev => prev.filter(t => t.id !== id));
     return true;
-    }, [workspaceId]);
+  }, [setTasks, workspaceId]);
 
   const openTasks = useMemo(() => tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled'), [tasks]);
   const doneTasks = useMemo(() => tasks.filter(t => t.status === 'done'), [tasks]);
