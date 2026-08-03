@@ -1,7 +1,7 @@
 import { NewChannelDialog } from './components/chat/NewChannelDialog';
 import { DEFAULT_BACKGROUND_OPACITY } from './lib/wallpaperDefaults';
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
-import { Globe, SquareTerminal, MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Database, Trash2, Settings, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2, Zap } from 'lucide-react';
+import { Globe, SquareTerminal, MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Database, Library, Trash2, Settings, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2, Zap } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { WorkspaceRail } from './components/layout/WorkspaceRail';
@@ -20,6 +20,8 @@ import { ChatWindowBody, DocWindowBody, TasksWindowBody } from './components/win
 import { channelMessages } from './components/chat/channelView';
 import { MemorySection } from './components/memory/MemorySection';
 import { SkillsWindowContent } from './components/windows/SkillsWindowContent';
+import { DocumentLibraryWindowContent } from './components/windows/DocumentLibraryWindowContent';
+import { useDocumentLibrary, type DocumentLibrary } from './hooks/useDocumentLibrary';
 import { countOpenTasks } from './components/windows/taskSchedule';
 import { OnboardingTour } from './components/onboarding/OnboardingTour';
 import { GetStartedPanel } from './components/onboarding/GetStartedPanel';
@@ -190,6 +192,7 @@ function windowDockIcon(type: FloatingWindow['type']) {
   if (type === 'chat') return <MessageSquare className="size-4" />;
   if (type === 'memory') return <Brain className="size-4" />;
   if (type === 'skills') return <Sparkles className="size-4" />;
+  if (type === 'library') return <Library className="size-4" />;
   if (type === 'tasks') return <CheckCircle2 className="size-4" />;
   if (type === 'activity') return <Activity className="size-4" />;
   if (type === 'agents') return <Bot className="size-4" />;
@@ -913,6 +916,29 @@ function AppContent() {
     activeWorkspaceId || null,
     (workspaceBootstrap?.connections as import('./types').AgentConnection[] | undefined) || null,
   );
+  // Which agents have a live daemon RIGHT NOW. The library fills a source chip
+  // for a connected agent and outlines one that is merely the last thing we were
+  // told — 'busy' counts as connected, because a daemon mid-turn is exactly as
+  // attached as an idle one.
+  const connectedAgentIds = useMemo(
+    () => agentConnections
+      .filter(connection => connection.status === 'online' || connection.status === 'busy')
+      .map(connection => String(connection.agent_id || ''))
+      .filter(Boolean),
+    [agentConnections],
+  );
+  // ONE library for the whole app — the sidebar's Documents section and the
+  // Library window read the same collation. Built here rather than in each
+  // surface because the mirrors behind it hold realtime subscriptions, and two
+  // copies would double those and let the two surfaces disagree mid-fetch.
+  const documentLibrary = useDocumentLibrary({
+    workspaceId: activeWorkspaceId || null,
+    documents,
+    agents,
+    connectedAgentIds,
+    fetchWorkspaceDocumentContent: fetchDocumentContent,
+  });
+
   const workspacePresenceUsers = useWorkspacePresence({
     user,
     cursors,
@@ -1333,6 +1359,20 @@ function AppContent() {
     }
     openWindow('skills', { title: 'Skills', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
+
+  // `entryKey` is the library's COLLATION key, not a document id: the sidebar
+  // rows are documents-with-many-copies, and asking the window to focus a row id
+  // would name one copy of the thing the reader pointed at.
+  const handleOpenLibrary = useCallback((entryKey?: string) => {
+    const existing = windows.find(w => w.type === 'library');
+    if (existing) {
+      focusWindow(existing.id);
+      if (existing.minimized) minimizeWindow(existing.id);
+      if (entryKey) updateWindow(existing.id, { focusLibraryKey: entryKey });
+      return;
+    }
+    openWindow('library', { title: 'Library', canvasId: activeLayerId, ownerUserId: user?.id, focusLibraryKey: entryKey });
+  }, [windows, openWindow, focusWindow, minimizeWindow, updateWindow, activeLayerId, user?.id]);
 
   const handleOpenTasks = useCallback((taskId?: string) => {
     const existing = windows.find(w => w.type === 'tasks');
@@ -1755,6 +1795,14 @@ function AppContent() {
     openWindow('document', { title: doc.title, documentId: doc.id, canvasId: activeLayerId, ownerUserId: user?.id });
   }, [openWindow, activeLayerId, user?.id]);
 
+  // The library lists documents by identity, not by row — a "workspace" source
+  // carries a document id and nothing else. Resolve it here so opening the
+  // editor from the library is the same act as opening it from the sidebar.
+  const handleOpenDocumentById = useCallback((documentId: string) => {
+    const doc = documents.find(item => item.id === documentId);
+    if (doc) handleDocumentOpen(doc);
+  }, [documents, handleDocumentOpen]);
+
   const handleSessionOpen = useCallback((session: ChatSession) => {
     setActiveSession(session);
     openWindow('chat', { title: session.title, sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
@@ -2041,6 +2089,7 @@ function AppContent() {
     }
     if (win.type === 'memory') handleOpenMemory();
     else if (win.type === 'skills') handleOpenSkills();
+    else if (win.type === 'library') handleOpenLibrary();
     else if (win.type === 'tasks') handleOpenTasks();
     else if (win.type === 'activity') handleOpenActivity();
     else if (win.type === 'agents') handleOpenAgents();
@@ -2048,7 +2097,7 @@ function AppContent() {
     else if (win.type === 'inbox') handleOpenInbox();
     else if (win.type === 'schedules') handleOpenSchedules();
     else if (win.type === 'automations') handleOpenAutomations();
-  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenAutomations, handleOpenInbox, handleOpenMemory, handleOpenResources, handleOpenSchedules, handleOpenSkills, handleOpenTasks, handleSessionOpen, sessions]);
+  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenAutomations, handleOpenInbox, handleOpenMemory, handleOpenLibrary, handleOpenResources, handleOpenSchedules, handleOpenSkills, handleOpenTasks, handleSessionOpen, sessions]);
 
   const [useWorkspaceCtx, setUseWorkspaceCtx] = useState(() => getSetting('ai_use_workspace_context'));
   const extractedMessageIdsRef = useRef<Set<string>>(new Set());
@@ -2395,6 +2444,8 @@ function AppContent() {
             onOpenThread={handleOpenThreadFromSidebar}
             onOpenMemory={handleOpenMemory}
             onOpenSkills={handleOpenSkills}
+            onOpenLibrary={handleOpenLibrary}
+            libraryEntries={documentLibrary.entries}
             onOpenTasks={handleOpenTasks}
             onOpenActivity={handleOpenActivity}
             onOpenAgents={handleOpenAgents}
@@ -2623,6 +2674,8 @@ function AppContent() {
                   onAutoSaveDocument={autoSave}
                   onAddToCanvasApplet={handleCreateDocApp}
                   fetchDocumentContent={fetchDocumentContent}
+                  onOpenDocumentById={handleOpenDocumentById}
+                  documentLibrary={documentLibrary}
                   onToggleFavorite={toggleFavorite}
                   onAddFact={handleAddFactFromScene}
                   onUpdateFact={updateFact}
@@ -2984,6 +3037,8 @@ function CanvasLayerScene({
   onAutoSaveDocument,
   onAddToCanvasApplet,
   fetchDocumentContent,
+  onOpenDocumentById,
+  documentLibrary,
   onToggleFavorite,
   onAddFact,
   onUpdateFact,
@@ -3095,6 +3150,8 @@ function CanvasLayerScene({
   onAutoSaveDocument: (id: string, updates: { title?: string; content?: string }) => void;
   onAddToCanvasApplet: (doc: Document) => void;
   fetchDocumentContent: (id: string, force?: boolean) => Promise<string>;
+  onOpenDocumentById: (documentId: string) => void;
+  documentLibrary: DocumentLibrary;
   onToggleFavorite: (id: string, current: boolean) => void;
   onAddFact: (fact: string, category: string) => void;
   onUpdateFact: (id: string, fact: string, category: string) => void;
@@ -3450,6 +3507,38 @@ function CanvasLayerScene({
                 agentConnections={agentConnections}
                 systemCapabilities={systemCapabilities}
                 workspaceId={workspaceId}
+              />
+            </FloatingWindowShell>
+          );
+        }
+
+        if (win.type === 'library') {
+          return (
+            <FloatingWindowShell
+              key={win.id}
+              window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
+              onClose={onCloseWindow}
+              onFocus={onFocusWindow}
+              onUpdate={onUpdateWindow}
+              onMinimize={onMinimizeWindow}
+              onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
+              titleIcon={<Library size={13} />}
+              breadcrumb={workspaceName}
+            >
+              <DocumentLibraryWindowContent
+                library={documentLibrary}
+                focusKey={win.focusLibraryKey}
+                onFocusConsumed={() => onUpdateWindow(win.id, { focusLibraryKey: undefined })}
+                onOpenWorkspaceDocument={onOpenDocumentById}
               />
             </FloatingWindowShell>
           );

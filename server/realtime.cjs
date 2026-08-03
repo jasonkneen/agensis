@@ -41,6 +41,7 @@ function createRealtime(deps = {}) {
   handleAgentJobResult,
   handleAgentJobSegment,
   handleAgentJobStep,
+  handleAgentDocumentSync,
   handleAgentMemorySync,
   handleAgentPermissionPrepared,
   handleAgentPermissionRequest,
@@ -292,6 +293,12 @@ function createRealtime(deps = {}) {
 
  const REALTIME_HEAVY_FIELDS = {
   agent_memory_files: ['content_cache'],
+  // Same shape and the same reasoning as agent_memory_files above: a daemon
+  // mirrors whole markdown bodies up, the library keeps a metadata-only list
+  // and fetches one body when a document is opened, and a re-sync UPSERTs every
+  // row it reports. Broadcasting the bodies would fan a repo's entire docs tree
+  // to every subscribed browser on every reconnect.
+  agent_documents: ['content'],
   agent_jobs: ['prompt', 'response'],
   // Document HTML bodies: list clients drop content after arrival, but
   // notifyDbSubscribers was still fanning full `returning *` rows workspace-wide
@@ -1002,6 +1009,7 @@ function createRealtime(deps = {}) {
        capabilitiesHash: message.capabilitiesHash,
        memoryHash: message.memoryHash,
        skillsHash: message.skillsHash,
+       documentsHash: message.documentsHash,
       });
       return;
      }
@@ -1048,6 +1056,10 @@ function createRealtime(deps = {}) {
      }
      if (message.action === 'agent_skill_sync') {
       await handleAgentSkillSync(ws, message);
+      return;
+     }
+     if (message.action === 'agent_document_sync') {
+      await handleAgentDocumentSync(ws, message);
       return;
      }
      if (message.action === 'agent_capabilities_sync') {

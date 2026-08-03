@@ -883,6 +883,59 @@ no publish lane (run it from a checkout), and `cli/**/*.mjs` is listed in
 `tests/lint-coverage.test.cjs` — those three hold the bearer token, the
 redaction and the egress allowlist. Full reference: `cli/README.md`.
 
+### Document library and per-agent sharing
+
+Every document the workspace can reach, in one place, however many machines hold
+a copy. Collation: `src/lib/documentLibrary.ts` (pure). Surfaces: the sidebar's
+Documents section and the Library window
+(`src/components/windows/DocumentLibraryWindowContent.tsx`).
+
+- **THREE daemon mirrors, one pattern.** `agent_memory_files`,
+  `agent_skill_documents` and now `agent_documents` are all daemon-written,
+  read-only in-app, UPSERT by `UNIQUE(agent_id, path)`, and prune what the daemon
+  stopped reporting. Adding a fourth means copying that shape, not inventing one.
+  The new wire action is `agent_document_sync`; its validator is
+  `server/document-library.cjs`, and its drift hash (`documentsHash`) rides the
+  same heartbeat channel as the other two.
+- **`agent_documents` is NOT rows in `documents`.** That table is
+  workspace-authored, editable, and each row is the only copy of itself. These
+  are read-only snapshots of files on other machines, and the SAME document
+  routinely arrives from several agents at once — three checkouts of one repo is
+  the normal case. Merging would either collapse them (losing the disagreement
+  the library exists to show) or fill the sidebar with duplicates.
+- **Identity is the filename, not the content hash.** Hash equality proves two
+  copies are identical; it cannot recognise that one agent's README is a newer
+  edit of another's, which is exactly the case the compare view is for. So the
+  collation key is the normalized basename (title as fallback, for a workspace
+  document that has no path), and the hash is used AFTERWARDS to say whether the
+  copies agree. `identical` is asserted only on equal, non-empty hashes —
+  unknown is never agreement.
+- **"Latest" means the newest FILE**, ranked on the agent's reported
+  `source_modified_at` and falling back to `last_synced`. Ranking on sync time
+  alone would promote whichever daemon reconnected most recently.
+- **The mirror carries markdown and plain text only** (`DOCUMENT_EXTENSIONS`,
+  plus a closed list of extensionless names like `README`). That is a security
+  rule, not tidiness: the moment it accepts `.env` or `.pem` it becomes a way to
+  siphon a working directory into a shared workspace through a feature labelled
+  "documents".
+- **`workspace_agents.sharing` gates all four channels** (`memory`, `skills`,
+  `tools`, `documents`) — `shared/agentSharing.cjs`, twinned in
+  `src/lib/agentSharing.ts`. Read FAIL-OPEN, like `ambient_replies`: absent means
+  shared, only an explicit `false` withholds, because every channel was mirroring
+  before the column existed.
+- **Enforced at INGEST, and it PRUNES.** A withheld channel refuses the daemon's
+  push AND deletes what that agent already mirrored; switching one off through
+  the agent update route prunes eagerly rather than waiting for the next sync,
+  and switching one on nudges live daemons to re-push. A flag that only hid rows
+  in the UI would leave the bodies in the workspace database, which is not what
+  "stop sharing my memory" means. `tools` is the exception in mechanism only:
+  the advert is redacted into `agent_connections.capabilities` at ingest, because
+  `publicAgentConnection` is a pure row mapper on the fanout path with no agent
+  row in hand.
+- **Bodies never ride realtime.** `agent_documents.content` is in
+  `REALTIME_HEAVY_FIELDS` and the list is metadata-only; a body is fetched one
+  row at a time when a document is opened.
+
 ## Tests (three runners)
 
 - `npm test` — Node's built-in runner over `tests/*.test.cjs`

@@ -22,6 +22,7 @@ const {
  wouldExceedMaxDepth,
  roleSetHasCapability,
 } = require('./workspace-tree.cjs');
+const { sanitizeAgentSharingPatch } = require('./agentSharing.cjs');
 
 // ----------------------------------------------------------------------------
 // Allow-sets and role/capability tables — lifted VERBATIM from server/index.cjs.
@@ -52,6 +53,16 @@ const ALLOWED_TABLES = new Set([
  'agent_registrations',
  'activity_events',
  'agent_memory_files',
+ // The daemon-mirrored markdown library. READ through the generic /db path for
+ // the same reason agent_memory_files is: the sidebar keeps a live,
+ // metadata-only list and subscribes to changes, so a dedicated snapshot route
+ // would need a realtime lane of its own to say anything a reload didn't.
+ // Bodies never travel that way — `content` is off the projection below and off
+ // the realtime fanout, and is fetched one row at a time when a document is
+ // opened. Every WRITE is 'manage' (see DB_TABLE_ACCESS): the daemon sync is
+ // the only writer, and a browser-forged row would be a document claiming to
+ // have come off an agent's disk.
+ 'agent_documents',
  'memory_file_comments',
  'thread_items',
  'activity_event_comments',
@@ -186,7 +197,7 @@ const VERSIONED_TABLES = new Set([
 const JSON_COLUMNS_BY_TABLE = {
  chat_sessions: new Set(['participants']),
  canvas_objects: new Set(['points']),
- workspace_agents: new Set(['tools', 'skills', 'resource_facets', 'metadata', 'sandbox_config', 'identity']),
+ workspace_agents: new Set(['tools', 'skills', 'resource_facets', 'metadata', 'sandbox_config', 'identity', 'sharing']),
  agent_connections: new Set(['metadata', 'capabilities']),
  agent_registrations: new Set(['requested_identity']),
  agent_jobs: new Set(['metadata']),
@@ -238,7 +249,7 @@ const WORKSPACE_SCOPED_TABLES = new Set([
  'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
  'agent_connections', 'cursorbuddy_connection_keys', 'agent_jobs', 'agent_registrations',
  'activity_events', 'workspace_members',
- 'agent_memory_files', 'memory_file_comments', 'thread_items',
+ 'agent_memory_files', 'agent_documents', 'memory_file_comments', 'thread_items',
  'agent_schedules', 'agent_schedule_runs', 'activity_event_comments',
  'huddles', 'huddle_events', 'feedback_reports', 'orb_deliveries',
  'agent_permission_requests', 'thread_harvests',
@@ -369,6 +380,10 @@ const DB_TABLE_ACCESS = {
  // record that it did.
  automation_runs: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  agent_memory_files: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
+ // Same rule, same reason: the daemon sync is the only writer. A browser-forged
+ // row here would be a document claiming to have come off an agent's disk, in a
+ // library whose whole value is that its provenance is true.
+ agent_documents: { select: 'read', insert: 'manage', update: 'manage', delete: 'manage' },
  memory_file_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
  thread_items: DEFAULT_TABLE_ACCESS,
  activity_event_comments: { select: 'read', insert: 'comment', update: 'comment', delete: 'comment' },
@@ -641,7 +656,7 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
   'accent_color', 'description', 'system_prompt', 'soul', 'instructions',
   'tools', 'skills', 'purpose', 'resource_facets', 'metadata', 'identity',
   'handle', 'model', 'run_mode', 'sandbox_provider', 'sandbox_config',
-  'memory_dir', 'enabled', 'ambient_replies', 'permission_mode', 'version',
+  'memory_dir', 'enabled', 'ambient_replies', 'sharing', 'permission_mode', 'version',
   'created_by', 'created_at', 'updated_at',
  ],
  // A webhook URL is a bearer credential and is returned in plaintext exactly
@@ -700,6 +715,21 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
  workspace_skills: [
   'id', 'workspace_id', 'name', 'title', 'summary', 'body', 'revision',
   'source', 'origin', 'created_by', 'created_at', 'updated_at',
+ ],
+ // Pinned for the same reason, and with one asymmetry worth stating. `content`
+ // IS selectable — it is the document, and the library renders and diffs it —
+ // but the client asks for it ONE ROW AT A TIME (useAgentDocuments keeps a
+ // metadata-only list and fetches a body when a document is opened), and it is
+ // stripped from the realtime fanout in server/realtime.cjs. So the body is
+ // reachable without every UPSERT pushing every body to every subscriber.
+ //
+ // The next column added to this table is the reason the list exists: an
+ // absolute host path, a git remote, a repo-local URL would all be automatic
+ // exposures without it.
+ agent_documents: [
+  'id', 'workspace_id', 'agent_id', 'path', 'title', 'domain', 'summary',
+  'content', 'byte_size', 'truncated', 'content_hash', 'source_modified_at',
+  'last_synced', 'version', 'created_at', 'updated_at',
  ],
  // Strictly LESS than the dedicated route returns, which is the rule for every
  // entry here. `updated_at` is dropped: it records when a marker last MOVED,
@@ -805,6 +835,29 @@ function stripPrivilegedDbValues(table, values) {
   if (Object.prototype.hasOwnProperty.call(next, key)) delete next[key];
  }
  return next;
+}
+
+/**
+ * Narrow a `workspace_agents.sharing` write to the four known booleans.
+ *
+ * `sharing` is jsonb, which means the generic /backend/db write path would
+ * otherwise let anyone with 'write' park arbitrary data — any size, any shape —
+ * on an agent row through a column whose readers expect four booleans. Unknown
+ * keys are DROPPED rather than rejected so an older client that round-trips a
+ * whole agent object cannot fail its save on a key it never chose to send.
+ *
+ * A patch is MERGED over nothing, not over the stored value: the column holds
+ * only the keys someone explicitly set, and every reader applies the fail-open
+ * rule (shared/agentSharing.cjs). A partial write therefore means "these are
+ * the switches I touched", and the rest stay at whatever the reader's default
+ * says — which is the same answer they gave before the write.
+ */
+function sanitizeAgentSharingValues(table, values) {
+ if (table !== 'workspace_agents' || !values || typeof values !== 'object' || Array.isArray(values)) {
+  return values;
+ }
+ if (!Object.prototype.hasOwnProperty.call(values, 'sharing')) return values;
+ return { ...values, sharing: sanitizeAgentSharingPatch(values.sharing) };
 }
 
 function stripImmutableDbUpdateValues(table, values) {
@@ -3418,6 +3471,7 @@ module.exports = {
  redactDeletedMessageRow,
  redactDeletedMessageRows,
  stripPrivilegedDbValues,
+ sanitizeAgentSharingValues,
  validateUniformInsertRows,
  applyAgentPurposeInsertDefaults,
  stampTaskWriteIdentity,

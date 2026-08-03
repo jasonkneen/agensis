@@ -41,6 +41,12 @@ import {
 import { AI_MODELS, type AgentConnection, type AgentPermissionMode, type AgentWebhook, type ChatSession, type Task, type WorkspaceAgent } from '../../types';
 import { apiAuthHeaders, apiBaseUrl, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { CODEX_MODEL_LIST_ID, modelOptionsForRuntime, modelSurvivesRuntimeChange } from '../../lib/runtimeModels';
+import {
+  SHARING_CHANNELS,
+  SHARING_CHANNEL_DESCRIPTIONS,
+  SHARING_CHANNEL_LABELS,
+  normalizeAgentSharing,
+} from '../../lib/agentSharing';
 import { AgentModelPicker } from '@/components/agents/AgentModelPicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -2552,6 +2558,8 @@ function AgentDetailPane({
 
           <AmbientRepliesSection agent={agent} onUpdateAgent={onUpdateAgent} />
 
+          <SharingSection agent={agent} onUpdateAgent={onUpdateAgent} />
+
           <VoiceSection agent={agent} roster={roster} mode="view" />
 
           {agent.run_mode === 'daemon' && (
@@ -4078,6 +4086,72 @@ function AmbientRepliesSection({ agent, onUpdateAgent }: {
           {on ? 'On' : 'Off'}
         </Button>
       </div>
+    </AgentDetailSection>
+  );
+}
+
+/**
+ * What this agent CONTRIBUTES to the workspace.
+ *
+ * Four switches, one per mirror: the memory files it pushes up, the bodies
+ * behind the skills it advertises, its tool/CLI advert, and the markdown it can
+ * see from its own locations. Before these existed, connecting an agent
+ * published all four and the only off switch was not connecting it.
+ *
+ * Reads FAIL-OPEN through normalizeAgentSharing, matching
+ * shared/agentSharing.cjs and both backends: an agent row written before the
+ * column existed has been sharing all along, and rendering it as opted-out
+ * would be the UI inventing a decision nobody made.
+ *
+ * The copy says what switching one OFF actually does, because it is more than a
+ * display filter: the server refuses the daemon's next push AND removes what
+ * that agent already mirrored. People reasonably expect "stop sharing" to mean
+ * the files leave, and here it does — so it should say so before they click.
+ */
+function SharingSection({ agent, onUpdateAgent }: {
+  agent: WorkspaceAgent;
+  onUpdateAgent: (agentId: string, updates: Partial<WorkspaceAgent>) => void | Promise<unknown>;
+}) {
+  const sharing = normalizeAgentSharing(agent);
+  return (
+    <AgentDetailSection title="Shares with this workspace">
+      <div className="space-y-2">
+        {SHARING_CHANNELS.map(channel => {
+          const on = sharing[channel];
+          return (
+            <div key={channel} className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold">{SHARING_CHANNEL_LABELS[channel]}</div>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {SHARING_CHANNEL_DESCRIPTIONS[channel]}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant={on ? 'secondary' : 'outline'}
+                size="sm"
+                className="shrink-0"
+                aria-pressed={on}
+                aria-label={`${SHARING_CHANNEL_LABELS[channel]}: ${on ? 'on' : 'off'}`}
+                onClick={() => {
+                  // The whole object is sent, not a one-key patch. The column is
+                  // jsonb and the write REPLACES it, so sending {documents:false}
+                  // alone would silently reset the other three to their
+                  // fail-open default — which is "on", i.e. the opposite of what
+                  // someone who had switched two of them off just asked for.
+                  void onUpdateAgent(agent.id, { sharing: { ...sharing, [channel]: !on } });
+                }}
+              >
+                {on ? 'On' : 'Off'}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground/80">
+        Switching one off removes what {agent.name} has already contributed and stops the next
+        sync. Switching it back on asks the agent to send it again.
+      </p>
     </AgentDetailSection>
   );
 }
