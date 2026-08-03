@@ -1,7 +1,15 @@
 import { Bot, Check, MessageSquare, Pencil, Plus, Send, Trash2, User, X } from 'lucide-react';
-import React, { useMemo, useRef, useState, type CSSProperties } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
+import { ReactionBar } from './ReactionBar';
+import { SeenPill } from './SeenPill';
+import { useMessageReactions } from '../../hooks/useMessageReactions';
+import { useReadReceipts } from '../../hooks/useReadReceipts';
+import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
+import { receiptTargetForViewport } from '../../lib/readReceipts';
+import { seenAnchorIds } from '../../lib/seenPill';
+import type { ReactionUse } from '../../lib/reactionBar';
 import { ToolStepGroup } from './ToolStepGroup';
 import { buildTranscriptRows } from './toolSteps';
 import { usePermissionRequests } from '../../hooks/usePermissionRequests';
@@ -134,6 +142,52 @@ export function SubThreadPanel({
     [messages, permissionRequestsById],
   );
   useComposerAutosize(inputRef, mentions.input);
+
+  // Reactions and seen pills in a sub-thread.
+  //
+  // A sub-thread IS its own chat_session, so nothing here is thread-scoped: the
+  // receipt hook takes `session.id` with a null thread parent, exactly like the
+  // channel transcript. That is why this works at all without a server change —
+  // the markers and the reaction route were already reachable, the panel simply
+  // never rendered either.
+  const reactionState = useMessageReactions(readOnly ? null : currentUserId);
+  const { members: workspaceMembers } = useWorkspaceUsers(session.workspace_id ?? null);
+  // A reader id is a human user id OR an agent id, so resolve against members
+  // first and then the agent roster: an agent's name belongs in the tooltip
+  // exactly like a person's.
+  const resolveReaderName = useCallback((readerId: string) => {
+    const member = workspaceMembers.find(row => String(row.user_id) === String(readerId));
+    if (member) return member.email ? member.email.split('@')[0] : null;
+    const agent = agents.find(row => String(row.id) === String(readerId));
+    if (agent) return agent.name || null;
+    return null;
+  }, [workspaceMembers, agents]);
+
+  const receipts = useReadReceipts({
+    sessionId: session.id || null,
+    currentUserId: currentUserId || null,
+    active: !readOnly,
+    orderedMessages: messages,
+  });
+  const noteVisibleRead = receipts.noteVisible;
+  // `nearBottom` is load-bearing: `messages` is the loaded data set, not the
+  // viewport. Somebody scrolled up has a realtime append in the array that is
+  // physically off screen, and marking it would claim a read that never happened.
+  const newestVisibleMessage = useMemo(
+    () => receiptTargetForViewport(messages, currentUserId || null, {
+      surfaceActive: !readOnly,
+      nearBottom: autoScroll,
+    }),
+    [autoScroll, currentUserId, messages, readOnly],
+  );
+  useEffect(() => {
+    noteVisibleRead(newestVisibleMessage);
+  }, [noteVisibleRead, newestVisibleMessage]);
+
+  const seenAnchors = useMemo(
+    () => seenAnchorIds(messages, currentUserId || null),
+    [currentUserId, messages],
+  );
   // Same rule as the channel's status line: a placeholder stranded by a job that
   // died is not evidence that anyone is working.
   const activityAgents = useMemo(() => {
@@ -330,6 +384,19 @@ export function SubThreadPanel({
                           onAgentProfile={onAgentProfile}
                           currentUserId={readOnly ? null : currentUserId}
                           isStreaming={streaming && isLastRow && row.message.role === 'assistant'}
+                          reactions={reactionState.reactionsFor(row.message)}
+                          reactionUses={reactionState.reactionUses}
+                          onToggleReaction={readOnly || row.message.deleted_at
+                            ? undefined
+                            : (reaction, op) => reactionState.toggle(row.message, reaction, op)}
+                          resolveReaderName={resolveReaderName}
+                          // Same rule as the channel: only YOUR messages carry a
+                          // seen pill. "Did what I just said land" is the
+                          // question; a pill on somebody else's post answers
+                          // nothing and puts one on every row.
+                          readerIds={seenAnchors.has(row.message.id)
+                            ? receipts.readersOfMessage(row.message)
+                            : undefined}
                         />
                       </MessageScrollerItem>
                     );
@@ -498,18 +565,34 @@ export function SubThreadPanel({
   );
 }
 
+// A stable identity, so a read-only post's ReactionBar does not get a fresh
+// callback on every render. It is never reachable: `reactions` is nulled on the
+// same branch, so there are no pills to click.
+const NOOP_TOGGLE = () => {};
+
 export function SubThreadBubble({
   msg,
   accent,
   onAgentProfile,
   isStreaming,
   currentUserId,
+  reactions,
+  reactionUses = [],
+  onToggleReaction,
+  resolveReaderName,
+  readerIds,
 }: {
   msg: ChatMessage;
   accent?: string;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   isStreaming?: boolean;
   currentUserId?: string | null;
+  reactions?: Record<string, string[]>;
+  reactionUses?: readonly ReactionUse[];
+  onToggleReaction?: (reaction: string, op: 'add' | 'remove') => void;
+  resolveReaderName?: (readerId: string) => string | null;
+  /** Undefined on a post that carries no seen pill; empty when nobody has read it. */
+  readerIds?: string[];
 }) {
   const isUser = msg.role === 'user';
   const ownMutation = useOwnMessageMutation(msg, currentUserId, safeText(msg.content));
@@ -530,6 +613,12 @@ export function SubThreadBubble({
   const accentStyle = isAgentMessage
     ? ({ '--agent-accent': validAgentAccentColor(accent) } as CSSProperties & { '--agent-accent': string })
     : undefined;
+  // Built here so the row can ask "is there anything to show?" before rendering
+  // a bar at all — an empty bar carries `mt-1` and would add 4px under every
+  // post nobody has read.
+  const seenPill = readerIds !== undefined && readerIds.length > 0
+    ? <SeenPill readerIds={readerIds} resolveName={resolveReaderName || (() => null)} />
+    : null;
 
   return (
     <div
@@ -625,6 +714,21 @@ export function SubThreadBubble({
           ) : null}
           {artifact && <ChatArtifact artifact={artifact} />}
         </div>
+        {/* Reactions and the seen pill share one row, as in the channel. The
+            pill is derived from the read markers rather than stored as a
+            reaction — see src/lib/seenPill.ts. A placeholder ("Thinking …") is
+            excluded: it is a transient row that will be replaced, and reacting
+            to it would attach the reaction to a message about to disappear. */}
+        {!isActivityPlaceholder && !ownMutation.editing && (onToggleReaction || seenPill) && (
+          <ReactionBar
+            reactions={onToggleReaction ? reactions : null}
+            currentUserId={currentUserId || null}
+            resolveName={resolveReaderName || (() => null)}
+            onToggle={onToggleReaction ?? NOOP_TOGGLE}
+            reactionUses={reactionUses}
+            leadingSlot={seenPill}
+          />
+        )}
       </div>
     </div>
   );
