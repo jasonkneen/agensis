@@ -1005,7 +1005,7 @@ function createBuiltinTurn(deps = {}) {
         returning *`,
     [
      sessionId,
-     `@${handle} is set to Relay, but no host is online. Open AI Agents → Connect: Start on this Mac (desktop ACP) or run the CLI connection command (\`agensis connect …\`) on the machine that should execute work.`,
+     `@${handle} is set to Relay, but no host is online. Open AI Agents → Connect: Start on this Mac (Claude Agent SDK / Codex app-server) or run the CLI connection command (\`agensis connect …\`) on the machine that should execute work.`,
      workThreadParentId,
      String(agent.id),
      agent.name,

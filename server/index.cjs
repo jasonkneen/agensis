@@ -4080,8 +4080,16 @@ function resolveExecutionModel(model, runtime) {
 // A harness absent from this table still works: it simply takes no --model and
 // lets the local harness choose, which is the honest default (the same choice
 // Amp already makes) rather than inventing a model id we cannot verify.
+//
+// Grok default is intentionally EMPTY. Forcing `grok-4.5` looked right on paper
+// (it is the public id and Grok Build's default) but broke real hosts when the
+// plan/tier or local CLI config did not accept that exact id. Empty means
+// "omit --model" so the local Grok CLI uses its own config.
 const ACP_HARNESS_MODELS = {
- grok: { default: 'grok-4.5', owns: /^grok[-.]/i },
+ grok: {
+  default: '',
+  owns: /^grok([.-]|$)|^grok-build/i,
+ },
 };
 
 function acpHarnessOf(metadata) {
@@ -4094,10 +4102,12 @@ function acpHarnessOf(metadata) {
 function resolveAcpHarnessModel(harness, model) {
  const spec = ACP_HARNESS_MODELS[String(harness || '').trim().toLowerCase()] || null;
  const value = String(model || '').trim();
- if (!value || value === 'auto') return spec ? spec.default : '';
+ if (!value || value === 'auto') return spec ? (spec.default || '') : '';
  // An id the harness plainly does not own is a leftover default, not a choice a
- // human made — every one of these agents was carrying claude-opus-5.
- if (spec) return spec.owns.test(value) ? value : spec.default;
+ // human made — every one of these agents was carrying claude-opus-5. Drop it
+ // rather than inventing a different inaccessible id (the old bug was forcing
+ // grok-4.5 onto accounts that could not use it).
+ if (spec) return spec.owns.test(value) ? value : (spec.default || '');
  return /^(claude|gpt)[-.]/i.test(value) ? '' : value;
 }
 

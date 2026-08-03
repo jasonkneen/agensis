@@ -12,38 +12,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
   discoverLocalAgents: (options) => ipcRenderer.invoke('local-agents:discover', options ?? {}),
 
   /**
-   * Desktop ACP host — spawn Claude/Codex/Grok/… as local ACP children and
-   * optionally register them as the agent's online connection (no terminal).
+   * Local Relay runtime on this Mac — spawns `agensis connect --no-acp` so jobs
+   * run through Claude Agent SDK (warm connection) or Codex app-server.
+   * Replaces the former desktop ACP host.
    */
-  acp: {
-    listHarnesses: () => ipcRenderer.invoke('acp:list-harnesses'),
-    status: (agentId) => ipcRenderer.invoke('acp:status', agentId),
-    start: (options) => ipcRenderer.invoke('acp:start', options ?? {}),
-    stop: (agentId) => ipcRenderer.invoke('acp:stop', agentId),
-    prompt: (agentId, text) => ipcRenderer.invoke('acp:prompt', { agentId, text }),
-    onUpdate: (agentId, callback) => {
-      const channel = `acp:update:${agentId}`;
-      const handler = (_event, params) => callback(params);
-      ipcRenderer.on(channel, handler);
-      return () => ipcRenderer.removeListener(channel, handler);
-    },
-    onChunk: (agentId, callback) => {
-      const channel = `acp:chunk:${agentId}`;
-      const handler = (_event, chunk) => callback(chunk);
-      ipcRenderer.on(channel, handler);
-      return () => ipcRenderer.removeListener(channel, handler);
-    },
+  localRuntime: {
+    listRuntimes: () => ipcRenderer.invoke('local-runtime:list'),
+    status: (agentId) => ipcRenderer.invoke('local-runtime:status', agentId),
+    start: (options) => ipcRenderer.invoke('local-runtime:start', options ?? {}),
+    stop: (agentId) => ipcRenderer.invoke('local-runtime:stop', agentId),
+    listAutostart: () => ipcRenderer.invoke('local-runtime:list-autostart'),
     onLog: (agentId, callback) => {
-      const channel = `acp:log:${agentId}`;
+      const channel = `local-runtime:log:${agentId}`;
       const handler = (_event, line) => callback(line);
       ipcRenderer.on(channel, handler);
       return () => ipcRenderer.removeListener(channel, handler);
     },
-    listAutostart: () => ipcRenderer.invoke('acp:list-autostart'),
+    onExit: (callback) => {
+      const handler = (_event, payload) => callback(payload);
+      ipcRenderer.on('local-runtime:exit', handler);
+      return () => ipcRenderer.removeListener('local-runtime:exit', handler);
+    },
     onRestoreComplete: (callback) => {
       const handler = (_event, report) => callback(report);
-      ipcRenderer.on('acp:restore-complete', handler);
-      return () => ipcRenderer.removeListener('acp:restore-complete', handler);
+      ipcRenderer.on('local-runtime:restore-complete', handler);
+      return () => ipcRenderer.removeListener('local-runtime:restore-complete', handler);
     },
   },
 

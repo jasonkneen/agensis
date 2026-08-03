@@ -110,7 +110,7 @@ if (archArgs.length) {
   console.log(`[desktop:build] arch=${archArgs.join(' ')} (native only — no Rosetta / no dual-arch)`);
 }
 if (mode === 'local') {
-  console.log('[desktop:build] Local package: needs a running backend on :3142. Live web will not see ACP agents.');
+  console.log('[desktop:build] Local package: needs a running backend on :3142. Live web will not see local agents.');
 } else {
   console.log('[desktop:build] Prod package: API/ACP → hosted backend (same as live web).');
 }

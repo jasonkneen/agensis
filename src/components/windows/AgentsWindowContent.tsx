@@ -104,16 +104,11 @@ import {
   agentMetadataWithRuntime,
   agentExecutionRuntimeFromMetadata,
   agentFormRuntimeValueForAgent,
-  agentAcpHarnessFromMetadata,
   agentRuntimeLabel,
   agentRunModeHelp,
   agentRunModeLabel,
-  acpFormRuntimeValue,
-  acpHarnessLabel,
   executionRuntimeDisplayLabel,
-  resolveAgentAcpHarness,
   resolveFormRuntimeSelection,
-  runtimeChoicesFromAcpHarnesses,
   runtimeChoicesFromConnections,
   type AgentFormRuntimeValue,
   type AgentRuntimeChoice,
@@ -244,7 +239,7 @@ interface AgentEditForm {
   resourceFacets: ResourceFacet[];
   model: string;
   runMode: 'builtin' | 'daemon' | 'sandbox' | 'external';
-  /** Form select value: classic pin, `desktop`, or `acp:<harnessId>`. */
+  /** Form select value: classic pin (`claude`|`codex`|`amp`) or unpinned `desktop`. */
   runtime: AgentFormRuntimeValue;
   metadata: Record<string, unknown>;
   sandboxProvider: string;
@@ -308,14 +303,14 @@ function agentRuntimeDisplayLabel(
   agent: WorkspaceAgent,
   connections: AgentConnection[] = [],
 ): string {
-  const preferAcp = typeof window !== 'undefined' && Boolean(window.electronAPI?.acp);
+  const preferLocalRuntime = typeof window !== 'undefined' && Boolean(window.electronAPI?.localRuntime);
   return agentRuntimeLabel({
     metadata: agent.metadata as Record<string, unknown> | undefined,
     agentId: agent.id,
     name: agent.name,
     handle: agent.handle,
     connections,
-    preferAcp,
+    preferLocalRuntime,
   });
 }
 
@@ -323,23 +318,26 @@ function agentFormRuntimeValue(
   agent: WorkspaceAgent,
   connections: AgentConnection[] = [],
 ): AgentFormRuntimeValue {
-  const preferAcp = typeof window !== 'undefined' && Boolean(window.electronAPI?.acp);
+  const preferLocalRuntime = typeof window !== 'undefined' && Boolean(window.electronAPI?.localRuntime);
   return agentFormRuntimeValueForAgent({
     metadata: agent.metadata as Record<string, unknown> | undefined,
     agentId: agent.id,
     name: agent.name,
     handle: agent.handle,
     connections,
-    preferAcp,
+    preferLocalRuntime,
   });
 }
 
 function runtimeChoiceNote(choice: AgentRuntimeChoice): string {
-  if (choice.id === 'desktop') return 'no pin · any local harness';
-  if (String(choice.id).startsWith('acp:')) {
-    if (choice.available === true) return 'ready';
-    if (choice.available === false) return 'not installed on this Mac';
-    return 'scan local CLIs';
+  if (choice.id === 'desktop') return 'no pin · Claude SDK or Codex app-server';
+  if (choice.id === 'claude') {
+    if (choice.available === true) return 'Claude Agent SDK';
+    if (choice.available === false) return 'claude CLI not found';
+  }
+  if (choice.id === 'codex') {
+    if (choice.available === true) return 'codex app-server';
+    if (choice.available === false) return 'codex CLI not found';
   }
   if (choice.available === true) return 'ready';
   if (choice.available === null) return 'not reported by a connected daemon';
@@ -410,15 +408,14 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [newResourceFacets, setNewResourceFacets] = useState<ResourceFacet[]>([]);
   const [newModel, setNewModel] = useState('auto');
   const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon' | 'sandbox' | 'external'>('builtin');
-  const hasDesktopAcpShell = typeof window !== 'undefined' && Boolean(window.electronAPI?.acp);
-  const [acpHarnessCatalog, setAcpHarnessCatalog] = useState<Array<{
+  const hasDesktopLocalRuntime = typeof window !== 'undefined' && Boolean(window.electronAPI?.localRuntime);
+  const [localRuntimeCatalog, setLocalRuntimeCatalog] = useState<Array<{
     id: string;
     label: string;
     available: boolean;
   }>>([]);
-  // Prefer a concrete local harness on Electron so the form never defaults to a
-  // Claude pin that mislabels Hermes/Grok.
-  const defaultDaemonRuntime: AgentFormRuntimeValue = hasDesktopAcpShell ? 'desktop' : 'claude';
+  // On desktop default to unpinned "this Mac"; browser defaults to classic Claude pin.
+  const defaultDaemonRuntime: AgentFormRuntimeValue = hasDesktopLocalRuntime ? 'desktop' : 'claude';
   const [newRuntime, setNewRuntime] = useState<AgentFormRuntimeValue>(defaultDaemonRuntime);
   const [newMetadata, setNewMetadata] = useState<Record<string, unknown>>({});
   const [newSandboxProvider, setNewSandboxProvider] = useState('e2b');
@@ -426,18 +423,18 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
-    if (!hasDesktopAcpShell || !window.electronAPI?.acp) return;
+    if (!hasDesktopLocalRuntime || !window.electronAPI?.localRuntime) return;
     let cancelled = false;
-    void window.electronAPI.acp.listHarnesses().then((res) => {
+    void window.electronAPI.localRuntime.listRuntimes().then((res) => {
       if (cancelled || !res.ok) return;
-      setAcpHarnessCatalog(res.data.map(h => ({
-        id: h.id,
-        label: h.label,
-        available: h.available,
+      setLocalRuntimeCatalog(res.data.runtimes.map(r => ({
+        id: r.id,
+        label: r.label,
+        available: r.available,
       })));
     });
     return () => { cancelled = true; };
-  }, [hasDesktopAcpShell]);
+  }, [hasDesktopLocalRuntime]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<SystemCapabilities | null>(null);
@@ -600,30 +597,21 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     [skillEntries, capabilities],
   );
   const runtimeChoices = useMemo(() => {
-    // Desktop shell: list real ACP harnesses (Grok, Hermes, …) so the bar never
-    // pretends every remote agent is "Claude — ready".
-    if (acpHarnessCatalog.length > 0) {
-      const harnessChoices = runtimeChoicesFromAcpHarnesses(acpHarnessCatalog);
-      // Keep a generic Desktop ACP option so a form value of `desktop` (stale
-      // classic pin cleared, harness not yet chosen) is selectable and labeled.
+    // Desktop shell: full local catalog (SDK / app-server / ACP / CLI).
+    if (localRuntimeCatalog.length > 0) {
+      const localChoices = localRuntimeCatalog.map(r => ({
+        id: r.id,
+        label: r.label,
+        available: r.available,
+        reason: r.available ? null : 'not_installed',
+      }));
       return [
-        ...harnessChoices,
-        { id: 'desktop', label: 'Desktop ACP', available: true, reason: null },
+        ...localChoices,
+        { id: 'desktop', label: 'This Mac (auto)', available: true, reason: null },
       ];
     }
     return runtimeChoicesFromConnections(connections);
-  }, [acpHarnessCatalog, connections]);
-
-  // Once harnesses load, prefer the first available as the create-form default
-  // when still on the generic desktop placeholder.
-  useEffect(() => {
-    if (acpHarnessCatalog.length === 0) return;
-    const preferred = acpHarnessCatalog.find(h => h.available) || acpHarnessCatalog[0];
-    if (!preferred) return;
-    setNewRuntime(current => (
-      current === 'desktop' ? acpFormRuntimeValue(preferred.id) : current
-    ));
-  }, [acpHarnessCatalog]);
+  }, [localRuntimeCatalog, connections]);
 
   const resetNewAgentFields = () => {
     setNewName('');
@@ -641,10 +629,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     setNewResourceFacets([]);
     setNewModel('auto');
     setNewRunMode('builtin');
-    const preferredHarness = acpHarnessCatalog.find(h => h.available) || acpHarnessCatalog[0];
+    const preferredHarness = localRuntimeCatalog.find(h => h.available) || localRuntimeCatalog[0];
     setNewRuntime(
       preferredHarness
-        ? acpFormRuntimeValue(preferredHarness.id)
+        ? preferredHarness.id
         : defaultDaemonRuntime,
     );
     setNewMetadata({});
@@ -724,10 +712,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     if (tpl.runtime && tpl.runtime !== 'desktop') {
       setNewRuntime(tpl.runtime);
     } else {
-      const preferredHarness = acpHarnessCatalog.find(h => h.available) || acpHarnessCatalog[0];
+      const preferredHarness = localRuntimeCatalog.find(h => h.available) || localRuntimeCatalog[0];
       setNewRuntime(
         preferredHarness
-          ? acpFormRuntimeValue(preferredHarness.id)
+          ? preferredHarness.id
           : (tpl.runtime || defaultDaemonRuntime),
       );
     }
@@ -1054,9 +1042,9 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 onRunModeChange={(value) => {
                   setNewRunMode(value);
                   // Desktop app: Relay defaults to a local ACP harness, not a Claude pin.
-                  if (value === 'daemon' && hasDesktopAcpShell) {
-                    const preferred = acpHarnessCatalog.find(h => h.available) || acpHarnessCatalog[0];
-                    setNewRuntime(preferred ? acpFormRuntimeValue(preferred.id) : 'desktop');
+                  if (value === 'daemon' && hasDesktopLocalRuntime) {
+                    const preferred = localRuntimeCatalog.find(h => h.available) || localRuntimeCatalog[0];
+                    setNewRuntime(preferred ? preferred.id : 'desktop');
                   }
                 }}
                 onRuntimeChange={setNewRuntime}
@@ -2134,43 +2122,22 @@ function AgentDetailPane({
   // while editing, and this draft is committed by Save like any other field.
   const [editVoice, setEditVoice] = useState<AgentVoicePreference>({});
   const [disconnecting, setDisconnecting] = useState(false);
-  // Desktop ACP session for this agent (Electron only) — drives model picker "restart to apply".
-  const hasDesktopAcpApi = Boolean(typeof window !== 'undefined' && window.electronAPI?.acp);
-  const [acpSessionRunning, setAcpSessionRunning] = useState(false);
+  // Local Relay daemon on this Mac (Electron only) — drives model picker "restart to apply".
+  const hasDesktopLocalRuntimeApi = Boolean(typeof window !== 'undefined' && window.electronAPI?.localRuntime);
+  const [localRuntimeRunning, setLocalRuntimeRunning] = useState(false);
   useEffect(() => {
-    if (!agent?.id || !hasDesktopAcpApi) {
-      setAcpSessionRunning(false);
+    if (!agent?.id || !hasDesktopLocalRuntimeApi) {
+      setLocalRuntimeRunning(false);
       return;
     }
     let cancelled = false;
     const syncStatus = async () => {
       try {
-        const st = await window.electronAPI!.acp!.status(agent.id);
+        const st = await window.electronAPI!.localRuntime!.status(agent.id);
         if (cancelled || !st.ok) return;
-        setAcpSessionRunning(Boolean(st.data.session?.running));
-        // Persist preferred harness once it is knowable (live session, online
-        // connection, or name like "Hermes") so the form never sticks on Claude.
-        const saved = agentAcpHarnessFromMetadata(agent.metadata as Record<string, unknown> | undefined);
-        const harness = resolveAgentAcpHarness({
-          metadata: agent.metadata as Record<string, unknown> | undefined,
-          agentId: agent.id,
-          name: agent.name,
-          handle: agent.handle,
-          liveHarness: st.data.session?.harnessId,
-          connections,
-        });
-        if (harness && !saved) {
-          onUpdateAgent(agent.id, {
-            metadata: agentMetadataWithRuntime(
-              agent.metadata as Record<string, unknown> | undefined,
-              'desktop',
-              'daemon',
-              harness,
-            ),
-          });
-        }
+        setLocalRuntimeRunning(Boolean(st.data.session?.running));
       } catch {
-        if (!cancelled) setAcpSessionRunning(false);
+        if (!cancelled) setLocalRuntimeRunning(false);
       }
     };
     void syncStatus();
@@ -2179,7 +2146,7 @@ function AgentDetailPane({
       cancelled = true;
       window.clearInterval(t);
     };
-  }, [agent?.id, agent?.model, agent?.metadata, agent?.name, agent?.handle, connections, hasDesktopAcpApi, onUpdateAgent]);
+  }, [agent?.id, hasDesktopLocalRuntimeApi]);
 
   // What the form was seeded from, normalized exactly like a save. handleSave
   // diffs against this so it submits ONLY the fields the human changed in THIS
@@ -2393,9 +2360,9 @@ function AgentDetailPane({
               setEditRuntimeSelectionDirty(true);
               // Switching to Relay in the desktop shell: prefer a real ACP
               // harness (Hermes/Grok/…), never a classic Claude pin.
-              if (value === 'daemon' && typeof window !== 'undefined' && window.electronAPI?.acp) {
-                const preferred = runtimeChoices.find(c => String(c.id).startsWith('acp:') && c.available === true)
-                  || runtimeChoices.find(c => String(c.id).startsWith('acp:'))
+              if (value === 'daemon' && typeof window !== 'undefined' && window.electronAPI?.localRuntime) {
+                const preferred = runtimeChoices.find(c => (c.id === 'claude' || c.id === 'codex') && c.available === true)
+                  || runtimeChoices.find(c => c.id === 'claude' || c.id === 'codex')
                   || null;
                 setEditRuntime(preferred?.id || 'desktop');
               }
@@ -2470,14 +2437,14 @@ function AgentDetailPane({
             <div className="mt-2">
               <AgentModelPicker
                 agent={agent}
-                acpRunning={isConnected || acpSessionRunning}
+                acpRunning={isConnected || localRuntimeRunning}
                 onChangeModel={async (modelId) => {
                   onUpdateAgent(agent.id, { model: modelId });
                 }}
-                onRestartAcp={hasDesktopAcpApi && acpSessionRunning
+                onRestartAcp={hasDesktopLocalRuntimeApi && localRuntimeRunning
                   ? async (modelId) => {
-                    await restartDesktopAcpForAgent(agent, modelId);
-                    setAcpSessionRunning(true);
+                    await restartLocalRuntimeForAgent(agent, modelId);
+                    setLocalRuntimeRunning(true);
                   }
                   : undefined}
               />
@@ -2772,27 +2739,26 @@ function ConnectExplainer({ benefit, note }: { benefit: string; note: string }) 
 }
 
 /**
- * Re-mint + re-Start desktop ACP so a model (or backend) change takes effect.
- * Prefers: live session harness → saved metadata.acp_harness → first available.
+ * Re-mint + re-Start the local Relay daemon so a model (or backend) change takes effect.
+ * Uses Claude Agent SDK or Codex app-server via `agensis connect --no-acp`.
  */
-async function restartDesktopAcpForAgent(
+async function restartLocalRuntimeForAgent(
   agent: WorkspaceAgent,
   modelOverride?: string,
 ): Promise<void> {
-  const acp = window.electronAPI?.acp;
-  if (!acp) throw new Error('Desktop ACP is not available');
+  const api = window.electronAPI?.localRuntime;
+  if (!api) throw new Error('Local desktop runtime is not available');
   const handle = agent.handle || agentHandle(agent.name);
-  const status = await acp.status(agent.id);
-  const savedHarness = agentAcpHarnessFromMetadata(agent.metadata as Record<string, unknown> | undefined);
-  let harnessId = status.ok && status.data.session?.harnessId
-    ? status.data.session.harnessId
-    : savedHarness;
-  if (!harnessId) {
-    const list = await acp.listHarnesses();
-    harnessId = list.ok
-      ? (list.data.find(h => h.available)?.id || list.data[0]?.id || 'claude')
-      : 'claude';
-  }
+  const status = await api.status(agent.id);
+  const meta = agent.metadata as Record<string, unknown> | undefined;
+  const pinnedRuntime = agentExecutionRuntimeFromMetadata(meta);
+  const harness = String(meta?.acp_harness || meta?.acpHarness || '').trim().toLowerCase();
+  // Prefer live session → saved harness → classic pin → claude.
+  const runtime = (status.ok && status.data.session?.runtime)
+    || harness
+    || (pinnedRuntime === 'codex' || pinnedRuntime === 'amp' || pinnedRuntime === 'claude'
+      ? pinnedRuntime
+      : 'claude');
 
   const response = await fetch(apiUrl(`/backend/agents/${agent.id}/connection-command`), {
     method: 'POST',
@@ -2802,22 +2768,18 @@ async function restartDesktopAcpForAgent(
   const payload = await response.json().catch(() => null);
   const token = payload?.data?.token || '';
   if (!response.ok || !token) {
-    throw new Error(payload?.error?.message || 'Could not mint a token to restart ACP');
+    throw new Error(payload?.error?.message || 'Could not mint a token to restart the local runtime');
   }
   const mintBase = typeof payload?.data?.baseUrl === 'string' ? payload.data.baseUrl : '';
   const backendBase = mintBase || apiBaseUrl() || 'http://127.0.0.1:3142';
   const cwd = typeof payload?.data?.cwd === 'string' ? payload.data.cwd : undefined;
-  // Only classic pins are enforced by the server; preferred harness clears them.
-  const pinnedRuntime = agentExecutionRuntimeFromMetadata(agent.metadata as Record<string, unknown> | undefined);
-  const requiredRuntime = pinnedRuntime === 'desktop' ? undefined : pinnedRuntime;
   const model = modelOverride || agent.model || 'auto';
-  // Product values: default | accept_edits | yolo (never camelCase acceptEdits).
   const permissionMode = agent.permission_mode || 'default';
-  const result = await acp.start({
+  const classic = runtime === 'claude' || runtime === 'codex' || runtime === 'amp';
+  const result = await api.start({
     agentId: agent.id,
-    harnessId,
+    runtime,
     cwd,
-    // Honor ACCESS: yolo / accept_edits elevate; default (Ask) shows a dialog.
     permissionMode,
     autoApprove: permissionMode === 'yolo' || permissionMode === 'accept_edits',
     token,
@@ -2826,9 +2788,9 @@ async function restartDesktopAcpForAgent(
     handle,
     name: agent.name,
     model,
-    requiredRuntime,
+    requiredRuntime: classic ? runtime : undefined,
   });
-  if (!result.ok) throw new Error(result.error || 'Failed to restart ACP');
+  if (!result.ok) throw new Error(result.error || 'Failed to restart local runtime');
 }
 
 /** Human label for which backend this UI will mint tokens / register against. */
@@ -2876,22 +2838,25 @@ function AgentConnectDialog({
   const [cliError, setCliError] = useState('');
   const [cliBusy, setCliBusy] = useState(false);
 
-  // Desktop ACP host (Electron only)
-  const hasDesktopAcp = Boolean(typeof window !== 'undefined' && window.electronAPI?.acp);
-  const [acpHarnesses, setAcpHarnesses] = useState<Array<{
+  // Local Relay on this Mac (Electron only) — Claude Agent SDK / Codex app-server.
+  const hasDesktopLocalRuntime = Boolean(typeof window !== 'undefined' && window.electronAPI?.localRuntime);
+  const [localRuntimes, setLocalRuntimes] = useState<Array<{
     id: string;
     label: string;
     available: boolean;
-    path: string | null;
-    command: string | null;
+    detail: string;
     installHint: string | null;
+    mode?: string;
   }>>([]);
-  const [acpHarnessId, setAcpHarnessId] = useState('grok');
-  const [acpBusy, setAcpBusy] = useState(false);
-  const [acpError, setAcpError] = useState('');
-  const [acpRunning, setAcpRunning] = useState(false);
-  const [acpStatusLabel, setAcpStatusLabel] = useState('');
-  const [acpWsUrl, setAcpWsUrl] = useState('');
+  const [daemonReady, setDaemonReady] = useState<{ available: boolean; error: string | null }>({
+    available: true,
+    error: null,
+  });
+  const [localRuntimeId, setLocalRuntimeId] = useState('claude');
+  const [localBusy, setLocalBusy] = useState(false);
+  const [localError, setLocalError] = useState('');
+  const [localRunning, setLocalRunning] = useState(false);
+  const [localStatusLabel, setLocalStatusLabel] = useState('');
 
   // MCP client
   const [manifest, setManifest] = useState<SkillManifest | null>(null);
@@ -2913,42 +2878,52 @@ function AgentConnectDialog({
     setTab('cli');
     setCliCommand('');
     setCliError('');
-    setAcpError('');
-    setAcpRunning(false);
-    setAcpStatusLabel('');
-    setAcpWsUrl('');
+    setLocalError('');
+    setLocalRunning(false);
+    setLocalStatusLabel('');
     setManifest(null);
     setLoadError('');
     setToken('');
     setTokenError('');
   }, [open, agent?.id]);
 
-  // Load ACP harness catalog + running status when the dialog opens in Electron.
+  // Load local runtime catalog + running status when the dialog opens in Electron.
   useEffect(() => {
-    if (!open || !hasDesktopAcp || !agent?.id) return;
+    if (!open || !hasDesktopLocalRuntime || !agent?.id) return;
     let cancelled = false;
     void (async () => {
-      const list = await window.electronAPI!.acp!.listHarnesses();
+      const list = await window.electronAPI!.localRuntime!.listRuntimes();
       if (cancelled || !list.ok) return;
-      setAcpHarnesses(list.data);
-      // Prefer: saved acp_harness → classic pin name match → first available.
-      const saved = agentAcpHarnessFromMetadata(agent.metadata as Record<string, unknown> | undefined);
-      const pinned = String((agent.metadata as { runtime?: string } | undefined)?.runtime || '').trim().toLowerCase();
-      const preferred = (saved && list.data.find(h => h.id === saved))
-        || (pinned && list.data.find(h => h.available && h.id === pinned))
-        || list.data.find(h => h.available)
-        || list.data[0];
-      if (preferred) setAcpHarnessId(preferred.id);
-      const st = await window.electronAPI!.acp!.status(agent.id);
+      setLocalRuntimes(list.data.runtimes.map(r => ({
+        id: r.id,
+        label: r.label,
+        available: r.available,
+        detail: r.detail,
+        installHint: r.installHint,
+        mode: r.mode,
+      })));
+      setDaemonReady({
+        available: list.data.daemon.available,
+        error: list.data.daemon.error,
+      });
+      const meta = agent.metadata as { runtime?: string; acp_harness?: string } | undefined;
+      const pinned = String(meta?.runtime || '').trim().toLowerCase();
+      const harness = String(meta?.acp_harness || '').trim().toLowerCase();
+      const preferred = (harness && list.data.runtimes.find(r => r.id === harness))
+        || (pinned && list.data.runtimes.find(r => r.available && r.id === pinned))
+        || list.data.runtimes.find(r => r.available)
+        || list.data.runtimes[0];
+      if (preferred) setLocalRuntimeId(preferred.id);
+      const st = await window.electronAPI!.localRuntime!.status(agent.id);
       if (cancelled || !st.ok) return;
-      setAcpRunning(Boolean(st.data.session?.running));
+      setLocalRunning(Boolean(st.data.session?.running));
       if (st.data.session?.running) {
-        setAcpStatusLabel(`${st.data.session.label} · pid ${st.data.session.pid}`);
-        setAcpHarnessId(st.data.session.harnessId);
+        setLocalStatusLabel(`${st.data.session.label} · pid ${st.data.session.pid}`);
+        if (st.data.session.runtime) setLocalRuntimeId(st.data.session.runtime);
       }
     })();
     return () => { cancelled = true; };
-  }, [open, hasDesktopAcp, agent?.id, agent?.metadata]);
+  }, [open, hasDesktopLocalRuntime, agent?.id, agent?.metadata]);
 
   // Load the MCP skill manifest once the dialog is open for an agent.
   const agentId = agent?.id ?? '';
@@ -3007,12 +2982,11 @@ function AgentConnectDialog({
     }
   };
 
-  const handleStartDesktopAcp = async () => {
-    if (!hasDesktopAcp || !agent) return;
-    setAcpBusy(true);
-    setAcpError('');
+  const handleStartLocalRuntime = async () => {
+    if (!hasDesktopLocalRuntime || !agent) return;
+    setLocalBusy(true);
+    setLocalError('');
     try {
-      // Mint a connect token so the desktop host can register as this agent.
       const response = await fetch(apiUrl(`/backend/agents/${agent.id}/connection-command`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
@@ -3021,24 +2995,19 @@ function AgentConnectDialog({
       const payload = await response.json().catch(() => null);
       const newToken = payload?.data?.token || '';
       if (!response.ok || !newToken) {
-        setAcpError(payload?.error?.message || 'Could not mint an agent token for desktop ACP.');
+        setLocalError(payload?.error?.message || 'Could not mint an agent token for this Mac.');
         return;
       }
       const cwd = typeof payload?.data?.cwd === 'string' ? payload.data.cwd : undefined;
-      // Prefer the backend URL from the mint response (daemon base). Falling back
-      // to window origin on Vite (:5173) made the ACP bridge use the flaky proxy
-      // and appear online for a second then drop.
       const mintBase = typeof payload?.data?.baseUrl === 'string' ? payload.data.baseUrl : '';
       const backendBase = mintBase || apiBaseUrl() || 'http://127.0.0.1:3142';
-      // Starting an ACP harness clears the classic pin so the agent form labels
-      // this agent as Hermes/Grok/… instead of "Claude — ready".
-      // Product values: default | accept_edits | yolo.
       const permissionMode = agent.permission_mode || 'default';
-      const result = await window.electronAPI!.acp!.start({
+      // Full catalog id: claude | codex | amp | grok | hermes | omp | goose | …
+      const runtime = localRuntimeId || 'claude';
+      const result = await window.electronAPI!.localRuntime!.start({
         agentId: agent.id,
-        harnessId: acpHarnessId,
+        runtime,
         cwd,
-        // ACCESS: Full access / auto-accept edits elevate; Ask shows a real prompt.
         permissionMode,
         autoApprove: permissionMode === 'yolo' || permissionMode === 'accept_edits',
         token: newToken,
@@ -3047,30 +3016,34 @@ function AgentConnectDialog({
         handle,
         name: agent.name,
         model: agent.model || 'auto',
-        requiredRuntime: undefined,
+        // Only classic pins are enforced by the server as executionRuntime.
+        requiredRuntime: (runtime === 'claude' || runtime === 'codex' || runtime === 'amp')
+          ? runtime
+          : undefined,
       });
       if (!result.ok) {
-        setAcpError(result.error || 'Failed to start local ACP agent.');
+        setLocalError(result.error || 'Failed to start local runtime.');
         return;
       }
-      setAcpRunning(true);
-      const harness = acpHarnesses.find(h => h.id === acpHarnessId);
-      // Persist preferred harness so the form/badge show the correct ACP agent.
+      setLocalRunning(true);
+      // Classic pins (claude/codex/amp) OR desktop + preferred harness (grok/hermes/…).
+      const classic = runtime === 'claude' || runtime === 'codex' || runtime === 'amp';
       onUpdateAgent(agent.id, {
         metadata: agentMetadataWithRuntime(
           agent.metadata as Record<string, unknown> | undefined,
-          'desktop',
+          classic ? runtime : 'desktop',
           'daemon',
-          acpHarnessId,
+          classic ? null : runtime,
         ),
       });
       const data = result.data as {
-        bridge?: { wsUrl?: string };
+        session?: { label?: string; pid?: number; baseUrl?: string };
         autostart?: { saved?: boolean; tokenStored?: boolean; openAtLogin?: boolean };
       };
       const auto = data.autostart;
-      const ws = data.bridge?.wsUrl || '';
-      setAcpWsUrl(ws);
+      const runtimeLabel = data.session?.label
+        || localRuntimes.find(r => r.id === runtime)?.label
+        || runtime;
       const rebootHint = auto?.tokenStored === false
         ? 'Restore after reboot needs OS keychain encryption for the token.'
         : auto?.openAtLogin
@@ -3078,31 +3051,28 @@ function AgentConnectDialog({
           : auto?.saved
             ? 'Saved for restore when the desktop app opens.'
             : 'Not saved for autostart.';
-      setAcpStatusLabel(
-        harness
-          ? `${harness.label} · model ${agentModelLabel} · ${rebootHint}`
-          : `${acpHarnessLabel(acpHarnessId)} · model ${agentModelLabel} · ${rebootHint}`,
+      setLocalStatusLabel(
+        `${runtimeLabel} · model ${agentModelLabel} · ${rebootHint}`,
       );
     } catch (err) {
-      setAcpError(err instanceof Error ? err.message : 'Failed to start local ACP agent.');
+      setLocalError(err instanceof Error ? err.message : 'Failed to start local runtime.');
     } finally {
-      setAcpBusy(false);
+      setLocalBusy(false);
     }
   };
 
-  const handleStopDesktopAcp = async () => {
-    if (!hasDesktopAcp || !agent) return;
-    setAcpBusy(true);
-    setAcpError('');
+  const handleStopLocalRuntime = async () => {
+    if (!hasDesktopLocalRuntime || !agent) return;
+    setLocalBusy(true);
+    setLocalError('');
     try {
-      await window.electronAPI!.acp!.stop(agent.id);
-      setAcpRunning(false);
-      setAcpStatusLabel('');
-      setAcpWsUrl('');
+      await window.electronAPI!.localRuntime!.stop(agent.id);
+      setLocalRunning(false);
+      setLocalStatusLabel('');
     } catch (err) {
-      setAcpError(err instanceof Error ? err.message : 'Failed to stop local ACP agent.');
+      setLocalError(err instanceof Error ? err.message : 'Failed to stop local runtime.');
     } finally {
-      setAcpBusy(false);
+      setLocalBusy(false);
     }
   };
 
@@ -3147,8 +3117,8 @@ function AgentConnectDialog({
             Connect {agent.name}
           </DialogTitle>
           <DialogDescription className="text-xs">
-            {hasDesktopAcp
-              ? `Relay: Start @${handle} on this Mac (ACP). Connector: MCP. Or add a webhook trigger. Registers against ${backendLabel}.`
+            {hasDesktopLocalRuntime
+              ? `Relay: Start @${handle} on this Mac (Claude Agent SDK / Codex app-server). Connector: MCP. Or add a webhook. Registers against ${backendLabel}.`
               : `Relay: agensis CLI on a host. Connector: MCP. Or an HTTP webhook trigger.`}
           </DialogDescription>
         </DialogHeader>
@@ -3157,8 +3127,8 @@ function AgentConnectDialog({
           <div className="border-b px-4 pt-3">
             <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="cli" className="gap-1.5">
-                {hasDesktopAcp ? <Monitor className="size-3.5" /> : <Terminal className="size-3.5" />}
-                {hasDesktopAcp ? 'This Mac' : 'CLI'}
+                {hasDesktopLocalRuntime ? <Monitor className="size-3.5" /> : <Terminal className="size-3.5" />}
+                {hasDesktopLocalRuntime ? 'This Mac' : 'CLI'}
               </TabsTrigger>
               <TabsTrigger value="mcp" className="gap-1.5"><Plug className="size-3.5" />MCP</TabsTrigger>
               <TabsTrigger value="webhook" className="gap-1.5"><Link2 className="size-3.5" />Webhook</TabsTrigger>
@@ -3166,98 +3136,107 @@ function AgentConnectDialog({
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            {/* Machine: desktop ACP and/or terminal daemon */}
+            {/* Machine: local SDK runtime and/or terminal daemon */}
             <TabsContent value="cli" className="mt-0 space-y-4">
               <ConnectExplainer
-                benefit={hasDesktopAcp
-                  ? `Relay path: Start @${handle} on this Mac with a local ACP harness (Claude, Codex, Grok, Hermes, …). No terminal. Registers on ${backendLabel} so web and desktop both see it online.`
+                benefit={hasDesktopLocalRuntime
+                  ? `Relay path: Start @${handle} on this Mac with whatever the local tool supports — Claude Agent SDK, Codex app-server, or ACP for Grok / Hermes / Goose / Cursor / … Registers on ${backendLabel}.`
                   : `Relay path: run the agensis-agent CLI on a host that should execute work for @${handle} (files, shells, local tools).`}
-                note={hasDesktopAcp
-                  ? `Agent must be Relay (not Direct) for this host to receive jobs. Model is ${agentModelLabel} — edit the agent to change it, then Start again. After switching local vs hosted backend, re-Start.`
+                note={hasDesktopLocalRuntime
+                  ? `Agent must be Relay (not Direct). Model is ${agentModelLabel} — edit the agent to change it, then Start again. Requires @agensis/agensis-agent on PATH. After switching local vs hosted backend, re-Start.`
                   : 'Agent must be Relay (not Direct). Install @agensis/agensis-agent, generate a connect command below, then optionally install it as an OS service so it survives logout.'}
               />
 
-              {hasDesktopAcp && (
-                <McpDialogSection icon={Monitor} title="Start on this Mac (ACP)">
+              {hasDesktopLocalRuntime && (
+                <McpDialogSection icon={Monitor} title="Start on this Mac">
                   <p className="text-xs text-muted-foreground">
-                    Spawns the harness inside the desktop app and opens a WebSocket to{' '}
+                    Spawns <span className="font-mono">agensis connect</span> against{' '}
                     <span className="font-medium text-foreground">{backendLabel}</span>.
-                    Harness = local runtime. Model is set on the agent (change below anytime).
+                    Claude → Agent SDK · Codex → app-server · Grok/Hermes/Goose/… → ACP · Pi → CLI.
                   </p>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <select
                       className="h-8 max-w-56 rounded-md border bg-background px-2 text-sm"
-                      value={acpHarnessId}
-                      onChange={e => setAcpHarnessId(e.target.value)}
-                      disabled={acpBusy || acpRunning}
-                      aria-label="ACP harness"
+                      value={localRuntimeId}
+                      onChange={e => setLocalRuntimeId(e.target.value)}
+                      disabled={localBusy || localRunning}
+                      aria-label="Local runtime"
                     >
-                      {acpHarnesses.map(h => (
-                        <option key={h.id} value={h.id} disabled={!h.available}>
-                          {h.label}{h.available ? '' : ' (not installed)'}
+                      {localRuntimes.map(r => (
+                        <option key={r.id} value={r.id} disabled={!r.available}>
+                          {r.label}{r.available ? '' : ' (not installed)'}
                         </option>
                       ))}
                     </select>
+                    {localRuntimes.find(r => r.id === localRuntimeId)?.detail && (
+                      <span className="text-[11px] text-muted-foreground max-w-xs truncate" title={localRuntimes.find(r => r.id === localRuntimeId)?.detail}>
+                        {localRuntimes.find(r => r.id === localRuntimeId)?.detail}
+                      </span>
+                    )}
                     <AgentModelPicker
                       agent={agent}
-                      acpRunning={acpRunning}
-                      disabled={acpBusy}
+                      acpRunning={localRunning}
+                      disabled={localBusy}
                       onChangeModel={async (modelId) => {
                         onUpdateAgent(agent.id, { model: modelId });
                       }}
-                      onRestartAcp={acpRunning
+                      onRestartAcp={localRunning
                         ? async (modelId) => {
-                          setAcpBusy(true);
-                          setAcpError('');
+                          setLocalBusy(true);
+                          setLocalError('');
                           try {
-                            await restartDesktopAcpForAgent(agent, modelId);
-                            setAcpRunning(true);
-                            setAcpStatusLabel(`Restarted · model ${displayModel(modelId)}`);
+                            await restartLocalRuntimeForAgent(agent, modelId);
+                            setLocalRunning(true);
+                            setLocalStatusLabel(`Restarted · model ${displayModel(modelId)}`);
                           } catch (err) {
-                            setAcpError(err instanceof Error ? err.message : 'Restart failed');
+                            setLocalError(err instanceof Error ? err.message : 'Restart failed');
                           } finally {
-                            setAcpBusy(false);
+                            setLocalBusy(false);
                           }
                         }
                         : undefined}
                     />
-                    {!acpRunning ? (
+                    {!localRunning ? (
                       <Button
                         type="button"
                         size="sm"
-                        onClick={() => void handleStartDesktopAcp()}
-                        disabled={acpBusy || !acpHarnesses.some(h => h.id === acpHarnessId && h.available)}
+                        onClick={() => void handleStartLocalRuntime()}
+                        disabled={
+                          localBusy
+                          || !daemonReady.available
+                          || !localRuntimes.some(r => r.id === localRuntimeId && r.available)
+                        }
                       >
-                        <Power data-icon="inline-start" className={acpBusy ? 'animate-pulse' : undefined} />
-                        {acpBusy ? 'Starting…' : 'Start on this Mac'}
+                        <Power data-icon="inline-start" className={localBusy ? 'animate-pulse' : undefined} />
+                        {localBusy ? 'Starting…' : 'Start on this Mac'}
                       </Button>
                     ) : (
                       <Button
                         type="button"
                         size="sm"
                         variant="outline"
-                        onClick={() => void handleStopDesktopAcp()}
-                        disabled={acpBusy}
+                        onClick={() => void handleStopLocalRuntime()}
+                        disabled={localBusy}
                       >
                         <Unplug data-icon="inline-start" />
                         Stop
                       </Button>
                     )}
                   </div>
-                  {acpRunning && acpStatusLabel && (
+                  {localRunning && localStatusLabel && (
                     <div className="mt-2 space-y-1 text-xs text-emerald-600 dark:text-emerald-400">
-                      <p>Running · {acpStatusLabel}</p>
-                      {acpWsUrl && (
-                        <p className="break-all font-mono text-[11px] text-muted-foreground">
-                          Bridge {acpWsUrl}
-                        </p>
-                      )}
+                      <p>Running · {localStatusLabel}</p>
                     </div>
                   )}
-                  {acpError && <div className="mt-2 text-xs text-destructive">{acpError}</div>}
-                  {!acpHarnesses.some(h => h.available) && (
+                  {localError && <div className="mt-2 text-xs text-destructive whitespace-pre-wrap">{localError}</div>}
+                  {!daemonReady.available && (
                     <p className="mt-2 text-xs text-muted-foreground">
-                      No ACP harness found on PATH. Install Claude Code / Codex / Grok (or their ACP adapters), then reopen this dialog.
+                      {daemonReady.error || 'Install @agensis/agensis-agent (`npm i -g @agensis/agensis-agent`), then reopen this dialog.'}
+                    </p>
+                  )}
+                  {daemonReady.available && !localRuntimes.some(r => r.available) && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Install the Claude Code CLI (`claude`) and/or Codex CLI (`codex`) on this Mac, then reopen.
                     </p>
                   )}
                 </McpDialogSection>
@@ -3265,11 +3244,11 @@ function AgentConnectDialog({
 
               <McpDialogSection
                 icon={Terminal}
-                title={hasDesktopAcp ? 'Optional: terminal daemon (agensis-agent CLI)' : 'Daemon connect command'}
+                title={hasDesktopLocalRuntime ? 'Optional: terminal daemon (agensis-agent CLI)' : 'Daemon connect command'}
               >
                 <p className="text-xs text-muted-foreground">
-                  {hasDesktopAcp
-                    ? 'Only if you want a separate OS process instead of desktop ACP. Generates a one-line connect command for @agensis/agensis-agent (copied to the clipboard). Same backend target as above.'
+                  {hasDesktopLocalRuntime
+                    ? 'Only if you want a separate OS process instead of Start on this Mac. Generates a one-line connect command for @agensis/agensis-agent (copied to the clipboard). Same backend target as above.'
                     : 'Generate a one-line command, then run it where the daemon should execute. Copied to the clipboard.'}
                 </p>
                 <Button type="button" size="sm" className="mt-2" onClick={handleGenerateCli} disabled={cliBusy}>
@@ -3280,7 +3259,7 @@ function AgentConnectDialog({
                 {cliCommand && (
                   <div className="mt-3 space-y-2 rounded-md border bg-muted/30 p-3">
                     <p className="text-xs text-muted-foreground">
-                      Optional: keep that CLI profile running at login (not the same as desktop ACP autostart):
+                      Optional: keep that CLI profile running at login (not the same as desktop autostart):
                     </p>
                     <CopyBlock value={`agensis service install --profile ${handle}`} />
                     <p className="text-[11px] text-muted-foreground">
@@ -3295,8 +3274,8 @@ function AgentConnectDialog({
             {/* MCP client */}
             <TabsContent value="mcp" className="mt-0 space-y-4">
               <ConnectExplainer
-                benefit={`Connector path: plug an MCP client (Claude Code, Cursor, Codex, …) into @${handle} with an agent token. Different from Relay (desktop ACP / CLI) — no local coding harness is required.`}
-                note="The token authenticates as this agent. Generating a new one invalidates the previous token for CLI daemons and desktop ACP until they re-Start / reconnect."
+                benefit={`Connector path: plug an MCP client (Claude Code, Cursor, Codex, …) into @${handle} with an agent token. Different from Relay (local SDK / CLI) — no local coding host is required.`}
+                note="The token authenticates as this agent. Generating a new one invalidates the previous token for CLI daemons and Start on this Mac until they re-Start / reconnect."
               />
               {loadError && (
                 <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">

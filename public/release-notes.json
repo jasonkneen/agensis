@@ -1,5 +1,17 @@
 [
   {
+    "version": "desktop-local-sdk-runtime",
+    "date": "2026-08-02",
+    "title": "Start on this Mac uses Claude Agent SDK and Codex app-server",
+    "summary": "Start on this Mac spawns the real Relay host and uses whatever each local tool supports best: Claude Agent SDK, Codex app-server, Amp, and ACP for Grok, Hermes, Goose, Cursor, OpenCode, Kimi, OpenClaw, plus Oh My Pi via its CLI. Requires @agensis/agensis-agent on the Mac.",
+    "highlights": [
+      "Claude → Agent SDK warm connection; Codex → app-server",
+      "Grok, Hermes, Goose, Cursor, OpenCode, Kimi, OpenClaw → ACP via the CLI",
+      "Oh My Pi (omp) available when installed",
+      "Autostart / reboot restore still works; install once: npm i -g @agensis/agensis-agent"
+    ]
+  },
+  {
     "version": "connector-oauth-and-runtime-reliability",
     "date": "2026-08-02",
     "title": "Safer Connectors, OAuth, and Relay jobs",

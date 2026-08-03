@@ -70,7 +70,7 @@ export function agentModelPickerCanSwitch(runMode: AgentRunMode, runtime: AgentE
  * `external` | `sandbox` — only the human-facing names change.
  *
  * - **Direct** (`builtin`) — turn runs on agensis (hosted model / workspace key).
- * - **Relay** (`daemon`) — job is pushed to a linked host (desktop ACP or CLI).
+ * - **Relay** (`daemon`) — job is pushed to a linked host (desktop local SDK or CLI).
  * - **Connector** (`external`) — an MCP client (etc.) acts as this agent.
  */
 export function agentRunModeLabel(runMode?: string | null): string {
@@ -85,7 +85,7 @@ export function agentRunModeHelp(runMode?: string | null): string {
     return 'Retired sandbox path — work was relayed through a host.';
   }
   if (runMode === 'daemon') {
-    return 'Linked host — desktop ACP or agensis CLI. Web and desktop both see it when online.';
+    return 'Linked host — desktop local SDK or agensis CLI. Web and desktop both see it when online.';
   }
   if (runMode === 'external') {
     return 'An external MCP client registers and answers as this agent.';
@@ -122,13 +122,16 @@ export interface AgentRuntimeChoice {
 const CLASSIC_RUNTIMES: AgentExecutionRuntime[] = ['claude', 'codex', 'amp'];
 
 const EXECUTION_RUNTIME_LABELS: Record<AgentExecutionRuntime, string> = {
-  claude: 'Claude',
-  codex: 'Codex',
+  claude: 'Claude (Agent SDK)',
+  codex: 'Codex (app-server)',
   amp: 'Amp',
-  desktop: 'Desktop ACP',
+  desktop: 'This Mac (local SDK)',
 };
 
-/** Labels for known desktop ACP harnesses (mirrors electron/acp/harnesses.cjs). */
+/**
+ * Legacy ACP harness labels. Desktop no longer hosts ACP; kept so old
+ * `metadata.acp_harness` rows still render a human name until re-started.
+ */
 export const ACP_HARNESS_LABELS: Record<string, string> = {
   grok: 'Grok Build',
   claude: 'Claude Code',
@@ -151,7 +154,9 @@ export function normalizeAcpHarnessId(value: unknown): string {
 
 export function acpHarnessLabel(harnessId: string): string {
   const id = normalizeAcpHarnessId(harnessId);
-  if (!id) return 'Desktop ACP';
+  if (!id) return 'This Mac';
+  if (id === 'claude') return 'Claude (Agent SDK)';
+  if (id === 'codex') return 'Codex (app-server)';
   return ACP_HARNESS_LABELS[id] || id.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
@@ -349,16 +354,21 @@ export function agentFormRuntimeValueForAgent(input: {
     metadata?: Record<string, unknown> | null;
     capabilities?: { clis?: string[] | null } | null;
   }>;
-  /** When true (Electron), never surface a bare classic pin if we can name a harness. */
+  /**
+   * When true (Electron), prefer unpinned `desktop` over a bare classic pin when
+   * we have no concrete runtime. Accepts legacy `preferAcp` name from older call sites.
+   */
+  preferLocalRuntime?: boolean;
   preferAcp?: boolean;
 }): AgentFormRuntimeValue {
+  // Prefer classic pins (claude/codex/amp) when set — desktop local runtime uses those.
+  const runtime = agentExecutionRuntimeFromMetadata(input.metadata);
+  if (runtime === 'claude' || runtime === 'codex' || runtime === 'amp') return runtime;
+  // Legacy ACP harness metadata still maps to a form value so old rows don't break.
   const harness = resolveAgentAcpHarness(input);
+  if (harness === 'claude' || harness === 'codex' || harness === 'amp') return harness;
   if (harness) return acpFormRuntimeValue(harness);
-  if (input.preferAcp) {
-    // Desktop shell: a classic pin without a concrete harness is almost always
-    // stale for ACP agents — never leave the select on bare "claude" (Claude — ready).
-    return 'desktop';
-  }
+  if (input.preferLocalRuntime || input.preferAcp) return 'desktop';
   return agentFormRuntimeValueFromMetadata(input.metadata);
 }
 
@@ -389,12 +399,12 @@ export function executionRuntimeDisplayLabel(
   const harness = normalizeAcpHarnessId(acpHarness);
   if (harness) return acpHarnessLabel(harness);
   if (runtime === 'amp') return 'Amp (managed orb)';
-  if (runtime === 'desktop') return 'Desktop ACP';
-  if (runtime === 'codex') return 'Codex';
-  return 'Claude';
+  if (runtime === 'desktop') return 'This Mac (local SDK)';
+  if (runtime === 'codex') return 'Codex (app-server)';
+  return 'Claude (Agent SDK)';
 }
 
-/** Badge/detail label: real harness name when known, never a lying Claude pin. */
+/** Badge/detail label for the agent's local runtime. */
 export function agentRuntimeLabel(input: {
   metadata?: Record<string, unknown> | null;
   agentId?: string | null;
@@ -407,16 +417,20 @@ export function agentRuntimeLabel(input: {
     metadata?: Record<string, unknown> | null;
     capabilities?: { clis?: string[] | null } | null;
   }>;
+  preferLocalRuntime?: boolean;
   preferAcp?: boolean;
 }): string {
+  const runtime = agentExecutionRuntimeFromMetadata(input.metadata);
+  if (runtime === 'claude' || runtime === 'codex' || runtime === 'amp') {
+    return executionRuntimeDisplayLabel(runtime);
+  }
   const harness = resolveAgentAcpHarness(input);
   if (harness) return acpHarnessLabel(harness);
-  if (input.preferAcp) {
-    // No harness yet — never fall through to a stale classic Claude pin.
-    return 'Desktop ACP';
+  if (input.preferLocalRuntime || input.preferAcp) {
+    return 'This Mac (local SDK)';
   }
   return executionRuntimeDisplayLabel(
-    agentExecutionRuntimeFromMetadata(input.metadata),
+    runtime,
     agentAcpHarnessFromMetadata(input.metadata),
   );
 }

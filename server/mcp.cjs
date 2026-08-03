@@ -2371,7 +2371,7 @@ function buildTools() {
  // presence alive, so DMs hang), it asks here for the Relay CLI connect command
  // and launches it as a background process. That host then holds the WebSocket
  // (agent shows online as Relay) and answers turns via the local coding CLI.
- // This is NOT desktop ACP and NOT Connector (MCP-as-the-agent).
+ // This is NOT desktop local runtime and NOT Connector (MCP-as-the-agent).
  add({
   name: 'get_connect_command',
   // Minting a full-permission Relay token is a workspace-admin action. Exclude
@@ -2380,7 +2380,7 @@ function buildTools() {
   // is enforced in run(): agent→self, user→manage role, workspace→control plane.
   kinds: ['agent', 'workspace', 'user', 'controller'],
   controllerScope: 'agents:manage_own',
-  description: 'Get the Relay connect command for an agent so a host can run `agensis connect` as an always-on runtime. Product modes: Direct = hosted on agensis; Relay = linked host (this CLI command, or desktop ACP); Connector = MCP client acting as the agent. Registering over MCP does NOT make the agent Relay-online — only a running Relay host (CLI or desktop ACP) does. Call this, then run the returned `command` as a long-running process where the agent should execute; it holds the connection and answers turns. Returns the full `agensis connect …` command, a freshly-minted aga_ token (shown once), and model / permission settings. NOTE: this ROTATES the agent\'s connect token (restart any existing host with the new one) and sets run_mode to daemon (Relay).',
+  description: 'Get the Relay connect command for an agent so a host can run `agensis connect` as an always-on runtime. Product modes: Direct = hosted on agensis; Relay = linked host (this CLI command, or desktop Start on this Mac via Claude Agent SDK / Codex app-server); Connector = MCP client acting as the agent. Registering over MCP does NOT make the agent Relay-online — only a running Relay host (CLI or desktop local runtime) does. Call this, then run the returned `command` as a long-running process where the agent should execute; it holds the connection and answers turns. Returns the full `agensis connect …` command, a freshly-minted aga_ token (shown once), and model / permission settings. NOTE: this ROTATES the agent\'s connect token (restart any existing host with the new one) and sets run_mode to daemon (Relay).',
   inputSchema: {
    type: 'object',
    properties: {
@@ -2447,7 +2447,7 @@ function buildTools() {
      ...payload,
      instructions: [
       `Run "command" on the machine where @${payload.handle} should execute, as a long-running background process — it must keep running to stay Relay-online.`,
-      'This is the Relay CLI path (not desktop ACP, not Connector/MCP-as-agent). While it runs, the host holds the connection and answers turns via the local coding CLI.',
+      'This is the Relay CLI path (not desktop local runtime, not Connector/MCP-as-agent). While it runs, the host holds the connection and answers turns via Claude Agent SDK / Codex app-server / local coding CLI.',
       'The agent is set to Relay (run_mode daemon). The token is shown once and replaces any previous one; if another host is already running for this agent, restart it with this command.',
      ],
     };

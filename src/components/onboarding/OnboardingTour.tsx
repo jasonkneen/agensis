@@ -87,7 +87,7 @@ const STEPS: StepMeta[] = [
     accent: 'from-violet-500/25 to-violet-500/5 text-violet-500 ring-violet-500/20',
     eyebrow: 'Step 2',
     title: 'Link a Relay host.',
-    body: 'Run work on this machine via desktop ACP or the agensis CLI (Claude Code, Codex, Hermes, Grok, …). Optional, but this is where local files and tools live.',
+    body: 'Run work on this machine via Start on this Mac (Claude Agent SDK / Codex app-server) or the agensis CLI. Optional, but this is where local files and tools live.',
   },
   {
     id: 'invite',
