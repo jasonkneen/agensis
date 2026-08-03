@@ -92,7 +92,10 @@ test('a login token reaches exactly the tools the agw_ workspace token reaches',
     + 'if that changed, re-read AGENTS.md "Login tokens at the MCP door" before proceeding.',
   );
   // Pinned literally, so "both shrank to zero" cannot pass this test.
-  assert.equal(byUser.length, 41);
+  // 42 since react_to_message: it is offered to both credentials on the same
+  // terms as post_message (an `as:` handle that is mcp_approved), so the sets
+  // stayed identical and only the count moved.
+  assert.equal(byUser.length, 42);
   assert.ok(byUser.includes('get_connect_command'), 'including the tool that mints an aga_ daemon token');
   assert.ok(byUser.includes('register_agent'));
   for (const standingRuleTool of [
