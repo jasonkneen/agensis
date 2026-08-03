@@ -112,8 +112,7 @@ import { QueuedPill } from '../chat/SeenPill';
 import { ReadReceipt } from '../chat/ReadReceipt';
 import { frequentReactions, noteReactionUse, reactionPills, reactionToggleOp, type ReactionUse } from '../../lib/reactionBar';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
-import { receiptTargetForViewport } from '../../lib/readReceipts';
-import { seenAnchorIds } from '../../lib/seenPill';
+import { isOwnReceiptMessage, receiptTargetForViewport } from '../../lib/readReceipts';
 import { queuedState, type QueuedState } from '../../lib/queuedPill';
 import { useSessionWork } from '../../hooks/useAgentWork';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
@@ -1053,14 +1052,16 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     return () => window.removeEventListener('pagehide', flush);
   }, [noteVisibleRead]);
 
-  // NOT receipts.anchorIds. That set is the old one-eye-per-run rule; the seen
-  // pill also marks every message of your CURRENT run, because typing three
-  // times while an agent is mid-stream and wanting to see each land is the
-  // exact case this feature exists for. See src/lib/seenPill.ts.
-  const receiptAnchors = useMemo(
-    () => seenAnchorIds(shownMessages, currentUserId || null),
-    [currentUserId, shownMessages],
-  );
+  // NO ANCHORING AT ALL any more. Both earlier rules — one eye per run, then
+  // "every message of the trailing run" — existed to keep the indicator sparse,
+  // and both threw away the fact you actually want to keep: WHAT WAS READ. A
+  // receipt is not a transient notification, it is standing evidence, and
+  // hiding it on older messages means scrolling back tells you nothing about
+  // whether the agent ever took them in.
+  //
+  // So every one of YOUR messages carries the eye whenever it is still true.
+  // Somebody else's message never does: "who read their post" is not a fact you
+  // can act on, and it would put an eye on most rows in a busy channel.
 
   // No `unseenAnchor` any more. "Sent, not seen yet" needed its own anchor only
   // while the signal was a pill, because a pill cannot render absence. The eye
@@ -2305,11 +2306,12 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           onToggleReaction={readOnly || msg.deleted_at ? undefined : (reaction, op) => void handleToggleReaction(msg, reaction, op)}
                           resolveUserName={resolveUserName}
                           reactionUses={reactionUses}
-                          // The receipt is drawn only on your OWN messages, and
-                          // only on the last of a run: it answers "did what I
-                          // just said land", so an eye on somebody else's
-                          // message is noise on every row.
-                          readerIds={receiptAnchors.has(msg.id) ? receipts.readersOfMessage(msg) : undefined}
+                          // Every one of your own messages, for as long as the
+                          // receipt is true — see the note by the removed
+                          // anchoring above.
+                          readerIds={isOwnReceiptMessage(msg, currentUserId || null)
+                            ? receipts.readersOfMessage(msg)
+                            : undefined}
                           isDirectMessage={isDirectMessage}
                           queued={queuedState(msg, sessionWork, currentUserId || null)}
                         />

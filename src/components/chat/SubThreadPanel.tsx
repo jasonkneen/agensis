@@ -9,8 +9,7 @@ import { ReadReceipt } from './ReadReceipt';
 import { useMessageReactions } from '../../hooks/useMessageReactions';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
-import { receiptTargetForViewport } from '../../lib/readReceipts';
-import { seenAnchorIds } from '../../lib/seenPill';
+import { isOwnReceiptMessage, receiptTargetForViewport } from '../../lib/readReceipts';
 import { queuedState, type QueuedState } from '../../lib/queuedPill';
 import { useSessionWork } from '../../hooks/useAgentWork';
 import type { ReactionUse } from '../../lib/reactionBar';
@@ -188,10 +187,10 @@ export function SubThreadPanel({
     noteVisibleRead(newestVisibleMessage);
   }, [noteVisibleRead, newestVisibleMessage]);
 
-  const seenAnchors = useMemo(
-    () => seenAnchorIds(messages, currentUserId || null),
-    [currentUserId, messages],
-  );
+  // No anchoring: every one of your own posts keeps its eye for as long as the
+  // receipt is true, matching the channel. A read receipt is standing evidence
+  // of what was taken in, not a transient notification.
+
   // "Queued": you posted while a turn was already running here, so this one is
   // next. Derived from the running job's start time — see src/lib/queuedPill.ts
   // for why a 'queued' job row is the wrong signal.
@@ -405,11 +404,11 @@ export function SubThreadPanel({
                             ? undefined
                             : (reaction, op) => reactionState.toggle(row.message, reaction, op)}
                           resolveReaderName={resolveReaderName}
-                          // Same rule as the channel: only YOUR messages carry a
-                          // seen pill. "Did what I just said land" is the
-                          // question; a pill on somebody else's post answers
-                          // nothing and puts one on every row.
-                          readerIds={seenAnchors.has(row.message.id)
+                          // Same rule as the channel: only YOUR messages carry
+                          // an eye, and every one of them does for as long as
+                          // the receipt is true. "Who read their post" is not a
+                          // fact you can act on and would mark every row.
+                          readerIds={isOwnReceiptMessage(row.message, currentUserId || null)
                             ? receipts.readersOfMessage(row.message)
                             : undefined}
                           queued={queuedState(row.message, panelWork, currentUserId || null)}
