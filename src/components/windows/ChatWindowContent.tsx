@@ -108,10 +108,13 @@ import {
 } from '../../lib/slashCommands';
 import { apiAuthHeaders, apiUrl, backendClient, getSlashCommands, type SystemCapabilities } from '../../lib/backendClient';
 import { ReactionBar, ReactionPicker } from '../chat/ReactionBar';
-import { ReadReceipt } from '../chat/ReadReceipt';
+import { QueuedPill, SeenPill, UnseenPill } from '../chat/SeenPill';
 import { frequentReactions, noteReactionUse, reactionPills, reactionToggleOp, type ReactionUse } from '../../lib/reactionBar';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
 import { receiptTargetForViewport } from '../../lib/readReceipts';
+import { seenAnchorIds, unseenAnchorId } from '../../lib/seenPill';
+import { queuedState } from '../../lib/queuedPill';
+import { useSessionWork } from '../../hooks/useAgentWork';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { canMutateOwnMessage } from '../../lib/messageOwnership';
@@ -1048,10 +1051,29 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     return () => window.removeEventListener('pagehide', flush);
   }, [noteVisibleRead]);
 
+  // NOT receipts.anchorIds. That set is the old one-eye-per-run rule; the seen
+  // pill also marks every message of your CURRENT run, because typing three
+  // times while an agent is mid-stream and wanting to see each land is the
+  // exact case this feature exists for. See src/lib/seenPill.ts.
   const receiptAnchors = useMemo(
-    () => receipts.anchorIds(shownMessages),
-    [receipts, shownMessages],
+    () => seenAnchorIds(shownMessages, currentUserId || null),
+    [currentUserId, shownMessages],
   );
+
+  // "Sent, not seen yet" — the state the hollow eye used to carry and a pill
+  // cannot express by being absent. Computed unconditionally and gated to DMs at
+  // the render site: `isDirectMessage` is resolved further down, and a hook that
+  // reads it from up here would be a temporal-dead-zone crash, not a warning.
+  const unseenAnchor = useMemo(
+    () => unseenAnchorId(shownMessages, currentUserId || null),
+    [currentUserId, shownMessages],
+  );
+
+  // "Queued" — you typed while a turn was already running, so this one is next.
+  // Derived from the running job's start time rather than a 'queued' job row,
+  // because a message typed mid-turn usually has no job row of its own yet.
+  // See src/lib/queuedPill.ts.
+  const sessionWork = useSessionWork(sessionId);
 
   // Tool approvals. A permission_request message is only an ANCHOR — its state
   // (still open? granted for how long? by whom?) lives on the request row, which
@@ -2283,7 +2305,10 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           // just said land", so an eye on somebody else's
                           // message is noise on every row.
                           readerIds={receiptAnchors.has(msg.id) ? receipts.readersOfMessage(msg) : undefined}
-                          isDirectMessage={isDirectMessage}
+                          // DMs only, and only the newest message of your run —
+                          // three "Sent" chips stacked say one thing three times.
+                          showUnseen={isDirectMessage && unseenAnchor === msg.id}
+                          queued={queuedState(msg, sessionWork, currentUserId || null)}
                         />
                       </MessageScrollerItem>
                       );
@@ -3091,6 +3116,11 @@ function ThreadReplySummaryButton({
   );
 }
 
+// A stable identity, so a read-only row's ReactionBar does not get a fresh
+// callback on every render. It is never reachable: `reactions` is nulled on the
+// same branch, so there are no pills to click.
+const NOOP_TOGGLE = () => {};
+
 function ChatMessageBubble({
   msg,
   avatar,
@@ -3119,7 +3149,8 @@ function ChatMessageBubble({
   resolveUserName,
   reactionUses,
   readerIds,
-  isDirectMessage,
+  showUnseen = false,
+  queued,
 }: {
   msg: ChatMessage;
   avatar?: string;
@@ -3154,7 +3185,9 @@ function ChatMessageBubble({
    * it yet" and DOES draw one in a DM.
    */
   readerIds?: string[];
-  isDirectMessage?: boolean;
+  /** DM only: "sent, not seen yet" on the newest message of your run. */
+  showUnseen?: boolean;
+  queued?: QueuedState;
 }) {
   const isUser = msg.role === 'user';
   const rawContent = safeMessageText(msg.content);
@@ -3192,6 +3225,22 @@ function ChatMessageBubble({
   // Quick picks in the hover rail: the three most-used reactions, so the common
   // case is one click instead of open-picker-then-click.
   const quickReactions = useMemo(() => frequentReactions(reactionUses ?? [], 3), [reactionUses]);
+  // Built here rather than inline so the row can ask "is there anything derived
+  // to show?" before deciding to render a bar at all — an empty bar carries
+  // `mt-1` and would add 4px under every message nobody has read.
+  // The three derived chips, in the order they read: what happened to it
+  // (queued), then whether it landed (seen / sent). Seen and Sent are mutually
+  // exclusive by construction — once anybody has read it the seen pill takes
+  // over — so the row can never contradict itself.
+  const hasReaders = readerIds !== undefined && readerIds.length > 0;
+  const derivedChips = (queued?.queued || hasReaders || showUnseen) ? (
+    <>
+      {queued?.queued ? <QueuedPill state={queued} /> : null}
+      {hasReaders
+        ? <SeenPill readerIds={readerIds as string[]} resolveName={resolveUserName || (() => null)} />
+        : showUnseen ? <UnseenPill /> : null}
+    </>
+  ) : null;
 
   return (
     <div
@@ -3337,30 +3386,23 @@ function ChatMessageBubble({
             Everything about ordering, own-reaction state and the tooltip lives
             in src/lib/reactionBar.ts, because logic in this file cannot be
             tested under this repo's runners. */}
-        {onToggleReaction && (
+        {/* "Seen" now rides IN the reaction row as a 👀 chip rather than an eye
+            in the meta row — see src/lib/seenPill.ts for why it is derived from
+            the read markers instead of being a stored reaction, and why it is
+            still never a per-reader timestamp.
+
+            A read-only or deleted message keeps its seen pill but loses its
+            reactions: `reactions` is nulled rather than the whole bar dropped,
+            so pills never render as clickable no-ops. */}
+        {(onToggleReaction || derivedChips) && (
           <ReactionBar
-            reactions={reactions}
+            reactions={onToggleReaction ? reactions : null}
             currentUserId={uid}
             resolveName={resolveUserName || (() => null)}
-            onToggle={onToggleReaction}
+            onToggle={onToggleReaction ?? NOOP_TOGGLE}
             reactionUses={reactionUses}
+            leadingSlot={derivedChips}
           />
-        )}
-        {/* "Seen". An SVG, never 👀 — nobody chose it, so it is chrome, and 👀
-            is already in the reaction picker (the same glyph would mean two
-            different things in one row). Never a per-reader timestamp. */}
-        {/* The emptiness check is HERE and not only inside ReadReceipt: the
-            wrapper carries `mt-1`, so rendering it around a component that
-            returns null would add 4px under every one of your messages in a
-            channel nobody has read yet. */}
-        {readerIds !== undefined && (isDirectMessage || readerIds.length > 0) && (
-          <div className="mt-1 flex items-center justify-end">
-            <ReadReceipt
-              readerIds={readerIds}
-              resolveName={resolveUserName || (() => null)}
-              isDirect={isDirectMessage}
-            />
-          </div>
         )}
       </div>
       {/* Full-height rail bounded to this message row; the toolbar inside is sticky so it

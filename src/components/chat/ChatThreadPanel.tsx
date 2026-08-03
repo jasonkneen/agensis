@@ -1,8 +1,18 @@
-import { useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Bot, Check, CornerDownRight, Pencil, Send, Trash2, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { ThreadWorkBadge } from './AgentWorkBadge';
 import { MarkdownContent } from './MarkdownContent';
+import { ReactionBar } from './ReactionBar';
+import { QueuedPill, SeenPill } from './SeenPill';
+import { useMessageReactions } from '../../hooks/useMessageReactions';
+import { useReadReceipts } from '../../hooks/useReadReceipts';
+import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
+import { receiptTargetForViewport } from '../../lib/readReceipts';
+import { seenAnchorIds } from '../../lib/seenPill';
+import { queuedState, type QueuedState } from '../../lib/queuedPill';
+import { useThreadWork } from '../../hooks/useAgentWork';
+import type { ReactionUse } from '../../lib/reactionBar';
 import { ToolStepGroup } from './ToolStepGroup';
 import { buildTranscriptRows } from './toolSteps';
 import { usePermissionRequests } from '../../hooks/usePermissionRequests';
@@ -92,7 +102,13 @@ export function ChatThreadPanel({
   // precisely so the working conversation stays out of the channel — and reset
   // after each send so it can never silently broadcast the next reply too.
   const [broadcastToChannel, setBroadcastToChannel] = useState(false);
-  const replies = threadMessages.filter(reply => reply.id !== parentMessage.id);
+  // Memoized because the receipt hook takes it as `orderedMessages`: a fresh
+  // array every render would re-run the equal-time ordering work on every
+  // keystroke in the composer.
+  const replies = useMemo(
+    () => threadMessages.filter(reply => reply.id !== parentMessage.id),
+    [threadMessages, parentMessage.id],
+  );
   // Decided tool approvals fold into the chip for the call they gated, same as the
   // main window, so a thread doesn't accumulate settled permission rows either.
   const { byId: permissionRequestsById } = usePermissionRequests(workspaceId ?? null);
@@ -105,6 +121,56 @@ export function ChatThreadPanel({
   );
 
   useComposerAutosize(inputRef, m.input);
+
+  // Reactions and seen pills on thread replies.
+  //
+  // Unlike a sub-thread (its own chat_session), a reply thread lives INSIDE the
+  // owning session under `thread_parent_id`. The receipt hook is therefore given
+  // that scope explicitly: markers are already stored per (reader, session,
+  // thread_parent_id), so a reply thread keeps its own high-water mark and
+  // reading the channel does not silently mark the thread read, or vice versa.
+  const threadSessionId = parentMessage.session_id ? String(parentMessage.session_id) : null;
+  const reactionState = useMessageReactions(readOnly ? null : currentUserId);
+  const { members: workspaceMembers } = useWorkspaceUsers(workspaceId ?? null);
+  // A reader id is a human user id OR an agent id, so resolve against members
+  // first and then the agent roster.
+  const resolveReaderName = useCallback((readerId: string) => {
+    const member = workspaceMembers.find(row => String(row.user_id) === String(readerId));
+    if (member) return member.email ? member.email.split('@')[0] : null;
+    const agent = (agents ?? []).find(row => String(row.id) === String(readerId));
+    if (agent) return agent.name || null;
+    return null;
+  }, [workspaceMembers, agents]);
+
+  const receipts = useReadReceipts({
+    sessionId: threadSessionId,
+    currentUserId: currentUserId || null,
+    active: !readOnly,
+    threadParentId: parentMessage.id ? String(parentMessage.id) : null,
+    orderedMessages: replies,
+  });
+  const noteVisibleRead = receipts.noteVisible;
+  // `nearBottom` is load-bearing: `replies` is the loaded data set, not the
+  // viewport, so a realtime append while somebody has scrolled up exists in the
+  // array but was never on screen.
+  const newestVisibleReply = useMemo(
+    () => receiptTargetForViewport(replies, currentUserId || null, {
+      surfaceActive: !readOnly,
+      nearBottom: autoScroll,
+    }),
+    [autoScroll, currentUserId, readOnly, replies],
+  );
+  useEffect(() => {
+    noteVisibleRead(newestVisibleReply);
+  }, [noteVisibleRead, newestVisibleReply]);
+
+  const seenAnchors = useMemo(
+    () => seenAnchorIds(replies, currentUserId || null),
+    [currentUserId, replies],
+  );
+  // "Queued", scoped to THIS thread's running job (metadata.threadParentId), so
+  // a turn running in the channel does not mark thread replies as queued.
+  const panelWork = useThreadWork(parentMessage.id || null);
 
   const handleSend = async () => {
     if (readOnly || streaming || !onSendReply) return;
@@ -202,6 +268,16 @@ export function ChatThreadPanel({
                           onAgentProfile={onAgentProfile}
                           currentUserId={readOnly ? null : currentUserId}
                           isStreaming={streaming && isLastRow && row.message.role === 'assistant'}
+                          reactions={reactionState.reactionsFor(row.message)}
+                          reactionUses={reactionState.reactionUses}
+                          onToggleReaction={readOnly || row.message.deleted_at
+                            ? undefined
+                            : (reaction, op) => reactionState.toggle(row.message, reaction, op)}
+                          resolveReaderName={resolveReaderName}
+                          readerIds={seenAnchors.has(row.message.id)
+                            ? receipts.readersOfMessage(row.message)
+                            : undefined}
+                          queued={queuedState(row.message, panelWork, currentUserId || null)}
                         />
                       </MessageScrollerItem>
                     );
@@ -268,6 +344,11 @@ export function ChatThreadPanel({
   );
 }
 
+// A stable identity, so a read-only reply's ReactionBar does not get a fresh
+// callback on every render. It is never reachable: `reactions` is nulled on the
+// same branch, so there are no pills to click.
+const NOOP_TOGGLE = () => {};
+
 export function ThreadBubble({
   msg,
   accent,
@@ -275,6 +356,12 @@ export function ThreadBubble({
   isStreaming,
   isParent,
   currentUserId,
+  reactions,
+  reactionUses = [],
+  onToggleReaction,
+  resolveReaderName,
+  readerIds,
+  queued,
 }: {
   msg: ChatMessage;
   accent?: string;
@@ -282,6 +369,13 @@ export function ThreadBubble({
   isStreaming?: boolean;
   isParent?: boolean;
   currentUserId?: string | null;
+  reactions?: Record<string, string[]>;
+  reactionUses?: readonly ReactionUse[];
+  onToggleReaction?: (reaction: string, op: 'add' | 'remove') => void;
+  resolveReaderName?: (readerId: string) => string | null;
+  /** Undefined on a reply that carries no seen pill; empty when nobody has read it. */
+  readerIds?: string[];
+  queued?: QueuedState;
 }) {
   const isUser = msg.role === 'user';
   const rawContent = safeMessageText(msg.content);
@@ -308,6 +402,20 @@ export function ThreadBubble({
   const accentStyle = isAgentMessage
     ? ({ '--agent-accent': validAgentAccentColor(accent) } as CSSProperties & { '--agent-accent': string })
     : undefined;
+  // Built here so the row can ask "is there anything to show?" before rendering
+  // a bar at all — an empty bar carries `mt-1` and would add 4px under every
+  // reply nobody has read.
+  // Queued first, then seen: "what happened to it" then "did it land". Only
+  // ever rendered together on a mid-turn message that has since been read.
+  const hasReaders = readerIds !== undefined && readerIds.length > 0;
+  const seenPill = (queued?.queued || hasReaders) ? (
+    <>
+      {queued?.queued ? <QueuedPill state={queued} /> : null}
+      {hasReaders
+        ? <SeenPill readerIds={readerIds as string[]} resolveName={resolveReaderName || (() => null)} />
+        : null}
+    </>
+  ) : null;
 
   return (
     <div
@@ -405,6 +513,24 @@ export function ThreadBubble({
           ) : null}
           {artifact && <ChatArtifact artifact={artifact} />}
         </div>
+        {/* Reactions and the seen pill share one row, as in the channel — see
+            src/lib/seenPill.ts for why the pill is derived from the read markers
+            rather than stored as a reaction.
+
+            NOT on the parent. The parent is rendered here as a clipped HEADER
+            for context, not as a post: it already carries its own pills in the
+            channel, and a second, independently-toggleable copy of the same
+            message's reactions in two places is a bug waiting to be filed. */}
+        {!isParent && !ownMutation.editing && (onToggleReaction || seenPill) && (
+          <ReactionBar
+            reactions={onToggleReaction ? reactions : null}
+            currentUserId={currentUserId || null}
+            resolveName={resolveReaderName || (() => null)}
+            onToggle={onToggleReaction ?? NOOP_TOGGLE}
+            reactionUses={reactionUses}
+            leadingSlot={seenPill}
+          />
+        )}
       </div>
     </div>
   );
