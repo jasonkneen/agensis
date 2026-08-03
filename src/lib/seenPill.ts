@@ -78,6 +78,41 @@ export function seenPillLabel(
  *
  * Returns a Set of message ids so a row can ask in O(1) while rendering.
  */
+/**
+ * The single message that may carry an "unread" chip, or null.
+ *
+ * WHY THIS EXISTS AT ALL. Moving the receipt into the reaction row lost one
+ * state the old eye had: in a DM it drew a HOLLOW eye for "sent, not read yet".
+ * A pill cannot show absence — it renders nothing until somebody reads — so
+ * "did that land" went unanswered in the one place where it is the whole
+ * question. This puts it back, deliberately narrowly:
+ *
+ *   * DMs only. An unread chip on every message in a 30-person channel is
+ *     furniture; "nobody has read this yet" there is the normal state of the
+ *     world for the first few seconds of every message ever sent.
+ *   * The LAST message of your trailing run only — never the whole run, unlike
+ *     the seen pill. Three "Not seen yet" chips stacked say one thing three
+ *     times, and the run's last message is the one whose answer you are waiting
+ *     for.
+ *   * Nothing once anybody has read it: the seen pill takes over, and showing
+ *     both would be a contradiction on one row.
+ */
+export function unseenAnchorId(
+  messages: readonly ReceiptMessage[],
+  currentUserId: string | null,
+): string | null {
+  if (!currentUserId) return null;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message?.id) continue;
+    // Scan back from the end and stop at the first message either way: if the
+    // transcript does not END with one of yours, the other party has replied,
+    // which answers "did it land" far better than a chip could.
+    return isOwnReceiptMessage(message, currentUserId) ? String(message.id) : null;
+  }
+  return null;
+}
+
 export function seenAnchorIds(
   messages: readonly ReceiptMessage[],
   currentUserId: string | null,

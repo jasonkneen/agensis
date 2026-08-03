@@ -3,12 +3,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSPrope
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { MarkdownContent } from './MarkdownContent';
 import { ReactionBar } from './ReactionBar';
-import { SeenPill } from './SeenPill';
+import { QueuedPill, SeenPill } from './SeenPill';
 import { useMessageReactions } from '../../hooks/useMessageReactions';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
 import { receiptTargetForViewport } from '../../lib/readReceipts';
 import { seenAnchorIds } from '../../lib/seenPill';
+import { queuedState, type QueuedState } from '../../lib/queuedPill';
+import { useSessionWork } from '../../hooks/useAgentWork';
 import type { ReactionUse } from '../../lib/reactionBar';
 import { ToolStepGroup } from './ToolStepGroup';
 import { buildTranscriptRows } from './toolSteps';
@@ -188,6 +190,10 @@ export function SubThreadPanel({
     () => seenAnchorIds(messages, currentUserId || null),
     [currentUserId, messages],
   );
+  // "Queued": you posted while a turn was already running here, so this one is
+  // next. Derived from the running job's start time — see src/lib/queuedPill.ts
+  // for why a 'queued' job row is the wrong signal.
+  const panelWork = useSessionWork(session.id || null);
   // Same rule as the channel's status line: a placeholder stranded by a job that
   // died is not evidence that anyone is working.
   const activityAgents = useMemo(() => {
@@ -397,6 +403,7 @@ export function SubThreadPanel({
                           readerIds={seenAnchors.has(row.message.id)
                             ? receipts.readersOfMessage(row.message)
                             : undefined}
+                          queued={queuedState(row.message, panelWork, currentUserId || null)}
                         />
                       </MessageScrollerItem>
                     );
@@ -581,6 +588,7 @@ export function SubThreadBubble({
   onToggleReaction,
   resolveReaderName,
   readerIds,
+  queued,
 }: {
   msg: ChatMessage;
   accent?: string;
@@ -593,6 +601,7 @@ export function SubThreadBubble({
   resolveReaderName?: (readerId: string) => string | null;
   /** Undefined on a post that carries no seen pill; empty when nobody has read it. */
   readerIds?: string[];
+  queued?: QueuedState;
 }) {
   const isUser = msg.role === 'user';
   const ownMutation = useOwnMessageMutation(msg, currentUserId, safeText(msg.content));
@@ -616,9 +625,17 @@ export function SubThreadBubble({
   // Built here so the row can ask "is there anything to show?" before rendering
   // a bar at all — an empty bar carries `mt-1` and would add 4px under every
   // post nobody has read.
-  const seenPill = readerIds !== undefined && readerIds.length > 0
-    ? <SeenPill readerIds={readerIds} resolveName={resolveReaderName || (() => null)} />
-    : null;
+  // Queued first, then seen: "what happened to it" then "did it land". Only
+  // ever rendered together on a mid-turn message that has since been read.
+  const hasReaders = readerIds !== undefined && readerIds.length > 0;
+  const seenPill = (queued?.queued || hasReaders) ? (
+    <>
+      {queued?.queued ? <QueuedPill state={queued} /> : null}
+      {hasReaders
+        ? <SeenPill readerIds={readerIds as string[]} resolveName={resolveReaderName || (() => null)} />
+        : null}
+    </>
+  ) : null;
 
   return (
     <div

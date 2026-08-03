@@ -4,12 +4,14 @@ import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { ThreadWorkBadge } from './AgentWorkBadge';
 import { MarkdownContent } from './MarkdownContent';
 import { ReactionBar } from './ReactionBar';
-import { SeenPill } from './SeenPill';
+import { QueuedPill, SeenPill } from './SeenPill';
 import { useMessageReactions } from '../../hooks/useMessageReactions';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
 import { receiptTargetForViewport } from '../../lib/readReceipts';
 import { seenAnchorIds } from '../../lib/seenPill';
+import { queuedState, type QueuedState } from '../../lib/queuedPill';
+import { useThreadWork } from '../../hooks/useAgentWork';
 import type { ReactionUse } from '../../lib/reactionBar';
 import { ToolStepGroup } from './ToolStepGroup';
 import { buildTranscriptRows } from './toolSteps';
@@ -166,6 +168,9 @@ export function ChatThreadPanel({
     () => seenAnchorIds(replies, currentUserId || null),
     [currentUserId, replies],
   );
+  // "Queued", scoped to THIS thread's running job (metadata.threadParentId), so
+  // a turn running in the channel does not mark thread replies as queued.
+  const panelWork = useThreadWork(parentMessage.id || null);
 
   const handleSend = async () => {
     if (readOnly || streaming || !onSendReply) return;
@@ -272,6 +277,7 @@ export function ChatThreadPanel({
                           readerIds={seenAnchors.has(row.message.id)
                             ? receipts.readersOfMessage(row.message)
                             : undefined}
+                          queued={queuedState(row.message, panelWork, currentUserId || null)}
                         />
                       </MessageScrollerItem>
                     );
@@ -355,6 +361,7 @@ export function ThreadBubble({
   onToggleReaction,
   resolveReaderName,
   readerIds,
+  queued,
 }: {
   msg: ChatMessage;
   accent?: string;
@@ -368,6 +375,7 @@ export function ThreadBubble({
   resolveReaderName?: (readerId: string) => string | null;
   /** Undefined on a reply that carries no seen pill; empty when nobody has read it. */
   readerIds?: string[];
+  queued?: QueuedState;
 }) {
   const isUser = msg.role === 'user';
   const rawContent = safeMessageText(msg.content);
@@ -397,9 +405,17 @@ export function ThreadBubble({
   // Built here so the row can ask "is there anything to show?" before rendering
   // a bar at all — an empty bar carries `mt-1` and would add 4px under every
   // reply nobody has read.
-  const seenPill = readerIds !== undefined && readerIds.length > 0
-    ? <SeenPill readerIds={readerIds} resolveName={resolveReaderName || (() => null)} />
-    : null;
+  // Queued first, then seen: "what happened to it" then "did it land". Only
+  // ever rendered together on a mid-turn message that has since been read.
+  const hasReaders = readerIds !== undefined && readerIds.length > 0;
+  const seenPill = (queued?.queued || hasReaders) ? (
+    <>
+      {queued?.queued ? <QueuedPill state={queued} /> : null}
+      {hasReaders
+        ? <SeenPill readerIds={readerIds as string[]} resolveName={resolveReaderName || (() => null)} />
+        : null}
+    </>
+  ) : null;
 
   return (
     <div

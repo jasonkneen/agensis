@@ -108,11 +108,13 @@ import {
 } from '../../lib/slashCommands';
 import { apiAuthHeaders, apiUrl, backendClient, getSlashCommands, type SystemCapabilities } from '../../lib/backendClient';
 import { ReactionBar, ReactionPicker } from '../chat/ReactionBar';
-import { SeenPill } from '../chat/SeenPill';
+import { QueuedPill, SeenPill, UnseenPill } from '../chat/SeenPill';
 import { frequentReactions, noteReactionUse, reactionPills, reactionToggleOp, type ReactionUse } from '../../lib/reactionBar';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
 import { receiptTargetForViewport } from '../../lib/readReceipts';
-import { seenAnchorIds } from '../../lib/seenPill';
+import { seenAnchorIds, unseenAnchorId } from '../../lib/seenPill';
+import { queuedState } from '../../lib/queuedPill';
+import { useSessionWork } from '../../hooks/useAgentWork';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { canMutateOwnMessage } from '../../lib/messageOwnership';
@@ -1057,6 +1059,21 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     () => seenAnchorIds(shownMessages, currentUserId || null),
     [currentUserId, shownMessages],
   );
+
+  // "Sent, not seen yet" — the state the hollow eye used to carry and a pill
+  // cannot express by being absent. Computed unconditionally and gated to DMs at
+  // the render site: `isDirectMessage` is resolved further down, and a hook that
+  // reads it from up here would be a temporal-dead-zone crash, not a warning.
+  const unseenAnchor = useMemo(
+    () => unseenAnchorId(shownMessages, currentUserId || null),
+    [currentUserId, shownMessages],
+  );
+
+  // "Queued" — you typed while a turn was already running, so this one is next.
+  // Derived from the running job's start time rather than a 'queued' job row,
+  // because a message typed mid-turn usually has no job row of its own yet.
+  // See src/lib/queuedPill.ts.
+  const sessionWork = useSessionWork(sessionId);
 
   // Tool approvals. A permission_request message is only an ANCHOR — its state
   // (still open? granted for how long? by whom?) lives on the request row, which
@@ -2288,6 +2305,10 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           // just said land", so an eye on somebody else's
                           // message is noise on every row.
                           readerIds={receiptAnchors.has(msg.id) ? receipts.readersOfMessage(msg) : undefined}
+                          // DMs only, and only the newest message of your run —
+                          // three "Sent" chips stacked say one thing three times.
+                          showUnseen={isDirectMessage && unseenAnchor === msg.id}
+                          queued={queuedState(msg, sessionWork, currentUserId || null)}
                         />
                       </MessageScrollerItem>
                       );
@@ -3128,6 +3149,8 @@ function ChatMessageBubble({
   resolveUserName,
   reactionUses,
   readerIds,
+  showUnseen = false,
+  queued,
 }: {
   msg: ChatMessage;
   avatar?: string;
@@ -3162,6 +3185,9 @@ function ChatMessageBubble({
    * it yet" and DOES draw one in a DM.
    */
   readerIds?: string[];
+  /** DM only: "sent, not seen yet" on the newest message of your run. */
+  showUnseen?: boolean;
+  queued?: QueuedState;
 }) {
   const isUser = msg.role === 'user';
   const rawContent = safeMessageText(msg.content);
@@ -3202,9 +3228,19 @@ function ChatMessageBubble({
   // Built here rather than inline so the row can ask "is there anything derived
   // to show?" before deciding to render a bar at all — an empty bar carries
   // `mt-1` and would add 4px under every message nobody has read.
-  const seenPill = readerIds !== undefined && readerIds.length > 0
-    ? <SeenPill readerIds={readerIds} resolveName={resolveUserName || (() => null)} />
-    : null;
+  // The three derived chips, in the order they read: what happened to it
+  // (queued), then whether it landed (seen / sent). Seen and Sent are mutually
+  // exclusive by construction — once anybody has read it the seen pill takes
+  // over — so the row can never contradict itself.
+  const hasReaders = readerIds !== undefined && readerIds.length > 0;
+  const derivedChips = (queued?.queued || hasReaders || showUnseen) ? (
+    <>
+      {queued?.queued ? <QueuedPill state={queued} /> : null}
+      {hasReaders
+        ? <SeenPill readerIds={readerIds as string[]} resolveName={resolveUserName || (() => null)} />
+        : showUnseen ? <UnseenPill /> : null}
+    </>
+  ) : null;
 
   return (
     <div
@@ -3358,14 +3394,14 @@ function ChatMessageBubble({
             A read-only or deleted message keeps its seen pill but loses its
             reactions: `reactions` is nulled rather than the whole bar dropped,
             so pills never render as clickable no-ops. */}
-        {(onToggleReaction || seenPill) && (
+        {(onToggleReaction || derivedChips) && (
           <ReactionBar
             reactions={onToggleReaction ? reactions : null}
             currentUserId={uid}
             resolveName={resolveUserName || (() => null)}
             onToggle={onToggleReaction ?? NOOP_TOGGLE}
             reactionUses={reactionUses}
-            leadingSlot={seenPill}
+            leadingSlot={derivedChips}
           />
         )}
       </div>
