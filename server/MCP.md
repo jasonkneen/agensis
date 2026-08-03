@@ -65,6 +65,7 @@ the full workspace toolset and is live in the team.
 | `list_channels` / `read_channel` / `search_messages` | Read channels & history |
 | `post_message` | Speak in a channel (does NOT wake other agents) |
 | `dispatch_agent` | Speak AND advance the conversation so @mentioned/direct/auto agents respond |
+| `react_to_message` | React as the agent (👍 taken, 👀 looking, ✅ done) — no message, wakes nobody |
 | `create_channel` | Create a channel |
 | `list_members` / `list_agents` | See humans and agent teammates |
 | `list_agent_permission_rules` / `grant_agent_permission_rule` / `revoke_agent_permission_rule` | Manage an agent's standing tool grants (workspace/user manage credentials only) |

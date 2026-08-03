@@ -19,6 +19,15 @@ const KINDS_TO_RECORD = Object.freeze(new Set(['user']));
 const { normalizeTaskTitle, resolveTaskParentByTitle } = require('../shared/taskTitle.cjs');
 const { normalizeConversationMode } = require('../shared/channelMentions.cjs');
 const { ADVANCE_AGENT_READ_MARKER_SQL } = require('../shared/read-receipts.cjs');
+const {
+ AGENT_REACTION_CURRENT_SQL,
+ agentReactionToggleSql,
+ explainReactionNoop,
+ normalizeReactionOp,
+ normalizeReactionValue,
+ priorReactionMap,
+} = require('../shared/reaction-toggle.cjs');
+const { emitReactionFlowEventsForUpdate } = require('../shared/reaction-events.cjs');
 
 // Advance to one exact message returned to the agent, and broadcast it so a
 // human watching sees the eye fill. Resolving "latest" inside the write would
@@ -1227,6 +1236,123 @@ function buildTools() {
     threadParentId,
    }).catch((err) => console.error('[mcp] continueConversation failed', err));
    return { dispatched: true, message };
+  },
+ });
+
+ // React AS the agent. The counterpart of post_message for the cases where a
+ // whole message is more than the moment deserves: "on it", "looking", "done".
+ //
+ // Why this is a tool and not something the server does for the agent: an
+ // automatic reaction on job-claim would be a system fact wearing a reaction's
+ // clothes — indistinguishable in the UI from a chosen one, and unfalsifiable.
+ // The eye (read receipts) already reports "this was delivered" and it is a
+ // separate lane on purpose. A reaction means the agent decided something.
+ //
+ // `integration` is absent from `kinds`: a flow connection is not an agent, has
+ // no workspace_agents row, and therefore has no id the reactions map could
+ // honestly carry.
+ add({
+  name: 'react_to_message',
+  kinds: ['agent', 'workspace', 'user', 'invite'],
+  description: 'Add or remove an emoji reaction on a message, as an agent. Use it to acknowledge cheaply instead of posting: 👍 taken/agreed, 👀 looking now, ✅ done, 🤔 unclear. Cheaper than a message and it does not advance the conversation or wake anyone. A workspace or user client MUST pass `as: "<handle>"`.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    message_id: { type: 'string', description: 'The message id to react to (from read_channel / search_messages).' },
+    reaction: { type: 'string', description: 'The emoji to add or remove, e.g. "👍".' },
+    op: { type: 'string', enum: ['add', 'remove'], description: "'add' (default) or 'remove' to take your own reaction back." },
+    as: { type: 'string', description: 'Agent handle to react as (e.g. "forge"). Required for a workspace or user client; ignored for a per-agent token.' },
+   },
+   required: ['message_id', 'reaction'],
+   additionalProperties: false,
+  },
+  async run(args, { db, identity, deps }) {
+   const messageId = requireString(args, 'message_id');
+   // Normalized, never trusted — the SAME normalizer the HTTP route uses, so the
+   // key an agent writes and the key a human writes cannot differ by an
+   // invisible control character and split one reaction into two chips.
+   const reaction = normalizeReactionValue(args?.reaction);
+   if (!reaction) throw new ToolError('A reaction is required (an emoji, e.g. "👍")');
+   const op = normalizeReactionOp(args?.op ?? 'add');
+   if (!op) throw new ToolError("op must be 'add' or 'remove'");
+
+   // Resolves to identity.agentId for a per-agent token, and enforces
+   // mcp_approved (plus controller ownership) for a client acting via `as:`.
+   const acting = await resolveActingAgent(identity, deps, args?.as);
+   const agentId = String(acting.id);
+
+   // Resolve the message's session BEFORE the write and pin the write to it:
+   // authorizing one row and mutating another is the classic shape of this bug.
+   const found = (await db.unsafe(
+    `select m.id, m.session_id, s.workspace_id
+       from messages m
+       join chat_sessions s on s.id = m.session_id
+      where m.id = $1::uuid and m.deleted_at is null and s.workspace_id = $2
+      limit 1`,
+    [messageId, identity.workspaceId],
+   ))[0];
+   // Deliberately the same message whether the id is unknown or belongs to
+   // another tenant — the difference is exactly what a prober is asking for.
+   if (!found) throw new ToolError('Message not found in this workspace');
+   // The CALLER's channel gate (private / DM). The statement below independently
+   // re-checks the ACTING AGENT's, which is the one that matters when a
+   // workspace token drives an agent through `as:`.
+   await assertChannelInWorkspace(db, String(found.session_id), identity);
+
+   // Per (agent, message): a burst on one message is the abusive shape, and
+   // limiting the agent globally would punish one working a busy channel. Only
+   // applied when the host injected the limiter; the general MCP request limiter
+   // has already run either way.
+   const limiter = deps.reactionRateLimiter;
+   if (limiter && typeof limiter.check === 'function') {
+    const verdict = limiter.check(`${agentId}:${messageId}`);
+    if (verdict && verdict.blocked) throw new ToolError('Too many reactions on that message — slow down.');
+   }
+
+   const updated = await db.unsafe(
+    agentReactionToggleSql(op),
+    [messageId, String(found.session_id), reaction, agentId],
+   );
+
+   // Zero rows means the world already agrees (a repeat call, a retry), the cap
+   // is full, or this agent may not touch that session. Only THEN do we pay a
+   // read — to choose the answer, never to decide whether to write.
+   if (updated.length === 0) {
+    const current = (await db.unsafe(
+     AGENT_REACTION_CURRENT_SQL,
+     [messageId, String(found.session_id), agentId],
+    ))[0];
+    const problem = explainReactionNoop(current, { op, reaction, userId: agentId });
+    if (problem) throw new ToolError(problem.message);
+    return { messageId, reactions: current?.reactions ?? {}, changed: false };
+   }
+
+   const after = updated[0];
+   deps.notifyDbSubscribers('messages', 'UPDATE', updated);
+
+   // Same flow-webhook contract as the human lane: the before-image is DERIVED
+   // (priorReactionMap), never re-read, because a SELECT for it would reintroduce
+   // the race the single statement exists to remove.
+   //
+   // `actorUserId` is null on purpose. It names the authenticated ACCOUNT behind
+   // the write, and there is no app_users row here; the agent id is already
+   // carried as the reaction's `userId`. Passing the agent id as the actor would
+   // assert an account that does not exist.
+   void emitReactionFlowEventsForUpdate({
+    db: (sql, params) => db.unsafe(sql, params),
+    // porsager: bind the OBJECT. A JSON.stringify here becomes a jsonb string
+    // scalar (tests/jsonb-bind-hygiene.test.cjs).
+    encodeJsonb: (payload) => payload,
+    priorRows: [{ ...after, reactions: priorReactionMap(after.reactions, { op, reaction, userId: agentId }) }],
+    updatedRows: updated,
+    nextReactions: after.reactions,
+    actorUserId: null,
+    onWarn: (message) => console.warn('[flows] agent reaction events:', message),
+   }).catch((error) => {
+    console.error('[flows] failed to queue agent reaction event:', error.message || error);
+   });
+
+   return { messageId, reactions: after.reactions ?? {}, changed: true, reacted_as: { id: agentId, name: acting.name } };
   },
  });
 
