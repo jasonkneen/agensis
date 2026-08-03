@@ -10,8 +10,7 @@ import { ReadReceipt } from './ReadReceipt';
 import { useMessageReactions } from '../../hooks/useMessageReactions';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
-import { receiptTargetForViewport } from '../../lib/readReceipts';
-import { seenAnchorIds } from '../../lib/seenPill';
+import { isOwnReceiptMessage, receiptTargetForViewport } from '../../lib/readReceipts';
 import { queuedState, type QueuedState } from '../../lib/queuedPill';
 import { useThreadWork } from '../../hooks/useAgentWork';
 import type { ReactionUse } from '../../lib/reactionBar';
@@ -172,10 +171,10 @@ export function ChatThreadPanel({
     noteVisibleRead(newestVisibleReply);
   }, [noteVisibleRead, newestVisibleReply]);
 
-  const seenAnchors = useMemo(
-    () => seenAnchorIds(replies, currentUserId || null),
-    [currentUserId, replies],
-  );
+  // No anchoring: every one of your own replies keeps its eye for as long as
+  // the receipt is true, matching the channel. A read receipt is standing
+  // evidence of what was taken in, not a transient notification.
+
   // "Queued", scoped to THIS thread's running job (metadata.threadParentId), so
   // a turn running in the channel does not mark thread replies as queued.
   const panelWork = useThreadWork(parentMessage.id || null);
@@ -290,7 +289,7 @@ export function ChatThreadPanel({
                             ? undefined
                             : (reaction, op) => reactionState.toggle(row.message, reaction, op)}
                           resolveReaderName={resolveReaderName}
-                          readerIds={seenAnchors.has(row.message.id)
+                          readerIds={isOwnReceiptMessage(row.message, currentUserId || null)
                             ? receipts.readersOfMessage(row.message)
                             : undefined}
                           queued={queuedState(row.message, panelWork, currentUserId || null)}
