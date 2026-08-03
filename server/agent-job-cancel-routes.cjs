@@ -72,6 +72,7 @@ function mountAgentJobCancelRoutes(app, deps = {}) {
     enforceWorkspaceRole, enforceSessionRead,
     cancelBuiltinJob, sendToConnection, scheduleTaskQueueDrain,
     rateLimitBlocked, agentJobCancelRateLimiter,
+    drainPendingChatTurn = () => {},
     onWarn = () => {},
   } = deps;
 
@@ -170,6 +171,12 @@ function mountAgentJobCancelRoutes(app, deps = {}) {
       try {
         if (row.workspace_id && row.agent_id) {
           scheduleTaskQueueDrain(String(row.workspace_id), String(row.agent_id), 'job_cancelled');
+        }
+        // And any human message that arrived while this turn was running. Stop is
+        // the most likely moment for one to exist: the reason people reach for
+        // the button is that they typed something and got nothing back.
+        if (row.session_id && row.agent_id) {
+          drainPendingChatTurn(String(row.session_id), String(row.agent_id), 'job_cancelled');
         }
       } catch (error) {
         onWarn(`could not drain queue after cancelling job ${row.id}: ${error?.message || error}`);

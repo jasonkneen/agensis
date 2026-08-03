@@ -780,6 +780,10 @@ export function FloatingWindowShell({
         ref={shellRef}
         data-floating-window
         data-floating-window-id={win.id}
+        // External demo and QA drivers need a stable handle. The id above is a
+        // runtime UUID and titlebar text is presentation copy; the window type
+        // is the durable contract shared with Showrunner's adapter.
+        data-window-type={win.type}
         data-window-hidden={isHidden ? 'true' : undefined}
         data-window-group={win.groupId || undefined}
         // The window's LOGICAL box, before bleed inflation and before the group

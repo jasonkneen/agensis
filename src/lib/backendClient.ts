@@ -8,8 +8,11 @@ import {
 } from './authSession';
 
 const HOSTED_AGENSIS_BACKEND_BASE = 'https://agensis-backend.fly.dev';
+const LOCAL_DEMO_BACKEND_BASE = 'http://127.0.0.1:3142';
 
 const BACKEND_BASE = (() => {
+  const demo = localDemoBackendBase();
+  if (demo) return demo;
   const explicit = normalizeBackendBase(import.meta.env.VITE_BACKEND_BASE_URL);
   if (explicit) return explicit;
   if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
@@ -159,6 +162,14 @@ function isLoopbackBackendBase(base: string) {
   } catch {
     return /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::|\/|$)/i.test(base);
   }
+}
+
+function localDemoBackendBase() {
+  if (typeof window === 'undefined') return '';
+  if (!isLoopbackHost(window.location.hostname)) return '';
+  return new URLSearchParams(window.location.search).get('demo') === '1'
+    ? LOCAL_DEMO_BACKEND_BASE
+    : '';
 }
 
 function hostedAgensisBackendBase() {

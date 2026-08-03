@@ -5127,6 +5127,33 @@ const CHANNEL_CONTEXT_LIMIT = 40;
 // also keeps conversation history below the daemon's 10 KiB complete-prompt cap.
 const CHANNEL_CONTEXT_MAX_BYTES = 8 * 1024;
 const conversationLocks = new Set();
+// A human message that arrives while the agent it is addressed to is mid-turn
+// used to be DROPPED: continueConversation returned { reason: 'agent_busy' } and
+// nothing ever retried it. In a channel that is survivable — someone else
+// answers. In a DM it is silent data loss, because every thread of one DM shares
+// ONE chat_session and therefore ONE active-job slot
+// (uq_agent_jobs_active_per_session_agent, index.cjs ~2769). Ask a question in a
+// second thread while the agent works in the first and it was never answered at
+// all. Observed live 2026-08-03 in three sessions; in the worst case a human
+// waited 32 minutes and re-asked before learning the work was already done.
+//
+// So the turn is PARKED here instead of dropped, and replayed the instant that
+// agent's job reaches a terminal state (every such path already calls
+// scheduleTaskQueueDrain; the replay hooks the same sites). Keyed by
+// (session, agent) because that is exactly the scope of the slot blocking it.
+//
+// In-process, like conversationLocks: a parked turn is a best-effort retry, not
+// a durable promise. Losing one on restart is the pre-fix behaviour, so the
+// existing single-machine assumption (reconcileAgentConnectionsAtStartup) is not
+// made any weaker by this.
+const pendingChatTurns = new Map();
+// Long enough to outlive the 30-minute hard ceiling would be wrong: replaying a
+// turn a human has given up on is its own bug. 15 minutes covers an idle_timeout
+// (10) plus slack, and anything staler is dropped on read.
+const PENDING_CHAT_TURN_MAX_AGE_MS = 15 * 60_000;
+// A replay that is itself refused re-parks. The cap stops a permanently-busy
+// agent from turning one message into an unbounded retry loop.
+const PENDING_CHAT_TURN_MAX_ATTEMPTS = 3;
 // Cost damper on the PAID ambient tier only (shared/ambientAddressing.cjs).
 // In-process like conversationLocks and cadenceWakes, so on N Fly machines the
 // real cap is N x the constant. That is fine for a spend limiter and would NOT
@@ -6806,6 +6833,86 @@ async function resolveWorkThreadParent(sessionId) {
 // agent turn in flight (or ran one to completion). Task dispatch reads it to tell
 // "the agent is on it" from "the turn was refused — put the task back in the
 // queue"; every other caller ignores it.
+function pendingChatTurnKey(sessionId, agentId) {
+ return `${String(sessionId || '')}::${String(agentId || '')}`;
+}
+
+// Remember a turn that was refused only because the agent was already working.
+// Last write wins per (session, agent): if a human sends three messages while an
+// agent is busy, one replay answers all three — continueConversation re-reads the
+// conversation from the database, so the parked entry is a WAKE-UP, not a copy of
+// the message. Storing the newest keeps the thread/broadcast context current.
+function parkChatTurn({ workspaceId, sessionId, threadParentId, broadcastToChannel, targetAgentId, agentId }) {
+ if (!workspaceId || !sessionId || !agentId) return;
+ const key = pendingChatTurnKey(sessionId, agentId);
+ const attempts = pendingChatTurns.get(key)?.attempts || 0;
+ pendingChatTurns.set(key, {
+  workspaceId: String(workspaceId),
+  sessionId: String(sessionId),
+  threadParentId: threadParentId || null,
+  broadcastToChannel: broadcastToChannel ?? null,
+  targetAgentId: targetAgentId || null,
+  attempts,
+  parkedAt: Date.now(),
+ });
+}
+
+/**
+ * Replay the turn parked for (session, agent), if any.
+ *
+ * Called from every path that puts an agent job into a terminal state — the same
+ * sites that already schedule a task-queue drain, so the coverage (result,
+ * reap, cancel, connection loss, startup reconcile) is the coverage that has
+ * already been proven for tasks.
+ *
+ * Fire-and-forget and defensive: a replay must never be able to fail, or slow,
+ * the job-completion write that triggered it.
+ *
+ * `run` is a test seam; production always uses continueConversation.
+ */
+function drainPendingChatTurn(sessionId, agentId, cause = 'job_finished', run = continueConversation) {
+ const key = pendingChatTurnKey(sessionId, agentId);
+ const parked = pendingChatTurns.get(key);
+ if (!parked) return;
+ pendingChatTurns.delete(key);
+ // A human who has been waiting a quarter of an hour has moved on; answering now
+ // is noise, not service.
+ if (Date.now() - parked.parkedAt > PENDING_CHAT_TURN_MAX_AGE_MS) {
+  console.log(`[chat-retry] dropping stale parked turn session=${sessionId} agent=${agentId} (cause=${cause})`);
+  return;
+ }
+ if (parked.attempts >= PENDING_CHAT_TURN_MAX_ATTEMPTS) {
+  console.log(`[chat-retry] giving up on parked turn session=${sessionId} agent=${agentId} after ${parked.attempts} attempts`);
+  return;
+ }
+ const attempts = parked.attempts + 1;
+ return (async () => {
+  try {
+   const out = await run({
+    workspaceId: parked.workspaceId,
+    sessionId: parked.sessionId,
+    threadParentId: parked.threadParentId,
+    broadcastToChannel: parked.broadcastToChannel,
+    targetAgentId: parked.targetAgentId,
+   });
+   if (out && out.started) {
+    console.log(`[chat-retry] replayed parked turn session=${sessionId} agent=${agentId} (cause=${cause}, attempt ${attempts})`);
+    return;
+   }
+   // Still refused. 'agent_busy' means continueConversation has already re-parked
+   // it with the attempt count it read before this call, so only the counter needs
+   // carrying forward. 'locked' is a transient overlap with another turn on the
+   // same thread and deserves the same treatment.
+   if (out && (out.reason === 'agent_busy' || out.reason === 'locked')) {
+    const reparked = pendingChatTurns.get(key) || { ...parked, parkedAt: parked.parkedAt };
+    pendingChatTurns.set(key, { ...reparked, attempts, parkedAt: parked.parkedAt });
+   }
+  } catch (error) {
+   console.error('drainPendingChatTurn failed', error);
+  }
+ })();
+}
+
 async function continueConversation({
  workspaceId,
  sessionId,
@@ -7065,7 +7172,21 @@ async function continueConversation({
     }
    }
    if (!nextAgent) return { started, reason: 'no_agent' };
-   if (await hasActiveBurstJob(sessionId, nextAgent.id)) return { started, reason: 'agent_busy' };
+   if (await hasActiveBurstJob(sessionId, nextAgent.id)) {
+    // Park, don't drop. Pinned to the agent that was busy via targetAgentId, so
+    // the replay answers as the same agent instead of paying for a second
+    // election — explicitConversationAgent still degrades to a fresh election if
+    // that agent has since left the session.
+    parkChatTurn({
+     workspaceId,
+     sessionId,
+     threadParentId,
+     broadcastToChannel,
+     targetAgentId: nextAgent.id,
+     agentId: nextAgent.id,
+    });
+    return { started, reason: 'agent_busy' };
+   }
 
    // --- reply cadence -------------------------------------------------------
    // In a channel an operator set to 'social', this turn may be held for a few
@@ -8963,6 +9084,7 @@ const agentJobs = createAgentJobs({
  agentLiveMessageContent: (...a) => agentLiveMessageContent(...a),
  agentPermissionFlags, agentRuntimePayload, badRequest,
  continueConversation: (...a) => continueConversation(...a),
+ drainPendingChatTurn: (...a) => drainPendingChatTurn(...a),
  forbidden, ensureTable, getDb, isAgentEnabled,
  logMessageActivity: (...a) => logMessageActivity(...a),
  mirrorAgentReplyToTaskComment: (...a) => mirrorAgentReplyToTaskComment(...a),
@@ -9476,6 +9598,7 @@ function createApp() {
   agentJobCancelRateLimiter,
   cancelBuiltinJob,
   scheduleTaskQueueDrain: (...a) => taskDispatch.scheduleTaskQueueDrain(...a),
+  drainPendingChatTurn: (...a) => drainPendingChatTurn(...a),
   sendToConnection,
   onWarn: message => console.warn(`[agent-job-cancel] ${message}`),
  });
@@ -10580,6 +10703,7 @@ function resetTestState() {
  clearPendingJobFailures();
  taskDispatch.reset();
  conversationLocks.clear();
+ pendingChatTurns.clear();
  ambientElectionBudget.reset();
  workspaceIdBySessionCache.clear();
 }
@@ -10837,6 +10961,9 @@ module.exports = {
   agentsAddressedByRow,
   slugHandle,
   continueConversation,
+  parkChatTurn,
+  drainPendingChatTurn,
+  pendingChatTurns,
   verifyNetlifyDeploySignature,
   buildSystemPrompt,
   normalizeAiChatMessages,
