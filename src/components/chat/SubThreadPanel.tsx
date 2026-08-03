@@ -4,7 +4,8 @@ import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { SessionStopButton } from './StopAgentButton';
 import { MarkdownContent } from './MarkdownContent';
 import { ReactionBar } from './ReactionBar';
-import { QueuedPill, SeenPill } from './SeenPill';
+import { QueuedPill } from './SeenPill';
+import { ReadReceipt } from './ReadReceipt';
 import { useMessageReactions } from '../../hooks/useMessageReactions';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
@@ -644,17 +645,10 @@ export function SubThreadBubble({
   // Built here so the row can ask "is there anything to show?" before rendering
   // a bar at all — an empty bar carries `mt-1` and would add 4px under every
   // post nobody has read.
-  // Queued first, then seen: "what happened to it" then "did it land". Only
-  // ever rendered together on a mid-turn message that has since been read.
-  const hasReaders = readerIds !== undefined && readerIds.length > 0;
-  const seenPill = (queued?.queued || hasReaders) ? (
-    <>
-      {queued?.queued ? <QueuedPill state={queued} /> : null}
-      {hasReaders
-        ? <SeenPill readerIds={readerIds as string[]} resolveName={resolveReaderName || (() => null)} />
-        : null}
-    </>
-  ) : null;
+  // Only "queued" rides in the reaction row. Read state is a different kind of
+  // fact — an assertion about the AGENT rather than anything anybody chose — so
+  // it draws as its own eye below, matching the channel. See ReadReceipt.tsx.
+  const seenPill = queued?.queued ? <QueuedPill state={queued} /> : null;
 
   return (
     <div
@@ -750,11 +744,10 @@ export function SubThreadBubble({
           ) : null}
           {artifact && <ChatArtifact artifact={artifact} />}
         </div>
-        {/* Reactions and the seen pill share one row, as in the channel. The
-            pill is derived from the read markers rather than stored as a
-            reaction — see src/lib/seenPill.ts. A placeholder ("Thinking …") is
-            excluded: it is a transient row that will be replaced, and reacting
-            to it would attach the reaction to a message about to disappear. */}
+        {/* Reactions and the queued chip share one row, as in the channel. A
+            placeholder ("Thinking …") is excluded: it is a transient row that
+            will be replaced, and reacting to it would attach the reaction to a
+            message about to disappear. */}
         {!isActivityPlaceholder && !ownMutation.editing && (onToggleReaction || seenPill) && (
           <ReactionBar
             reactions={onToggleReaction ? reactions : null}
@@ -764,6 +757,13 @@ export function SubThreadBubble({
             reactionUses={reactionUses}
             leadingSlot={seenPill}
           />
+        )}
+        {/* "Has it been read" — its own signal, never a reaction pill. The
+            emptiness check is here because the wrapper carries `mt-1`. */}
+        {!isActivityPlaceholder && readerIds !== undefined && readerIds.length > 0 && (
+          <div className="mt-1 flex items-center justify-end">
+            <ReadReceipt readerIds={readerIds} resolveName={resolveReaderName || (() => null)} />
+          </div>
         )}
       </div>
     </div>
