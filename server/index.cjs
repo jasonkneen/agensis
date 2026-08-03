@@ -4406,8 +4406,83 @@ async function verifyOauthAccessToken(token) {
  }
 }
 
+// A credential minted for ONE huddle, for ONE agent.
+//
+// The LiveKit voice worker needs this workspace's MCP tools — a voice agent that
+// cannot read a document or hand work to another agent is a talking head. Neither
+// existing credential fits:
+//
+//   - the workspace `agw_` bearer is stored only as a HASH, so the plaintext is
+//     unrecoverable, and minting a fresh one ROTATES the human's MCP client out
+//     of existence (see createWorkspaceMcpToken);
+//   - the agent's own connect token would mean rotating a RUNNING daemon's
+//     identity just to start a call.
+//
+// So: a short-lived HMAC-signed bearer scoped to exactly one agent. It carries no
+// authority beyond that agent's own, because it resolves to the SAME identity
+// object verifyAgentConnectToken returns — every tool authorization rule then
+// applies to it unchanged, with nothing new to keep in sync. It is never stored,
+// so there is nothing to leak at rest and nothing to revoke but the clock.
+const VOICE_TOKEN_PREFIX = 'agv_';
+const VOICE_TOKEN_DEFAULT_TTL_MS = 4 * 60 * 60_000;
+const VOICE_TOKEN_MIN_TTL_MS = 60_000;
+
+async function createVoiceSessionToken({ workspaceId, agentId, ttlMs = VOICE_TOKEN_DEFAULT_TTL_MS } = {}) {
+ const workspace = String(workspaceId || '').trim();
+ const agent = String(agentId || '').trim();
+ if (!workspace || !agent) throw new Error('workspaceId and agentId are required');
+ const secret = await getAuthSecret();
+ const payload = Buffer.from(JSON.stringify({
+  w: workspace,
+  a: agent,
+  exp: Date.now() + Math.max(VOICE_TOKEN_MIN_TTL_MS, Number(ttlMs) || VOICE_TOKEN_DEFAULT_TTL_MS),
+ })).toString('base64url');
+ const signature = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+ return `${VOICE_TOKEN_PREFIX}${payload}.${signature}`;
+}
+
+async function verifyVoiceSessionToken(token) {
+ if (typeof token !== 'string' || !token.startsWith(VOICE_TOKEN_PREFIX)) return null;
+ const [payload, signature] = token.slice(VOICE_TOKEN_PREFIX.length).split('.');
+ if (!payload || !signature) return null;
+ const secret = await getAuthSecret();
+ const expected = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+ const given = Buffer.from(signature);
+ const want = Buffer.from(expected);
+ // Length check first: timingSafeEqual throws on a mismatch.
+ if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) return null;
+ let claims;
+ try {
+  claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+ } catch {
+  return null;
+ }
+ if (!claims?.w || !claims?.a) return null;
+ if (!(Number(claims.exp) > Date.now())) return null;
+ // The signature proves the CLAIM, never the agent's current state — a disabled
+ // or deleted agent must lose its voice immediately, not when the token lapses.
+ const rows = await getDb().unsafe(
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, metadata, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
+     from workspace_agents
+     where id = $1 and workspace_id = $2
+     limit 1`,
+  [String(claims.a), String(claims.w)],
+ );
+ const agent = rows[0];
+ if (!agent || !isAgentEnabled(agent)) return null;
+ return {
+  kind: 'agent',
+  agentId: agent.id,
+  workspaceId: agent.workspace_id,
+  name: agent.name,
+  handle: agent.handle || slugHandle(agent.name),
+  agent: agentRuntimePayload(agent),
+ };
+}
+
 async function verifyMcpToken(token, req = null) {
  return (await verifyAgentConnectToken(token, req))
+  || (await verifyVoiceSessionToken(token))
   || (await verifyFlowConnectionToken(token))
   || (await verifyControllerToken(token))
   || (await verifyWorkspaceMcpToken(token))
@@ -9309,6 +9384,13 @@ function createApp() {
   installCreatedSessionMemberships,
   lockPrivateSessionRoster,
   webhookRateLimiter,
+  // A huddle's agents join it as real LiveKit participants (voice-worker/).
+  // The worker reaches back for tools and the transcript, so it needs an
+  // absolute base URL and a credential scoped to the one agent it is being.
+  createVoiceSessionToken,
+  parseJsonArray,
+  parseJsonObject,
+  publicBaseUrl: normalizeAgentBackendBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || '',
  });
 
  // Voice engines for huddles. The Cartesia token exchange is plain HTTP and is
@@ -10624,6 +10706,10 @@ module.exports = {
   verifyUserAuthMcpToken,
   verifyMcpToken,
   createWorkspaceMcpToken,
+  // Per-huddle, per-agent voice credential for the LiveKit worker.
+  createVoiceSessionToken,
+  verifyVoiceSessionToken,
+  VOICE_TOKEN_PREFIX,
   createCursorBuddyConnectionKey,
   normalizeCursorBuddySurface,
   normalizeCursorBuddyScope,

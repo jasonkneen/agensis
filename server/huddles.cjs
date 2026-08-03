@@ -71,6 +71,7 @@
 // Agents in huddles is PHASE 2 and intentionally not built here.
 
 const crypto = require('crypto');
+const huddleAgents = require('./huddle-agents.cjs');
 
 // The LiveKit project is shared with other apps, so every room this app creates
 // is namespaced. Never derive a room name any other way.
@@ -762,7 +763,38 @@ function mountHuddleRoutes(app, deps = {}) {
   // project. Production always uses the real minter above.
   mintToken = mintJoinToken,
   endRoom = deleteLivekitRoom,
+  // Putting the channel's agents INTO the room. Injected for the same reason as
+  // mintToken, and optional: a deployment with no LiveKit agent service still
+  // serves human huddles, it just has nobody to talk to.
+  createVoiceSessionToken = null,
+  parseJsonArray = null,
+  parseJsonObject = null,
+  publicBaseUrl = '',
+  dispatchAgents = huddleAgents.dispatchVoiceAgents,
  } = deps;
+
+ /**
+  * Fire the agents into a room. Never awaited by a request handler: a human
+  * pressing "Huddle" must get their room back immediately, and an agent that
+  * takes a second to join is not a reason to hold the response open.
+  */
+ const dispatchIntoRoom = (huddle) => {
+  if (!huddle || !createVoiceSessionToken || typeof dispatchAgents !== 'function') return;
+  Promise.resolve(dispatchAgents({
+   db: getDb(),
+   workspaceId: huddle.workspace_id,
+   sessionId: huddle.session_id,
+   huddleId: huddle.id,
+   roomName: huddle.room_name,
+   livekitConfig,
+   createVoiceSessionToken,
+   parseJsonArray,
+   parseJsonObject,
+   baseUrl: publicBaseUrl,
+  })).catch((error) => {
+   console.error(`[huddle] agent dispatch failed for ${huddle.room_name}: ${error?.message || error}`);
+  });
+ };
 
  if (!app) throw new Error('mountHuddleRoutes requires an express app');
  for (const [name, value] of Object.entries({
@@ -1558,6 +1590,12 @@ function mountHuddleRoutes(app, deps = {}) {
      { actorUserId: req.userId, requireLiveHuddle: true },
     );
    }
+
+   // The agents join the moment the room exists, not when someone speaks — a
+   // huddle should already have its people in it when the human arrives. Only on
+   // creation: joining an existing huddle must not dispatch a second copy of
+   // every agent into a room they are already in.
+   if (created) dispatchIntoRoom(huddle);
 
    res.status(created ? 201 : 200).json({
     data: {

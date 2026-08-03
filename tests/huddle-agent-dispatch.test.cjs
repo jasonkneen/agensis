@@ -1,0 +1,138 @@
+'use strict';
+
+// Putting a channel's agents into the huddle's LiveKit room.
+//
+// The properties that matter are about FAILURE, because this runs while humans
+// are already on a call: a huddle whose agent cannot join must still be a working
+// human huddle, and one agent failing must not take the others with it.
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const { dispatchVoiceAgents, voiceSettingsFor } = require('../server/huddle-agents.cjs');
+
+const parseJsonArray = (v) => (Array.isArray(v) ? v : (() => { try { return JSON.parse(v || '[]'); } catch { return []; } })());
+const parseJsonObject = (v) => (v && typeof v === 'object' ? v : (() => { try { return JSON.parse(v || '{}'); } catch { return {}; } })());
+const livekitConfig = () => ({ url: 'wss://lk.test', apiKey: 'key', apiSecret: 'secret' });
+const createVoiceSessionToken = async ({ agentId }) => `agv_token_for_${agentId}`;
+const silent = { log: () => {}, error: () => {} };
+
+function fakeDb({ participants = [], agents = [] } = {}) {
+  return {
+    unsafe: async (sql) => {
+      if (/from chat_sessions/.test(sql)) return [{ participants: JSON.stringify(participants) }];
+      if (/from workspace_agents/.test(sql)) return agents;
+      return [];
+    },
+  };
+}
+
+const base = {
+  workspaceId: 'ws-1',
+  sessionId: 'sess-1',
+  huddleId: 'hud-1',
+  roomName: 'agensis-hud-1',
+  livekitConfig,
+  createVoiceSessionToken,
+  parseJsonArray,
+  parseJsonObject,
+  baseUrl: 'https://agensis-backend.fly.dev',
+  log: silent,
+};
+
+test('every agent in the channel roster is dispatched into the room', async () => {
+  const calls = [];
+  const result = await dispatchVoiceAgents({
+    ...base,
+    db: fakeDb({
+      participants: ['a1', 'a2'],
+      agents: [
+        { id: 'a1', name: 'Claude', handle: 'claude', accent_color: '#4f46e5', enabled: true },
+        { id: 'a2', name: 'Grok', handle: 'grok', enabled: true },
+      ],
+    }),
+    dispatchClientFactory: { createDispatch: async (room, agentName, opts) => { calls.push({ room, agentName, opts }); } },
+  });
+
+  assert.deepEqual(result.dispatched, ['claude', 'grok']);
+  assert.deepEqual(result.failed, []);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].room, 'agensis-hud-1');
+
+  const metadata = JSON.parse(calls[0].opts.metadata);
+  assert.equal(metadata.handle, 'claude');
+  assert.equal(metadata.agentId, 'a1');
+  assert.equal(metadata.accentColor, '#4f46e5');
+  // The worker cannot reach the workspace's tools without these, and a voice
+  // agent with no tools is a talking head.
+  assert.equal(metadata.mcp.url, 'https://agensis-backend.fly.dev/backend/mcp');
+  assert.equal(metadata.mcp.token, 'agv_token_for_a1');
+  assert.equal(metadata.transcript.url, 'https://agensis-backend.fly.dev/backend/huddles/transcript');
+  // Each agent gets its OWN credential — one leaking must not speak for another.
+  assert.equal(JSON.parse(calls[1].opts.metadata).mcp.token, 'agv_token_for_a2');
+});
+
+test('one agent failing does not stop the others, and never throws', async () => {
+  const result = await dispatchVoiceAgents({
+    ...base,
+    db: fakeDb({
+      participants: ['a1', 'a2', 'a3'],
+      agents: [
+        { id: 'a1', handle: 'claude', enabled: true },
+        { id: 'a2', handle: 'grok', enabled: true },
+        { id: 'a3', handle: 'hermes', enabled: true },
+      ],
+    }),
+    dispatchClientFactory: {
+      createDispatch: async (_room, _name, opts) => {
+        if (JSON.parse(opts.metadata).handle === 'grok') throw new Error('agent service unreachable');
+      },
+    },
+  });
+
+  assert.deepEqual(result.dispatched, ['claude', 'hermes'], 'the healthy agents still joined');
+  assert.equal(result.failed.length, 1);
+  assert.equal(result.failed[0].handle, 'grok');
+});
+
+test('a huddle with no LiveKit, no room or no agents is skipped, not failed', async () => {
+  const db = fakeDb({ participants: [], agents: [] });
+  const noop = { createDispatch: async () => { throw new Error('must not be called'); } };
+
+  assert.equal((await dispatchVoiceAgents({ ...base, db, dispatchClientFactory: noop })).skipped, 'no-agents');
+  assert.equal((await dispatchVoiceAgents({ ...base, db, roomName: '', dispatchClientFactory: noop })).skipped, 'no-room');
+  assert.equal(
+    (await dispatchVoiceAgents({ ...base, db, livekitConfig: () => ({}), dispatchClientFactory: noop })).skipped,
+    'livekit-not-configured',
+    'a deployment without LiveKit still has to serve human huddles',
+  );
+});
+
+test('a disabled agent is never given a voice', async () => {
+  const calls = [];
+  const result = await dispatchVoiceAgents({
+    ...base,
+    db: fakeDb({
+      participants: ['a1', 'a2'],
+      agents: [
+        { id: 'a1', handle: 'claude', enabled: true },
+        { id: 'a2', handle: 'retired', enabled: false },
+      ],
+    }),
+    dispatchClientFactory: { createDispatch: async (r, n, o) => calls.push(JSON.parse(o.metadata).handle) },
+  });
+  assert.deepEqual(result.dispatched, ['claude']);
+  assert.deepEqual(calls, ['claude']);
+});
+
+test('per-agent voice settings survive into the dispatch metadata', () => {
+  const settings = voiceSettingsFor({
+    identity: JSON.stringify({ voice: { cartesia_voice_id: 'v-123', speed: 1.1, emotion: 'calm' } }),
+    metadata: JSON.stringify({ voice_engine: 'openai-realtime' }),
+  }, parseJsonObject);
+
+  assert.equal(settings.engine, 'openai-realtime');
+  assert.equal(settings.cartesia_voice_id, 'v-123', 'an agent that had a voice keeps it across this migration');
+  assert.equal(settings.speed, 1.1);
+  assert.equal(settings.emotion, 'calm');
+});
