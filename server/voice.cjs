@@ -78,8 +78,16 @@ function createVoiceRelay({
       return true;
     }
 
+    // The happy path was unobservable, and that is its own defect: when voice is
+    // silent, "nothing in the logs" could mean the browser never asked, or that
+    // it asked and everything worked. Only the FAILURE paths logged, so the two
+    // were indistinguishable and there was nothing to bisect.
+    logger.log?.('[voice] stt start requested');
+
     const reason = unavailableReason('stt', env);
     if (reason) {
+      // A refusal the human experiences as "my voice does nothing".
+      logger.warn('[voice] stt refused:', reason);
       send({ event: 'unavailable', reason });
       return true;
     }
@@ -133,6 +141,9 @@ function createVoiceRelay({
         return;
       }
       state.open = true;
+      // The line that separates "the browser never asked" from "it asked and
+      // the upstream is live" — the whole question when voice goes quiet.
+      logger.log?.(`[voice] deepgram stream ready at ${sampleRate}Hz`);
       send({ event: 'ready', sampleRate });
     });
 
