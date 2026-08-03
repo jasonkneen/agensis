@@ -1,35 +1,51 @@
-import { Check, ListOrdered } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { cn } from '../../lib/utils';
 import { SEEN_GLYPH, describeSeenBy, seenPillLabel } from '../../lib/seenPill';
 import { queuedLabel, type QueuedState } from '../../lib/queuedPill';
+import { FaceStack } from './FaceStack';
+import { describeFaces, faceStack, type ReaderFace } from '../../lib/readerFaces';
 
-// The read receipt, shaped like a reaction pill and sitting in the reaction row.
+// The derived chips that ride in the reaction row: "looked at" and "queued".
 //
-// EVERY DECISION IS IN src/lib/seenPill.ts — why this is derived rather than a
-// stored reaction, why 👀 is allowed here when ReadReceipt.tsx argued for an
-// SVG, and why there is still never a timestamp. Read that first. This
-// component renders and nothing else, because the frontend runner only sees
-// tests/unit/**/*.test.ts and `.test.tsx` is outside the glob.
+// EVERY DECISION IS IN src/lib/seenPill.ts AND src/lib/queuedPill.ts — why
+// "seen" is derived rather than stored, why 👀 is allowed here, why "queued" is
+// not read off a job status, and what neither of them will ever claim. Read
+// those first. These components render and nothing else, because the frontend
+// runner only sees tests/unit/**/*.test.ts and `.test.tsx` is outside the glob.
 //
-// IT IS A `span`, NOT A `button`. A reaction pill is a toggle; this is an
-// assertion. Making it clickable would offer an action that cannot exist (you
-// cannot un-see a message on someone else's behalf), and `aria-pressed` on it
-// would tell a screen reader it is a control. The visual difference from a real
-// pill is deliberate too: no hover tint, no border emphasis, muted text.
+// THEY ARE `span`s, NOT `button`s. A reaction pill is a toggle; these are
+// assertions. Making them clickable would offer an action that cannot exist
+// (you cannot un-see a message on somebody else's behalf), and `aria-pressed`
+// would tell a screen reader they are controls. The visual difference from a
+// real pill is deliberate too: dashed border, no hover tint, muted text.
+//
+// EACH ONE SHOWS WHOSE FACE. A count answers "how many" when the question is
+// "who" — in a channel with three agents in it, "2" does not tell you whether
+// the one you asked has read it. The faces come from src/lib/readerFaces.ts and
+// an agent's carries its accent colour, the same colour its name is drawn in.
 
 export interface SeenPillProps {
   /** Ids of everyone who has read this message, excluding its author. */
   readerIds: readonly string[];
   resolveName: (readerId: string) => string | null;
+  /** Optional face lookup. Without it the chip falls back to a count. */
+  resolveFace?: (readerId: string) => ReaderFace;
   className?: string;
 }
 
-export function SeenPill({ readerIds, resolveName, className }: SeenPillProps) {
+export function SeenPill({ readerIds, resolveName, resolveFace, className }: SeenPillProps) {
   // Nobody has read it yet: render nothing rather than a zero. An empty pill on
   // every message you send is furniture, and "0 people have seen this" is a
   // sentence no product should say out loud.
   if (readerIds.length === 0) return null;
+
+  const stack = resolveFace ? faceStack(readerIds, resolveFace) : null;
+  // The tooltip prefers the face model when there is one, because that is what
+  // is actually on screen — a tooltip naming four readers over a chip showing
+  // three is the kind of small lie that makes people distrust the whole row.
+  const tooltip = stack
+    ? `Seen by ${describeFaces(stack.shown, stack.overflow)}`
+    : describeSeenBy(readerIds, resolveName);
 
   return (
     <Tooltip>
@@ -45,44 +61,16 @@ export function SeenPill({ readerIds, resolveName, className }: SeenPillProps) {
           )}
         >
           <span aria-hidden="true">{SEEN_GLYPH}</span>
-          {/* Always shown, including at 1: "+1" and a hidden count both make you
-              hover to learn something the row could just say. */}
-          <span className="text-[11px] font-medium tabular-nums">{readerIds.length}</span>
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="top">{describeSeenBy(readerIds, resolveName)}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-/**
- * "Sent, not read yet" — the state a pill cannot express by being absent.
- *
- * DMs only, one message only. `unseenAnchorId` in src/lib/seenPill.ts owns that
- * rule and the reasons for it. A lucide Check and NOT a greyed 👀: an emoji
- * cannot be dimmed (it is full-colour by definition), so a "faint" version of
- * the seen glyph is not something the platform can render — it would just look
- * like the same chip in a slightly different box.
- */
-export function UnseenPill({ className }: { className?: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          data-unseen-pill=""
-          aria-label="Sent, not seen yet"
-          className={cn(
-            'chat-reaction-chip inline-flex h-6 cursor-default select-none items-center gap-1',
-            'rounded-md border border-dashed border-border/50 bg-transparent px-2',
-            'text-[11px] font-medium text-muted-foreground/60',
-            className,
+          {resolveFace ? (
+            <FaceStack readerIds={readerIds} resolveFace={resolveFace} />
+          ) : (
+            /* Always shown, including at 1: "+1" and a hidden count both make
+               you hover to learn something the row could just say. */
+            <span className="text-[11px] font-medium tabular-nums">{readerIds.length}</span>
           )}
-        >
-          <Check className="size-3" aria-hidden="true" />
-          Sent
         </span>
       </TooltipTrigger>
-      <TooltipContent side="top">Sent — not seen yet</TooltipContent>
+      <TooltipContent side="top">{tooltip}</TooltipContent>
     </Tooltip>
   );
 }
@@ -94,14 +82,20 @@ export function UnseenPill({ className }: { className?: string }) {
  * running job's start time, why it is not read off a 'queued' job status, and
  * what it deliberately refuses to claim (no position, no ETA).
  *
- * A lucide icon rather than an emoji: the seen pill earns 👀 because that glyph
- * was the request and because it sits among user-chosen reactions. Nobody asked
- * for a specific queue emoji, so this follows the house rule and stays an SVG
- * that inherits currentColor and dims with the rest of the chrome.
+ * The faces are the agents whose turns are IN FRONT of this message, not a
+ * guess at who will answer it. Same reason the seen chip carries faces: in a
+ * channel with more than one agent, "Queued" without a who is half a sentence.
  */
-export function QueuedPill({ state, className }: { state: QueuedState; className?: string }) {
+export function QueuedPill({
+  state, resolveFace, className,
+}: {
+  state: QueuedState;
+  resolveFace?: (readerId: string) => ReaderFace;
+  className?: string;
+}) {
   if (!state.queued) return null;
   const { label, title } = queuedLabel(state);
+  const agentIds = state.agentIds || [];
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -115,7 +109,12 @@ export function QueuedPill({ state, className }: { state: QueuedState; className
             className,
           )}
         >
-          <ListOrdered className="size-3" aria-hidden="true" />
+          {/* The faces ARE the icon. A lucide glyph beside them would be a
+              second thing to parse saying less than the first. Without a face
+              lookup the chip is the word alone, exactly as it was. */}
+          {resolveFace && agentIds.length > 0 && (
+            <FaceStack readerIds={agentIds} resolveFace={resolveFace} max={2} />
+          )}
           {label}
         </span>
       </TooltipTrigger>

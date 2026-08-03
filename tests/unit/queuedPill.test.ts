@@ -21,13 +21,14 @@ function at(ms: number, overrides: Partial<ReceiptMessage> = {}): ReceiptMessage
   } as ReceiptMessage;
 }
 
-function work(anchorAt: number, jobs = 1): AgentWork {
-  return { anchorAt, jobs } as AgentWork;
+function work(anchorAt: number, jobs = 1, agentIds: string[] = ['agent-1']): AgentWork {
+  return { anchorAt, jobs, agentIds } as AgentWork;
 }
 
 describe('queuedState', () => {
   it('queues a message typed after the turn started', () => {
-    expect(queuedState(at(T0 + 5_000), work(T0), ME)).toEqual({ queued: true, workers: 1 });
+    expect(queuedState(at(T0 + 5_000), work(T0), ME))
+      .toEqual({ queued: true, workers: 1, agentIds: ['agent-1'] });
   });
 
   it('does NOT queue the message the agent is answering', () => {
@@ -66,7 +67,8 @@ describe('queuedState', () => {
   });
 
   it('carries the worker count through for the label', () => {
-    expect(queuedState(at(T0 + 5_000), work(T0, 3), ME)).toEqual({ queued: true, workers: 3 });
+    expect(queuedState(at(T0 + 5_000), work(T0, 3, ['a1', 'a2', 'a3']), ME))
+      .toEqual({ queued: true, workers: 3, agentIds: ['a1', 'a2', 'a3'] });
   });
 });
 
@@ -76,14 +78,14 @@ describe('queuedLabel', () => {
   });
 
   it('explains the wait without inventing a position or an ETA', () => {
-    const { label, title } = queuedLabel({ queued: true, workers: 1 });
+    const { label, title } = queuedLabel({ queued: true, workers: 1, agentIds: [] });
     expect(label).toBe('Queued');
     expect(title).toBe('Sent while the agent was already working — this is next in line');
     expect(title).not.toMatch(/\d+(st|nd|rd|th)/);
   });
 
   it('pluralises for several agents', () => {
-    expect(queuedLabel({ queued: true, workers: 2 }).title)
+    expect(queuedLabel({ queued: true, workers: 2, agentIds: [] }).title)
       .toBe('Sent while 2 agents were already working — this is next in line');
   });
 });

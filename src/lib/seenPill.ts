@@ -1,5 +1,33 @@
 import { type ReceiptMessage, isOwnReceiptMessage } from './readReceipts';
 
+// ============================================================================
+// SETTLED — DO NOT RE-DECIDE THIS WITHOUT THE HUMAN SAYING SO.
+//
+// On 2026-08-03 this moved four times in one afternoon. Three agents, each
+// working alone, each landed a defensible call and each undid the one before
+// it: chip in the reaction row -> eye in the meta row -> eye on every read
+// message -> back again. None of them was wrong on the merits; what was missing
+// was a written decision to defer to. This is it.
+//
+// THE SHAPE, as asked for by Jason in #testtest:
+//
+//   * 👀 IS A CHIP IN THE REACTION ROW. It means LOOKED AT, it is derived from
+//     the read markers, and it is the ONLY read indicator. There is no eye in
+//     the meta row and no second line under the pills — src/components/chat/
+//     ReadReceipt.tsx was deleted so there is nothing left to wire back up.
+//   * 👍 MEANS ACKNOWLEDGED. That one is a REAL reaction, not a derived chip:
+//     an agent adds it with the react_to_message MCP tool (b6c9daa4) when it
+//     has taken something on. Looked-at and acknowledged are different facts
+//     and this is the whole reason they are two different glyphs.
+//   * THE QUEUED CHIP STAYS, in the same row. See src/lib/queuedPill.ts.
+//   * EVERY CHIP SHOWS WHOSE FACE, not a count — src/lib/readerFaces.ts.
+//   * THE ACTIVITY DOTS ARE UNRELATED AND UNTOUCHED.
+//
+// WHAT WAS GIVEN UP, deliberately, so nobody "fixes" it as a bug: a chip cannot
+// render absence, so "sent, not read yet" shows NOTHING. There is no hollow
+// eye and no "Sent" chip. That state was tried (UnseenPill, 2808a551) and cut.
+// ============================================================================
+
 // The "seen" pill: the read receipt rendered as a reaction-shaped chip instead
 // of an eye in the meta row.
 //

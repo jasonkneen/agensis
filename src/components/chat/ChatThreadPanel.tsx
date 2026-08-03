@@ -5,8 +5,8 @@ import { ThreadWorkBadge } from './AgentWorkBadge';
 import { ThreadStopButton } from './StopAgentButton';
 import { MarkdownContent } from './MarkdownContent';
 import { ReactionBar } from './ReactionBar';
-import { QueuedPill } from './SeenPill';
-import { ReadReceipt } from './ReadReceipt';
+import { QueuedPill, SeenPill } from './SeenPill';
+import { buildReaderFaces, type ReaderFace } from '../../lib/readerFaces';
 import { useMessageReactions } from '../../hooks/useMessageReactions';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
@@ -141,13 +141,17 @@ export function ChatThreadPanel({
   const { members: workspaceMembers } = useWorkspaceUsers(workspaceId ?? null);
   // A reader id is a human user id OR an agent id, so resolve against members
   // first and then the agent roster.
-  const resolveReaderName = useCallback((readerId: string) => {
-    const member = workspaceMembers.find(row => String(row.user_id) === String(readerId));
-    if (member) return member.email ? member.email.split('@')[0] : null;
-    const agent = (agents ?? []).find(row => String(row.id) === String(readerId));
-    if (agent) return agent.name || null;
-    return null;
-  }, [workspaceMembers, agents]);
+  // One lookup, shared with the channel and the sub-thread panel — see
+  // src/lib/readerFaces.ts. A face rather than a name because the chips show
+  // WHO; `resolveReaderName` is the name-only view of the same thing.
+  const resolveReaderFace = useMemo(
+    () => buildReaderFaces({ members: workspaceMembers, agents: agents ?? [] }),
+    [workspaceMembers, agents],
+  );
+  const resolveReaderName = useCallback(
+    (readerId: string) => resolveReaderFace(readerId).name,
+    [resolveReaderFace],
+  );
 
   const receipts = useReadReceipts({
     sessionId: threadSessionId,
@@ -289,6 +293,7 @@ export function ChatThreadPanel({
                             ? undefined
                             : (reaction, op) => reactionState.toggle(row.message, reaction, op)}
                           resolveReaderName={resolveReaderName}
+                          resolveReaderFace={resolveReaderFace}
                           readerIds={isOwnReceiptMessage(row.message, currentUserId || null)
                             ? receipts.readersOfMessage(row.message)
                             : undefined}
@@ -375,6 +380,7 @@ export function ThreadBubble({
   reactionUses = [],
   onToggleReaction,
   resolveReaderName,
+  resolveReaderFace,
   readerIds,
   queued,
 }: {
@@ -388,6 +394,8 @@ export function ThreadBubble({
   reactionUses?: readonly ReactionUse[];
   onToggleReaction?: (reaction: string, op: 'add' | 'remove') => void;
   resolveReaderName?: (readerId: string) => string | null;
+  /** Face lookup for the chips that show WHO — readers, reactors, agents worked behind. */
+  resolveReaderFace?: (readerId: string) => ReaderFace;
   /** Undefined on a reply that carries no seen pill; empty when nobody has read it. */
   readerIds?: string[];
   queued?: QueuedState;
@@ -420,10 +428,22 @@ export function ThreadBubble({
   // Built here so the row can ask "is there anything to show?" before rendering
   // a bar at all — an empty bar carries `mt-1` and would add 4px under every
   // reply nobody has read.
-  // Only "queued" rides in the reaction row. Read state is a different kind of
-  // fact — an assertion about the AGENT rather than anything anybody chose — so
-  // it draws as its own eye below, matching the channel. See ReadReceipt.tsx.
-  const seenPill = queued?.queued ? <QueuedPill state={queued} /> : null;
+  // Seen, then queued, then the reactions — one row saying what happened to
+  // this reply, matching the channel. SETTLED: see the block at the top of
+  // src/lib/seenPill.ts before moving any of it.
+  const hasSeen = !isParent && readerIds !== undefined && readerIds.length > 0;
+  const seenPill = hasSeen || queued?.queued ? (
+    <>
+      {hasSeen && (
+        <SeenPill
+          readerIds={readerIds as string[]}
+          resolveName={resolveReaderName || (() => null)}
+          resolveFace={resolveReaderFace}
+        />
+      )}
+      {queued?.queued && <QueuedPill state={queued} resolveFace={resolveReaderFace} />}
+    </>
+  ) : null;
 
   return (
     <div
@@ -537,14 +557,8 @@ export function ThreadBubble({
             onToggle={onToggleReaction ?? NOOP_TOGGLE}
             reactionUses={reactionUses}
             leadingSlot={seenPill}
+            resolveFace={resolveReaderFace}
           />
-        )}
-        {/* "Has it been read" — its own signal, never a reaction pill. The
-            emptiness check is here because the wrapper carries `mt-1`. */}
-        {!isParent && readerIds !== undefined && readerIds.length > 0 && (
-          <div className="mt-1 flex items-center justify-end">
-            <ReadReceipt readerIds={readerIds} resolveName={resolveReaderName || (() => null)} />
-          </div>
         )}
       </div>
     </div>

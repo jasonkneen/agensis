@@ -108,8 +108,8 @@ import {
 } from '../../lib/slashCommands';
 import { apiAuthHeaders, apiUrl, backendClient, getSlashCommands, type SystemCapabilities } from '../../lib/backendClient';
 import { ReactionBar, ReactionPicker } from '../chat/ReactionBar';
-import { QueuedPill } from '../chat/SeenPill';
-import { ReadReceipt } from '../chat/ReadReceipt';
+import { QueuedPill, SeenPill } from '../chat/SeenPill';
+import { buildReaderFaces, type ReaderFace } from '../../lib/readerFaces';
 import { frequentReactions, noteReactionUse, reactionPills, reactionToggleOp, type ReactionUse } from '../../lib/reactionBar';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
 import { isOwnReceiptMessage, receiptTargetForViewport } from '../../lib/readReceipts';
@@ -921,13 +921,18 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // A reader id is a human user id OR an agent id (read receipts now cover both),
   // so resolve against members first, then the agent roster — an agent's eye
   // needs its name in the tooltip exactly like a person's.
-  const resolveUserName = useCallback((readerId: string) => {
-    const member = workspaceMembers.find(row => String(row.user_id) === String(readerId));
-    if (member) return member.email ? member.email.split('@')[0] : null;
-    const agent = agents.find(row => String(row.id) === String(readerId));
-    if (agent) return agent.name || null;
-    return null;
-  }, [workspaceMembers, agents]);
+  // One lookup, in src/lib/readerFaces.ts, shared with both thread panels — the
+  // three surfaces each used to carry their own copy of this and that is how
+  // they drift. It returns a FACE (name + avatar + accent) because the chips now
+  // show who, not how many; `resolveUserName` is the name-only view of it.
+  const resolveReaderFace = useMemo(
+    () => buildReaderFaces({ members: workspaceMembers, agents }),
+    [workspaceMembers, agents],
+  );
+  const resolveUserName = useCallback(
+    (readerId: string) => resolveReaderFace(readerId).name,
+    [resolveReaderFace],
+  );
 
   // Picker history, per account and local only: nobody else's ranking is
   // affected by what you reach for.
@@ -2305,6 +2310,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           currentUserId={currentUserId}
                           onToggleReaction={readOnly || msg.deleted_at ? undefined : (reaction, op) => void handleToggleReaction(msg, reaction, op)}
                           resolveUserName={resolveUserName}
+                          resolveReaderFace={resolveReaderFace}
                           reactionUses={reactionUses}
                           // Every one of your own messages, for as long as the
                           // receipt is true — see the note by the removed
@@ -2312,7 +2318,6 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           readerIds={isOwnReceiptMessage(msg, currentUserId || null)
                             ? receipts.readersOfMessage(msg)
                             : undefined}
-                          isDirectMessage={isDirectMessage}
                           queued={queuedState(msg, sessionWork, currentUserId || null)}
                         />
                       </MessageScrollerItem>
@@ -3163,9 +3168,9 @@ function ChatMessageBubble({
   currentUserId,
   onToggleReaction,
   resolveUserName,
+  resolveReaderFace,
   reactionUses,
   readerIds,
-  isDirectMessage = false,
   queued,
 }: {
   msg: ChatMessage;
@@ -3193,16 +3198,15 @@ function ChatMessageBubble({
   currentUserId?: string;
   onToggleReaction?: (reaction: string, op: 'add' | 'remove') => void;
   resolveUserName?: (userId: string) => string | null;
+  /** Face lookup for the chips that show WHO — readers, reactors, the agents worked behind. */
+  resolveReaderFace?: (userId: string) => ReaderFace;
   reactionUses?: readonly ReactionUse[];
   /**
-   * Who has read this message. `undefined` means "do not draw an indicator here"
-   * — which is every message except the last of each of your own runs — and is
-   * deliberately distinct from `[]`, which means "your message, nobody has read
-   * it yet" and DOES draw one in a DM.
+   * Who has read this message, or `undefined` for "not one of yours, draw
+   * nothing". An empty array means "yours, nobody yet" and also draws nothing:
+   * a chip cannot render absence, and that is the trade the 👀 chip makes.
    */
   readerIds?: string[];
-  /** A two-person conversation, so the eye draws hollow while unread. */
-  isDirectMessage?: boolean;
   queued?: QueuedState;
 }) {
   const isUser = msg.role === 'user';
@@ -3245,18 +3249,27 @@ function ChatMessageBubble({
   // to show?" before deciding to render a bar at all — an empty bar carries
   // `mt-1` and would add 4px under every message nobody has read.
   //
-  // ONLY "queued" LIVES HERE NOW. "Seen" was briefly a 👀 chip in this row and
-  // that was the wrong home for it: read state answers a question ABOUT THE
-  // AGENT ("has it read what I said"), which is a different kind of fact from a
-  // reaction and from "this is waiting its turn". Putting it among the reaction
-  // pills made a system assertion look like content somebody chose, and it
-  // could only ever appear once a read had landed — so the ordinary case, "sent
-  // and not read yet", rendered as nothing at all. It is back on its own in the
-  // meta row as an eye, which can draw that absence. See ReadReceipt.tsx.
+  // THE ROW IS "WHAT HAPPENED TO THIS MESSAGE", AND IT IS ONE ROW. Looked at
+  // (👀), acknowledged (a real 👍, from a person or from an agent), and queued
+  // all live here, each showing whose face. THIS IS A SETTLED DECISION — read
+  // the block at the top of src/lib/seenPill.ts before moving any of it.
   //
-  // "Queued" stays: it IS about this message's place in the work, it is
-  // transient, and it reads correctly next to the pills.
-  const derivedChips = queued?.queued ? <QueuedPill state={queued} /> : null;
+  // Seen leads, then queued, then the reactions: derived chips first so their
+  // position is stable, or the seen chip would jump sideways every time
+  // somebody reacted.
+  const hasSeen = Boolean(readerIds && readerIds.length > 0);
+  const derivedChips = hasSeen || queued?.queued ? (
+    <>
+      {hasSeen && (
+        <SeenPill
+          readerIds={readerIds as string[]}
+          resolveName={resolveUserName || (() => null)}
+          resolveFace={resolveReaderFace}
+        />
+      )}
+      {queued?.queued && <QueuedPill state={queued} resolveFace={resolveReaderFace} />}
+    </>
+  ) : null;
 
   return (
     <div
@@ -3413,26 +3426,13 @@ function ChatMessageBubble({
             onToggle={onToggleReaction ?? NOOP_TOGGLE}
             reactionUses={reactionUses}
             leadingSlot={derivedChips}
+            resolveFace={resolveReaderFace}
           />
         )}
-        {/* "Has it been read" — its own signal, on its own line, because it is
-            an assertion the system makes rather than anything anybody chose.
-            An SVG eye and never 👀: see ReadReceipt.tsx for the three reasons,
-            the shortest being that 👀 is already in the reaction picker.
-
-            The emptiness check is HERE and not only inside ReadReceipt: the
-            wrapper carries `mt-1`, so rendering it around a component that
-            returns null would add 4px under every one of your messages in a
-            channel nobody has read yet. */}
-        {readerIds !== undefined && (isDirectMessage || readerIds.length > 0) && (
-          <div className="mt-1 flex items-center justify-end">
-            <ReadReceipt
-              readerIds={readerIds}
-              resolveName={resolveUserName || (() => null)}
-              isDirect={isDirectMessage}
-            />
-          </div>
-        )}
+        {/* NOTHING GOES BELOW THIS. The read state used to draw as a separate
+            eye on its own line here; it is a chip in the row above now, and a
+            second line under the pills saying a third thing about the same
+            message is what made this area churn in the first place. */}
       </div>
       {/* Full-height rail bounded to this message row; the toolbar inside is sticky so it
           rides into view as you scroll a tall message (top → mid-viewport → bottom-right)

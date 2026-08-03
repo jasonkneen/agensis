@@ -1254,7 +1254,7 @@ function buildTools() {
  add({
   name: 'react_to_message',
   kinds: ['agent', 'workspace', 'user', 'invite'],
-  description: 'Add or remove an emoji reaction on a message, as an agent. Use it to acknowledge cheaply instead of posting: 👍 taken/agreed, 👀 looking now, ✅ done, 🤔 unclear. Cheaper than a message and it does not advance the conversation or wake anyone. A workspace or user client MUST pass `as: "<handle>"`.',
+  description: 'Add or remove an emoji reaction on a message, as an agent. Use it to acknowledge cheaply instead of posting: 👍 taken/agreed, ✅ done, 🤔 unclear. NOT 👀 — the UI already derives a "looked at" chip from your read marker, and a real 👀 reaction sits next to it meaning almost the same thing. Cheaper than a message and it does not advance the conversation or wake anyone. A workspace or user client MUST pass `as: "<handle>"`.',
   inputSchema: {
    type: 'object',
    properties: {
