@@ -3170,6 +3170,13 @@ function CanvasLayerScene({
 }) {
   const { selectedWindowIds, viewMode, toggleFullExpand } = useWindowManager();
   const { profile: userProfile } = useUserProfile(userId || null);
+  // Agent id -> name, so a document comment an AGENT wrote carries its byline
+  // rather than rendering as "Teammate". Agents author comments through the
+  // reply_to_comment MCP tool; the panel falls back to "Agent" without this.
+  const agentNamesById = useMemo(
+    () => Object.fromEntries(agents.map(agent => [String(agent.id), agent.name])),
+    [agents],
+  );
   const receiptsEnabled = userProfile?.share_read_receipts !== false;
   const isFullExpandMode = viewMode === 'full';
 
@@ -3432,6 +3439,7 @@ function CanvasLayerScene({
                 workspaceId={workspaceId}
                 userId={userId}
                 currentUserEmail={userEmail}
+                agentNames={agentNamesById}
                 onAutoSave={onAutoSaveDocument}
                 onToggleFavorite={onToggleFavorite}
                 onCommentCreated={onCommentCreated}

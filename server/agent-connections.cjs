@@ -6,6 +6,11 @@ const crypto = require('crypto');
 // threaded through `deps` like the rest of this factory's collaborators: there
 // is no cycle to break and no test that wants to substitute them.
 const { applyToolSharing, sharingGate } = require('../shared/agentSharing.cjs');
+const {
+ channelAllowed,
+ normalizeSharePolicyMessage,
+ pathAllowed,
+} = require('../shared/agentSharePolicy.cjs');
 const { normalizeAgentDocuments } = require('./document-library.cjs');
 
 // Agent daemon connections: who is attached right now, and everything that
@@ -853,6 +858,36 @@ function createAgentConnections(deps = {}) {
  }
 
  /**
+  * The share policy this connection's daemon declared (shared/agentSharePolicy).
+  *
+  * Read from the live connection rather than the database: it arrives on the
+  * capabilities snapshot and is the DAEMON's statement about its own machine,
+  * so the authoritative copy is the one attached to the socket that made it. A
+  * connection with no declaration yields an empty policy, which permits
+  * everything — the workspace switches then decide alone, exactly as they did
+  * before any of this existed.
+  */
+ function connectionSharePolicy(ws) {
+  const live = ws?.agentConnectionId ? connectedAgents.get(ws.agentConnectionId) : null;
+  const capabilities = live?.capabilities;
+  return normalizeSharePolicyMessage(capabilities && capabilities.sharePolicy);
+ }
+
+ /**
+  * The SECOND enforcement of the machine's own policy.
+  *
+  * The daemon already filtered — it read the file and never enumerated what it
+  * withholds. This runs the same rules again on what actually arrived, which is
+  * what makes the policy a control rather than a convention: a daemon that is
+  * buggy, out of date, or modified cannot push a path its own declared policy
+  * forbids. Cheap, because the rule set is capped and usually empty.
+  */
+ function policyFilterPaths(policy, items, pathOf) {
+  if (!policy?.rules?.length) return items;
+  return items.filter(item => pathAllowed(policy, pathOf(item)));
+ }
+
+ /**
   * Refuse a withheld channel AND remove what that agent already mirrored.
   *
   * The prune is the half that matters. Refusing the push alone would freeze the
@@ -917,16 +952,25 @@ function createAgentConnections(deps = {}) {
   // The per-agent off switch (workspace_agents.sharing.memory). Withheld means
   // this push is dropped and whatever this agent mirrored earlier is removed —
   // see pruneWithheldMirror for why the removal is the load-bearing half.
-  const withheldMemory = await pruneWithheldMirror(await agentSharingRow(agentId), 'memory', {
-   table: 'agent_memory_files',
-   agentId,
-  });
+  // BOTH halves must say yes. The workspace switch is what somebody set in
+  // agensis; the policy is what the machine's own .agensis-share file declares.
+  // Neither can widen the other — see shared/agentSharePolicy.cjs.
+  const memoryPolicy = connectionSharePolicy(ws);
+  const memoryRow = await agentSharingRow(agentId);
+  const memoryWithheld = !channelAllowed(memoryPolicy, 'memory');
+  const withheldMemory = memoryWithheld
+   ? await getDb().unsafe('delete from agent_memory_files where agent_id = $1 returning *', [agentId])
+   : await pruneWithheldMirror(memoryRow, 'memory', { table: 'agent_memory_files', agentId });
   if (withheldMemory) {
    if (withheldMemory.length > 0) notifyDbSubscribers('agent_memory_files', 'DELETE', withheldMemory);
    return;
   }
 
-  const incoming = Array.isArray(message.files) ? message.files : [];
+  const incoming = policyFilterPaths(
+   memoryPolicy,
+   Array.isArray(message.files) ? message.files : [],
+   (file) => String(file?.path || ''),
+  );
   const db = getDb();
   const upserted = [];
   const keptPaths = [];
@@ -991,6 +1035,15 @@ function createAgentConnections(deps = {}) {
   // contributing the bodies behind them. Nothing is broadcast: this table is
   // deliberately absent from ALLOWED_TABLES and its sync fans out nothing, so a
   // DELETE event would be a message to no one.
+  // Channel gate only. Path rules deliberately do NOT apply to skills: a skill
+  // is addressed by NAME and its `path` is an advisory label about where the
+  // daemon found it, so filtering on that would silently drop skills for a
+  // reason the file's author was describing documents.
+  const skillPolicy = connectionSharePolicy(ws);
+  if (!channelAllowed(skillPolicy, 'skills')) {
+   await getDb().unsafe('delete from agent_skill_documents where agent_id = $1', [agentId]);
+   return;
+  }
   if (await pruneWithheldMirror(await agentSharingRow(agentId), 'skills', {
    table: 'agent_skill_documents',
    agentId,
@@ -1072,16 +1125,27 @@ function createAgentConnections(deps = {}) {
   const agentId = ws.agentId || auth.agentId;
   if (!workspaceId || !agentId) throw forbidden('Agent is not registered');
 
-  const withheldDocuments = await pruneWithheldMirror(await agentSharingRow(agentId), 'documents', {
-   table: 'agent_documents',
-   agentId,
-  });
+  const documentPolicy = connectionSharePolicy(ws);
+  const documentsWithheld = !channelAllowed(documentPolicy, 'documents');
+  const withheldDocuments = documentsWithheld
+   ? await getDb().unsafe('delete from agent_documents where agent_id = $1 returning *', [agentId])
+   : await pruneWithheldMirror(await agentSharingRow(agentId), 'documents', {
+    table: 'agent_documents',
+    agentId,
+   });
   if (withheldDocuments) {
    if (withheldDocuments.length > 0) notifyDbSubscribers('agent_documents', 'DELETE', withheldDocuments);
    return;
   }
 
-  const documents = normalizeAgentDocuments(message.documents || message.files);
+  // Path rules applied AFTER normalization, so they see the same normalized
+  // path the row will be stored under — a rule written as `docs/**` must match
+  // a daemon that reported `./docs/x.md`.
+  const documents = policyFilterPaths(
+   documentPolicy,
+   normalizeAgentDocuments(message.documents || message.files),
+   (doc) => doc.path,
+  );
   const db = getDb();
   const upserted = [];
   const keptPaths = [];
@@ -1176,6 +1240,11 @@ function createAgentConnections(deps = {}) {
    // capabilities blob — omitting it would blank the reference on every
    // capabilities push and leave the heartbeat nudging documents forever.
    documentsHash: typeof message.documentsHash === 'string' ? message.documentsHash : null,
+   // The machine's own .agensis-share declaration, normalized (never trusted
+   // as sent — see normalizeSharePolicyMessage). Stored so the workspace can
+   // EXPLAIN an empty list: "that machine declines" is a different fact from
+   // "we turned it off here", and they need different fixes in different places.
+   sharePolicy: normalizeSharePolicyMessage(message.sharePolicy),
   };
 
   // The `tools` sharing switch, applied at INGEST rather than at render.

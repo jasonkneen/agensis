@@ -417,6 +417,14 @@ export interface DocumentComment {
  document_id?: string;
  workspace_id: string;
  user_id: string | null;
+ /**
+  * Set when an AGENT authored this comment (through the reply_to_comment MCP
+  * tool), in which case user_id is null. Server-stamped from the verified
+  * token and privileged in shared/backend-core.cjs, so a browser cannot forge
+  * it — which matters because dispatchCommentMentions treats a row with an
+  * agent_id as "do not wake anyone", i.e. it is a loop guard as well as a byline.
+  */
+ agent_id?: string | null;
  parent_id: string | null;
  content: string;
  anchor_text: string;
@@ -839,6 +847,18 @@ export interface AgentCapabilities {
  codingRoute?: boolean;
  shared?: boolean;
  memoryRoot: string | null;
+ /**
+  * The machine's own `.agensis-share` declaration, parsed by the daemon and
+  * re-validated by the server. See src/lib/agentSharePolicy.ts.
+  *
+  * Absent for a daemon that has no policy file, or one too old to send it —
+  * both mean "no machine-side restrictions", never "shares nothing".
+  */
+ sharePolicy?: {
+  declared: boolean;
+  channels: Partial<Record<'memory' | 'skills' | 'tools' | 'documents', boolean>>;
+  rules: Array<{ allow: boolean; pattern: string }>;
+ };
 }
 
 export interface AgentConnection {

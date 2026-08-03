@@ -936,6 +936,62 @@ Documents section and the Library window
   `REALTIME_HEAVY_FIELDS` and the list is metadata-only; a body is fetched one
   row at a time when a document is opened.
 
+### Agents on document comment threads
+
+`@mentioning` an agent in a document comment has woken it in its DM for a while
+(`dispatchCommentMentions`). What was missing is everything after that: the agent
+arrived holding a quoted string with no way to read the thread or answer where
+the person was looking. MCP tools: `list_comments`, `reply_to_comment`,
+`resolve_comment`.
+
+- **`document_comments.agent_id` is a LOOP GUARD before it is a byline.**
+  `dispatchCommentMentions` returns early for any comment row carrying an
+  agent_id, precisely so an agent's own reply cannot wake an agent. Document
+  comments are in `COMMENT_MENTION_TABLES`, so without the column an agent that
+  replied with an `@mention` would re-arm the dispatch that woke it. The guard
+  was already written; this is the field it needed.
+- **It is privileged** (`PRIVILEGED_DB_COLUMNS_BY_TABLE`), so the generic browser
+  write path strips it. A client that could set it could both put words in an
+  agent's mouth and post a comment that evades the dispatch. A loop guard a
+  client can set is not a guard. (`task_comments.agent_id` is NOT protected —
+  known gap, predates the rule.)
+- **A reply attaches to the THREAD ROOT.** The pane renders two levels; a
+  reply-to-a-reply pointing at its immediate parent would build a depth nothing
+  can draw and would simply not appear.
+- **Replying never resolves.** An agent that answers and silently closes the
+  thread takes the decision away from whoever asked.
+- **The mention hint is source-specific.** A document comment can be answered in
+  place, so the agent is told to use `list_comments`/`reply_to_comment` and given
+  the comment id; a task or memory-file mention still says to answer in the DM,
+  because there is no thread there to post into.
+
+### The agent share policy (`.agensis-share`)
+
+The MACHINE's half of sharing, next to the workspace's half above. A robots.txt-
+shaped file in the agent's root folder declaring what that computer will
+contribute. Parser/evaluator: `shared/agentSharePolicy.cjs` (pure). Full contract
+for the daemon repo: [docs/agent-share-policy.md](./docs/agent-share-policy.md).
+
+- **The two halves AND together**: `effective = workspace switch AND machine
+  policy`. Neither can widen the other. Written as an AND rather than a
+  precedence order because precedence invites "which wins?", and the answer is
+  always "the more restrictive one".
+- **Enforced TWICE.** The daemon never enumerates what it withholds (the real
+  control), and the server applies the same rules again at ingest against the
+  declaration the daemon reported. The second pass is what makes it a control
+  rather than a convention.
+- **Fail open on absence, fail closed on garbage.** No file means no
+  machine-side restrictions — every agent that connected before this existed has
+  none. But a line that does not parse becomes an `errors[]` entry rather than
+  being discarded: somebody wrote it meaning to restrict something.
+- **First-match-wins path rules**, and an unmatched path is ALLOWED — the rules
+  are exceptions, not an allowlist. Path rules do not apply to skills (a skill is
+  addressed by name; its path is an advisory label).
+- **The UI states both sides separately.** A channel the machine withholds
+  renders as `Blocked` and the switch is disabled, because "we turned it off
+  here" is a toggle away and "that machine declines" needs a file change on
+  someone else's computer.
+
 ## Tests (three runners)
 
 - `npm test` — Node's built-in runner over `tests/*.test.cjs`

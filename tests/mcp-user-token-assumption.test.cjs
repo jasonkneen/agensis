@@ -95,7 +95,12 @@ test('a login token reaches exactly the tools the agw_ workspace token reaches',
   // 42 since react_to_message: it is offered to both credentials on the same
   // terms as post_message (an `as:` handle that is mcp_approved), so the sets
   // stayed identical and only the count moved.
-  assert.equal(byUser.length, 42);
+  // 43 since list_comments, which is a READ and takes the default kinds. Its two
+  // write siblings (reply_to_comment, resolve_comment) are `kinds: ['agent']` —
+  // a comment authored through them is attributed to an agent, and a user token
+  // has no agent id to stamp — so they are absent from both sets and the
+  // equality above still holds for the reason it always did.
+  assert.equal(byUser.length, 43);
   assert.ok(byUser.includes('get_connect_command'), 'including the tool that mints an aga_ daemon token');
   assert.ok(byUser.includes('register_agent'));
   for (const standingRuleTool of [

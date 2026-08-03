@@ -1349,6 +1349,11 @@ CREATE TABLE IF NOT EXISTS document_comments (
   updated_at timestamptz DEFAULT now()
 );
 
+-- Agent-authored comments (an agent replying in a document thread) attribute to
+-- an agent, not a user — mirrors task_comments.agent_id. Load-bearing for the
+-- mention loop guard in dispatchCommentMentions, not just for attribution.
+ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS agent_id uuid;
+
 CREATE INDEX IF NOT EXISTS idx_document_comments_document_id ON document_comments(document_id);
 CREATE INDEX IF NOT EXISTS idx_document_comments_workspace_id ON document_comments(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_document_comments_parent_id ON document_comments(parent_id);

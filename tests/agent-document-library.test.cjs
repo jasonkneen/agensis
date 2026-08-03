@@ -237,15 +237,27 @@ test('the sync handler is routed and the drift hash is carried', () => {
   assert.match(connections, /documentsHash: typeof message\.documentsHash === 'string'/);
 });
 
-test('every mirror sync is gated on the agent"s sharing switch', () => {
+test('every mirror sync is gated on BOTH halves of sharing', () => {
+  // Two independent vetoes, and the sync must consult each. The workspace
+  // switch is what somebody set in agensis; the policy is what the machine's own
+  // .agensis-share declares. MUTATION: drop either call and one side silently
+  // stops being able to withhold anything.
   const source = read('server/agent-connections.cjs');
   for (const channel of ['memory', 'skills', 'documents']) {
     assert.match(
       source,
-      new RegExp(`pruneWithheldMirror\\(await agentSharingRow\\(agentId\\), '${channel}'`),
-      `${channel} sync is not gated on sharing`,
+      new RegExp(`pruneWithheldMirror\\([^;]*'${channel}'`, 's'),
+      `${channel} sync does not consult the workspace switch`,
+    );
+    assert.match(
+      source,
+      new RegExp(`channelAllowed\\(\\w+Policy, '${channel}'\\)`),
+      `${channel} sync does not consult the machine policy`,
     );
   }
+  // Path rules are re-applied server-side on what actually arrived — the pass
+  // that makes the policy a control rather than a convention.
+  assert.match(source, /policyFilterPaths\(/);
   // The tool advert is redacted at ingest rather than at render, because
   // publicAgentConnection is a pure row mapper on the fanout path.
   assert.match(source, /applyToolSharing\(capabilities,/);

@@ -474,6 +474,19 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
   'created_by',
   'dispatch_requested_by',
  ]),
+ // Agent authorship on a document comment is stamped from a verified MCP token,
+ // never sent by a client. Two things break if a browser can set it: a comment
+ // can be made to look like an agent wrote it, and — because
+ // dispatchCommentMentions returns early on any row with an agent_id — a
+ // comment that @mentions an agent can be posted in a way that silently evades
+ // the dispatch. The loop guard has to be unforgeable to be a guard.
+ //
+ // task_comments.agent_id is NOT listed, and that is a known gap rather than a
+ // decision: it predates this rule and the same forgery is possible there.
+ // Adding it needs a check that no existing browser path writes the column.
+ document_comments: new Set([
+  'agent_id',
+ ]),
  workspace_agents: new Set([
   'mcp_approved',
   'connect_token_hash',

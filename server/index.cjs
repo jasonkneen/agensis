@@ -1827,6 +1827,14 @@ async function ensureRuntimeSchema() {
     -- by B; delayed work must return to B's agent DM, never infer from created_by.
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS dispatch_requested_by uuid;
     ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    -- Agent-authored document comments attribute to an AGENT, not a user, the
+    -- same way task_comments.agent_id already does.
+    --
+    -- Not merely cosmetic: dispatchCommentMentions guards with
+    -- an early return on row.agent_id, so this column is what stops an agent that
+    -- replies with an @mention from waking itself in a loop. Before it existed
+    -- an agent reply on a document was indistinguishable from a human's.
+    ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS agent_id uuid;
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
     -- Tasks <-> subthread <-> comments loop (2026-07): a task @mention runs the
@@ -5359,6 +5367,16 @@ const COMMENT_MENTION_TABLES = {
    const title = d[0]?.title ? `"${d[0].title}"` : `#${String(row.document_id).slice(0, 8)}`;
    return { label: `document ${title}`, link: `agensis://document/${row.document_id}` };
   },
+  // A document comment is the one source an agent can answer IN PLACE. Telling
+  // it to "reply here in your DM" would send the answer to a room the person
+  // who asked is not looking at — so this names the tools instead. The comment
+  // id is included because reply_to_comment needs it and the agent has no other
+  // way to learn it: the quote above is text, not a handle on a row.
+  actionHint: (row) => [
+   `Read the whole thread first: list_comments(doc_id: "${row.document_id}") — you have been shown one line of it.`,
+   `Then answer where the conversation is: reply_to_comment(comment_id: "${row.id}", content: "…").`,
+   'Resolve it with resolve_comment only once the thing being asked for is actually done — resolving takes it out of everyone\'s inbox.',
+  ].join('\n'),
  },
  memory_file_comments: {
   anchorColumn: 'agent_id',
@@ -5689,10 +5707,17 @@ async function dispatchCommentMentions({ table, row, authorUserId, run = continu
    if (!session) continue;
 
    const linkLine = source.link ? `\n\nSource: ${source.link}` : '';
+   // What the agent should DO about being tagged. Source-specific, because the
+   // right answer genuinely differs: a document comment can be answered in its
+   // own thread, while a task or memory-file mention has no such surface and the
+   // DM is where the reply belongs.
+   const action = typeof config.actionHint === 'function'
+    ? config.actionHint(row)
+    : 'Pick this up and reply here in your DM.';
    const content =
     `@${slugHandle(agent.handle || agent.name)} — ${authorName} tagged you in a comment on ${source.label}:\n\n` +
     `> ${String(row.content || '').replace(/\n/g, '\n> ')}\n\n` +
-    `Pick this up and reply here in your DM.${linkLine}`;
+    `${action}${linkLine}`;
 
    const taskId = config.sourceTaskId ? config.sourceTaskId(row) : null;
    if (taskId) {

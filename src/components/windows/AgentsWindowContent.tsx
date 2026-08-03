@@ -47,6 +47,12 @@ import {
   SHARING_CHANNEL_LABELS,
   normalizeAgentSharing,
 } from '../../lib/agentSharing';
+import {
+  channelState,
+  describeChannelBlock,
+  describeSharePolicy,
+  sharePolicyFromCapabilities,
+} from '../../lib/agentSharePolicy';
 import { AgentModelPicker } from '@/components/agents/AgentModelPicker';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -2558,7 +2564,11 @@ function AgentDetailPane({
 
           <AmbientRepliesSection agent={agent} onUpdateAgent={onUpdateAgent} />
 
-          <SharingSection agent={agent} onUpdateAgent={onUpdateAgent} />
+          {/* The FIRST live connection's declaration. An agent normally has
+              exactly one (registerAgentConnection supersedes rather than
+              joins), and where it briefly has more they are the same machine
+              reconnecting, so any of them answers the question. */}
+          <SharingSection agent={agent} connection={activeConnections[0] || null} onUpdateAgent={onUpdateAgent} />
 
           <VoiceSection agent={agent} roster={roster} mode="view" />
 
@@ -4108,16 +4118,25 @@ function AmbientRepliesSection({ agent, onUpdateAgent }: {
  * that agent already mirrored. People reasonably expect "stop sharing" to mean
  * the files leave, and here it does — so it should say so before they click.
  */
-function SharingSection({ agent, onUpdateAgent }: {
+function SharingSection({ agent, connection, onUpdateAgent }: {
   agent: WorkspaceAgent;
+  /** The live daemon connection, for its declared machine policy. */
+  connection?: AgentConnection | null;
   onUpdateAgent: (agentId: string, updates: Partial<WorkspaceAgent>) => void | Promise<unknown>;
 }) {
   const sharing = normalizeAgentSharing(agent);
+  const policy = sharePolicyFromCapabilities(connection?.capabilities);
   return (
     <AgentDetailSection title="Shares with this workspace">
       <div className="space-y-2">
         {SHARING_CHANNELS.map(channel => {
           const on = sharing[channel];
+          const state = channelState(agent, policy, channel);
+          // The machine's veto is not something this switch can undo, so the
+          // switch stops claiming otherwise: it reads "Blocked" and is disabled.
+          // A control that looks live and does nothing is worse than no control.
+          const machineBlocked = state.reason === 'machine' || state.reason === 'both';
+          const blockNote = describeChannelBlock(state);
           return (
             <div key={channel} className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -4125,14 +4144,18 @@ function SharingSection({ agent, onUpdateAgent }: {
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   {SHARING_CHANNEL_DESCRIPTIONS[channel]}
                 </p>
+                {blockNote && (
+                  <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">{blockNote}</p>
+                )}
               </div>
               <Button
                 type="button"
-                variant={on ? 'secondary' : 'outline'}
+                variant={state.shared ? 'secondary' : 'outline'}
                 size="sm"
                 className="shrink-0"
-                aria-pressed={on}
-                aria-label={`${SHARING_CHANNEL_LABELS[channel]}: ${on ? 'on' : 'off'}`}
+                disabled={machineBlocked}
+                aria-pressed={state.shared}
+                aria-label={`${SHARING_CHANNEL_LABELS[channel]}: ${machineBlocked ? 'blocked by the machine' : on ? 'on' : 'off'}`}
                 onClick={() => {
                   // The whole object is sent, not a one-key patch. The column is
                   // jsonb and the write REPLACES it, so sending {documents:false}
@@ -4142,7 +4165,7 @@ function SharingSection({ agent, onUpdateAgent }: {
                   void onUpdateAgent(agent.id, { sharing: { ...sharing, [channel]: !on } });
                 }}
               >
-                {on ? 'On' : 'Off'}
+                {machineBlocked ? 'Blocked' : on ? 'On' : 'Off'}
               </Button>
             </div>
           );
@@ -4151,6 +4174,14 @@ function SharingSection({ agent, onUpdateAgent }: {
       <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground/80">
         Switching one off removes what {agent.name} has already contributed and stops the next
         sync. Switching it back on asks the agent to send it again.
+      </p>
+      {/* What the MACHINE says, stated separately from what this workspace
+          wants. The two decide together and neither can overrule the other, so
+          collapsing them into one line would make an unfixable "off" look like
+          a fixable one. */}
+      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/80">
+        {describeSharePolicy(policy)}
+        {policy.rules.length > 0 && ' — some paths on that machine are excluded.'}
       </p>
     </AgentDetailSection>
   );
