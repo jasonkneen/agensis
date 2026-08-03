@@ -362,13 +362,19 @@ describe('leaving', () => {
 });
 
 describe('who is in the call', () => {
-  it('shows agents as participants even though they hold no LiveKit connection', () => {
-    // An agent hears the transcript and speaks through it, but never joins the
-    // room. Building the chips from presence alone makes a three-agent call
-    // look empty.
+  it('shows only who is ACTUALLY in the room', () => {
+    // This assertion inverted. Agents used to hold no LiveKit connection at all
+    // — they heard the transcript through a browser side-channel and spoke to
+    // the local speakers — so the chips had to be synthesised from a separate
+    // roster, and a chip could name an agent that was not in the call.
+    //
+    // Agents now join the room as real participants (voice-worker/), so the
+    // roster comes from LiveKit and nothing else. With no agent dispatched into
+    // this fake room, no agent chip may appear: showing one would be the app
+    // claiming someone is on the call who is not.
     render(fakeSession(true));
     const chips = Array.from(container.querySelectorAll('[title="boris"], [title="Coder"]'));
-    expect(chips.map(c => c.textContent)).toEqual(['BO', 'CO']);
+    expect(chips).toEqual([]);
   });
 
   it('offers the agent switcher in a channel, where a plain sentence wakes nobody', () => {
@@ -439,9 +445,13 @@ describe('who is in the call', () => {
 
   it('picks up a roster that only finishes loading after the call started', () => {
     // The channel's participants are still loading when the Huddle button
-    // becomes clickable. A roster snapshotted at that moment is empty, and an
-    // empty roster in a CHANNEL means every spoken sentence is posted with no
-    // @mention — which wakes nobody, so the call is silent and looks broken.
+    // becomes clickable. A roster snapshotted at that moment is empty.
+    //
+    // The chips no longer come from this roster — they come from the LiveKit
+    // room, because agents actually join it now. But the roster still decides
+    // whether a channel offers the agent switcher at all, so a late-arriving one
+    // must still reach the dock. Snapshotting it once at mount is the bug this
+    // guards, and that has not changed.
     stub.session = fakeSession(true);
     act(() => {
       root.render(createElement(
@@ -451,7 +461,7 @@ describe('who is in the call', () => {
         createElement(HuddleDock),
       ));
     });
-    expect(container.querySelector('[title="boris"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Who your voice goes to"]')).toBeNull();
 
     act(() => {
       root.render(createElement(
@@ -462,6 +472,6 @@ describe('who is in the call', () => {
         createElement(HuddleDock),
       ));
     });
-    expect(container.querySelector('[title="boris"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Who your voice goes to"]')).not.toBeNull();
   });
 });

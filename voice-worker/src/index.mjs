@@ -103,6 +103,21 @@ export default defineAgent({
     // until the room is joined.
     await ctx.connect();
 
+    // Say WHO this participant is. LiveKit assigns the worker an opaque identity,
+    // so without this the app sees an anonymous participant and cannot match it
+    // to the agent — which is the whole difference between "an agent is in the
+    // call" and "someone unknown is in the call".
+    await ctx.room.localParticipant.setAttributes({
+      'agensis.kind': 'agent',
+      'agensis.agentId': String(meta.agentId || ''),
+      'agensis.handle': String(meta.handle || ''),
+      'agensis.name': String(meta.name || meta.handle || 'Agent'),
+      'agensis.accentColor': String(meta.accentColor || ''),
+      'agensis.engine': engine,
+    }).catch((error) => {
+      log.error(`[voice] could not publish agent attributes: ${error?.message || error}`);
+    });
+
     // The held identity image. Published as a real camera-source track so the
     // agent occupies a tile in the grid like any other participant.
     const avatar = await publishAvatarVideo(ctx.room, {

@@ -9510,6 +9510,7 @@ function createApp() {
   // The worker reaches back for tools and the transcript, so it needs an
   // absolute base URL and a credential scoped to the one agent it is being.
   createVoiceSessionToken,
+  verifyVoiceSessionToken,
   parseJsonArray,
   parseJsonObject,
   publicBaseUrl: normalizeAgentBackendBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || '',

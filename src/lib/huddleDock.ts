@@ -29,6 +29,29 @@ export const HUDDLE_NOTES_MAX_LENGTH = 20_000;
  * microphone actually open? should we be transcribing?) is testable without a
  * WebRTC session, an audio context or a browser.
  */
+/**
+ * One participant as LiveKit reports them.
+ *
+ * Agents are in this list because they are genuinely in the room — the voice
+ * worker joins, publishes audio and a held video tile, and stamps
+ * `agensis.*` attributes so a participant can be matched back to the agent it
+ * is. Before that, agents had no LiveKit presence at all and the chips had to be
+ * synthesised from a separate roster that no presence event ever mentioned.
+ */
+export interface HuddleRoomParticipant {
+  identity: string;
+  name: string;
+  isLocal: boolean;
+  isSpeaking: boolean;
+  kind: 'human' | 'agent';
+  /** Set only for agents, from the `agensis.agentId` attribute. */
+  agentId: string;
+  handle: string;
+  accentColor: string;
+  /** The agent's held image / a human's camera is publishing. */
+  hasVideo: boolean;
+}
+
 export interface HuddleLocalState {
   /** The WebRTC session is up. */
   connected: boolean;
@@ -38,6 +61,65 @@ export interface HuddleLocalState {
   speaker: string;
   /** '' unless the session could not be established. */
   failed: string;
+  /** Everyone in the room, humans and agents alike, straight from LiveKit. */
+  roomParticipants: HuddleRoomParticipant[];
+}
+
+/** Read the agensis identity a voice worker stamps on itself. */
+export function roomParticipantFrom(participant: {
+  identity: string;
+  name?: string;
+  isLocal?: boolean;
+  isSpeaking?: boolean;
+  attributes?: Record<string, string>;
+  videoTrackPublications?: { size: number };
+}): HuddleRoomParticipant {
+  const attributes = participant.attributes || {};
+  const isAgent = attributes['agensis.kind'] === 'agent';
+  return {
+    identity: participant.identity,
+    name: attributes['agensis.name'] || participant.name || participant.identity,
+    isLocal: Boolean(participant.isLocal),
+    isSpeaking: Boolean(participant.isSpeaking),
+    kind: isAgent ? 'agent' : 'human',
+    agentId: attributes['agensis.agentId'] || '',
+    handle: attributes['agensis.handle'] || '',
+    accentColor: attributes['agensis.accentColor'] || '',
+    hasVideo: Number(participant.videoTrackPublications?.size || 0) > 0,
+  };
+}
+
+/**
+ * The participant chips, built from the room itself.
+ *
+ * This replaces merging a LiveKit human list with a separately-maintained agent
+ * roster: with agents in the room there is one source of truth, so a chip cannot
+ * show an agent that is not actually connected — which is what "the agent is in
+ * the call" has to mean.
+ */
+export function buildRoomDockParticipants(
+  participants: readonly HuddleRoomParticipant[],
+  activeAgentId = '',
+): HuddleDockParticipant[] {
+  const out: HuddleDockParticipant[] = [];
+  const seen = new Set<string>();
+  for (const participant of participants) {
+    const id = participant.kind === 'agent' && participant.agentId
+      ? participant.agentId
+      : participant.identity;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push({
+      id,
+      name: participant.isLocal ? 'You' : (participant.name || (participant.kind === 'agent' ? 'Agent' : 'Someone')),
+      kind: participant.kind,
+      ...(participant.kind === 'agent'
+        ? { active: Boolean(activeAgentId) && participant.agentId === activeAgentId }
+        : {}),
+      speaking: participant.isSpeaking,
+    } as HuddleDockParticipant);
+  }
+  return out;
 }
 
 export const IDLE_HUDDLE_LOCAL: HuddleLocalState = {
@@ -45,6 +127,7 @@ export const IDLE_HUDDLE_LOCAL: HuddleLocalState = {
   micEnabled: false,
   speaker: '',
   failed: '',
+  roomParticipants: [],
 };
 
 /** Whether two local-state reports say the same thing. */
@@ -52,7 +135,33 @@ export function sameHuddleLocalState(a: HuddleLocalState, b: HuddleLocalState): 
   return a.connected === b.connected
     && a.micEnabled === b.micEnabled
     && a.speaker === b.speaker
-    && a.failed === b.failed;
+    && a.failed === b.failed
+    && sameRoomParticipants(a.roomParticipants, b.roomParticipants);
+}
+
+/**
+ * Roster equality, by the fields the UI actually renders.
+ *
+ * LiveKit re-emits participants on every track and speaking change, so comparing
+ * object identity here would report a change on every frame and re-render the
+ * whole dock while someone is simply talking.
+ */
+export function sameRoomParticipants(
+  a: readonly HuddleRoomParticipant[] = [],
+  b: readonly HuddleRoomParticipant[] = [],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i];
+    const y = b[i];
+    if (x.identity !== y.identity
+      || x.name !== y.name
+      || x.isSpeaking !== y.isSpeaking
+      || x.kind !== y.kind
+      || x.agentId !== y.agentId
+      || x.hasVideo !== y.hasVideo) return false;
+  }
+  return true;
 }
 
 export interface HuddleDockVisibilityInput {

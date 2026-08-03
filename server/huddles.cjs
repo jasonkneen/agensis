@@ -767,6 +767,7 @@ function mountHuddleRoutes(app, deps = {}) {
   // mintToken, and optional: a deployment with no LiveKit agent service still
   // serves human huddles, it just has nobody to talk to.
   createVoiceSessionToken = null,
+  verifyVoiceSessionToken = null,
   parseJsonArray = null,
   parseJsonObject = null,
   publicBaseUrl = '',
@@ -1612,6 +1613,64 @@ function mountHuddleRoutes(app, deps = {}) {
     },
     error: null,
    });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
+ // What was SAID in the huddle, written into the channel it belongs to.
+ //
+ // The voice worker posts here as each turn finalises. A huddle and its channel
+ // are one conversation held two ways — without this, the spoken half dies with
+ // the room: nobody who missed the call can read it and no agent can search it.
+ //
+ // Authenticated by the per-agent voice credential, NOT a human session: the
+ // caller is a worker process, and the credential already names exactly which
+ // agent it is allowed to be. It is scoped to one workspace, so a token from one
+ // workspace cannot write into another's channel however it is aimed.
+ app.post('/backend/huddles/transcript', async (req, res) => {
+  try {
+   if (typeof verifyVoiceSessionToken !== 'function') {
+    return jsonError(res, 503, new Error('Voice transcript ingest is not configured'));
+   }
+   const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+   const identity = bearer ? await verifyVoiceSessionToken(bearer) : null;
+   if (!identity) return jsonError(res, 401, new Error('A voice session credential is required'));
+
+   const huddleId = String(req.body?.huddleId || '').trim();
+   const role = req.body?.role === 'assistant' ? 'assistant' : 'user';
+   const content = String(req.body?.content || '').trim();
+   if (!content) return res.json({ data: { written: false, reason: 'empty' }, error: null });
+   if (!huddleId) return jsonError(res, 400, new Error('huddleId is required'));
+
+   // The huddle is the authority on where its transcript goes — never the
+   // caller's sessionId, which would let a valid credential write anywhere in
+   // the workspace it happened to name.
+   const rows = await getDb().unsafe(
+    `select ${HUDDLE_COLUMNS} from huddles where id = $1 and workspace_id = $2 limit 1`,
+    [huddleId, identity.workspaceId],
+   );
+   const huddle = rows[0];
+   if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   if (huddle.ended_at) return res.json({ data: { written: false, reason: 'ended' }, error: null });
+
+   const sessionId = huddle.transcript_session_id || huddle.session_id;
+   const isAgent = role === 'assistant';
+   const inserted = await getDb().unsafe(
+    `insert into messages (session_id, role, content, sender_kind, sender_id, sender_name, huddle_id)
+         values ($1, $2, $3, $4, $5, $6, $7) returning *`,
+    [
+     sessionId,
+     isAgent ? 'assistant' : 'user',
+     content.slice(0, 8000),
+     isAgent ? 'agent' : 'user',
+     isAgent ? String(identity.agentId || '') : '',
+     isAgent ? (identity.name || identity.handle || 'Agent') : String(req.body?.speaker || 'Participant'),
+     huddle.id,
+    ],
+   );
+   if (inserted[0]) notifyDbSubscribers('messages', 'INSERT', inserted);
+   res.json({ data: { written: Boolean(inserted[0]), sessionId }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }

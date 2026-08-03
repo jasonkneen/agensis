@@ -3,7 +3,7 @@ import { LiveKitRoom, RoomAudioRenderer, useLocalParticipant, useParticipants } 
 import { Loader2, Mic, MicOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import type { HuddleLocalState } from '@/lib/huddleDock';
+import { roomParticipantFrom, type HuddleLocalState } from '@/lib/huddleDock';
 import type { HuddleConnection } from '@/hooks/useHuddle';
 
 // THE CALL ITSELF. This is the ONLY file in the app that touches the LiveKit
@@ -107,11 +107,21 @@ function HuddleRoomState({
     return chosen.isLocal ? 'You' : (chosen.name || chosen.identity);
   }, [participants]);
 
-  // Primitive deps only, so this fires on real changes rather than on every
-  // LiveKit re-render.
+  // Everyone in the room — agents included, because the voice worker joins as a
+  // real participant and stamps `agensis.*` attributes on itself. This is the
+  // single source of truth for who is in the call; there is no separate agent
+  // roster to fall out of step with it.
+  const roomParticipants = useMemo(
+    () => participants.map(roomParticipantFrom),
+    [participants],
+  );
+
+  // The report is deliberately compared by VALUE upstream (sameHuddleLocalState):
+  // LiveKit re-emits participants on every speaking change, so identity-based
+  // deps here would re-render the dock continuously while anyone talks.
   useEffect(() => {
-    onLocalChange({ connected, micEnabled: isMicrophoneEnabled, speaker, failed });
-  }, [connected, isMicrophoneEnabled, speaker, failed, onLocalChange]);
+    onLocalChange({ connected, micEnabled: isMicrophoneEnabled, speaker, failed, roomParticipants });
+  }, [connected, isMicrophoneEnabled, speaker, failed, roomParticipants, onLocalChange]);
 
   return null;
 }

@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { CHROME_DEPTH } from '@/lib/chromeDepth';
 import {
-  buildDockParticipants,
+  buildRoomDockParticipants,
   HUDDLE_DOCK_TABS,
   IDLE_HUDDLE_LOCAL,
   normalizeHuddleDockTab,
@@ -16,12 +16,9 @@ import {
 } from '@/lib/huddleDock';
 import { huddleDuration } from '@/lib/huddleState';
 import { huddleTranscriptTarget } from '@/lib/huddleTranscript';
-import { matchLeadingAgentName, withAgentMention, type HuddleAgentOption } from '@/lib/huddleAgents';
-import { echoGuardUntil } from '@/lib/huddleVoice';
-import { isEchoSuppressed, playbackEchoGuardUntil } from '@/lib/voiceStream';
+import type { HuddleAgentOption } from '@/lib/huddleAgents';
 import { useHuddleHeartbeat } from '@/hooks/useHuddle';
 import { useHuddleSend } from '@/hooks/useHuddleTranscript';
-import { useSpeechInput, useSpeechOutput, useVoiceEngines } from '@/hooks/useHuddleVoice';
 import type { HuddleState } from '@/types';
 import { useHuddleDock } from './HuddleDockContext';
 import { HuddleSessionContext } from './HuddleSessionContext';
@@ -141,96 +138,32 @@ export function HuddleDock() {
     !!connection && local.connected,
   );
 
-  // Which engines this deployment can offer. Asked once, before a microphone is
-  // opened, so a missing key downgrades to the browser engines with a sentence
-  // on screen rather than to a mic that lights up and does nothing.
-  const engines = useVoiceEngines(workspaceId, !!connection);
-
   // Replies are read from the SAME session the transcript goes into. Pointing
   // this at the channel while speech posts into the huddle would mean the agent
   // answers in the huddle and the browser reads the channel aloud — a call
   // where nobody's replies are ever heard.
-  const { unavailable: outputUnavailable, speakingName, playbackEndsAtMs } = useSpeechOutput(
-    transcriptSessionId || null,
-    !!connection && !outputMuted,
-    connection?.joinedAtMs ?? 0,
-    // The FULL roster, not the active agent's voice alone: each incoming
-    // message picks its own voice by who POSTED it (messages.sender_id), so an
-    // agent that interrupts or posts a status update while someone else is
-    // "active" in the strip is still heard in its own voice, not the current
-    // speaker's. See voiceIdForSpeechItem in src/lib/huddleVoice.
-    { engine: engines.tts, workspaceId, roster: agents },
-  );
-
-  // While a reply is playing (and for a moment after), anything the microphone
-  // hears is our own voice coming back off the speakers. Posting it would have
-  // the agent answering itself, forever.
+  // Speech is no longer this browser's job.
   //
-  // Two sources, because they know different things. Cartesia schedules its
-  // audio on an AudioContext, so it can say exactly when the last sample lands;
-  // speechSynthesis can only say "still talking", so that path keeps the old
-  // boolean-plus-tail guard.
-  const echoGuardRef = useRef(0);
-  useEffect(() => {
-    echoGuardRef.current = playbackEndsAtMs > 0
-      ? playbackEchoGuardUntil(playbackEndsAtMs)
-      : echoGuardUntil(!!speakingName, Date.now());
-  }, [speakingName, playbackEndsAtMs]);
+  // The agent is a real LiveKit participant now (voice-worker/): it subscribes to
+  // room audio, runs STT and VAD server-side, and publishes its reply as an audio
+  // track that RoomAudioRenderer plays like anyone else's voice. That deletes an
+  // entire parallel pipeline — a SECOND getUserMedia feeding Deepgram, and TTS
+  // played to the local speakers outside the room — along with the echo guard it
+  // needed, because LiveKit cancels echo on a track it actually owns.
+  //
+  // Barge-in follows for free: capture is never muted, so talking over an agent
+  // reaches it mid-sentence instead of being discarded.
+  const speakingName = useMemo(() => {
+    const speaking = local.roomParticipants.filter(participant => participant.isSpeaking && !participant.isLocal);
+    return speaking[0]?.name || '';
+  }, [local.roomParticipants]);
 
-  // Mirrors `activeAgent` so two utterances in the same tick both see a switch
-  // the first one made, without waiting for a render in between.
-  const activeAgentRef = useRef<HuddleAgentOption | null>(activeAgent);
-  activeAgentRef.current = activeAgent;
-
-  const handleUtterance = useCallback((text: string) => {
-    if (!transcriptSessionId) return;
-    if (isEchoSuppressed(echoGuardRef.current, Date.now())) return;
-    // No agents to choose between (a DM): the utterance is posted verbatim and
-    // the single agent answers a plain message, exactly as it does when typed.
-    if (agents.length === 0) {
-      void send(text);
-      return;
-    }
-    let target = activeAgentRef.current;
-    let body = text;
-    // "Coder, what's the status" switches AND asks. Saying only a name switches
-    // and posts nothing — the strip is the acknowledgement.
-    const named = matchLeadingAgentName(text, agents);
-    if (named) {
-      target = named.agent;
-      activeAgentRef.current = named.agent;
-      setActiveAgentId(named.agent.id);
-      body = named.remainder;
-    }
-    if (!body) return;
-    void send(target ? withAgentMention(body, target.handle) : body);
-  }, [agents, send, transcriptSessionId]);
-
-  // Three gates, all of which must hold: we hold a connection, LiveKit says the
-  // session is up, and the mic is not muted. Muting the mic stops transcribing
-  // as well as transmitting — one control, no second thing to remember.
-  const listenEnabled = !!connection && !!transcriptSessionId && local.connected && local.micEnabled;
-  const { unavailable: inputUnavailable, listening, interim, error: inputError } = useSpeechInput(
-    listenEnabled,
-    handleUtterance,
-    // `suppressed` stops audio LEAVING the browser while a reply plays. The
-    // echo guard above is the second line of defence; this is the first, and it
-    // also means we are not paying Deepgram to transcribe our own voice.
-    { engine: engines.stt, suppressed: !!speakingName },
-  );
-
+  // The chips come from the ROOM, so a chip can only show someone actually
+  // connected. Previously agents had no LiveKit presence at all and had to be
+  // synthesised from a roster no presence event ever mentioned.
   const participants = useMemo(
-    () => buildDockParticipants({
-      humans: state?.participants ?? [],
-      // Agents are in the call in every way that matters — they hear the
-      // transcript and speak — but never hold a LiveKit connection, so no
-      // presence event will ever mention them. Building the chips from LiveKit
-      // alone makes a three-agent call look empty.
-      agents,
-      activeAgentId: activeAgent?.id || '',
-      speakingName,
-    }),
-    [state?.participants, agents, activeAgent?.id, speakingName],
+    () => buildRoomDockParticipants(local.roomParticipants, activeAgent?.id || ''),
+    [local.roomParticipants, activeAgent?.id],
   );
 
   // PERMANENTLY STABLE, via refs. handleLeave is also LiveKitRoom's
@@ -418,15 +351,18 @@ export function HuddleDock() {
               className="shrink-0 border-b border-border px-3 py-1.5"
               transcribing={!!transcriptSessionId}
               micEnabled={local.micEnabled}
-              listening={listening}
-              interim={interim}
-              inputError={inputError}
-              inputUnavailable={inputUnavailable}
-              outputUnavailable={outputUnavailable}
+              // Transcription now happens in the room, so "listening" is simply
+              // whether our track is live — there is no separate recogniser to
+              // be up or down, and no browser-side error to report.
+              listening={local.connected && local.micEnabled}
+              interim=""
+              inputError=""
+              inputUnavailable={false}
+              outputUnavailable={false}
               outputMuted={outputMuted}
               speakingName={speakingName}
               activeHandle={activeAgent?.handle || ''}
-              engineNotice={engines.notice}
+              engineNotice=""
             />
           )}
 
