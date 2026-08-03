@@ -45,6 +45,11 @@ function createAgentJobs(deps = {}) {
   // Every other cross-module dep here is a thunk for the same reason.
   getConnectedAgents,
   scheduleTaskQueueDrain,
+  // Replays a human turn parked because this agent was already mid-turn. Paired
+  // with scheduleTaskQueueDrain at every terminal-status site: the two answer the
+  // same question — "the one active-job slot just freed, what was waiting on
+  // it?" — for the two kinds of waiting work, tasks and chat.
+  drainPendingChatTurn = () => {},
   forbidden,
   ensureTable = (table) => table,
   getDb,
@@ -418,6 +423,7 @@ function createAgentJobs(deps = {}) {
    // here — each one frees the agent's active-job slot, and each one used to strand
    // whatever was queued behind it. Fire-and-forget, so it cannot fail this write.
    scheduleTaskQueueDrain(job.workspace_id, job.agent_id, `job_stuck:${reason}`);
+   drainPendingChatTurn(job.session_id, job.agent_id, `job_stuck:${reason}`);
    const meta = parseJsonObject(job.metadata);
    const responseMessageId = meta.responseMessageId || null;
    if (responseMessageId) {
@@ -822,6 +828,10 @@ function createAgentJobs(deps = {}) {
   // it. Fire-and-forget, before the early returns below so farm/sessionless jobs
   // drain too — a job finishing is a job finishing.
   afterDurableWrite(() => scheduleTaskQueueDrain(job.workspace_id, job.agent_id, `job_${status}`));
+  // Same moment, the other queue: a human message that arrived mid-turn is
+  // waiting on this exact slot. Inside afterDurableWrite so the replay cannot see
+  // the job still 'running' and immediately re-park itself.
+  afterDurableWrite(() => drainPendingChatTurn(job.session_id, job.agent_id, `job_${status}`));
 
   // Farm-originated coding jobs are control-plane work, not chat turns. They
   // deliberately have no session and are polled through the integration API;
