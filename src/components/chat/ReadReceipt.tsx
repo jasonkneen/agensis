@@ -1,4 +1,3 @@
-import { Eye } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { cn } from '../../lib/utils';
 import { describeReaders } from '../../lib/readReceipts';
@@ -25,6 +24,40 @@ import { describeReaders } from '../../lib/readReceipts';
 // switch receipts off, and it undoes the one privacy property the high-water
 // mark has: the model deliberately cannot record WHICH message was read, so the
 // UI must not hand back a finer clock than the model kept.
+//
+// WHY THIS DRAWS ITS OWN SVG INSTEAD OF `<Eye fill="currentColor" />`. Lucide's
+// eye is TWO nodes — the almond outline and a separate pupil circle — and the
+// `fill` prop is applied to the whole icon. Filling it paints the almond solid
+// AND paints the pupil the same colour, so the pupil vanishes into it: at 14px
+// the read state rendered as an opaque blob with no eye left in it. The
+// geometry below is lucide's, unchanged; the only difference is that `fill`
+// lands on the pupil alone, so a read receipt is an eye with a solid pupil and
+// an unread one is the same eye hollow. Both keep the outline that makes it
+// legible as an eye.
+
+// lucide-react v1 `eye`, node for node, so it stays on the pixel grid with the
+// other size-3.5 icons in the meta row.
+const EYE_ALMOND =
+  'M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0';
+
+function EyeGlyph({ read }: { read: boolean }) {
+  return (
+    <svg
+      className="size-3.5 shrink-0"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      data-read={read ? 'true' : 'false'}
+      aria-hidden="true"
+    >
+      <path d={EYE_ALMOND} />
+      <circle cx="12" cy="12" r="3" fill={read ? 'currentColor' : 'none'} />
+    </svg>
+  );
+}
 
 export interface ReadReceiptProps {
   /** Ids of everyone who has read this message, excluding its author. */
@@ -62,7 +95,7 @@ export function ReadReceipt({ readerIds, resolveName, isDirect = false, classNam
           )}
           aria-label={read ? `Read by ${count} ${count === 1 ? 'person' : 'people'}` : 'Not read yet'}
         >
-          <Eye className="size-3.5" fill={read ? 'currentColor' : 'none'} aria-hidden="true" />
+          <EyeGlyph read={read} />
           {/* The count only earns its space in a group. In a DM "read" is
               binary, so a "1" beside the eye is noise. */}
           {!isDirect && count > 1 ? (
