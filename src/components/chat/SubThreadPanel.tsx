@@ -1,6 +1,7 @@
 import { Bot, Check, MessageSquare, Pencil, Plus, Send, Trash2, User, X } from 'lucide-react';
-import React, { useMemo, useRef, useState, type CSSProperties } from 'react';
+import React, { useCallback, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
+import { SessionStopButton } from './StopAgentButton';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolStepGroup } from './ToolStepGroup';
 import { buildTranscriptRows } from './toolSteps';
@@ -134,6 +135,12 @@ export function SubThreadPanel({
     [messages, permissionRequestsById],
   );
   useComposerAutosize(inputRef, mentions.input);
+  // For the Stop control's label: an agent id from a running job row, resolved
+  // to the name this panel already shows.
+  const resolveAgentName = useCallback(
+    (agentId: string) => agents.find(row => String(row.id) === String(agentId))?.name || null,
+    [agents],
+  );
   // Same rule as the channel's status line: a placeholder stranded by a job that
   // died is not evidence that anyone is working.
   const activityAgents = useMemo(() => {
@@ -359,6 +366,17 @@ export function SubThreadPanel({
             ))}
             {'…'}
           </span>
+          {/* Stop. Driven by agent_jobs, not by the line beside it — the
+              activity text comes from placeholder messages, which carry no job
+              id. A sub-thread IS its own chat_session, so this is the session
+              control and it stops exactly this panel's turn. */}
+          {session.id && (
+            <SessionStopButton
+              sessionId={session.id}
+              resolveAgentName={resolveAgentName}
+              className="ml-auto"
+            />
+          )}
         </div>
       )}
 

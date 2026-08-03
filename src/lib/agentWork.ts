@@ -29,6 +29,18 @@ export interface AgentWork {
  anchorAt: number;
  /** How many jobs are running against this key. */
  jobs: number;
+ /**
+  * The running job ids, sorted, so a Stop control can name exactly what it is
+  * halting rather than asking the server to guess from a session id.
+  *
+  * SORTED, and rebuilt into the same array only when the membership is
+  * unchanged — see `stabilize`. Realtime rows arrive in whatever order the
+  * sockets deliver them, and an array that reordered itself would defeat the
+  * reference stability this whole store exists for.
+  */
+ jobIds: readonly string[];
+ /** The agent ids behind those jobs, same order, for labelling the control. */
+ agentIds: readonly string[];
 }
 
 /**
@@ -49,6 +61,8 @@ interface JobRecord {
  working: boolean;
  sessionId: string;
  threadParentId: string | null;
+ /** Whose job it is, so a Stop control can say which agent it will halt. */
+ agentId: string;
  anchorAt: number;
  /** Epoch ms this record was written, used only by the fetch/realtime race guard. */
  appliedAt: number;
@@ -97,19 +111,53 @@ function jobRecordOf(row: Partial<AgentJobRow> | null | undefined, appliedAt: nu
   working,
   sessionId,
   threadParentId: text(metadata.threadParentId) || null,
+  agentId: text(row.agent_id),
   anchorAt: anchorAt ?? 0,
   appliedAt,
  };
 }
 
-function accumulate(map: Map<string, AgentWork>, key: string, anchorAt: number) {
+function accumulate(
+ map: Map<string, AgentWork>,
+ key: string,
+ anchorAt: number,
+ jobId: string,
+ agentId: string,
+) {
  const existing = map.get(key);
  if (!existing) {
-  map.set(key, { anchorAt, jobs: 1 });
+  map.set(key, { anchorAt, jobs: 1, jobIds: [jobId], agentIds: [agentId] });
   return;
  }
  // Oldest start wins: the badge answers "how long has work been going on here".
- map.set(key, { anchorAt: Math.min(existing.anchorAt, anchorAt), jobs: existing.jobs + 1 });
+ map.set(key, {
+  anchorAt: Math.min(existing.anchorAt, anchorAt),
+  jobs: existing.jobs + 1,
+  jobIds: [...existing.jobIds, jobId],
+  agentIds: [...existing.agentIds, agentId],
+ });
+}
+
+/** Same ids in the same order. */
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+ if (left.length !== right.length) return false;
+ for (let i = 0; i < left.length; i += 1) if (left[i] !== right[i]) return false;
+ return true;
+}
+
+/** Order every entry's ids by job id, keeping each agent id paired with its job. */
+function sortIds(map: Map<string, AgentWork>) {
+ for (const [key, value] of map) {
+  if (value.jobs < 2) continue;
+  const pairs = value.jobIds
+   .map((jobId, index) => ({ jobId, agentId: value.agentIds[index] ?? '' }))
+   .sort((a, b) => (a.jobId < b.jobId ? -1 : a.jobId > b.jobId ? 1 : 0));
+  map.set(key, {
+   ...value,
+   jobIds: pairs.map(pair => pair.jobId),
+   agentIds: pairs.map(pair => pair.agentId),
+  });
+ }
 }
 
 /**
@@ -124,7 +172,14 @@ function stabilize(
  let reused = 0;
  for (const [key, value] of next) {
   const before = previous.get(key);
-  if (before && before.anchorAt === value.anchorAt && before.jobs === value.jobs) {
+  if (
+   before
+   && before.anchorAt === value.anchorAt
+   && before.jobs === value.jobs
+   // Membership too, not just the count: one job finishing as another starts
+   // keeps `jobs` at 1 while the id a Stop control would send changes.
+   && sameIds(before.jobIds, value.jobIds)
+  ) {
    next.set(key, before);
    reused += 1;
   }
@@ -142,9 +197,17 @@ function publish(now: number) {
    if (record.appliedAt < cutoff) jobs.delete(id);
    continue;
   }
-  accumulate(nextSession, record.sessionId, record.anchorAt);
-  if (record.threadParentId) accumulate(nextThread, record.threadParentId, record.anchorAt);
+  accumulate(nextSession, record.sessionId, record.anchorAt, id, record.agentId);
+  if (record.threadParentId) {
+   accumulate(nextThread, record.threadParentId, record.anchorAt, id, record.agentId);
+  }
  }
+ // Sort AFTER accumulating, so the arrays do not depend on Map iteration order
+ // (which follows whatever order realtime rows happened to arrive in). Without
+ // this, two clients watching the same session hold differently-ordered arrays
+ // and `stabilize` sees a change on every recompute.
+ sortIds(nextSession);
+ sortIds(nextThread);
  const stableSession = stabilize(sessionWork, nextSession);
  const stableThread = stabilize(threadWork, nextThread);
  const changed = stableSession !== sessionWork || stableThread !== threadWork;

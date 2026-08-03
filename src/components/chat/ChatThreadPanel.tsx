@@ -1,7 +1,8 @@
-import { useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useRef, useState, type CSSProperties } from 'react';
 import { Bot, Check, CornerDownRight, Pencil, Send, Trash2, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { ThreadWorkBadge } from './AgentWorkBadge';
+import { ThreadStopButton } from './StopAgentButton';
 import { MarkdownContent } from './MarkdownContent';
 import { ToolStepGroup } from './ToolStepGroup';
 import { buildTranscriptRows } from './toolSteps';
@@ -105,6 +106,12 @@ export function ChatThreadPanel({
   );
 
   useComposerAutosize(inputRef, m.input);
+  // For the Stop control's label: an agent id from a running job row, resolved
+  // to the name this panel already shows.
+  const resolveAgentName = useCallback(
+    (agentId: string) => (agents ?? []).find(row => String(row.id) === String(agentId))?.name || null,
+    [agents],
+  );
 
   const handleSend = async () => {
     if (readOnly || streaming || !onSendReply) return;
@@ -143,6 +150,14 @@ export function ChatThreadPanel({
         {/* Same live working state as the "N replies" chip in the channel, so the
             open panel doesn't look idle while its agent is still going. */}
         <ThreadWorkBadge parentMessageId={parentMessage.id} className="text-xs" />
+        {/* Stop, right next to the working state it cancels. Keyed by the
+            thread's parent message id — agent_jobs.metadata.threadParentId —
+            so it ends THIS thread's turn and not the channel's. Renders null
+            unless a job is actually running here. */}
+        <ThreadStopButton
+          parentMessageId={parentMessage.id}
+          resolveAgentName={resolveAgentName}
+        />
         <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close thread">
           <X />
         </Button>

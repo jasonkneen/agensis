@@ -215,6 +215,7 @@ import {
 import { buildThreadReplySummaries, formatLastReplyTime, type ThreadReplySummary } from '../../lib/threadSummary';
 import { useSharedNow } from '../../hooks/useSharedNow';
 import { ThreadWorkBadge } from '../chat/AgentWorkBadge';
+import { SessionStopButton } from '../chat/StopAgentButton';
 import { cn } from '@/lib/utils';
 import { shouldAnnounceTyping } from '../../lib/typingPresence';
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
@@ -1234,6 +1235,13 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     return entries;
   }, [displayMessages, directAgent]);
   const isDirectMessage = isDirectMessageProp || Boolean(directAgent) || channelMeta?.folder === 'Direct messages';
+
+  // For the Stop control's label: an agent id from a running job row, resolved
+  // to the name the rest of the surface already shows.
+  const resolveAgentName = useCallback(
+    (agentId: string) => agents.find(row => String(row.id) === String(agentId))?.name || null,
+    [agents],
+  );
 
   // Typing presence. The composer is the only thing that knows a human is
   // mid-sentence; the throttle, the TTL and the fan-out all live downstream in
@@ -2335,6 +2343,17 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                   ))}
                   {'…'}
                 </span>
+                {/* Stop. Driven by agent_jobs, not by the line it sits beside —
+                    the "is thinking" text comes from placeholder messages,
+                    which carry no job id, so there would be nothing to cancel.
+                    Renders null unless a real job is running here. */}
+                {sessionId && (
+                  <SessionStopButton
+                    sessionId={sessionId}
+                    resolveAgentName={resolveAgentName}
+                    className="ml-auto"
+                  />
+                )}
               </div>
             )}
             {/* Match the message column's shift so the composer stays under the

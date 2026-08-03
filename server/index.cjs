@@ -151,6 +151,7 @@ const { mountSystemRoutes } = require('./system-routes.cjs');
 const { mountWorkspacesRoutes } = require('./workspaces-routes.cjs');
 const { mountWorkspaceMcpRoutes } = require('./workspace-mcp-routes.cjs');
 const { mountInboxRoutes } = require('./inbox-routes.cjs');
+const { mountAgentJobCancelRoutes } = require('./agent-job-cancel-routes.cjs');
 const { mountReactionsRoutes } = require('./reactions-routes.cjs');
 const { mountReadReceiptsRoutes } = require('./read-receipts-routes.cjs');
 const { mountSessionAccessRoutes } = require('./session-access-routes.cjs');
@@ -3314,6 +3315,10 @@ const reactionRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 // holds a well-behaved client to ~20 writes/minute per conversation; this is the
 // floor under one that does not.
 const readReceiptRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
+// Keyed per (user, job). Stopping is idempotent and cheap, so this only has to
+// bound a stuck button — a person legitimately halting several runaway agents
+// at once is the exact moment the feature exists for and must not be throttled.
+const agentJobCancelRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 // Bridge deliveries are machine traffic and legitimately bursty — a busy Slack
 // channel or a Telegram group mid-argument outruns a human webhook by a lot.
 const bridgeRateLimiter = createRateLimiter({ windowMs: 60_000, max: 600 });
@@ -9381,6 +9386,17 @@ function createApp() {
   deleteSkill: deleteWorkspaceSkill,
  });
  mountInboxRoutes(app, { ...coreDeps(), INBOX_DEFAULT_LIMIT, INBOX_FILTERS, INBOX_MAX_LIMIT, THREAD_INBOX_DEFAULT_LIMIT, buildInboxSql, buildThreadInboxSql, inboxMentionHandle, inboxMentionPattern, toInboxItem, toThreadInboxItem });
+ // Stop one running turn. Deliberately NOT part of sessions-routes: clearing or
+ // closing a conversation also deletes its messages, and "stop what you are
+ // doing" must not be reachable only through a destructive door.
+ mountAgentJobCancelRoutes(app, {
+  ...coreDeps(),
+  agentJobCancelRateLimiter,
+  cancelBuiltinJob,
+  scheduleTaskQueueDrain: (...a) => taskDispatch.scheduleTaskQueueDrain(...a),
+  sendToConnection,
+  onWarn: message => console.warn(`[agent-job-cancel] ${message}`),
+ });
  mountReactionsRoutes(app, { ...coreDeps(), reactionRateLimiter });
  mountReadReceiptsRoutes(app, { ...coreDeps(), readReceiptRateLimiter });
  mountSessionAccessRoutes(app, { ...coreDeps(), revokeRealtimeAccessForMember });
