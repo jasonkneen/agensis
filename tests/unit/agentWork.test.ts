@@ -36,6 +36,15 @@ function job(overrides: Partial<AgentJobRow> & { id: string }): Partial<AgentJob
   };
 }
 
+/**
+ * The expected snapshot for one key. `jobIds`/`agentIds` exist so a Stop control
+ * can name exactly which job it is halting instead of asking the server to guess
+ * from a session id, so every assertion here pins them.
+ */
+function work(anchorAt: number, jobIds: string[], agentIds: string[], jobs = jobIds.length) {
+  return { anchorAt, jobs, jobIds, agentIds };
+}
+
 describe('agentWork store', () => {
   beforeEach(() => {
     clearAgentWork();
@@ -47,7 +56,7 @@ describe('agentWork store', () => {
 
   it('derives a session anchor from a running job', () => {
     applyAgentJobRow(job({ id: 'job-1' }), 'INSERT');
-    expect(getSessionWork('session-a')).toEqual({ anchorAt: T0, jobs: 1 });
+    expect(getSessionWork('session-a')).toEqual(work(T0, ['job-1'], ['agent-1']));
     expect(getSessionWork('session-b')).toBeNull();
   });
 
@@ -60,7 +69,7 @@ describe('agentWork store', () => {
 
     // started_at missing but created_at parseable: anchor to the insert.
     applyAgentJobRow(job({ id: 'fallback', started_at: null }), 'INSERT');
-    expect(getSessionWork('session-a')).toEqual({ anchorAt: T0, jobs: 1 });
+    expect(getSessionWork('session-a')).toEqual(work(T0, ['fallback'], ['agent-1']));
   });
 
   it('clears the session when the job finishes', () => {
@@ -71,9 +80,9 @@ describe('agentWork store', () => {
 
   it('keys thread work off metadata.threadParentId', () => {
     applyAgentJobRow(job({ id: 'job-1', metadata: { threadParentId: 'msg-9', handle: 'coder' } }), 'INSERT');
-    expect(getThreadWork('msg-9')).toEqual({ anchorAt: T0, jobs: 1 });
+    expect(getThreadWork('msg-9')).toEqual(work(T0, ['job-1'], ['agent-1']));
     // A thread job is still work in its session — the channel row shows it too.
-    expect(getSessionWork('session-a')).toEqual({ anchorAt: T0, jobs: 1 });
+    expect(getSessionWork('session-a')).toEqual(work(T0, ['job-1'], ['agent-1']));
     // A session-level job is NOT attributed to any thread.
     applyAgentJobRow(job({ id: 'job-2', session_id: 'session-b' }), 'INSERT');
     expect(getThreadWork('session-b')).toBeNull();
@@ -83,10 +92,14 @@ describe('agentWork store', () => {
     const later = T0 + 30_000;
     applyAgentJobRow(job({ id: 'job-1', started_at: new Date(later).toISOString() }), 'INSERT');
     applyAgentJobRow(job({ id: 'job-2', agent_id: 'agent-2' }), 'INSERT');
-    expect(getSessionWork('session-a')).toEqual({ anchorAt: T0, jobs: 2 });
+    // Sorted by job id, with each agent id still paired to its own job — the
+    // rows arrived job-1-then-job-2 but job-2 is agent-2's.
+    expect(getSessionWork('session-a')).toEqual(
+      work(T0, ['job-1', 'job-2'], ['agent-1', 'agent-2'], 2),
+    );
 
     applyAgentJobRow(job({ id: 'job-2', status: 'error' }), 'UPDATE');
-    expect(getSessionWork('session-a')).toEqual({ anchorAt: later, jobs: 1 });
+    expect(getSessionWork('session-a')).toEqual(work(later, ['job-1'], ['agent-1']));
   });
 
   it('publishes only when the working set changes', () => {
@@ -145,7 +158,7 @@ describe('agentWork store', () => {
       fetchStartedAt + 2,
     );
     expect(getSessionWork('session-a')).toBeNull();
-    expect(getSessionWork('session-b')).toEqual({ anchorAt: T0, jobs: 1 });
+    expect(getSessionWork('session-b')).toEqual(work(T0, ['job-2'], ['agent-1']));
   });
 
   it('creates no timers of its own — the clock belongs to the badge leaf', () => {
@@ -166,7 +179,7 @@ describe('agentWork store', () => {
     applyAgentJobRow(job({ id: 'stale', session_id: 'session-z' }), 'INSERT');
     resetAgentWork([job({ id: 'job-1' })]);
     expect(getSessionWork('session-z')).toBeNull();
-    expect(getSessionWork('session-a')).toEqual({ anchorAt: T0, jobs: 1 });
+    expect(getSessionWork('session-a')).toEqual(work(T0, ['job-1'], ['agent-1']));
   });
 
   it('drops everything on clear and notifies', () => {
