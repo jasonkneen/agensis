@@ -113,7 +113,7 @@ import { frequentReactions, noteReactionUse, reactionPills, reactionToggleOp, ty
 import { useReadReceipts } from '../../hooks/useReadReceipts';
 import { receiptTargetForViewport } from '../../lib/readReceipts';
 import { seenAnchorIds, unseenAnchorId } from '../../lib/seenPill';
-import { queuedState } from '../../lib/queuedPill';
+import { queuedState, type QueuedState } from '../../lib/queuedPill';
 import { useSessionWork } from '../../hooks/useAgentWork';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
