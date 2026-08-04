@@ -254,6 +254,21 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
       style={{ ...RAIL_WIDTH_STYLE, paddingTop: titlebarInset ? titlebarInset + 8 : undefined }}
       onKeyDown={handleKeyDown}
     >
+      {/* macOS runs this window with `titleBarStyle: 'hiddenInset'`, which
+          removes the system title bar — so the window is draggable ONLY where
+          the renderer says it is. `titlebarInset` above already reserves this
+          band for the traffic lights; without a drag region in it there is
+          nothing anywhere to grab and the window cannot be moved at all. Out of
+          flow and behind the rows, so it covers no control. */}
+      {titlebarInset ? (
+        <div
+          aria-hidden="true"
+          data-titlebar-drag=""
+          className="titlebar-drag-region absolute inset-x-0 top-0"
+          style={{ height: titlebarInset }}
+        />
+      ) : null}
+
       {/* Theme-accent wash, matching the sidebar it sits beside. Decorative,
           non-interactive, out of flow — not a flex item. */}
       <div aria-hidden="true" className="sidebar-accent-wash" />
