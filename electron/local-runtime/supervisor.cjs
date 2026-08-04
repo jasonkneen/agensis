@@ -52,7 +52,21 @@ function quoteWindowsShellArg(value) {
     throw new Error(`Refusing to pass "%" through the Windows shell (cmd.exe would expand it as %VAR%): ${str}`);
   }
   if (!/[\s"^&|<>()]/.test(str)) return str;
-  return `"${str.replace(/"/g, '""')}"`;
+  // Two parsers see this string and they want different escapes, so neither
+  // textbook answer works alone (all of the below verified empirically by
+  // round-tripping through a real cmd.exe + .cmd shim):
+  //
+  //   - The CRT parser treats a backslash as an escape only when it precedes a
+  //     quote. So every backslash run that lands before a quote — including the
+  //     closing one we add — has to be doubled, or `--cwd "C:\proj\"` reads the
+  //     final \" as a literal quote and swallows the following args. A --cwd
+  //     with a trailing separator is the everyday way to hit that.
+  //   - The quote itself must still be escaped as "" and not \". cmd.exe does
+  //     not understand \", so it counts the quote as ending the quoted region
+  //     and resumes treating metacharacters as syntax: `name\"&calc` would run
+  //     calc. "" keeps cmd.exe's quote parity intact and the CRT still folds it
+  //     to one literal quote.
+  return `"${str.replace(/(\\*)"/g, '$1$1""').replace(/(\\+)$/, '$1$1')}"`;
 }
 
 function createSession(config, child, binary) {

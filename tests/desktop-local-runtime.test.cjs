@@ -204,11 +204,33 @@ test('quoteWindowsShellArg leaves plain args untouched', () => {
 test('quoteWindowsShellArg quotes args with spaces', () => {
   assert.equal(quoteWindowsShellArg('arg with spaces'), '"arg with spaces"');
   // --cwd and --name routinely carry spaces on Windows.
-  assert.equal(quoteWindowsShellArg('C:\Users\a b\proj'), '"C:\Users\a b\proj"');
+  assert.equal(quoteWindowsShellArg('C:\\Users\\a b\\proj'), '"C:\\Users\\a b\\proj"');
+});
+
+test('quoteWindowsShellArg doubles a trailing backslash run so it cannot escape the closing quote', () => {
+  // The CRT command-line parser only treats backslashes as escapes when they
+  // precede a quote, so an undoubled `proj\` would turn the closing quote into
+  // a literal one and swallow the following args. A --cwd with a trailing
+  // separator is the everyday way to hit this.
+  assert.equal(quoteWindowsShellArg('C:\\Users\\a b\\proj\\'), '"C:\\Users\\a b\\proj\\\\"');
+  assert.equal(quoteWindowsShellArg('a b\\\\'), '"a b\\\\\\\\"');
+  // Interior backslashes are not before a quote, so they stay as-is.
+  assert.equal(quoteWindowsShellArg('C:\\a b\\\\c'), '"C:\\a b\\\\c"');
 });
 
 test('quoteWindowsShellArg escapes double quotes', () => {
   assert.equal(quoteWindowsShellArg('say "hi"'), '"say ""hi"""');
+});
+
+test('quoteWindowsShellArg doubles a backslash run sitting in front of a quote', () => {
+  // Same CRT escaping rule as the trailing case: an undoubled backslash before
+  // a quote escapes it, so `a\"b` would lose the argument boundary and swallow
+  // whatever follows. Verified by round-tripping through a real cmd.exe shim.
+  assert.equal(quoteWindowsShellArg('a b\\"c'), '"a b\\\\""c"');
+  // The quote stays "" rather than \": cmd.exe does not understand \", so it
+  // would count the region as unquoted and run the metacharacter — `&calc`
+  // here — as a command of its own.
+  assert.equal(quoteWindowsShellArg('name\\"&calc'), '"name\\\\""&calc"');
 });
 
 test('quoteWindowsShellArg quotes cmd.exe metacharacters', () => {
