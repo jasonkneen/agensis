@@ -24,19 +24,26 @@ const common = {
   permissionMode: 'default',
 };
 
-test('a grok-harness agent is minted with grok-4.5, never a Claude model', () => {
-  // The exact production row: acp_harness grok, model left at claude-opus-5.
+test('a grok-harness agent never gets a Claude model, and auto omits --model', () => {
+  // Leftover Anthropic pin must not ride the connect string. Empty --model lets
+  // the local Grok CLI use ~/.grok/config.toml (or its own default) — forcing
+  // grok-4.5 broke accounts without access to that exact id.
   const cmd = __test.agentConnectionCommand({
     ...common,
     acpHarness: 'grok',
     model: 'claude-opus-5',
   }).portableCommand;
 
-  assert.match(cmd, / --model grok-4\.5(?: |$)/, 'a grok agent must default to grok-4.5');
+  assert.doesNotMatch(cmd, / --model /, 'foreign pins must not invent a Grok model id');
   assert.doesNotMatch(cmd, /claude-opus/, 'a Claude model id must never reach a grok harness');
+
+  for (const model of ['auto', '']) {
+    const autoCmd = __test.agentConnectionCommand({ ...common, acpHarness: 'grok', model }).portableCommand;
+    assert.doesNotMatch(autoCmd, / --model /, `model=${JSON.stringify(model)} must omit --model`);
+  }
 });
 
-test('an explicit grok model is kept; a foreign one is replaced by the harness default', () => {
+test('an explicit grok model is kept; a foreign one is dropped', () => {
   const kept = __test.agentConnectionCommand({
     ...common,
     acpHarness: 'grok',
@@ -44,11 +51,17 @@ test('an explicit grok model is kept; a foreign one is replaced by the harness d
   }).portableCommand;
   assert.match(kept, / --model grok-4\.5-fast(?: |$)/, 'a real grok id is a deliberate choice');
 
-  // 'auto' and a Codex id are both "nobody chose this for grok".
-  for (const model of ['auto', '', 'gpt-5.6-sol']) {
-    const cmd = __test.agentConnectionCommand({ ...common, acpHarness: 'grok', model }).portableCommand;
-    assert.match(cmd, / --model grok-4\.5(?: |$)/, `model=${JSON.stringify(model)} must fall back to grok-4.5`);
-  }
+  const native = __test.agentConnectionCommand({
+    ...common,
+    acpHarness: 'grok',
+    model: 'grok-4.5',
+  }).portableCommand;
+  assert.match(native, / --model grok-4\.5(?: |$)/, 'native Grok ids must be kept');
+
+  // Codex id is not a Grok choice — drop, do not replace with grok-4.5.
+  const cmd = __test.agentConnectionCommand({ ...common, acpHarness: 'grok', model: 'gpt-5.6-sol' }).portableCommand;
+  assert.doesNotMatch(cmd, / --model /, 'foreign non-Grok ids must not invent a fallback');
+  assert.doesNotMatch(cmd, /gpt-5/);
 });
 
 test('a harness with no known catalog takes no --model at all', () => {

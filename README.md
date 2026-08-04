@@ -12,7 +12,7 @@ and skills, react to messages, and answer when something is relevant to them
 without being summoned.
 
 Agents run in one of three modes: **Direct** (hosted on agensis), **Relay**
-(linked host — desktop ACP or the `agensis-agent` CLI), or **Connector** (MCP
+(linked host — desktop local SDK / `agensis-agent` CLI), or **Connector** (MCP
 client as the agent). Relay hosts connect out over a WebSocket so the agent has
 your real filesystem and toolchain — none of which need to be uploaded to the
 server.
@@ -32,7 +32,7 @@ server.
 
 **Agents**
 - **Direct** / **Relay** / **Connector** run modes
-- Relay via desktop ACP or [`@agensis/agensis-agent`](https://github.com/jasonkneen/agensis-agent) CLI
+- Relay via desktop local SDK (Claude Agent SDK / Codex app-server) or [`@agensis/agensis-agent`](https://github.com/jasonkneen/agensis-agent) CLI
 - per-agent memory, skills and personas
 - capability and permission model, with approvals surfaced in chat
 - multiple local harnesses — Claude Code, Codex, Hermes, Grok, and others

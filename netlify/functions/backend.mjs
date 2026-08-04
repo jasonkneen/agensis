@@ -4121,6 +4121,23 @@ async function route(req) {
   if (forwarded) return forwarded;
   return handleCloseSession(decodeURIComponent(sessionCloseMatch[1]), userId);
  }
+ const agentJobCancelMatch = pathname.match(/^\/backend\/agent-jobs\/([^/]+)\/cancel$/);
+ if (req.method === 'POST' && agentJobCancelMatch) {
+  // Authenticate here, then forward — and unlike clear/close there is NO local
+  // fallback, deliberately. Stopping a turn means aborting an in-process stream
+  // or addressing one exact daemon websocket, neither of which a Lambda can
+  // reach. Writing status='cancelled' from here would report "stopped" to the
+  // user while the agent kept running and kept using tools, which is worse than
+  // saying no. So: fail closed.
+  await requireUserId(req);
+  const forwarded = await forwardConversationControl(req, pathname);
+  if (forwarded) return forwarded;
+  return jsonErrorWithData(
+   503,
+   new Error('Stopping an agent requires the long-running backend'),
+   { requiredEnv: 'AGENSIS_DAEMON_BASE_URL' },
+  );
+ }
  const sessionSplitMatch = pathname.match(/^\/backend\/sessions\/([^/]+)\/split$/);
  if (req.method === 'POST' && sessionSplitMatch) {
   const userId = await requireUserId(req);

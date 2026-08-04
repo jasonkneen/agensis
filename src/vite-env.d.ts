@@ -39,7 +39,7 @@ interface LocalAgentCapabilities {
 }
 
 interface Window {
-  /** Electron desktop shell bridge (pty, folder picker, local agents, ACP host). */
+  /** Electron desktop shell bridge (pty, folder picker, local agents, local runtime). */
   electronAPI?: {
     pickFolder: () => Promise<string | null>;
     /** Probe THIS machine for claude/codex/amp/grok/… (not the remote backend). */
@@ -47,42 +47,61 @@ interface Window {
       workspacePath?: string;
       refresh?: boolean;
     }) => Promise<{ ok: true; data: LocalAgentCapabilities } | { ok: false; error: string }>;
-    acp?: {
-      listHarnesses: () => Promise<{
+    /**
+     * Local Relay on this Mac — spawns `agensis connect --no-acp` so jobs use
+     * Claude Agent SDK (warm connection) or Codex app-server.
+     */
+    localRuntime?: {
+      listRuntimes: () => Promise<{
         ok: true;
-        data: Array<{
-          id: string;
-          label: string;
-          available: boolean;
-          path: string | null;
-          command: string | null;
-          installHint: string | null;
-        }>;
+        data: {
+          daemon: {
+            available: boolean;
+            version: string | null;
+            error: string | null;
+            source: string | null;
+            path: string | null;
+          };
+          runtimes: Array<{
+            id: string;
+            label: string;
+            detail: string;
+            available: boolean;
+            path: string | null;
+            installHint: string | null;
+            mode?: string;
+            acpHarness?: string | null;
+            classicRuntime?: string | null;
+          }>;
+        };
       } | { ok: false; error: string }>;
       status: (agentId: string) => Promise<{
         ok: true;
         data: {
           session: {
             agentId: string;
-            harnessId: string;
+            runtime: string;
             label: string;
-            path: string;
             cwd: string;
-            sessionId: string | null;
+            baseUrl: string;
+            model: string;
             pid: number | undefined;
             startedAt: string;
             running: boolean;
+            lastError: string | null;
+            registeredHint: boolean;
+            binarySource: string | null;
           } | null;
-          bridge: { agentId: string; connected: boolean; harnessId: string } | null;
           running: unknown[];
+          autostart?: Array<{ agentId: string; runtime: string; autoStart: boolean; savedAt?: string }>;
+          openAtLogin?: boolean;
         };
       } | { ok: false; error: string }>;
       start: (options: {
         agentId: string;
-        harnessId: string;
+        runtime?: string;
         cwd?: string;
         autoApprove?: boolean;
-        /** Agent ACCESS: default=Ask, accept_edits, yolo=Full access (acceptEdits legacy alias ok) */
         permissionMode?: 'default' | 'accept_edits' | 'acceptEdits' | 'yolo';
         token?: string;
         baseUrl?: string;
@@ -90,17 +109,18 @@ interface Window {
         handle?: string;
         name?: string;
         model?: string;
-        /** agent.metadata.runtime when pinned to claude|codex|amp */
         requiredRuntime?: string;
+        harnessId?: string;
+        autoStart?: boolean;
       }) => Promise<{ ok: true; data: unknown } | { ok: false; error: string }>;
       stop: (agentId: string) => Promise<{ ok: true; data: unknown } | { ok: false; error: string }>;
-      prompt: (
-        agentId: string,
-        text: string,
-      ) => Promise<{ ok: true; data: { text: string; stopReason: string } } | { ok: false; error: string }>;
-      onUpdate: (agentId: string, callback: (params: unknown) => void) => () => void;
-      onChunk: (agentId: string, callback: (chunk: string) => void) => () => void;
+      listAutostart: () => Promise<{
+        ok: true;
+        data: { agents: unknown[]; openAtLogin: boolean };
+      } | { ok: false; error: string }>;
       onLog: (agentId: string, callback: (line: string) => void) => () => void;
+      onExit: (callback: (payload: { agentId: string }) => void) => () => void;
+      onRestoreComplete: (callback: (report: unknown) => void) => () => void;
     };
     pty?: {
       spawn: (options?: { cols?: number; rows?: number; cwd?: string }) => Promise<

@@ -73,6 +73,7 @@ const PUBLIC_TOOL_SURFACE = {
   list_thread_items: ['session_id'],
   list_workspace_resources: [],
   post_message: ['channel_id', 'content'],
+  react_to_message: ['message_id', 'reaction'],
   read_channel: ['channel_id'],
   read_doc: ['doc_id'],
   read_skill: ['skill'],

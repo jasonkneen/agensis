@@ -142,6 +142,130 @@ function reactionToggleSql(op) {
  throw new Error(`Unknown reaction op: ${op}`);
 }
 
+// ----------------------------------------------------------------------------
+// The AGENT lane.
+//
+// An agent has a row in `workspace_agents`, not in `app_users`, so it has no
+// `req.userId` and every statement above is unreachable to it: `sessionReadableSql`
+// authorizes a HUMAN through chat_session_members. That absence — not a
+// permissions setting — is why an agent could not react at all.
+//
+// The map itself is unchanged. The stored value is the agent's id, exactly as a
+// human's entry is the user's id, because the map is `{ reaction: [id, …] }` and
+// nothing in it has ever declared which table an id came from. The client
+// resolves a name for an unknown id off the agent roster, which is the same
+// shape read receipts already use (a marker's reader is `user_id` OR `agent_id`
+// and the client resolves both the same way).
+//
+// What changes is the authorization predicate, and it is deliberately the SAME
+// rule the MCP surface already applies to this agent for reading and posting in
+// a session (`mcpSessionScopeSql`): an open channel, or a session this agent is
+// a listed participant of. A private conversation it was never added to stays
+// closed, so an agent cannot annotate a DM it cannot read.
+//
+// Two liveness facts are joined INSIDE the statement rather than checked before
+// it, so a disable or a removal landing between the caller's authorization and
+// this write fails closed rather than racing it:
+//   * `workspace_agents.enabled is not false` — a disabled agent writes nothing.
+//   * the agent's workspace must be the SESSION's workspace — an agent cannot
+//     reach across tenants even if a caller names a foreign message id.
+// `for share` holds both rows for the duration, matching ADVANCE_AGENT_READ_MARKER_SQL.
+//
+// `mcp_approved` is deliberately NOT required here, for the same reason
+// insertAgentMessage does not require it of a per-agent token: it authorizes an
+// external client acting AS an agent, and that check belongs at the identity
+// resolution (`resolveActingAgent`), not on the row write. Putting it here too
+// would silently suppress reactions for the default builtin agent whose turn is
+// already fully authorized to post in the channel.
+//
+// $agentParam is the agent id, bound as text and as uuid.
+function agentReactionScopeSql(agentParam) {
+ return `exists (
+     select 1
+       from chat_sessions reaction_session_scope
+       join workspace_agents reacting_agent
+         on reacting_agent.id = ${agentParam}::uuid
+        and reacting_agent.workspace_id = reaction_session_scope.workspace_id
+        and reacting_agent.enabled is not false
+      where reaction_session_scope.id = messages.session_id
+        and reaction_session_scope.deleted_at is null
+        and (
+          (coalesce(reaction_session_scope.visibility, 'workspace') <> 'private'
+           and coalesce(reaction_session_scope.folder, '') <> 'Direct messages')
+          or exists (
+            select 1
+              from jsonb_array_elements(
+                case when jsonb_typeof(reaction_session_scope.participants) = 'array'
+                     then reaction_session_scope.participants else '[]'::jsonb end
+              ) reacting_agent_participant
+             where reacting_agent_participant->>'agent_id' = ${agentParam}::text
+          )
+        )
+      for share of reaction_session_scope, reacting_agent
+   )`;
+}
+
+// $1 message id, $2 session id, $3 reaction, $4 agent id.
+//
+// The guards are the human statement's guards verbatim — the `@>` containment
+// test that makes the transition exact (and therefore makes priorReactionMap a
+// pure function of the after-image), and the distinct-reaction cap. Only the
+// authorization `exists (…)` differs. Keeping them identical is what lets both
+// lanes share priorReactionMap and explainReactionNoop rather than growing a
+// second, subtly different reconstruction of the before-image.
+const AGENT_REACTION_ADD_SQL = `update messages
+   set reactions = jsonb_set(
+         coalesce(reactions, '{}'::jsonb),
+         array[$3::text],
+         coalesce(reactions -> $3::text, '[]'::jsonb) || to_jsonb($4::text)
+       )
+ where id = $1::uuid
+   and session_id = $2::uuid
+   and deleted_at is null
+   and ${agentReactionScopeSql('$4')}
+   and not coalesce(reactions -> $3::text, '[]'::jsonb) @> to_jsonb($4::text)
+   and (
+     coalesce(reactions, '{}'::jsonb) ? $3::text
+     or (select count(*) from jsonb_object_keys(coalesce(reactions, '{}'::jsonb))) < ${MAX_DISTINCT_REACTIONS_PER_MESSAGE}
+   )
+returning ${REACTION_RETURNING_COLUMNS}`;
+
+const AGENT_REACTION_REMOVE_SQL = `update messages
+   set reactions = case
+         when jsonb_array_length(coalesce(reactions -> $3::text, '[]'::jsonb) - $4::text) = 0
+           then coalesce(reactions, '{}'::jsonb) - $3::text
+         else jsonb_set(
+                coalesce(reactions, '{}'::jsonb),
+                array[$3::text],
+                coalesce(reactions -> $3::text, '[]'::jsonb) - $4::text
+              )
+       end
+ where id = $1::uuid
+   and session_id = $2::uuid
+   and deleted_at is null
+   and ${agentReactionScopeSql('$4')}
+   and coalesce(reactions -> $3::text, '[]'::jsonb) @> to_jsonb($4::text)
+returning ${REACTION_RETURNING_COLUMNS}`;
+
+// The no-op read, agent-scoped. It exists for the same reason the human one
+// does — to choose between "you already hold it" and "the cap is full" AFTER a
+// zero-row write — and it must carry the same scope predicate, or a message an
+// agent may not touch would answer it with a 409 instead of a 404 and confirm
+// the message exists.
+const AGENT_REACTION_CURRENT_SQL = `select ${REACTION_RETURNING_COLUMNS}
+  from messages
+ where id = $1::uuid
+   and session_id = $2::uuid
+   and deleted_at is null
+   and ${agentReactionScopeSql('$3')}
+ limit 1`;
+
+function agentReactionToggleSql(op) {
+ if (op === 'add') return AGENT_REACTION_ADD_SQL;
+ if (op === 'remove') return AGENT_REACTION_REMOVE_SQL;
+ throw new Error(`Unknown reaction op: ${op}`);
+}
+
 /**
  * Normalize the caller's op. Anything else is a 400 rather than a guess: an
  * unrecognised op that fell through to 'add' would let a typo silently mean the
@@ -250,8 +374,12 @@ function explainReactionNoop(row, { op, reaction, userId }) {
 }
 
 module.exports = {
+ AGENT_REACTION_ADD_SQL,
+ AGENT_REACTION_CURRENT_SQL,
+ AGENT_REACTION_REMOVE_SQL,
  MAX_DISTINCT_REACTIONS_PER_MESSAGE,
  REACTION_ADD_SQL,
+ agentReactionToggleSql,
  REACTION_CURRENT_SQL,
  REACTION_OPS,
  REACTION_REMOVE_SQL,

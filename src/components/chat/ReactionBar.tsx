@@ -15,6 +15,8 @@ import {
   type ReactionMap,
   type ReactionUse,
 } from '../../lib/reactionBar';
+import { FaceStack } from './FaceStack';
+import type { ReaderFace } from '../../lib/readerFaces';
 
 // The reactions bar: the pills under a message, and the picker that adds one.
 //
@@ -37,21 +39,47 @@ export interface ReactionBarProps {
   onToggle: (reaction: string, op: 'add' | 'remove') => void;
   /** Persisted per-account picker history, for the "Frequently used" row. */
   reactionUses?: readonly ReactionUse[];
+  /**
+   * Derived, non-interactive chips that share this row — today the seen pill and
+   * the queued pill. They are NOT reactions: they carry no entry in the reaction
+   * map and cannot be toggled. They live here anyway because the row is what the
+   * eye reads as "what happened to this message", and a second row underneath
+   * for system-asserted chips would be the same information in two places.
+   */
+  leadingSlot?: React.ReactNode;
+  /**
+   * Optional face lookup. With it, a pill shows WHO holds the reaction instead
+   * of how many do.
+   *
+   * This is what makes 👍-means-acknowledged legible. An agent can react now
+   * (react_to_message, b6c9daa4), so a thumbs-up on your message is a specific
+   * agent saying "got it" — and in a channel with three agents in it, a bare
+   * "2" does not tell you whether the one you asked is among them. Past three
+   * holders it falls back to "+N", which is the one case where the numeral
+   * genuinely says more (see faceStack in src/lib/readerFaces.ts).
+   *
+   * Optional so every existing caller and every existing test keeps the count.
+   */
+  resolveFace?: (userId: string) => ReaderFace;
   className?: string;
 }
 
 /**
- * The pills. Rendered ONLY when reactions exist, so a message with none costs
- * no vertical space and hovering does not shift the row.
+ * The pills. Rendered ONLY when there is something to show, so a message with
+ * no reactions and no readers costs no vertical space and hovering does not
+ * shift the row.
  */
 export function ReactionBar({
-  reactions, currentUserId, resolveName, onToggle, reactionUses = [], className,
+  reactions, currentUserId, resolveName, onToggle, reactionUses = [], leadingSlot, resolveFace, className,
 }: ReactionBarProps) {
   const pills = useMemo(() => reactionPills(reactions, currentUserId), [reactions, currentUserId]);
-  if (pills.length === 0) return null;
+  if (pills.length === 0 && !leadingSlot) return null;
 
   return (
     <div className={cn('mt-1 flex flex-wrap items-center gap-1', className)}>
+      {/* Derived chips lead the row so their position is stable: appending them
+          would make the seen pill jump sideways every time somebody reacts. */}
+      {leadingSlot}
       {pills.map(pill => (
         <Tooltip key={pill.reaction}>
           <TooltipTrigger asChild>
@@ -71,17 +99,26 @@ export function ReactionBar({
               )}
             >
               {pill.reaction}
-              {/* The numeral is always shown, including at 1. "+1" and a hidden
-                  count both make you hover to learn something the row could
-                  just say. */}
-              <span className="text-[11px] font-medium">{pill.count}</span>
+              {resolveFace ? (
+                /* Who, not how many — see the `resolveFace` prop doc. */
+                <FaceStack readerIds={pill.userIds} resolveFace={resolveFace} />
+              ) : (
+                /* The numeral is always shown, including at 1. "+1" and a
+                   hidden count both make you hover to learn something the row
+                   could just say. */
+                <span className="text-[11px] font-medium">{pill.count}</span>
+              )}
             </button>
           </TooltipTrigger>
           <TooltipContent side="top">{describeReactors(pill, resolveName, currentUserId)}</TooltipContent>
         </Tooltip>
       ))}
       {/* A keyboard user must never have to reach the hover rail to add a
-          reaction, so an existing pill row carries its own opener. */}
+          reaction, so an existing pill row carries its own opener. A row that
+          exists only for a derived chip does NOT: the opener would then appear
+          under every message anyone has read, which is the furniture the hover
+          rail exists to avoid. */}
+      {pills.length > 0 && (
       <ReactionPicker
         onPick={reaction => onToggle(reaction, reactionToggleOp(pills.find(p => p.reaction === reaction), currentUserId))}
         reactionUses={reactionUses}
@@ -96,6 +133,7 @@ export function ReactionBar({
           </button>
         )}
       />
+      )}
     </div>
   );
 }

@@ -122,7 +122,7 @@ function createAgentConnections(deps = {}) {
   if (taken.length === 0) return taken;
   const closeMessage = AGENT_DISCONNECT_CLOSE_MESSAGES[reason] || AGENT_DISCONNECT_CLOSE_MESSAGES.deactivated;
   const disabledReason = reason === 'runtime_mismatch'
-   ? 'Agent execution runtime changed; reconnect the Relay host with its new connection command (desktop ACP or CLI).'
+   ? 'Agent execution runtime changed; reconnect the Relay host with its new connection command (desktop local runtime or CLI).'
    : reason;
   for (const entry of taken) {
    if (entry.keepSocket) continue;

@@ -235,17 +235,16 @@ const {
   refreshLoginShellPath,
 } = require('../shared/local-agent-discovery.cjs');
 
-const acpHost = require('./acp/host.cjs');
-const acpBridge = require('./acp/agentBridge.cjs');
-const { createAutostartStore } = require('./acp/autostart.cjs');
-const { restoreAutostartAgents } = require('./acp/restore.cjs');
+const localRuntime = require('./local-runtime/supervisor.cjs');
+const { createAutostartStore } = require('./local-runtime/autostart.cjs');
+const { restoreAutostartAgents } = require('./local-runtime/restore.cjs');
 
 /** @type {ReturnType<typeof createAutostartStore> | null} */
-let acpAutostart = null;
+let localRuntimeAutostart = null;
 
-function getAcpAutostart() {
-  if (acpAutostart) return acpAutostart;
-  acpAutostart = createAutostartStore({
+function getLocalRuntimeAutostart() {
+  if (localRuntimeAutostart) return localRuntimeAutostart;
+  localRuntimeAutostart = createAutostartStore({
     userDataDir: app.getPath('userData'),
     encrypt: (plain) => {
       try {
@@ -264,19 +263,19 @@ function getAcpAutostart() {
       }
     },
   });
-  return acpAutostart;
+  return localRuntimeAutostart;
 }
 
 function syncLoginItemFromAutostart() {
   try {
-    const store = getAcpAutostart();
+    const store = getLocalRuntimeAutostart();
     const want = store.shouldOpenAtLogin();
     app.setLoginItemSettings({
       openAtLogin: want,
       openAsHidden: want,
     });
   } catch (error) {
-    console.warn('[desktop-acp] login item update failed:', error?.message || error);
+    console.warn('[desktop-local] login item update failed:', error?.message || error);
   }
 }
 
@@ -294,32 +293,33 @@ ipcMain.handle('local-agents:discover', async (event, options = {}) => {
   }
 });
 
-// ── Desktop ACP host ────────────────────────────────────────────────────────
-// Spawn Claude/Codex/Amp/Grok/… as ACP children on THIS machine, optionally
-// register as a daemon-shaped WS agent so channel jobs stream through ACP.
+// ── Desktop local runtime (Relay on this Mac) ───────────────────────────────
+// Spawns `agensis connect --no-acp` so jobs use Claude Agent SDK (warm SSE-like
+// streaming connection) or `codex app-server` — not the old ACP host.
 
-ipcMain.handle('acp:list-harnesses', async (event) => {
+ipcMain.handle('local-runtime:list', async (event, options = {}) => {
   if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
   try {
-    refreshLoginShellPath();
-    return { ok: true, data: acpHost.listHarnesses() };
+    // Only re-probe login-shell PATH on explicit refresh — every open of Agents
+    // used to spawnSync zsh -l and freeze the UI (beachball).
+    if (options?.refresh) refreshLoginShellPath();
+    return { ok: true, data: localRuntime.listRuntimes() };
   } catch (error) {
     return { ok: false, error: error?.message || String(error) };
   }
 });
 
-ipcMain.handle('acp:status', async (event, agentId) => {
+ipcMain.handle('local-runtime:status', async (event, agentId) => {
   if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
-  const store = getAcpAutostart();
+  const store = getLocalRuntimeAutostart();
   return {
     ok: true,
     data: {
-      session: acpHost.status(agentId),
-      bridge: acpBridge.bridgeStatus(agentId),
-      running: acpHost.listRunning(),
+      session: localRuntime.status(agentId),
+      running: localRuntime.listRunning(),
       autostart: store.list().map((a) => ({
         agentId: a.agentId,
-        harnessId: a.harnessId,
+        runtime: a.runtime,
         autoStart: a.autoStart !== false,
         savedAt: a.savedAt,
       })),
@@ -328,116 +328,66 @@ ipcMain.handle('acp:status', async (event, agentId) => {
   };
 });
 
-ipcMain.handle('acp:start', async (event, options = {}) => {
+ipcMain.handle('local-runtime:start', async (event, options = {}) => {
   if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
   try {
-    // Prefer the Agents ACCESS setting (default | accept_edits | yolo).
-    // Only treat autoApprove:true as Full access when permissionMode is omitted.
-    // Never default unknown → yolo.
-    const { isElevatedAccessMode } = require('./acp/client.cjs');
     const permissionMode = String(options.permissionMode || options.permission_mode || '').trim()
       || (options.autoApprove === true ? 'yolo' : 'default');
-    const session = await acpHost.start({
+    // Full catalog: claude/codex/amp (SDK/app-server) or grok/hermes/omp/… (ACP/CLI).
+    const runtime = localRuntime.pickRuntimeId(options);
+
+    let autostart = null;
+    if (options.token && options.baseUrl && options.workspaceId && options.autoStart !== false) {
+      try {
+        autostart = getLocalRuntimeAutostart().remember({
+          agentId: options.agentId,
+          runtime,
+          workspaceId: options.workspaceId,
+          handle: options.handle,
+          name: options.name,
+          model: options.model,
+          cwd: options.cwd,
+          baseUrl: options.baseUrl,
+          permissionMode,
+          autoStart: true,
+        }, options.token);
+        syncLoginItemFromAutostart();
+        console.log('[desktop-local] autostart saved', autostart, getLocalRuntimeAutostart().manifestPath());
+      } catch (persistError) {
+        console.warn('[desktop-local] autostart persist failed:', persistError?.message || persistError);
+        autostart = { saved: false, error: persistError?.message || String(persistError) };
+      }
+    }
+
+    const session = await localRuntime.start({
       agentId: options.agentId,
-      harnessId: options.harnessId,
-      cwd: options.cwd,
-      model: options.model,
-      // ACCESS UI: yolo → bypassPermissions; accept_edits → acceptEdits; default → Ask dialog.
-      permissionMode,
-      autoApprove: isElevatedAccessMode(permissionMode) || options.autoApprove === true,
-      // Same connect token as the WS bridge — authenticates workspace MCP for
-      // harnesses (Grok) that load /backend/mcp on session start.
+      workspaceId: options.workspaceId,
       token: options.token,
       baseUrl: options.baseUrl,
-      onUpdate: (params) => {
-        if (!event.sender.isDestroyed()) {
-          event.sender.send(`acp:update:${options.agentId}`, params);
-        }
-      },
+      handle: options.handle,
+      name: options.name,
+      model: options.model,
+      cwd: options.cwd,
+      runtime,
+      harnessId: options.harnessId,
+      requiredRuntime: options.requiredRuntime,
+      permissionMode,
       onLog: (line) => {
         if (!event.sender.isDestroyed()) {
-          event.sender.send(`acp:log:${options.agentId}`, line);
+          event.sender.send(`local-runtime:log:${options.agentId}`, line);
         }
       },
       onExit: ({ agentId }) => {
-        // Harness died — drop the online connection so the UI shows offline,
-        // then leave autostart in place so the next launch/restore brings it back.
-        try {
-          acpBridge.stopBridge(agentId);
-        } catch {
-          // ignore
-        }
         if (!event.sender.isDestroyed()) {
-          event.sender.send('acp:harness-exit', { agentId });
+          event.sender.send('local-runtime:exit', { agentId });
         }
       },
     });
-
-    // Optional: connect to backend as this agent so @mentions land here.
-    let bridge = null;
-    let autostart = null;
-    let bridgeStatus = null;
-    if (options.token && options.baseUrl && options.workspaceId) {
-      // Persist BEFORE bridge so a crash mid-register still restores next launch.
-      if (options.autoStart !== false) {
-        try {
-          autostart = getAcpAutostart().remember({
-            agentId: options.agentId,
-            harnessId: options.harnessId,
-            workspaceId: options.workspaceId,
-            handle: options.handle,
-            name: options.name,
-            model: options.model,
-            cwd: options.cwd,
-            baseUrl: options.baseUrl,
-            requiredRuntime: options.requiredRuntime,
-            permissionMode,
-            autoStart: true,
-          }, options.token);
-          syncLoginItemFromAutostart();
-          console.log('[desktop-acp] autostart saved', autostart, getAcpAutostart().manifestPath());
-        } catch (persistError) {
-          console.warn('[desktop-acp] autostart persist failed:', persistError?.message || persistError);
-          autostart = { saved: false, error: persistError?.message || String(persistError) };
-        }
-      }
-
-      bridge = acpBridge.startBridge({
-        agentId: options.agentId,
-        workspaceId: options.workspaceId,
-        token: options.token,
-        baseUrl: options.baseUrl,
-        handle: options.handle,
-        name: options.name,
-        harnessId: options.harnessId,
-        cwd: options.cwd,
-        model: options.model,
-        // Must match agent.metadata.runtime when that pin is set (server kicks otherwise).
-        requiredRuntime: options.requiredRuntime,
-      });
-
-      // Block until the server accepts us so the UI does not claim "Running"
-      // for a socket that will die in one second.
-      try {
-        const { waitForRegistration } = require('./acp/restore.cjs');
-        bridgeStatus = await waitForRegistration(options.agentId, 20_000);
-      } catch (regError) {
-        // Host is up; bridge failed. Still return session so user can see error.
-        bridgeStatus = acpBridge.bridgeStatus(options.agentId);
-        return {
-          ok: false,
-          error: regError?.message || 'ACP registered process but backend rejected the agent connection',
-          data: { session, bridge, bridgeStatus, autostart },
-        };
-      }
-    }
 
     return {
       ok: true,
       data: {
         session,
-        bridge,
-        bridgeStatus: bridgeStatus || acpBridge.bridgeStatus(options.agentId),
         autostart,
       },
     };
@@ -446,13 +396,12 @@ ipcMain.handle('acp:start', async (event, options = {}) => {
   }
 });
 
-ipcMain.handle('acp:stop', async (event, agentId) => {
+ipcMain.handle('local-runtime:stop', async (event, agentId) => {
   if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
   try {
-    acpBridge.stopBridge(agentId);
-    const result = await acpHost.stop(agentId);
+    const result = await localRuntime.stop(agentId);
     // Explicit Stop removes reboot restore (user chose offline).
-    const forgotten = getAcpAutostart().forget(agentId);
+    const forgotten = getLocalRuntimeAutostart().forget(agentId);
     syncLoginItemFromAutostart();
     return { ok: true, data: { ...result, autostart: forgotten } };
   } catch (error) {
@@ -460,9 +409,9 @@ ipcMain.handle('acp:stop', async (event, agentId) => {
   }
 });
 
-ipcMain.handle('acp:list-autostart', async (event) => {
+ipcMain.handle('local-runtime:list-autostart', async (event) => {
   if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
-  const store = getAcpAutostart();
+  const store = getLocalRuntimeAutostart();
   return {
     ok: true,
     data: {
@@ -470,22 +419,6 @@ ipcMain.handle('acp:list-autostart', async (event) => {
       openAtLogin: store.shouldOpenAtLogin(),
     },
   };
-});
-
-ipcMain.handle('acp:prompt', async (event, { agentId, text } = {}) => {
-  if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
-  try {
-    const result = await acpHost.prompt(agentId, text, {
-      onChunk: (chunk) => {
-        if (!event.sender.isDestroyed()) {
-          event.sender.send(`acp:chunk:${agentId}`, chunk);
-        }
-      },
-    });
-    return { ok: true, data: result };
-  } catch (error) {
-    return { ok: false, error: error?.message || String(error) };
-  }
 });
 
 app.whenReady().then(async () => {
@@ -498,31 +431,41 @@ app.whenReady().then(async () => {
   }
   createWindow();
 
-  // Reboot / relaunch: restore ACP agents that were started with autostart.
-  // First attempt after a short delay; restore itself retries while the
-  // backend (local 3142 or Fly) is still coming up.
+  // Warm login-shell PATH off the critical path so the first Agents/Connect
+  // list does not pay a sync zsh -l on the main thread mid-interaction.
+  setImmediate(() => {
+    try {
+      const { loginShellPath } = require('../shared/local-agent-discovery.cjs');
+      loginShellPath();
+    } catch {
+      // ignore warm failures
+    }
+  });
+
+  // Reboot / relaunch: restore local-runtime agents that were started with
+  // autostart. Retries while the backend (local 3142 or Fly) is still coming up.
   const runRestore = async (reason) => {
     try {
       syncLoginItemFromAutostart();
-      const store = getAcpAutostart();
+      const store = getLocalRuntimeAutostart();
       const pending = store.list();
-      console.log(`[desktop-acp] restore (${reason}) pending=${pending.length} path=${store.manifestPath()}`);
+      console.log(`[desktop-local] restore (${reason}) pending=${pending.length} path=${store.manifestPath()}`);
       if (pending.length === 0) return;
       const report = await restoreAutostartAgents(store, {
         maxAttempts: 6,
         attemptDelayMs: 3000,
       });
       console.log(
-        `[desktop-acp] restore complete attempted=${report.attempted} ok=${report.ok} failed=${report.failed}`,
+        `[desktop-local] restore complete attempted=${report.attempted} ok=${report.ok} failed=${report.failed}`,
         JSON.stringify(report.results),
       );
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.isDestroyed()) {
-          win.webContents.send('acp:restore-complete', report);
+          win.webContents.send('local-runtime:restore-complete', report);
         }
       }
     } catch (error) {
-      console.error('[desktop-acp] restore failed:', error?.message || error);
+      console.error('[desktop-local] restore failed:', error?.message || error);
     }
   };
 
@@ -535,11 +478,10 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
-  // Tear down live processes on quit (clean). Disk autostart list is preserved
+  // Tear down live daemons on quit (clean). Disk autostart list is preserved
   // so the next launch / reboot restore brings them back.
   try {
-    acpBridge.stopAllBridges();
-    acpHost.stopAll();
+    localRuntime.stopAll();
   } catch {
     // ignore teardown races
   }

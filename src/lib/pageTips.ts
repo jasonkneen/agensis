@@ -186,7 +186,7 @@ export const PAGE_TIPS: readonly PageTip[] = [
     id: 'agents-run-mode',
     surface: 'agents',
     title: 'How an agent runs is the choice that matters',
-    body: 'Direct agents run on agensis with hosted model access. Relay agents run on a linked host — desktop ACP or the agensis CLI — so web and desktop both see them when that host is online. Connector agents are external MCP clients that answer as the agent.',
+    body: 'Direct agents run on agensis with hosted model access. Relay agents run on a linked host — desktop local SDK (Claude Agent SDK / Codex app-server) or the agensis CLI — so web and desktop both see them when that host is online. Connector agents are external MCP clients that answer as the agent.',
   },
   {
     id: 'agents-host-folders',

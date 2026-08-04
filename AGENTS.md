@@ -773,7 +773,7 @@ Two related rules:
 ### Connector agents (`run_mode='external'`)
 
 A Connector is an external MCP client acting as an agent. It is not Direct
-(`builtin`) and not Relay (`daemon`, including desktop ACP). `register_agent`
+(`builtin`) and not Relay (`daemon`, including desktop local runtime). `register_agent`
 creates Connector agents with `run_mode='external'`; `resolveRunTarget` must
 keep that mode out of both the builtin and daemon lanes.
 
@@ -1042,10 +1042,16 @@ infrastructure. Source, tests, release workflow and published bundle live at
 npm package is `@agensis/agensis-agent`; changes to the server/daemon wire
 contract must be coordinated across both repositories.
 
-## Desktop ACP (Electron) — local dev setups
+## Desktop local runtime (Electron) — local dev setups
 
-Desktop can run local ACP harnesses ("Start on this Mac") and bridge them as
-daemon-shaped WebSocket agents. **Operator guide for local dev:**
+Desktop **Start on this Mac** spawns the real `@agensis/agensis-agent` CLI
+(`agensis connect --no-acp`) as a supervised child. Turns run through:
+
+- **Claude** — `@anthropic-ai/claude-agent-sdk` warm streaming connection
+- **Codex** — `codex app-server` (stdio JSON-RPC)
+
+There is **no** desktop ACP host. ACP was removed; do not reintroduce
+`electron/acp/*`. Code: `electron/local-runtime/*`. Operator guide:
 **[docs/desktop.md](./docs/desktop.md)** (setup A fully local, setup B + live
 web).
 
@@ -1056,70 +1062,18 @@ web).
 
 Rules agents must not break:
 
-- **Same backend as the UI** for bridges. Live web never stays green for agents
-  registered only on local `:3142`.
-- **"Online" = live socket on this server process**, not "ACP child is running".
-- **Job result wire:** `agent_job_result` uses **`response`** (and `error`);
-  deltas use `content`. Wrong field → `@handle finished without output`.
-- Switching A ↔ B requires **re-Start** ACP (token + autostart `baseUrl`).
-  Code: `electron/acp/*`, `scripts/desktop-dev.mjs` / `desktop-build.mjs`.
+- **Same backend as the UI** for the daemon. Live web never stays green for
+  agents registered only on local `:3142`.
+- **"Online" = live socket on this server process**, not "child process is up".
+- **Always pass `--no-acp` / `AGENSIS_ACP=0`** from desktop so the CLI uses the
+  SDK / app-server path, not ACP harnesses.
+- **Job result wire** is owned by the CLI (same as terminal `agensis connect`).
+- Switching A ↔ B requires **re-Start** (token + autostart `baseUrl`).
+- Requires `@agensis/agensis-agent` on PATH (or npx fallback).
 
-### ACP ACCESS / tool permissions (do not regress)
-
-**Do not advertise `clientCapabilities.fs` or `terminal` on the desktop host.**
-Claude Code ACP treats those as "route tools through an MCP shim named `acp`"
-(`mcp__acp__Read`, disallow native `Read`/`Write`/`Edit`). That is correct for
-an IDE that owns the buffer; it is wrong for a desktop agent that must edit
-files on the host. Capabilities stay
-`{ fs: { readTextFile: false, writeTextFile: false }, terminal: false }` in
-`electron/acp/client.cjs` (`DESKTOP_CLIENT_CAPABILITIES`). Permissions still use
-ACP (`session/request_permission` → in-chat card).
-
-Claude Code ACP (`claude-code-acp`) always opens a session in **`default`**.
-The Agents **Access** control is not a label on our side alone — it must become
-an ACP `session/set_mode` (and residual `session/request_permission` handling):
-
-| Agents UI | `permission_mode` (DB) | Required wire |
-| --- | --- | --- |
-| Full access | `yolo` | `session/set_mode` `{ modeId: "bypassPermissions" }` + residual auto-allow |
-| Auto-accept edits | `accept_edits` | `session/set_mode` `{ modeId: "acceptEdits" }`; residual **edits** auto-allow, shell still asks |
-| Ask | `default` | stay default; **dialog** on each tool (never silent cancel) |
-
-Product spelling is `accept_edits` (underscore). Aliases `acceptEdits` /
-`accept-edits` must still elevate — do not match camelCase only.
-
-**Permission reply shape (schema):**
-`{ outcome: { outcome: "selected", optionId } }` or
-`{ outcome: { outcome: "cancelled" } }`.
-A flat `{ outcome: "selected", optionId }` is treated as deny by Claude ACP —
-that is how Full access still looked like every command was rejected.
-
-**ALWAYS ALLOWED** has one grant store for both Relay executors:
-`workspace_agents.metadata.permission_rules`. The daemon reads it directly; the
-desktop ACP bridge seeds its permission broker from the same field on every job.
-Do not create an ACP-only grant store or let the two matching rules drift.
-
-**Ask / residual shell must use product auth dialogs**, not only a native OS
-box. During a bridged job, `session/request_permission` raises the same
-`agent_permission_request` frame as Relay, parks until the human answers the
-in-chat `PermissionRequestCard`, then completes the prepare/commit receipt
-protocol (`permissionDecisionReceipts: true` on register). Native Electron
-dialog is fallback only when no bridge/handler is set (tests).
-
-**Grants must stick:**
-- `once` — this tool call only
-- `session` — rest of the job (in-memory on the broker)
-- `always` — server writes `workspace_agents.metadata.permission_rules` (same as
-  Relay; manage-gated); the bridge seeds those rules from
-  `job.agent.metadata.permission_rules` on every job so the next run does not
-  re-ask. Local short-circuit uses the same rule keys the card would store.
-
-**UI → IPC → host must pass `permissionMode`.** Dropping it defaults Ask-like
-behavior while the form still says Full access.
-
-Pinned by `tests/acp-permission-contract.test.cjs` and
-`tests/desktop-acp-permission-broker.test.cjs`. If those go red, fix the client
-— do not weaken the contract without updating this section in the same commit.
+Permissions, grants, and Access modes are handled by the CLI's
+`connectionExecutors` + permission broker — same path as a terminal daemon.
+Pinned by `tests/desktop-local-runtime.test.cjs`.
 
 ## Conventions
 

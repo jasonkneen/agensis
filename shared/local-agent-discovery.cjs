@@ -161,9 +161,12 @@ function fetchLoginShellPath() {
   for (const shell of ['/bin/zsh', '/bin/bash']) {
     try {
       if (!fs.existsSync(shell)) continue;
+      // Keep this SHORT: Electron main freezes for the whole spawnSync. A hung
+      // login shell (network home, slow oh-my-zsh) used to beachball the app
+      // for 4s+ every time Agents/Connect probed local tools.
       const result = spawnSync(shell, ['-l', '-c', 'echo $PATH'], {
         encoding: 'utf8',
-        timeout: 4000,
+        timeout: 1500,
         env: process.env,
       });
       if (result.status !== 0) continue;
@@ -348,7 +351,7 @@ function findViaLoginShell(command) {
       const result = spawnSync(
         shell,
         ['-l', '-c', 'command -v -- "$1"', '_', command],
-        { encoding: 'utf8', timeout: 4000, env: process.env },
+        { encoding: 'utf8', timeout: 1500, env: process.env },
       );
       if (result.status !== 0) continue;
       const lines = String(result.stdout || '')
@@ -369,11 +372,19 @@ function findViaLoginShell(command) {
 /**
  * Resolve `command` to an absolute executable path on this host.
  * Order: process PATH → common install dirs → login-shell PATH → command -v.
+ *
+ * `options` may be a PATH string (legacy) — treated as `{ pathEnv, skipLoginShell: true }`
+ * so callers that already gathered a full PATH do not re-spawn a login shell
+ * per command (that was freezing Electron for seconds per probe).
  */
 function resolveCommandPath(command, options = {}) {
   if (!command || typeof command !== 'string') return null;
   const trimmed = command.trim();
   if (!trimmed) return null;
+
+  if (typeof options === 'string') {
+    options = { pathEnv: options, skipLoginShell: true };
+  }
 
   if (path.isAbsolute(trimmed) || trimmed.includes('/') || trimmed.includes('\\')) {
     return isExecutableFile(trimmed) ? trimmed : null;
@@ -388,7 +399,8 @@ function resolveCommandPath(command, options = {}) {
   const fromCommon = findInDirs(trimmed, commonBinaryDirs(home));
   if (fromCommon) return fromCommon;
 
-  // Login-shell PATH (macOS GUI gap). Skip when caller injects a path for tests.
+  // Login-shell PATH (macOS GUI gap). Skip when caller injects a full pathEnv
+  // (desktop already merged login-shell PATH once) or tests set skipLoginShell.
   if (options.skipLoginShell) return null;
   const shellPath = options.loginShellPath !== undefined
     ? options.loginShellPath
@@ -398,7 +410,34 @@ function resolveCommandPath(command, options = {}) {
     if (fromShell) return fromShell;
   }
 
+  // Last resort only: one more login-shell spawn per command. Avoid when the
+  // caller already supplied pathEnv (desktop list path never reaches here).
+  if (options.pathEnv !== undefined) return null;
   return findViaLoginShell(trimmed);
+}
+
+/**
+ * Merge process PATH + login-shell PATH once for bulk probes.
+ * Use with resolveCommandPath(..., { pathEnv, skipLoginShell: true }).
+ */
+function mergedPathEnv(options = {}) {
+  const parts = [];
+  const processPath = options.pathEnv !== undefined ? options.pathEnv : (process.env.PATH || '');
+  if (processPath) parts.push(...pathDirsFromEnv(processPath));
+  if (!options.skipLoginShell) {
+    const shellPath = options.loginShellPath !== undefined
+      ? options.loginShellPath
+      : loginShellPath();
+    if (shellPath) parts.push(...pathDirsFromEnv(shellPath));
+  }
+  const seen = new Set();
+  const merged = [];
+  for (const dir of parts) {
+    if (!dir || seen.has(dir)) continue;
+    seen.add(dir);
+    merged.push(dir);
+  }
+  return merged.join(path.delimiter);
 }
 
 async function probeCommand(command, args = ['--version'], options = {}) {
@@ -608,6 +647,7 @@ module.exports = {
   detectLocalAgentCapabilities,
   refreshLoginShellPath,
   loginShellPath,
+  mergedPathEnv,
   findNvmDefaultBin,
   isSafeNvmTag,
   countDirectoryEntries,

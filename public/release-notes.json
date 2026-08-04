@@ -1,5 +1,17 @@
 [
   {
+    "version": "desktop-local-sdk-runtime",
+    "date": "2026-08-02",
+    "title": "Start on this Mac uses Claude Agent SDK and Codex app-server",
+    "summary": "Start on this Mac spawns the real Relay host and uses whatever each local tool supports best: Claude Agent SDK, Codex app-server, Amp, and ACP for Grok, Hermes, Goose, Cursor, OpenCode, Kimi, OpenClaw, plus Oh My Pi via its CLI. Requires @agensis/agensis-agent on the Mac.",
+    "highlights": [
+      "Claude → Agent SDK warm connection; Codex → app-server",
+      "Grok, Hermes, Goose, Cursor, OpenCode, Kimi, OpenClaw → ACP via the CLI",
+      "Oh My Pi (omp) available when installed",
+      "Autostart / reboot restore still works; install once: npm i -g @agensis/agensis-agent"
+    ]
+  },
+  {
     "version": "connector-oauth-and-runtime-reliability",
     "date": "2026-08-02",
     "title": "Safer Connectors, OAuth, and Relay jobs",
@@ -17,10 +29,10 @@
     "version": "windows-desktop-support",
     "date": "2026-08-01",
     "title": "Desktop now runs on Windows",
-    "summary": "The desktop app's terminal panel and local ACP agent harness (Start on this PC) previously assumed macOS/Linux \u2014 the terminal spawned /bin/zsh and the ACP host couldn't launch npm-installed CLI harnesses on Windows, both hard failures. The terminal now resolves cmd.exe (or $SHELL elsewhere) and the correct home directory, and harness spawning handles Windows .cmd/.bat shims correctly. Windows installers (NSIS + portable) now build cleanly: native modules are no longer force-rebuilt from source (node-pty already ships prebuilt binaries for every target), and the two installer types no longer silently overwrite each other's output file.",
+    "summary": "The desktop app's terminal panel and local runtime daemon (Start on this PC) previously assumed macOS/Linux \u2014 the terminal spawned /bin/zsh and the supervisor couldn't launch the npm-installed agensis CLI on Windows, both hard failures. The terminal now resolves cmd.exe (or $SHELL elsewhere) and the correct home directory, and daemon spawning handles Windows .cmd/.bat shims correctly, quoting each argument because Windows shell:true does no escaping of its own. Windows installers (NSIS + portable) now build cleanly: native modules are no longer force-rebuilt from source (node-pty already ships prebuilt binaries for every target), and the two installer types no longer silently overwrite each other's output file.",
     "highlights": [
       "Terminal panel: cmd.exe + correct home dir on Windows, was hardcoded to /bin/zsh",
-      "Local ACP harness spawn: .cmd/.bat shims now launch correctly instead of crashing with EINVAL",
+      "Local runtime daemon spawn: .cmd/.bat shims now launch correctly instead of crashing with EINVAL",
       "Windows installers (NSIS + portable) build without a native toolchain installed",
       "NSIS and portable builds no longer overwrite each other's output file"
     ]

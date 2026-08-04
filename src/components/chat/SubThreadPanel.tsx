@@ -1,7 +1,18 @@
 import { Bot, Check, MessageSquare, Pencil, Plus, Send, Trash2, User, X } from 'lucide-react';
-import React, { useMemo, useRef, useState, type CSSProperties } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
+import { SessionStopButton } from './StopAgentButton';
 import { MarkdownContent } from './MarkdownContent';
+import { ReactionBar } from './ReactionBar';
+import { QueuedPill, SeenPill } from './SeenPill';
+import { buildReaderFaces, type ReaderFace } from '../../lib/readerFaces';
+import { useMessageReactions } from '../../hooks/useMessageReactions';
+import { useReadReceipts } from '../../hooks/useReadReceipts';
+import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
+import { isOwnReceiptMessage, receiptTargetForViewport } from '../../lib/readReceipts';
+import { queuedState, type QueuedState } from '../../lib/queuedPill';
+import { useSessionWork } from '../../hooks/useAgentWork';
+import type { ReactionUse } from '../../lib/reactionBar';
 import { ToolStepGroup } from './ToolStepGroup';
 import { buildTranscriptRows } from './toolSteps';
 import { usePermissionRequests } from '../../hooks/usePermissionRequests';
@@ -134,6 +145,67 @@ export function SubThreadPanel({
     [messages, permissionRequestsById],
   );
   useComposerAutosize(inputRef, mentions.input);
+
+  // Reactions and seen pills in a sub-thread.
+  //
+  // A sub-thread IS its own chat_session, so nothing here is thread-scoped: the
+  // receipt hook takes `session.id` with a null thread parent, exactly like the
+  // channel transcript. That is why this works at all without a server change —
+  // the markers and the reaction route were already reachable, the panel simply
+  // never rendered either.
+  const reactionState = useMessageReactions(readOnly ? null : currentUserId);
+  const { members: workspaceMembers } = useWorkspaceUsers(session.workspace_id ?? null);
+  // A reader id is a human user id OR an agent id, so resolve against members
+  // first and then the agent roster: an agent's name belongs in the tooltip
+  // exactly like a person's.
+  // One lookup, shared with the channel and the reply-thread panel — see
+  // src/lib/readerFaces.ts. A face rather than a name because the chips show
+  // WHO; `resolveReaderName` is the name-only view of the same thing.
+  const resolveReaderFace = useMemo(
+    () => buildReaderFaces({ members: workspaceMembers, agents }),
+    [workspaceMembers, agents],
+  );
+  const resolveReaderName = useCallback(
+    (readerId: string) => resolveReaderFace(readerId).name,
+    [resolveReaderFace],
+  );
+
+  const receipts = useReadReceipts({
+    sessionId: session.id || null,
+    currentUserId: currentUserId || null,
+    active: !readOnly,
+    orderedMessages: messages,
+  });
+  const noteVisibleRead = receipts.noteVisible;
+  // `nearBottom` is load-bearing: `messages` is the loaded data set, not the
+  // viewport. Somebody scrolled up has a realtime append in the array that is
+  // physically off screen, and marking it would claim a read that never happened.
+  const newestVisibleMessage = useMemo(
+    () => receiptTargetForViewport(messages, currentUserId || null, {
+      surfaceActive: !readOnly,
+      nearBottom: autoScroll,
+    }),
+    [autoScroll, currentUserId, messages, readOnly],
+  );
+  useEffect(() => {
+    noteVisibleRead(newestVisibleMessage);
+  }, [noteVisibleRead, newestVisibleMessage]);
+
+  // No anchoring: every one of your own posts keeps its eye for as long as the
+  // receipt is true, matching the channel. A read receipt is standing evidence
+  // of what was taken in, not a transient notification.
+
+  // "Queued": you posted while a turn was already running here, so this one is
+  // next. Derived from the running job's start time — see src/lib/queuedPill.ts
+  // for why a 'queued' job row is the wrong signal.
+  const panelWork = useSessionWork(session.id || null);
+
+  // For the Stop control's label: an agent id from a running job row, resolved
+  // to the name this panel already shows.
+  const resolveAgentName = useCallback(
+    (agentId: string) => agents.find(row => String(row.id) === String(agentId))?.name || null,
+    [agents],
+  );
   // Same rule as the channel's status line: a placeholder stranded by a job that
   // died is not evidence that anyone is working.
   const activityAgents = useMemo(() => {
@@ -330,6 +402,21 @@ export function SubThreadPanel({
                           onAgentProfile={onAgentProfile}
                           currentUserId={readOnly ? null : currentUserId}
                           isStreaming={streaming && isLastRow && row.message.role === 'assistant'}
+                          reactions={reactionState.reactionsFor(row.message)}
+                          reactionUses={reactionState.reactionUses}
+                          onToggleReaction={readOnly || row.message.deleted_at
+                            ? undefined
+                            : (reaction, op) => reactionState.toggle(row.message, reaction, op)}
+                          resolveReaderName={resolveReaderName}
+                          resolveReaderFace={resolveReaderFace}
+                          // Same rule as the channel: only YOUR messages carry
+                          // an eye, and every one of them does for as long as
+                          // the receipt is true. "Who read their post" is not a
+                          // fact you can act on and would mark every row.
+                          readerIds={isOwnReceiptMessage(row.message, currentUserId || null)
+                            ? receipts.readersOfMessage(row.message)
+                            : undefined}
+                          queued={queuedState(row.message, panelWork, currentUserId || null)}
                         />
                       </MessageScrollerItem>
                     );
@@ -359,6 +446,17 @@ export function SubThreadPanel({
             ))}
             {'…'}
           </span>
+          {/* Stop. Driven by agent_jobs, not by the line beside it — the
+              activity text comes from placeholder messages, which carry no job
+              id. A sub-thread IS its own chat_session, so this is the session
+              control and it stops exactly this panel's turn. */}
+          {session.id && (
+            <SessionStopButton
+              sessionId={session.id}
+              resolveAgentName={resolveAgentName}
+              className="ml-auto"
+            />
+          )}
         </div>
       )}
 
@@ -498,18 +596,39 @@ export function SubThreadPanel({
   );
 }
 
+// A stable identity, so a read-only post's ReactionBar does not get a fresh
+// callback on every render. It is never reachable: `reactions` is nulled on the
+// same branch, so there are no pills to click.
+const NOOP_TOGGLE = () => {};
+
 export function SubThreadBubble({
   msg,
   accent,
   onAgentProfile,
   isStreaming,
   currentUserId,
+  reactions,
+  reactionUses = [],
+  onToggleReaction,
+  resolveReaderName,
+  resolveReaderFace,
+  readerIds,
+  queued,
 }: {
   msg: ChatMessage;
   accent?: string;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   isStreaming?: boolean;
   currentUserId?: string | null;
+  reactions?: Record<string, string[]>;
+  reactionUses?: readonly ReactionUse[];
+  onToggleReaction?: (reaction: string, op: 'add' | 'remove') => void;
+  resolveReaderName?: (readerId: string) => string | null;
+  /** Face lookup for the chips that show WHO — readers, reactors, agents worked behind. */
+  resolveReaderFace?: (readerId: string) => ReaderFace;
+  /** Undefined on a post that carries no seen pill; empty when nobody has read it. */
+  readerIds?: string[];
+  queued?: QueuedState;
 }) {
   const isUser = msg.role === 'user';
   const ownMutation = useOwnMessageMutation(msg, currentUserId, safeText(msg.content));
@@ -530,6 +649,25 @@ export function SubThreadBubble({
   const accentStyle = isAgentMessage
     ? ({ '--agent-accent': validAgentAccentColor(accent) } as CSSProperties & { '--agent-accent': string })
     : undefined;
+  // Built here so the row can ask "is there anything to show?" before rendering
+  // a bar at all — an empty bar carries `mt-1` and would add 4px under every
+  // post nobody has read.
+  // Seen, then queued, then the reactions — one row saying what happened to
+  // this post, matching the channel. SETTLED: see the block at the top of
+  // src/lib/seenPill.ts before moving any of it.
+  const hasSeen = !isActivityPlaceholder && readerIds !== undefined && readerIds.length > 0;
+  const seenPill = hasSeen || queued?.queued ? (
+    <>
+      {hasSeen && (
+        <SeenPill
+          readerIds={readerIds as string[]}
+          resolveName={resolveReaderName || (() => null)}
+          resolveFace={resolveReaderFace}
+        />
+      )}
+      {queued?.queued && <QueuedPill state={queued} resolveFace={resolveReaderFace} />}
+    </>
+  ) : null;
 
   return (
     <div
@@ -625,6 +763,21 @@ export function SubThreadBubble({
           ) : null}
           {artifact && <ChatArtifact artifact={artifact} />}
         </div>
+        {/* Reactions and the queued chip share one row, as in the channel. A
+            placeholder ("Thinking …") is excluded: it is a transient row that
+            will be replaced, and reacting to it would attach the reaction to a
+            message about to disappear. */}
+        {!isActivityPlaceholder && !ownMutation.editing && (onToggleReaction || seenPill) && (
+          <ReactionBar
+            reactions={onToggleReaction ? reactions : null}
+            currentUserId={currentUserId || null}
+            resolveName={resolveReaderName || (() => null)}
+            onToggle={onToggleReaction ?? NOOP_TOGGLE}
+            reactionUses={reactionUses}
+            leadingSlot={seenPill}
+            resolveFace={resolveReaderFace}
+          />
+        )}
       </div>
     </div>
   );
