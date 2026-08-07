@@ -1539,6 +1539,133 @@ function buildTools() {
   },
  });
 
+ // -- Document comments -----------------------------------------------------
+ //
+ // Comments were a HUMAN-ONLY surface. An agent could be @mentioned in one --
+ // dispatchCommentMentions has woken agents from document comments for a while
+ // -- and would arrive in its DM holding a quoted string with no way to read the
+ // thread it came from, see what the comment was anchored to, or answer where
+ // the person was actually looking. It could only reply in the DM, which is a
+ // different place from the conversation it was invited into.
+ //
+ // These three tools close that loop. The rules that make them safe:
+ //  - Workspace-scoped like every other tool: the document is re-checked against
+ //    the workspace id on the TOKEN, never one from an argument.
+ //  - A reply is attributed to the AGENT (`agent_id`), stamped here from the
+ //    verified identity. That column is privileged in shared/backend-core.cjs so
+ //    no client can forge it, and it is what stops an agent's own reply from
+ //    re-arming the mention dispatch that woke it.
+ //  - Resolving is a real state change on a human's thread, so it is allowed but
+ //    never implied: replying does not resolve. An agent that answers a question
+ //    and silently closes it takes the decision away from the person who asked.
+ //  - Comment text is workspace-authored, the same trust level as a channel
+ //    message, so it is NOT nonce-fenced the way a mirrored skill body is. If
+ //    that judgement ever changes it changes for messages too.
+
+ add({
+  name: 'list_comments',
+  description: 'Read the comment threads on a document. Returns each comment with its author, the text it is anchored to, whether it is resolved, and parent_id so replies can be grouped into threads. Use this when you are mentioned in a document comment: it is how you see what was actually being discussed rather than the one line that was quoted at you.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    doc_id: { type: 'string', description: 'The document id.' },
+    include_resolved: { type: 'boolean', description: 'Include resolved comments (default false).' },
+    limit: { type: 'integer', description: 'Max results (default 50, max 200).' },
+   },
+   required: ['doc_id'],
+   additionalProperties: false,
+  },
+  async run(args, { db, identity }) {
+   const docId = requireString(args, 'doc_id');
+   const limit = optInt(args?.limit, 50, 200);
+   // Prove the document is in THIS workspace before returning anything anchored
+   // to it. Filtering the comments alone would leak a comment whose
+   // workspace_id was written wrong; this makes the document the authority.
+   const doc = await db.unsafe(
+    'select id, title from documents where id = $1 and workspace_id = $2 limit 1',
+    [docId, identity.workspaceId]);
+   if (!doc[0]) throw new ToolError('Document not found in this workspace');
+
+   const resolvedClause = args?.include_resolved === true ? '' : 'and dc.resolved is not true';
+   const rows = await db.unsafe(
+    `select dc.id, dc.parent_id, dc.content, dc.anchor_text, dc.resolved, dc.created_at,
+            case when dc.agent_id is not null then 'agent' else 'human' end as author_kind,
+            coalesce(nullif(wa.name, ''), nullif(u.display_name, ''), u.email, '') as author_name
+       from document_comments dc
+       left join app_users u on u.id = dc.user_id
+       left join workspace_agents wa on wa.id = dc.agent_id
+      where dc.document_id = $1 and dc.workspace_id = $2 ${resolvedClause}
+      order by dc.created_at asc
+      limit $3`,
+    [docId, identity.workspaceId, limit]);
+   return { document: { id: doc[0].id, title: doc[0].title }, comments: rows };
+  },
+ });
+
+ add({
+  name: 'reply_to_comment',
+  description: 'Reply to a document comment. The reply is attributed to you and appears in the thread in the document, where the person who commented is looking. Replying does NOT resolve the comment — use resolve_comment for that, and only when the thing being asked for is actually done.',
+  kinds: ['agent'],
+  inputSchema: {
+   type: 'object',
+   properties: {
+    comment_id: { type: 'string', description: 'The comment to reply to. A reply to a reply is attached to the same thread.' },
+    content: { type: 'string', description: 'The reply text.' },
+   },
+   required: ['comment_id', 'content'],
+   additionalProperties: false,
+  },
+  async run(args, { db, identity, deps }) {
+   const commentId = requireString(args, 'comment_id');
+   const content = requireString(args, 'content');
+   if (!identity.agentId) throw new ToolError('Only an agent identity can reply to a comment');
+
+   const parent = await db.unsafe(
+    'select id, document_id, parent_id, workspace_id from document_comments where id = $1 and workspace_id = $2 limit 1',
+    [commentId, identity.workspaceId]);
+   if (!parent[0]) throw new ToolError('Comment not found in this workspace');
+
+   // Attach to the thread ROOT, not to the comment replied to. document_comments
+   // is a two-level structure everywhere it is rendered (a comment and its
+   // replies); a reply-to-a-reply pointing at its immediate parent would build a
+   // depth the UI has no way to draw and would silently disappear from the pane.
+   const threadRoot = parent[0].parent_id || parent[0].id;
+
+   const rows = await db.unsafe(
+    `insert into document_comments (document_id, workspace_id, user_id, agent_id, parent_id, content)
+         values ($1, $2, null, $3, $4, $5) returning *`,
+    [parent[0].document_id, identity.workspaceId, identity.agentId, threadRoot, content]);
+   deps.notifyDbSubscribers('document_comments', 'INSERT', rows);
+   return { comment: rows[0] };
+  },
+ });
+
+ add({
+  name: 'resolve_comment',
+  description: 'Mark a document comment thread resolved, or reopen it. Resolve only when the thing being asked for is actually done — a resolved comment disappears from everyone\'s inbox, so resolving something you have not finished hides it from the person who raised it.',
+  kinds: ['agent'],
+  inputSchema: {
+   type: 'object',
+   properties: {
+    comment_id: { type: 'string', description: 'The comment to resolve.' },
+    resolved: { type: 'boolean', description: 'true to resolve (default), false to reopen.' },
+   },
+   required: ['comment_id'],
+   additionalProperties: false,
+  },
+  async run(args, { db, identity, deps }) {
+   const commentId = requireString(args, 'comment_id');
+   const resolved = args?.resolved !== false;
+   const rows = await db.unsafe(
+    `update document_comments set resolved = $3, updated_at = now()
+       where id = $1 and workspace_id = $2 returning *`,
+    [commentId, identity.workspaceId, resolved]);
+   if (!rows[0]) throw new ToolError('Comment not found in this workspace');
+   deps.notifyDbSubscribers('document_comments', 'UPDATE', rows);
+   return { comment: rows[0] };
+  },
+ });
+
  // -- Tasks -----------------------------------------------------------------
 
  add({

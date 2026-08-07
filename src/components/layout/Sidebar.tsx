@@ -1,4 +1,10 @@
 import { channelIconGlyph } from '../../lib/channelProfile';
+import {
+ DEFAULT_DOMAIN as LIBRARY_GENERAL_DOMAIN,
+ groupLibraryByDomain,
+ type LibraryEntry,
+ type LibrarySource,
+} from '../../lib/documentLibrary';
 import React from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -18,6 +24,7 @@ import {
  Folder,
  GitMerge,
  Hash,
+ Library,
  Inbox,
  Layers3,
  Globe,
@@ -269,6 +276,20 @@ interface SidebarProps {
  onOpenThread?: (sessionId: string, parentMessageId: string) => void;
  onOpenMemory: () => void;
  onOpenSkills?: () => void;
+ /**
+  * Open the collated document library. `entryKey` is the COLLATION key of a
+  * document (see src/lib/documentLibrary.ts), not a row id — one library
+  * document is many rows, and naming a row would name one copy of it.
+  */
+ onOpenLibrary?: (entryKey?: string) => void;
+ /**
+  * The collated library, built once in AppContent by useDocumentLibrary.
+  *
+  * Passed in rather than built here: the mirrors behind it hold realtime
+  * subscriptions, and a second copy would both double those and let the sidebar
+  * and the Library window disagree while one of them was mid-fetch.
+  */
+ libraryEntries?: LibraryEntry[];
  onOpenBrowser?: () => void;
  onOpenTerminal?: () => void;
  onOpenTasks?: () => void;
@@ -342,6 +363,8 @@ export const Sidebar = React.memo(function Sidebar({
  onOpenThread,
  onOpenMemory,
  onOpenSkills,
+ onOpenLibrary,
+ libraryEntries = [],
  onOpenBrowser,
  onOpenTerminal,
  onOpenTasks,
@@ -540,6 +563,19 @@ export const Sidebar = React.memo(function Sidebar({
   () => groupSessionsByFolder(nostrChannelGroups.localSessions),
   [nostrChannelGroups.localSessions],
  );
+ // The Documents section renders the LIBRARY — every document the workspace can
+ // reach, from here and from every connected agent, deduped and grouped by
+ // folder/domain. It falls back to the workspace-only list when no library has
+ // been built yet (the section must not go blank while the mirrors load, and a
+ // caller that does not pass one at all still gets the section it had before).
+ const libraryGroups = React.useMemo(() => groupLibraryByDomain(libraryEntries), [libraryEntries]);
+ const documentCount = libraryEntries.length > 0 ? libraryEntries.length : uniqueRecents.length;
+ // Documents authored HERE, by id, so a library row backed by one keeps the
+ // editor-open and move-to-folder affordances that only a real row can have.
+ const recentsById = React.useMemo(
+  () => new Map(uniqueRecents.map(doc => [doc.id, doc])),
+  [uniqueRecents],
+ );
  const groupedDocuments = React.useMemo(() => groupDocumentsByFolder(uniqueRecents), [uniqueRecents]);
  const focusedWindow = floatingWindows
   .filter(win => !win.minimized)
@@ -661,12 +697,13 @@ export const Sidebar = React.memo(function Sidebar({
     <Separator />
     <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadInbox.unreadCount} onClick={() => revealSection('threads')} />
     <SidebarRailButton icon={<Hash />} title="Channels" count={activeChannelSessions.length} onClick={() => revealSection('channels')} />
-    <SidebarRailButton icon={<FileText />} title="Documents" count={uniqueRecents.length} onClick={() => revealSection('documents')} />
+    <SidebarRailButton icon={<FileText />} title="Documents" count={documentCount} onClick={() => revealSection('documents')} />
     <SidebarRailButton icon={<Upload />} title="Upload files" onClick={openUploadPicker} />
     <SidebarRailButton icon={<Bot />} title="Direct messages" count={directMessageTargets.length} onClick={() => revealSection('direct-messages')} />
     <SidebarRailButton icon={<Archive />} title="Archive" count={archivedSessions.length} onClick={() => revealSection('archive')} />
     <Separator />
     {onOpenSkills && <SidebarRailButton icon={<Sparkles />} title="Skills" onClick={onOpenSkills} />}
+    {onOpenLibrary && <SidebarRailButton icon={<Library />} title="Library" count={libraryEntries.length} onClick={() => onOpenLibrary()} />}
     {onOpenActivity && <SidebarRailButton icon={<RotateCcw />} title="Activity" onClick={onOpenActivity} />}
     {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
     {onOpenResources && <SidebarRailButton icon={<Database />} title="Resources" onClick={onOpenResources} />}
@@ -1003,59 +1040,119 @@ export const Sidebar = React.memo(function Sidebar({
        id="documents"
        label="Documents"
        icon={<FileText />}
-       count={uniqueRecents.length}
+       count={documentCount}
        actionLabel="New document"
        onAction={onNewDocument}
        headerActions={(
-        <button
-         type="button"
-         className="sidebar-section-action"
-         aria-label="Upload files"
-         title="Upload files"
-         onClick={event => {
-          event.stopPropagation();
-          openUploadPicker();
-         }}
-        >
-         <Upload className="size-4" />
-        </button>
+        <>
+         {onOpenLibrary && (
+          <button
+           type="button"
+           className="sidebar-section-action"
+           aria-label="Open the library"
+           title="Open the library"
+           onClick={event => {
+            event.stopPropagation();
+            onOpenLibrary();
+           }}
+          >
+           <Library className="size-4" />
+          </button>
+         )}
+         <button
+          type="button"
+          className="sidebar-section-action"
+          aria-label="Upload files"
+          title="Upload files"
+          onClick={event => {
+           event.stopPropagation();
+           openUploadPicker();
+          }}
+         >
+          <Upload className="size-4" />
+         </button>
+        </>
        )}
        open={openSections.has('documents')}
        onOpenChange={open => toggleSection('documents', open)}
       >
-       {groupedDocuments.map(group => (
-        group.folder === 'General' ? (
-         group.documents.map(doc => (
-          <DocumentRow
-           key={doc.id}
-           doc={doc}
-           onOpen={() => onDocumentOpen(doc)}
-           onMoveFolder={folder => onDocumentUpdate?.(doc.id, { folder })}
-           onAddToCanvas={onAddToCanvasApplet}
-           presenceUsers={documentPresence[doc.id] || []}
-          />
-         ))
-        ) : (
-         <SidebarFolderGroup
-          key={group.folder}
-          id={`docs-folder:${group.folder}`}
-          label={group.folder}
-          count={group.documents.length}
-          open={openSections.has(`docs-folder:${group.folder}`)}
-          onOpenChange={open => toggleSection(`docs-folder:${group.folder}`, open)}
-         >
-          {group.documents.map(doc => (
+       {/* The LIBRARY when there is one — documents from here and from every
+           connected agent, deduped into one row each and grouped by folder or
+           domain. The workspace-only list stays as the fallback so the section
+           never goes blank while the agent mirrors are still loading. */}
+       {libraryEntries.length > 0 ? (
+        libraryGroups.map(group => (
+         group.domain === LIBRARY_GENERAL_DOMAIN ? (
+          group.entries.map(entry => (
+           <LibraryDocumentRow
+            key={entry.key}
+            entry={entry}
+            workspaceDoc={workspaceDocForEntry(entry, recentsById)}
+            onOpenDocument={onDocumentOpen}
+            onOpenLibrary={onOpenLibrary}
+            onMoveFolder={(docId, folder) => onDocumentUpdate?.(docId, { folder })}
+            onAddToCanvas={onAddToCanvasApplet}
+            documentPresence={documentPresence}
+           />
+          ))
+         ) : (
+          <SidebarFolderGroup
+           key={group.domain}
+           id={`docs-folder:${group.domain}`}
+           label={group.domain}
+           count={group.entries.length}
+           open={openSections.has(`docs-folder:${group.domain}`)}
+           onOpenChange={open => toggleSection(`docs-folder:${group.domain}`, open)}
+          >
+           {group.entries.map(entry => (
+            <LibraryDocumentRow
+             key={entry.key}
+             entry={entry}
+             workspaceDoc={workspaceDocForEntry(entry, recentsById)}
+             onOpenDocument={onDocumentOpen}
+             onOpenLibrary={onOpenLibrary}
+             onMoveFolder={(docId, folder) => onDocumentUpdate?.(docId, { folder })}
+             documentPresence={documentPresence}
+            />
+           ))}
+          </SidebarFolderGroup>
+         )
+        ))
+       ) : (
+        groupedDocuments.map(group => (
+         group.folder === 'General' ? (
+          group.documents.map(doc => (
            <DocumentRow
             key={doc.id}
             doc={doc}
             onOpen={() => onDocumentOpen(doc)}
             onMoveFolder={folder => onDocumentUpdate?.(doc.id, { folder })}
+            onAddToCanvas={onAddToCanvasApplet}
             presenceUsers={documentPresence[doc.id] || []}
            />
-          ))}
-         </SidebarFolderGroup>
-        )
-       ))}
+          ))
+         ) : (
+          <SidebarFolderGroup
+           key={group.folder}
+           id={`docs-folder:${group.folder}`}
+           label={group.folder}
+           count={group.documents.length}
+           open={openSections.has(`docs-folder:${group.folder}`)}
+           onOpenChange={open => toggleSection(`docs-folder:${group.folder}`, open)}
+          >
+           {group.documents.map(doc => (
+            <DocumentRow
+             key={doc.id}
+             doc={doc}
+             onOpen={() => onDocumentOpen(doc)}
+             onMoveFolder={folder => onDocumentUpdate?.(doc.id, { folder })}
+             presenceUsers={documentPresence[doc.id] || []}
+            />
+           ))}
+          </SidebarFolderGroup>
+         )
+        ))
+       )}
       </SidebarSection>
       <SidebarSection
        id="direct-messages"
@@ -1121,6 +1218,7 @@ export const Sidebar = React.memo(function Sidebar({
           together they bracket the sections so the five read as one band. */}
       <div aria-hidden="true" className="sidebar-group-divider" />
       {onOpenSkills && <ActionTile icon={<Sparkles />} label="Skills" active={focusedWindowType === 'skills'} onClick={onOpenSkills} />}
+      {onOpenLibrary && <ActionTile icon={<Library />} label="Library" active={focusedWindowType === 'library'} onClick={() => onOpenLibrary()} />}
       {onOpenActivity && <ActionTile icon={<RotateCcw />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
       {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
       {onOpenResources && <ActionTile icon={<Database />} label="Resources" active={focusedWindowType === 'resources'} onClick={onOpenResources} />}
@@ -1852,12 +1950,15 @@ function ItemRow({
  onClick,
  kind = 'item',
  presenceUsers = [],
+ trailing,
 }: {
  icon: React.ReactNode;
  label: string;
  onClick: () => void;
  kind?: 'item' | 'session' | 'document';
  presenceUsers?: ItemPresenceUser[];
+ /** Rendered at the row's end when nobody is present on the item. */
+ trailing?: React.ReactNode;
 }) {
  return (
   <button
@@ -1869,6 +1970,9 @@ function ItemRow({
     {icon}
    </span>
    <span className="sidebar-item-label min-w-0 truncate text-left">{label}</span>
+   {/* Presence wins the trailing slot: somebody being IN the document right now
+       is the more urgent fact, and stacking both would crowd a 20px-tall row. */}
+   {presenceUsers.length === 0 && trailing}
    {presenceUsers.length > 0 && (
     <span className="ml-auto flex shrink-0 items-center gap-0.5 transition-all duration-150 group-hover:gap-1">
      {presenceUsers.slice(0, 3).map(person => (
@@ -2257,6 +2361,151 @@ function SessionRow({
       </ContextMenuItem>
      </>
     )}
+   </ContextMenuContent>
+  </ContextMenu>
+ );
+}
+
+/**
+ * The workspace-authored row behind a library entry, if there is one.
+ *
+ * A library entry is a DOCUMENT; a `documents` row is one copy of it. When the
+ * workspace holds that copy, the row keeps the affordances only a real row can
+ * have — open in the editor, move to a folder, add an applet to the canvas —
+ * and when it does not, the entry is read-only and opens in the library.
+ */
+function workspaceDocForEntry(entry: LibraryEntry, byId: Map<string, Document>): Document | null {
+ const source = entry.sources.find(candidate => candidate.kind === 'workspace');
+ return source ? byId.get(source.rowId) ?? null : null;
+}
+
+/** Chips for the agents contributing a copy. Two, then a "+n". */
+function LibrarySourceChips({ sources }: { sources: LibrarySource[] }) {
+ const agents = sources.map(source => source.agent).filter((agent): agent is NonNullable<typeof agent> => Boolean(agent));
+ if (agents.length === 0) return null;
+ return (
+  <span className="ml-auto flex shrink-0 items-center gap-0.5">
+   {agents.slice(0, 2).map(agent => (
+    <span
+     key={agent.id}
+     className="flex size-3.5 items-center justify-center overflow-hidden rounded-full text-[7px] font-semibold leading-none text-white ring-1 ring-background"
+     style={{ backgroundColor: agent.color, opacity: agent.connected ? 1 : 0.55 }}
+     title={`${agent.name}${agent.connected ? '' : ' (offline — this is the last copy it sent)'}`}
+    >
+     {agent.initials}
+    </span>
+   ))}
+   {agents.length > 2 && (
+    <span className="text-[10px] leading-none text-muted-foreground">+{agents.length - 2}</span>
+   )}
+  </span>
+ );
+}
+
+/**
+ * ONE document in the sidebar, however many places have a copy.
+ *
+ * The chips are the whole reason this is not just DocumentRow: the sidebar's
+ * job here is to say "this exists, and these three agents each have it", which
+ * is the fact that turns a list of filenames into a library. Clicking the row
+ * opens the copy you can act on — the editor for a workspace document, the
+ * library (which shows every copy and the differences between them) otherwise.
+ */
+function LibraryDocumentRow({
+ entry,
+ workspaceDoc,
+ onOpenDocument,
+ onOpenLibrary,
+ onMoveFolder,
+ onAddToCanvas,
+ documentPresence,
+}: {
+ entry: LibraryEntry;
+ workspaceDoc: Document | null;
+ onOpenDocument: (doc: Document) => void;
+ onOpenLibrary?: (entryKey?: string) => void;
+ onMoveFolder: (documentId: string, folder: string) => void;
+ onAddToCanvas?: (doc: Document) => void;
+ documentPresence: Record<string, ItemPresenceUser[]>;
+}) {
+ const multi = entry.sources.length > 1;
+ const openPrimary = () => {
+  if (workspaceDoc) onOpenDocument(workspaceDoc);
+  else onOpenLibrary?.(entry.key);
+ };
+
+ const row = (
+  <div className="min-w-0 w-full">
+   <button
+    type="button"
+    className="sidebar-item-row sidebar-item-row-document group flex min-w-0 w-full items-center overflow-hidden rounded-md text-left text-sm font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+    onClick={openPrimary}
+    title={multi ? `${entry.title} — ${entry.sources.length} copies` : entry.title}
+   >
+    <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">
+     {workspaceDoc?.folder === APPLETS_FOLDER ? <Code2 /> : <FileText />}
+    </span>
+    <span className="sidebar-item-label min-w-0 truncate text-left">{entry.title}</span>
+    <LibrarySourceChips sources={entry.sources} />
+   </button>
+  </div>
+ );
+
+ // No context menu for a document the workspace does not hold: every item on it
+ // (move to folder, add to canvas) acts on a `documents` row, and offering them
+ // against a file on somebody else’s disk would be offering something that
+ // cannot happen.
+ if (!workspaceDoc) return row;
+
+ const isApplet = workspaceDoc.folder === APPLETS_FOLDER;
+ return (
+  <ContextMenu>
+   <ContextMenuTrigger asChild>
+    <div className="min-w-0 w-full">
+     <ItemRow
+      icon={isApplet ? <Code2 /> : <FileText />}
+      label={entry.title}
+      onClick={openPrimary}
+      kind="document"
+      presenceUsers={documentPresence[workspaceDoc.id] || []}
+      trailing={multi ? <LibrarySourceChips sources={entry.sources} /> : undefined}
+     />
+    </div>
+   </ContextMenuTrigger>
+   <ContextMenuContent>
+    <ContextMenuLabel>{entry.title}</ContextMenuLabel>
+    <ContextMenuSeparator />
+    {multi && onOpenLibrary && (
+     <>
+      <ContextMenuItem onSelect={() => onOpenLibrary(entry.key)}>
+       <Library data-icon="inline-start" />
+       Compare {entry.sources.length} copies
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+     </>
+    )}
+    {isApplet && onAddToCanvas && (
+     <>
+      <ContextMenuItem onSelect={() => onAddToCanvas(workspaceDoc)}>
+       <LayoutTemplate data-icon="inline-start" />
+       Add to canvas
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+     </>
+    )}
+    <ContextMenuSub>
+     <ContextMenuSubTrigger>
+      <Folder data-icon="inline-start" />
+      Move to folder
+     </ContextMenuSubTrigger>
+     <ContextMenuSubContent>
+      {ITEM_FOLDERS.map(folder => (
+       <ContextMenuItem key={folder} onSelect={() => onMoveFolder(workspaceDoc.id, folder)}>
+        {folder}
+       </ContextMenuItem>
+      ))}
+     </ContextMenuSubContent>
+    </ContextMenuSub>
    </ContextMenuContent>
   </ContextMenu>
  );

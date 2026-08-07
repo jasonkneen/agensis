@@ -2,6 +2,17 @@
 
 const crypto = require('crypto');
 
+// Both pure and dependency-free, so they are required directly rather than
+// threaded through `deps` like the rest of this factory's collaborators: there
+// is no cycle to break and no test that wants to substitute them.
+const { applyToolSharing, sharingGate } = require('../shared/agentSharing.cjs');
+const {
+ channelAllowed,
+ normalizeSharePolicyMessage,
+ pathAllowed,
+} = require('../shared/agentSharePolicy.cjs');
+const { normalizeAgentDocuments } = require('./document-library.cjs');
+
 // Agent daemon connections: who is attached right now, and everything that
 // happens when that changes.
 //
@@ -804,9 +815,13 @@ function createAgentConnections(deps = {}) {
  //    list of NAMES; the BODIES ride agent_skill_sync into agent_skill_documents, so they
  //    need their own hash — a daemon can edit a SKILL.md without the name list changing,
  //    and the capabilities hash would not move.
+ //  - Document drift when the stored documentsHash differs. Third hash, same argument as
+ //    the second: the markdown a daemon mirrors up (agent_document_sync ->
+ //    agent_documents) is not described by either of the other two, and editing a README
+ //    moves nothing else.
  // The stored reference only advances when a real snapshot lands, so a genuine mismatch
  // resolves in ~1 round-trip rather than looping every beat.
- function capabilitiesDriftNudges(stored, { capabilitiesHash, memoryHash, skillsHash } = {}) {
+ function capabilitiesDriftNudges(stored, { capabilitiesHash, memoryHash, skillsHash, documentsHash } = {}) {
   const nudges = [];
   if (capabilitiesHash && (!capabilitiesShapeValid(stored) || capabilitiesHash !== stored.hash)) {
    nudges.push('agent_capabilities_refresh');
@@ -817,7 +832,82 @@ function createAgentConnections(deps = {}) {
   if (skillsHash && skillsHash !== (stored && stored.skillsHash)) {
    nudges.push('agent_skills_refresh');
   }
+  if (documentsHash && documentsHash !== (stored && stored.documentsHash)) {
+   nudges.push('agent_documents_refresh');
+  }
   return nudges;
+ }
+
+ /**
+  * The sharing switches on one agent row, for the ingest gate.
+  *
+  * Read at PUSH time rather than cached on the connection, deliberately: a
+  * person switching "share documents" off expects the next sync to stop, not
+  * the next reconnect. A daemon syncs on a heartbeat cadence, so this is a
+  * single indexed primary-key read against a row the process already touches
+  * constantly.
+  *
+  * Fail-open on a missing row is not a decision this makes — `sharingGate`
+  * normalizes `undefined` to all-shared, which is the same answer the column
+  * default gives. The row only goes missing if the agent was deleted, and the
+  * FK would have taken the mirror rows with it.
+  */
+ async function agentSharingRow(agentId) {
+  const rows = await getDb().unsafe('select sharing from workspace_agents where id = $1 limit 1', [agentId]);
+  return rows[0] || null;
+ }
+
+ /**
+  * The share policy this connection's daemon declared (shared/agentSharePolicy).
+  *
+  * Read from the live connection rather than the database: it arrives on the
+  * capabilities snapshot and is the DAEMON's statement about its own machine,
+  * so the authoritative copy is the one attached to the socket that made it. A
+  * connection with no declaration yields an empty policy, which permits
+  * everything — the workspace switches then decide alone, exactly as they did
+  * before any of this existed.
+  */
+ function connectionSharePolicy(ws) {
+  const live = ws?.agentConnectionId ? connectedAgents.get(ws.agentConnectionId) : null;
+  const capabilities = live?.capabilities;
+  return normalizeSharePolicyMessage(capabilities && capabilities.sharePolicy);
+ }
+
+ /**
+  * The SECOND enforcement of the machine's own policy.
+  *
+  * The daemon already filtered — it read the file and never enumerated what it
+  * withholds. This runs the same rules again on what actually arrived, which is
+  * what makes the policy a control rather than a convention: a daemon that is
+  * buggy, out of date, or modified cannot push a path its own declared policy
+  * forbids. Cheap, because the rule set is capped and usually empty.
+  */
+ function policyFilterPaths(policy, items, pathOf) {
+  if (!policy?.rules?.length) return items;
+  return items.filter(item => pathAllowed(policy, pathOf(item)));
+ }
+
+ /**
+  * Refuse a withheld channel AND remove what that agent already mirrored.
+  *
+  * The prune is the half that matters. Refusing the push alone would freeze the
+  * last snapshot in the workspace forever — every browse surface would keep
+  * rendering the agent's files, with nothing to indicate they were no longer
+  * being shared. "Stop sharing my memory" has to mean the memory leaves.
+  *
+  * Returns null when the channel is SHARED (the caller proceeds), or the rows it
+  * deleted when the channel is withheld (the caller stops). The caller does its
+  * own fanout with a LITERAL table name — see tests/realtime-fanout-allowlist:
+  * a notifyDbSubscribers call whose table is a variable escapes the allowlist
+  * check entirely, so this returns the rows rather than broadcasting them.
+  */
+ async function pruneWithheldMirror(agentRow, channel, { table, agentId }) {
+  const { allowed } = sharingGate(agentRow, channel);
+  if (allowed) return null;
+  return getDb().unsafe(
+   `delete from ${quoteIdent(table)} where agent_id = $1 returning *`,
+   [agentId],
+  );
  }
 
  async function updateAgentHeartbeat(ws, metadata = {}, hashes = {}) {
@@ -859,7 +949,28 @@ function createAgentConnections(deps = {}) {
   const agentId = ws.agentId || auth.agentId;
   if (!workspaceId || !agentId) throw forbidden('Agent is not registered');
 
-  const incoming = Array.isArray(message.files) ? message.files : [];
+  // The per-agent off switch (workspace_agents.sharing.memory). Withheld means
+  // this push is dropped and whatever this agent mirrored earlier is removed —
+  // see pruneWithheldMirror for why the removal is the load-bearing half.
+  // BOTH halves must say yes. The workspace switch is what somebody set in
+  // agensis; the policy is what the machine's own .agensis-share file declares.
+  // Neither can widen the other — see shared/agentSharePolicy.cjs.
+  const memoryPolicy = connectionSharePolicy(ws);
+  const memoryRow = await agentSharingRow(agentId);
+  const memoryWithheld = !channelAllowed(memoryPolicy, 'memory');
+  const withheldMemory = memoryWithheld
+   ? await getDb().unsafe('delete from agent_memory_files where agent_id = $1 returning *', [agentId])
+   : await pruneWithheldMirror(memoryRow, 'memory', { table: 'agent_memory_files', agentId });
+  if (withheldMemory) {
+   if (withheldMemory.length > 0) notifyDbSubscribers('agent_memory_files', 'DELETE', withheldMemory);
+   return;
+  }
+
+  const incoming = policyFilterPaths(
+   memoryPolicy,
+   Array.isArray(message.files) ? message.files : [],
+   (file) => String(file?.path || ''),
+  );
   const db = getDb();
   const upserted = [];
   const keptPaths = [];
@@ -919,6 +1030,25 @@ function createAgentConnections(deps = {}) {
   const agentId = ws.agentId || auth.agentId;
   if (!workspaceId || !agentId) throw forbidden('Agent is not registered');
 
+  // Same off switch, `skills` half. A withheld agent keeps advertising skill
+  // NAMES (that is capabilities.skills, governed by nothing here) but stops
+  // contributing the bodies behind them. Nothing is broadcast: this table is
+  // deliberately absent from ALLOWED_TABLES and its sync fans out nothing, so a
+  // DELETE event would be a message to no one.
+  // Channel gate only. Path rules deliberately do NOT apply to skills: a skill
+  // is addressed by NAME and its `path` is an advisory label about where the
+  // daemon found it, so filtering on that would silently drop skills for a
+  // reason the file's author was describing documents.
+  const skillPolicy = connectionSharePolicy(ws);
+  if (!channelAllowed(skillPolicy, 'skills')) {
+   await getDb().unsafe('delete from agent_skill_documents where agent_id = $1', [agentId]);
+   return;
+  }
+  if (await pruneWithheldMirror(await agentSharingRow(agentId), 'skills', {
+   table: 'agent_skill_documents',
+   agentId,
+  })) return;
+
   const documents = normalizeSkillDocuments(message.skills);
   const db = getDb();
   const keptSkills = [];
@@ -967,6 +1097,111 @@ function createAgentConnections(deps = {}) {
   }
  }
 
+ /**
+  * Ingest the MARKDOWN a connected agent can see from its own locations.
+  *
+  * Third and last member of the daemon-mirror family, and deliberately the same
+  * shape as the two above it: UPSERT by UNIQUE(agent_id, path), prune what the
+  * daemon stopped reporting, advance the drift hash here so the heartbeat stops
+  * nudging. One pattern for "a daemon pushed files up", not three.
+  *
+  * Two differences from the skill mirror, both intentional:
+  *
+  *   1. IT BROADCASTS (metadata only). The library is a SIDEBAR surface — a
+  *      person watching it expects a document that appeared on a teammate's
+  *      machine to appear here, not on next reload. `content` is stripped from
+  *      the fanout in server/realtime.cjs (REALTIME_HEAVY_FIELDS), so what goes
+  *      out is the path/title/domain/hash row the list actually renders.
+  *   2. IT PRUNES BY PATH SET rather than deleting everything on an empty push.
+  *      Same as the memory mirror. A daemon that legitimately reports zero
+  *      documents (nothing markdown in its locations) still clears the agent's
+  *      rows — that is the honest answer, and the sharing switch is the way to
+  *      say "don't ask" rather than "answer nothing".
+  */
+ async function handleAgentDocumentSync(ws, message) {
+  const auth = ws.agentAuth;
+  if (!auth) throw forbidden('Agent token is required');
+  const workspaceId = ws.workspaceId || auth.workspaceId;
+  const agentId = ws.agentId || auth.agentId;
+  if (!workspaceId || !agentId) throw forbidden('Agent is not registered');
+
+  const documentPolicy = connectionSharePolicy(ws);
+  const documentsWithheld = !channelAllowed(documentPolicy, 'documents');
+  const withheldDocuments = documentsWithheld
+   ? await getDb().unsafe('delete from agent_documents where agent_id = $1 returning *', [agentId])
+   : await pruneWithheldMirror(await agentSharingRow(agentId), 'documents', {
+    table: 'agent_documents',
+    agentId,
+   });
+  if (withheldDocuments) {
+   if (withheldDocuments.length > 0) notifyDbSubscribers('agent_documents', 'DELETE', withheldDocuments);
+   return;
+  }
+
+  // Path rules applied AFTER normalization, so they see the same normalized
+  // path the row will be stored under — a rule written as `docs/**` must match
+  // a daemon that reported `./docs/x.md`.
+  const documents = policyFilterPaths(
+   documentPolicy,
+   normalizeAgentDocuments(message.documents || message.files),
+   (doc) => doc.path,
+  );
+  const db = getDb();
+  const upserted = [];
+  const keptPaths = [];
+  for (const doc of documents) {
+   keptPaths.push(doc.path);
+   const rows = await db.unsafe(
+    `insert into agent_documents (
+        workspace_id, agent_id, path, title, domain, summary, content, byte_size,
+        truncated, content_hash, source_modified_at, last_synced, updated_at)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())
+        on conflict (agent_id, path) do update set
+          title = excluded.title,
+          domain = excluded.domain,
+          summary = excluded.summary,
+          content = excluded.content,
+          byte_size = excluded.byte_size,
+          truncated = excluded.truncated,
+          content_hash = excluded.content_hash,
+          source_modified_at = excluded.source_modified_at,
+          last_synced = now(),
+          updated_at = now(),
+          version = agent_documents.version + 1
+        returning *`,
+    [
+     workspaceId, agentId, doc.path, doc.title, doc.domain, doc.summary, doc.content,
+     doc.byteSize, doc.truncated, doc.contentHash, doc.sourceModifiedAt,
+    ],
+   );
+   if (rows[0]) upserted.push(rows[0]);
+  }
+
+  const pruned = keptPaths.length > 0
+   ? await db.unsafe(
+    'delete from agent_documents where agent_id = $1 and path <> all($2::text[]) returning *',
+    [agentId, keptPaths],
+   )
+   : await db.unsafe('delete from agent_documents where agent_id = $1 returning *', [agentId]);
+
+  if (upserted.length > 0) notifyDbSubscribers('agent_documents', 'INSERT', upserted);
+  if (pruned.length > 0) notifyDbSubscribers('agent_documents', 'DELETE', pruned);
+
+  // Advance the drift reference here, for the same reason the skill mirror does:
+  // otherwise the heartbeat nudges agent_documents_refresh every beat and the
+  // daemon answers each one with a full re-push it has already sent.
+  if (typeof message.hash === 'string' && message.hash && ws.agentConnectionId) {
+   const rows = await db.unsafe(
+    `update agent_connections
+       set capabilities = coalesce(capabilities, '{}'::jsonb) || $2::jsonb, updated_at = now()
+       where id = $1 returning *`,
+    [ws.agentConnectionId, { documentsHash: message.hash }],
+   );
+   const live = connectedAgents.get(ws.agentConnectionId);
+   if (live && rows[0]) live.capabilities = parseJsonObject(rows[0].capabilities);
+  }
+ }
+
  async function handleAgentCapabilitiesSync(ws, message) {
   const auth = ws.agentAuth;
   if (!auth) throw forbidden('Agent token is required');
@@ -1000,16 +1235,72 @@ function createAgentConnections(deps = {}) {
    hash: typeof message.hash === 'string' ? message.hash : null,
    memoryHash: typeof message.memoryHash === 'string' ? message.memoryHash : null,
    skillsHash: typeof message.skillsHash === 'string' ? message.skillsHash : null,
+   // Third mirror's drift reference. Carried HERE as well as advanced by
+   // handleAgentDocumentSync because this statement REPLACES the whole
+   // capabilities blob — omitting it would blank the reference on every
+   // capabilities push and leave the heartbeat nudging documents forever.
+   documentsHash: typeof message.documentsHash === 'string' ? message.documentsHash : null,
+   // The machine's own .agensis-share declaration, normalized (never trusted
+   // as sent — see normalizeSharePolicyMessage). Stored so the workspace can
+   // EXPLAIN an empty list: "that machine declines" is a different fact from
+   // "we turned it off here", and they need different fixes in different places.
+   sharePolicy: normalizeSharePolicyMessage(message.sharePolicy),
   };
+
+  // The `tools` sharing switch, applied at INGEST rather than at render.
+  //
+  // publicAgentConnection is a pure row mapper on the fanout path with no agent
+  // row in hand, so a render-time gate there would need a database read inside
+  // realtime broadcast. Redacting here means the withheld advert is never
+  // stored at all, which is also the stronger property. Turning the switch back
+  // on re-nudges the daemon (see the agent update route) so the full advert
+  // returns on the next push rather than at the next unrelated drift.
+  const shareable = applyToolSharing(capabilities, await agentSharingRow(ws.agentId || auth.agentId));
 
   const rows = await getDb().unsafe(
    `update agent_connections set capabilities = $2::jsonb, updated_at = now()
       where id = $1 returning *`,
-   [connectionId, capabilities],
+   [connectionId, shareable],
   );
   const liveConnection = connectedAgents.get(connectionId);
-  if (liveConnection) liveConnection.capabilities = capabilities;
+  if (liveConnection) liveConnection.capabilities = shareable;
   if (rows.length > 0) notifyDbSubscribers('agent_connections', 'UPDATE', rows.map(publicAgentConnection));
+ }
+
+ /**
+  * Ask an agent's live daemons to re-push everything, after its sharing changed.
+  *
+  * Switching a channel ON is the case that needs this. Switching OFF takes
+  * effect immediately (the ingest gate prunes on the next push, and the update
+  * route prunes eagerly), but switching back on leaves the agent with nothing
+  * mirrored and a drift hash that still MATCHES — so the heartbeat sees no
+  * drift and would never ask for the snapshot that is now allowed. The daemon
+  * has to be told.
+  *
+  * All four nudges are sent rather than only the changed one: they are cheap
+  * frames on a socket that already exists, and a daemon that ignores an unknown
+  * one loses nothing. Returns how many connections were told.
+  */
+ function nudgeAgentSharingResync(workspaceId, agentId, handle = null) {
+  let told = 0;
+  for (const entry of connectedAgents.values()) {
+   if (String(entry.agentId) !== String(agentId)) continue;
+   if (workspaceId && String(entry.workspaceId) !== String(workspaceId)) continue;
+   for (const type of ['agent_capabilities_refresh', 'agent_memory_refresh', 'agent_skills_refresh', 'agent_documents_refresh']) {
+    sendWs(entry.ws, { type });
+   }
+   told += 1;
+  }
+  if (told === 0 && handle) {
+   const fallback = findConnectedAgent(workspaceId, agentId, handle);
+   if (fallback) {
+    for (const type of ['agent_capabilities_refresh', 'agent_memory_refresh', 'agent_skills_refresh', 'agent_documents_refresh']) {
+     sendWs(fallback.ws, { type });
+    }
+    told = 1;
+   }
+  }
+  return told;
  }
 
  // Test seams. connectedAgents is private, so a test that needs to assert HOW
@@ -1041,8 +1332,10 @@ function createAgentConnections(deps = {}) {
   disconnectAgentDaemons,
   findConnectedAgent,
   handleAgentCapabilitiesSync,
+  handleAgentDocumentSync,
   handleAgentMemorySync,
   handleAgentSkillSync,
+  nudgeAgentSharingResync,
   hasMcpPresence,
   isConnectionSocketLive,
   isConnectionSocketOpen,
