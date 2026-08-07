@@ -1,4 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage } = require('electron');
+const os = require('os');
 const path = require('path');
 const { fileURLToPath } = require('url');
 
@@ -134,7 +135,9 @@ ipcMain.handle('pty:spawn', async (event, options) => {
   const pty = loadPty();
   if (!pty) return { ok: false, error: 'node-pty is not installed for this build' };
 
-  const shell = process.env.SHELL || '/bin/zsh';
+  const shell = process.platform === 'win32'
+    ? (process.env.COMSPEC || 'powershell.exe')
+    : (process.env.SHELL || '/bin/zsh');
   const id = `pty-${++ptyCounter}`;
   const sender = event.sender;
 
@@ -142,7 +145,7 @@ ipcMain.handle('pty:spawn', async (event, options) => {
     name: 'xterm-256color',
     cols: Math.max(2, Number(options.cols) || 80),
     rows: Math.max(1, Number(options.rows) || 24),
-    cwd: options.cwd || process.env.HOME,
+    cwd: options.cwd || os.homedir(),
     env: { ...process.env, TERM: 'xterm-256color' },
   });
 

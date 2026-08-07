@@ -189,3 +189,75 @@ test('main process wires local-runtime IPC channels', () => {
   assert.doesNotMatch(src, /electron\/acp\//);
   assert.doesNotMatch(src, /require\('\.\/acp\//);
 });
+
+// Windows daemon spawn. resolveAgensisBinary resolves `agensis`/`npx` to the
+// npm .cmd shim on Windows, which needs shell:true — and shell:true on Windows
+// does no arg escaping of its own, so the supervisor must quote each arg.
+const { quoteWindowsShellArg } = supervisor;
+
+test('quoteWindowsShellArg leaves plain args untouched', () => {
+  assert.equal(quoteWindowsShellArg('connect'), 'connect');
+  assert.equal(quoteWindowsShellArg('--no-acp'), '--no-acp');
+  assert.equal(quoteWindowsShellArg(''), '""');
+});
+
+test('quoteWindowsShellArg quotes args with spaces', () => {
+  assert.equal(quoteWindowsShellArg('arg with spaces'), '"arg with spaces"');
+  // --cwd and --name routinely carry spaces on Windows.
+  assert.equal(quoteWindowsShellArg('C:\\Users\\a b\\proj'), '"C:\\Users\\a b\\proj"');
+});
+
+test('quoteWindowsShellArg doubles a trailing backslash run so it cannot escape the closing quote', () => {
+  // The CRT command-line parser only treats backslashes as escapes when they
+  // precede a quote, so an undoubled `proj\` would turn the closing quote into
+  // a literal one and swallow the following args. A --cwd with a trailing
+  // separator is the everyday way to hit this.
+  assert.equal(quoteWindowsShellArg('C:\\Users\\a b\\proj\\'), '"C:\\Users\\a b\\proj\\\\"');
+  assert.equal(quoteWindowsShellArg('a b\\\\'), '"a b\\\\\\\\"');
+  // Interior backslashes are not before a quote, so they stay as-is.
+  assert.equal(quoteWindowsShellArg('C:\\a b\\\\c'), '"C:\\a b\\\\c"');
+});
+
+test('quoteWindowsShellArg escapes double quotes', () => {
+  assert.equal(quoteWindowsShellArg('say "hi"'), '"say ""hi"""');
+});
+
+test('quoteWindowsShellArg doubles a backslash run sitting in front of a quote', () => {
+  // Same CRT escaping rule as the trailing case: an undoubled backslash before
+  // a quote escapes it, so `a\"b` would lose the argument boundary and swallow
+  // whatever follows. Verified by round-tripping through a real cmd.exe shim.
+  assert.equal(quoteWindowsShellArg('a b\\"c'), '"a b\\\\""c"');
+  // The quote stays "" rather than \": cmd.exe does not understand \", so it
+  // would count the region as unquoted and run the metacharacter — `&calc`
+  // here — as a command of its own.
+  assert.equal(quoteWindowsShellArg('name\\"&calc'), '"name\\\\""&calc"');
+});
+
+test('quoteWindowsShellArg quotes cmd.exe metacharacters', () => {
+  for (const meta of ['a&b', 'a|b', 'a<b', 'a>b', 'a^b', 'a(b)']) {
+    assert.equal(quoteWindowsShellArg(meta), `"${meta}"`, meta);
+  }
+});
+
+test('quoteWindowsShellArg refuses literal percent signs rather than pass through an unsafe escape', () => {
+  // cmd.exe expands %VAR% while parsing the command line even inside a
+  // double-quoted argument, and the usual %% escape does not survive the
+  // extra quoting layer Node's shell:true adds for `cmd /d /s /c "..."`
+  // (verified empirically against a real cmd.exe: %%USERPROFILE%% still
+  // expanded to the real path). Refuse rather than ship a broken escape.
+  assert.throws(() => quoteWindowsShellArg('%USERPROFILE%'), /Refusing to pass "%"/);
+  assert.throws(() => quoteWindowsShellArg('100%'), /Refusing to pass "%"/);
+});
+
+test('supervisor spawns .cmd/.bat shims through a shell, .exe directly', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'electron/local-runtime/supervisor.cjs'),
+    'utf8',
+  );
+  // shell:true is gated on win32 AND a shim extension — never unconditional.
+  assert.match(src, /process\.platform === 'win32' && \/\\.\(cmd\|bat\)\$\/i\.test\(binary\.command\)/);
+  assert.match(src, /shell: needsShell/);
+  assert.match(src, /windowsHide: true/);
+  // Args must be quoted on the shell path.
+  assert.match(src, /args\.map\(quoteWindowsShellArg\)/);
+});

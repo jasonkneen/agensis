@@ -32,6 +32,43 @@ const {
 /** @type {Map<string, ReturnType<typeof createSession>>} */
 const sessions = new Map();
 
+// child_process.spawn's shell:true does NOT escape args on Windows (Node
+// warns about this — DEP0190): it hands cmd.exe a plain space-joined command
+// line, so any arg with a space or shell metacharacter needs its own quoting.
+// Unlike a static harness argv, the connect args below carry real user input
+// (--name, --handle, --cwd, --token), so this is load-bearing, not defensive.
+//
+// cmd.exe expands %VAR% while it parses the command line, even inside a
+// double-quoted argument. The usual %% escape for a literal percent does NOT
+// survive here — Node's shell:true wraps the whole command line in an extra
+// layer of quoting for `cmd /d /s /c "..."`, and that extra layer changes how
+// the %-scan interacts with quote boundaries (verified empirically:
+// %%USERPROFILE%% still expands to the real path through it). Rather than ship
+// an escape that only looks safe, refuse a literal "%".
+function quoteWindowsShellArg(value) {
+  const str = String(value);
+  if (str === '') return '""';
+  if (str.includes('%')) {
+    throw new Error(`Refusing to pass "%" through the Windows shell (cmd.exe would expand it as %VAR%): ${str}`);
+  }
+  if (!/[\s"^&|<>()]/.test(str)) return str;
+  // Two parsers see this string and they want different escapes, so neither
+  // textbook answer works alone (all of the below verified empirically by
+  // round-tripping through a real cmd.exe + .cmd shim):
+  //
+  //   - The CRT parser treats a backslash as an escape only when it precedes a
+  //     quote. So every backslash run that lands before a quote — including the
+  //     closing one we add — has to be doubled, or `--cwd "C:\proj\"` reads the
+  //     final \" as a literal quote and swallows the following args. A --cwd
+  //     with a trailing separator is the everyday way to hit that.
+  //   - The quote itself must still be escaped as "" and not \". cmd.exe does
+  //     not understand \", so it counts the quote as ending the quoted region
+  //     and resumes treating metacharacters as syntax: `name\"&calc` would run
+  //     calc. "" keeps cmd.exe's quote parity intact and the CRT still folds it
+  //     to one literal quote.
+  return `"${str.replace(/(\\*)"/g, '$1$1""').replace(/(\\+)$/, '$1$1')}"`;
+}
+
 function createSession(config, child, binary) {
   return {
     agentId: config.agentId,
@@ -209,17 +246,31 @@ async function start(options = {}) {
     `[desktop-local] start agent=${agentId} runtime=${runtime} mode=${connect.def.mode} url=${baseUrl} via=${binary.source}`,
   );
 
-  const child = spawn(binary.command, args, {
-    cwd,
-    env: {
-      ...process.env,
-      PATH: pathEnv,
-      ...connect.env,
-      ELECTRON_RUN_AS_NODE: undefined,
+  // resolveAgensisBinary resolves through PATH, and on Windows that turns
+  // `agensis`/`npx` into the npm-installed .cmd/.bat shim (see the win32 branch
+  // in shared/local-agent-discovery.cjs). Those are batch files, not PE
+  // executables, so child_process.spawn cannot exec them without shell:true.
+  // Only shim extensions get shell:true — a resolved .exe still spawns
+  // directly, with no argument re-quoting risk.
+  const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(binary.command);
+
+  const child = spawn(
+    needsShell ? quoteWindowsShellArg(binary.command) : binary.command,
+    needsShell ? args.map(quoteWindowsShellArg) : args,
+    {
+      cwd,
+      env: {
+        ...process.env,
+        PATH: pathEnv,
+        ...connect.env,
+        ELECTRON_RUN_AS_NODE: undefined,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: false,
+      shell: needsShell,
+      windowsHide: true,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: false,
-  });
+  );
 
   const session = createSession(
     {
@@ -333,6 +384,7 @@ function stopAll() {
 }
 
 module.exports = {
+  quoteWindowsShellArg,
   listRuntimes,
   status,
   listRunning,

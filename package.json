@@ -140,6 +140,7 @@
     "appId": "io.agensis.app",
     "productName": "agensis",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "npmRebuild": false,
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -200,7 +201,11 @@
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-${version}-${os}-${arch}-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-${os}-${arch}-portable.${ext}"
     },
     "linux": {
       "category": "Office",
