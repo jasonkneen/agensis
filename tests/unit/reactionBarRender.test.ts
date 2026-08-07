@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { ReactionBar } from '../../src/components/chat/ReactionBar';
-import { ReadReceipt } from '../../src/components/chat/ReadReceipt';
 import { TooltipProvider } from '../../src/components/ui/tooltip';
 
 // The claims a pure test cannot settle: these components MOUNT, and what they
@@ -82,48 +81,3 @@ describe('ReactionBar', () => {
   });
 });
 
-describe('ReadReceipt', () => {
-  const resolveName = (id: string) => (id === THEM ? 'Ana' : null);
-
-  it('is an SVG icon and never an emoji glyph', () => {
-    // The project rule: reactions are the emoji exception because the glyph is
-    // user-selected CONTENT. Nobody chose this one — the app is asserting a fact
-    // — so it is chrome and it is a lucide SVG. 👀 is also already in the
-    // reaction picker, so the same glyph would mean two different things in one
-    // row.
-    render(createElement(ReadReceipt, { readerIds: [THEM], resolveName }));
-    expect(container.querySelector('svg')).not.toBeNull();
-    expect(container.textContent).not.toContain('👀');
-    expect(container.textContent).not.toContain('👁');
-  });
-
-  it('puts the fact in text, not only in the icon', () => {
-    render(createElement(ReadReceipt, { readerIds: [THEM, 'u2'], resolveName }));
-    expect(container.querySelector('[aria-label="Read by 2 people"]')).not.toBeNull();
-  });
-
-  it('draws nothing in a channel until somebody has read it', () => {
-    // An eye on every message in a 30-person channel is furniture.
-    render(createElement(ReadReceipt, { readerIds: [], resolveName }));
-    expect(container.querySelector('svg')).toBeNull();
-  });
-
-  it('draws an unread state in a DM, where "did it land" is the whole question', () => {
-    render(createElement(ReadReceipt, { readerIds: [], resolveName, isDirect: true }));
-    expect(container.querySelector('svg')).not.toBeNull();
-    expect(container.querySelector('[aria-label="Not read yet"]')).not.toBeNull();
-  });
-
-  it('shows no count in a DM, where "read" is binary', () => {
-    render(createElement(ReadReceipt, { readerIds: [THEM], resolveName, isDirect: true }));
-    expect(container.textContent?.trim()).toBe('');
-  });
-
-  it('never shows a per-reader timestamp', () => {
-    // The data supports "read at 23:47" and the product must not show it: that
-    // is where a receipt stops being useful and starts being surveillance, and
-    // it would undo the one privacy property the high-water mark has.
-    render(createElement(ReadReceipt, { readerIds: [THEM], resolveName }));
-    expect(container.textContent).not.toMatch(/\d{1,2}:\d{2}/);
-  });
-});

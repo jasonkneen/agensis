@@ -5,11 +5,11 @@ import { SessionStopButton } from './StopAgentButton';
 import { MarkdownContent } from './MarkdownContent';
 import { ReactionBar } from './ReactionBar';
 import { QueuedPill, SeenPill } from './SeenPill';
+import { buildReaderFaces, type ReaderFace } from '../../lib/readerFaces';
 import { useMessageReactions } from '../../hooks/useMessageReactions';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
-import { receiptTargetForViewport } from '../../lib/readReceipts';
-import { seenAnchorIds } from '../../lib/seenPill';
+import { isOwnReceiptMessage, receiptTargetForViewport } from '../../lib/readReceipts';
 import { queuedState, type QueuedState } from '../../lib/queuedPill';
 import { useSessionWork } from '../../hooks/useAgentWork';
 import type { ReactionUse } from '../../lib/reactionBar';
@@ -158,13 +158,17 @@ export function SubThreadPanel({
   // A reader id is a human user id OR an agent id, so resolve against members
   // first and then the agent roster: an agent's name belongs in the tooltip
   // exactly like a person's.
-  const resolveReaderName = useCallback((readerId: string) => {
-    const member = workspaceMembers.find(row => String(row.user_id) === String(readerId));
-    if (member) return member.email ? member.email.split('@')[0] : null;
-    const agent = agents.find(row => String(row.id) === String(readerId));
-    if (agent) return agent.name || null;
-    return null;
-  }, [workspaceMembers, agents]);
+  // One lookup, shared with the channel and the reply-thread panel — see
+  // src/lib/readerFaces.ts. A face rather than a name because the chips show
+  // WHO; `resolveReaderName` is the name-only view of the same thing.
+  const resolveReaderFace = useMemo(
+    () => buildReaderFaces({ members: workspaceMembers, agents }),
+    [workspaceMembers, agents],
+  );
+  const resolveReaderName = useCallback(
+    (readerId: string) => resolveReaderFace(readerId).name,
+    [resolveReaderFace],
+  );
 
   const receipts = useReadReceipts({
     sessionId: session.id || null,
@@ -187,10 +191,10 @@ export function SubThreadPanel({
     noteVisibleRead(newestVisibleMessage);
   }, [noteVisibleRead, newestVisibleMessage]);
 
-  const seenAnchors = useMemo(
-    () => seenAnchorIds(messages, currentUserId || null),
-    [currentUserId, messages],
-  );
+  // No anchoring: every one of your own posts keeps its eye for as long as the
+  // receipt is true, matching the channel. A read receipt is standing evidence
+  // of what was taken in, not a transient notification.
+
   // "Queued": you posted while a turn was already running here, so this one is
   // next. Derived from the running job's start time — see src/lib/queuedPill.ts
   // for why a 'queued' job row is the wrong signal.
@@ -404,11 +408,12 @@ export function SubThreadPanel({
                             ? undefined
                             : (reaction, op) => reactionState.toggle(row.message, reaction, op)}
                           resolveReaderName={resolveReaderName}
-                          // Same rule as the channel: only YOUR messages carry a
-                          // seen pill. "Did what I just said land" is the
-                          // question; a pill on somebody else's post answers
-                          // nothing and puts one on every row.
-                          readerIds={seenAnchors.has(row.message.id)
+                          resolveReaderFace={resolveReaderFace}
+                          // Same rule as the channel: only YOUR messages carry
+                          // an eye, and every one of them does for as long as
+                          // the receipt is true. "Who read their post" is not a
+                          // fact you can act on and would mark every row.
+                          readerIds={isOwnReceiptMessage(row.message, currentUserId || null)
                             ? receipts.readersOfMessage(row.message)
                             : undefined}
                           queued={queuedState(row.message, panelWork, currentUserId || null)}
@@ -606,6 +611,7 @@ export function SubThreadBubble({
   reactionUses = [],
   onToggleReaction,
   resolveReaderName,
+  resolveReaderFace,
   readerIds,
   queued,
 }: {
@@ -618,6 +624,8 @@ export function SubThreadBubble({
   reactionUses?: readonly ReactionUse[];
   onToggleReaction?: (reaction: string, op: 'add' | 'remove') => void;
   resolveReaderName?: (readerId: string) => string | null;
+  /** Face lookup for the chips that show WHO — readers, reactors, agents worked behind. */
+  resolveReaderFace?: (readerId: string) => ReaderFace;
   /** Undefined on a post that carries no seen pill; empty when nobody has read it. */
   readerIds?: string[];
   queued?: QueuedState;
@@ -644,15 +652,20 @@ export function SubThreadBubble({
   // Built here so the row can ask "is there anything to show?" before rendering
   // a bar at all — an empty bar carries `mt-1` and would add 4px under every
   // post nobody has read.
-  // Queued first, then seen: "what happened to it" then "did it land". Only
-  // ever rendered together on a mid-turn message that has since been read.
-  const hasReaders = readerIds !== undefined && readerIds.length > 0;
-  const seenPill = (queued?.queued || hasReaders) ? (
+  // Seen, then queued, then the reactions — one row saying what happened to
+  // this post, matching the channel. SETTLED: see the block at the top of
+  // src/lib/seenPill.ts before moving any of it.
+  const hasSeen = !isActivityPlaceholder && readerIds !== undefined && readerIds.length > 0;
+  const seenPill = hasSeen || queued?.queued ? (
     <>
-      {queued?.queued ? <QueuedPill state={queued} /> : null}
-      {hasReaders
-        ? <SeenPill readerIds={readerIds as string[]} resolveName={resolveReaderName || (() => null)} />
-        : null}
+      {hasSeen && (
+        <SeenPill
+          readerIds={readerIds as string[]}
+          resolveName={resolveReaderName || (() => null)}
+          resolveFace={resolveReaderFace}
+        />
+      )}
+      {queued?.queued && <QueuedPill state={queued} resolveFace={resolveReaderFace} />}
     </>
   ) : null;
 
@@ -750,11 +763,10 @@ export function SubThreadBubble({
           ) : null}
           {artifact && <ChatArtifact artifact={artifact} />}
         </div>
-        {/* Reactions and the seen pill share one row, as in the channel. The
-            pill is derived from the read markers rather than stored as a
-            reaction — see src/lib/seenPill.ts. A placeholder ("Thinking …") is
-            excluded: it is a transient row that will be replaced, and reacting
-            to it would attach the reaction to a message about to disappear. */}
+        {/* Reactions and the queued chip share one row, as in the channel. A
+            placeholder ("Thinking …") is excluded: it is a transient row that
+            will be replaced, and reacting to it would attach the reaction to a
+            message about to disappear. */}
         {!isActivityPlaceholder && !ownMutation.editing && (onToggleReaction || seenPill) && (
           <ReactionBar
             reactions={onToggleReaction ? reactions : null}
@@ -763,6 +775,7 @@ export function SubThreadBubble({
             onToggle={onToggleReaction ?? NOOP_TOGGLE}
             reactionUses={reactionUses}
             leadingSlot={seenPill}
+            resolveFace={resolveReaderFace}
           />
         )}
       </div>

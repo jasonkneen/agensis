@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { ReactionBar } from '../../src/components/chat/ReactionBar';
-import { QueuedPill, SeenPill, UnseenPill } from '../../src/components/chat/SeenPill';
+import { QueuedPill, SeenPill } from '../../src/components/chat/SeenPill';
 import { TooltipProvider } from '../../src/components/ui/tooltip';
 
 // The claims a pure test cannot settle: this component MOUNTS, and the thing it
@@ -67,28 +67,19 @@ describe('SeenPill', () => {
   });
 });
 
-describe('UnseenPill', () => {
-  it('says "sent, not seen yet" — the state a pill cannot show by being absent', () => {
-    render(createElement(UnseenPill, {}));
-    const pill = container.querySelector('[data-unseen-pill]');
-    expect(pill).not.toBeNull();
-    expect(pill?.getAttribute('aria-label')).toBe('Sent, not seen yet');
-  });
-
-  it('is not a control either — nothing here is clickable', () => {
-    render(createElement(UnseenPill, {}));
-    expect(container.querySelectorAll('button')).toHaveLength(0);
-  });
-});
+// UnseenPill is GONE, deliberately. "Sent, not seen yet" is the one state a
+// chip cannot draw, and the settled shape (see the block at the top of
+// src/lib/seenPill.ts) accepts that rather than inventing a second indicator
+// for it. Do not add it back without the human asking.
 
 describe('QueuedPill', () => {
   it('renders nothing when the message is not queued', () => {
-    render(createElement(QueuedPill, { state: { queued: false, workers: 0 } }));
+    render(createElement(QueuedPill, { state: { queued: false, workers: 0, agentIds: [] } }));
     expect(container.textContent).toBe('');
   });
 
   it('explains the wait and stays a non-control', () => {
-    render(createElement(QueuedPill, { state: { queued: true, workers: 1 } }));
+    render(createElement(QueuedPill, { state: { queued: true, workers: 1, agentIds: [] } }));
     const pill = container.querySelector('[data-queued-pill]');
     expect(pill?.textContent).toContain('Queued');
     expect(pill?.getAttribute('aria-label'))

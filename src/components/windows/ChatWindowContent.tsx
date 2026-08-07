@@ -108,11 +108,11 @@ import {
 } from '../../lib/slashCommands';
 import { apiAuthHeaders, apiUrl, backendClient, getSlashCommands, type SystemCapabilities } from '../../lib/backendClient';
 import { ReactionBar, ReactionPicker } from '../chat/ReactionBar';
-import { QueuedPill, SeenPill, UnseenPill } from '../chat/SeenPill';
+import { QueuedPill, SeenPill } from '../chat/SeenPill';
+import { buildReaderFaces, type ReaderFace } from '../../lib/readerFaces';
 import { frequentReactions, noteReactionUse, reactionPills, reactionToggleOp, type ReactionUse } from '../../lib/reactionBar';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
-import { receiptTargetForViewport } from '../../lib/readReceipts';
-import { seenAnchorIds, unseenAnchorId } from '../../lib/seenPill';
+import { isOwnReceiptMessage, receiptTargetForViewport } from '../../lib/readReceipts';
 import { queuedState, type QueuedState } from '../../lib/queuedPill';
 import { useSessionWork } from '../../hooks/useAgentWork';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
@@ -921,13 +921,18 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   // A reader id is a human user id OR an agent id (read receipts now cover both),
   // so resolve against members first, then the agent roster — an agent's eye
   // needs its name in the tooltip exactly like a person's.
-  const resolveUserName = useCallback((readerId: string) => {
-    const member = workspaceMembers.find(row => String(row.user_id) === String(readerId));
-    if (member) return member.email ? member.email.split('@')[0] : null;
-    const agent = agents.find(row => String(row.id) === String(readerId));
-    if (agent) return agent.name || null;
-    return null;
-  }, [workspaceMembers, agents]);
+  // One lookup, in src/lib/readerFaces.ts, shared with both thread panels — the
+  // three surfaces each used to carry their own copy of this and that is how
+  // they drift. It returns a FACE (name + avatar + accent) because the chips now
+  // show who, not how many; `resolveUserName` is the name-only view of it.
+  const resolveReaderFace = useMemo(
+    () => buildReaderFaces({ members: workspaceMembers, agents }),
+    [workspaceMembers, agents],
+  );
+  const resolveUserName = useCallback(
+    (readerId: string) => resolveReaderFace(readerId).name,
+    [resolveReaderFace],
+  );
 
   // Picker history, per account and local only: nobody else's ranking is
   // affected by what you reach for.
@@ -1052,23 +1057,21 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     return () => window.removeEventListener('pagehide', flush);
   }, [noteVisibleRead]);
 
-  // NOT receipts.anchorIds. That set is the old one-eye-per-run rule; the seen
-  // pill also marks every message of your CURRENT run, because typing three
-  // times while an agent is mid-stream and wanting to see each land is the
-  // exact case this feature exists for. See src/lib/seenPill.ts.
-  const receiptAnchors = useMemo(
-    () => seenAnchorIds(shownMessages, currentUserId || null),
-    [currentUserId, shownMessages],
-  );
+  // NO ANCHORING AT ALL any more. Both earlier rules — one eye per run, then
+  // "every message of the trailing run" — existed to keep the indicator sparse,
+  // and both threw away the fact you actually want to keep: WHAT WAS READ. A
+  // receipt is not a transient notification, it is standing evidence, and
+  // hiding it on older messages means scrolling back tells you nothing about
+  // whether the agent ever took them in.
+  //
+  // So every one of YOUR messages carries the eye whenever it is still true.
+  // Somebody else's message never does: "who read their post" is not a fact you
+  // can act on, and it would put an eye on most rows in a busy channel.
 
-  // "Sent, not seen yet" — the state the hollow eye used to carry and a pill
-  // cannot express by being absent. Computed unconditionally and gated to DMs at
-  // the render site: `isDirectMessage` is resolved further down, and a hook that
-  // reads it from up here would be a temporal-dead-zone crash, not a warning.
-  const unseenAnchor = useMemo(
-    () => unseenAnchorId(shownMessages, currentUserId || null),
-    [currentUserId, shownMessages],
-  );
+  // No `unseenAnchor` any more. "Sent, not seen yet" needed its own anchor only
+  // while the signal was a pill, because a pill cannot render absence. The eye
+  // draws that state natively — hollow in a DM until somebody reads — so the
+  // state is back where it can be shown on every anchor rather than on one.
 
   // "Queued" — you typed while a turn was already running, so this one is next.
   // Derived from the running job's start time rather than a 'queued' job row,
@@ -2307,15 +2310,14 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           currentUserId={currentUserId}
                           onToggleReaction={readOnly || msg.deleted_at ? undefined : (reaction, op) => void handleToggleReaction(msg, reaction, op)}
                           resolveUserName={resolveUserName}
+                          resolveReaderFace={resolveReaderFace}
                           reactionUses={reactionUses}
-                          // The receipt is drawn only on your OWN messages, and
-                          // only on the last of a run: it answers "did what I
-                          // just said land", so an eye on somebody else's
-                          // message is noise on every row.
-                          readerIds={receiptAnchors.has(msg.id) ? receipts.readersOfMessage(msg) : undefined}
-                          // DMs only, and only the newest message of your run —
-                          // three "Sent" chips stacked say one thing three times.
-                          showUnseen={isDirectMessage && unseenAnchor === msg.id}
+                          // Every one of your own messages, for as long as the
+                          // receipt is true — see the note by the removed
+                          // anchoring above.
+                          readerIds={isOwnReceiptMessage(msg, currentUserId || null)
+                            ? receipts.readersOfMessage(msg)
+                            : undefined}
                           queued={queuedState(msg, sessionWork, currentUserId || null)}
                         />
                       </MessageScrollerItem>
@@ -3166,9 +3168,9 @@ function ChatMessageBubble({
   currentUserId,
   onToggleReaction,
   resolveUserName,
+  resolveReaderFace,
   reactionUses,
   readerIds,
-  showUnseen = false,
   queued,
 }: {
   msg: ChatMessage;
@@ -3196,16 +3198,15 @@ function ChatMessageBubble({
   currentUserId?: string;
   onToggleReaction?: (reaction: string, op: 'add' | 'remove') => void;
   resolveUserName?: (userId: string) => string | null;
+  /** Face lookup for the chips that show WHO — readers, reactors, the agents worked behind. */
+  resolveReaderFace?: (userId: string) => ReaderFace;
   reactionUses?: readonly ReactionUse[];
   /**
-   * Who has read this message. `undefined` means "do not draw an indicator here"
-   * — which is every message except the last of each of your own runs — and is
-   * deliberately distinct from `[]`, which means "your message, nobody has read
-   * it yet" and DOES draw one in a DM.
+   * Who has read this message, or `undefined` for "not one of yours, draw
+   * nothing". An empty array means "yours, nobody yet" and also draws nothing:
+   * a chip cannot render absence, and that is the trade the 👀 chip makes.
    */
   readerIds?: string[];
-  /** DM only: "sent, not seen yet" on the newest message of your run. */
-  showUnseen?: boolean;
   queued?: QueuedState;
 }) {
   const isUser = msg.role === 'user';
@@ -3247,17 +3248,26 @@ function ChatMessageBubble({
   // Built here rather than inline so the row can ask "is there anything derived
   // to show?" before deciding to render a bar at all — an empty bar carries
   // `mt-1` and would add 4px under every message nobody has read.
-  // The three derived chips, in the order they read: what happened to it
-  // (queued), then whether it landed (seen / sent). Seen and Sent are mutually
-  // exclusive by construction — once anybody has read it the seen pill takes
-  // over — so the row can never contradict itself.
-  const hasReaders = readerIds !== undefined && readerIds.length > 0;
-  const derivedChips = (queued?.queued || hasReaders || showUnseen) ? (
+  //
+  // THE ROW IS "WHAT HAPPENED TO THIS MESSAGE", AND IT IS ONE ROW. Looked at
+  // (👀), acknowledged (a real 👍, from a person or from an agent), and queued
+  // all live here, each showing whose face. THIS IS A SETTLED DECISION — read
+  // the block at the top of src/lib/seenPill.ts before moving any of it.
+  //
+  // Seen leads, then queued, then the reactions: derived chips first so their
+  // position is stable, or the seen chip would jump sideways every time
+  // somebody reacted.
+  const hasSeen = Boolean(readerIds && readerIds.length > 0);
+  const derivedChips = hasSeen || queued?.queued ? (
     <>
-      {queued?.queued ? <QueuedPill state={queued} /> : null}
-      {hasReaders
-        ? <SeenPill readerIds={readerIds as string[]} resolveName={resolveUserName || (() => null)} />
-        : showUnseen ? <UnseenPill /> : null}
+      {hasSeen && (
+        <SeenPill
+          readerIds={readerIds as string[]}
+          resolveName={resolveUserName || (() => null)}
+          resolveFace={resolveReaderFace}
+        />
+      )}
+      {queued?.queued && <QueuedPill state={queued} resolveFace={resolveReaderFace} />}
     </>
   ) : null;
 
@@ -3405,12 +3415,7 @@ function ChatMessageBubble({
             Everything about ordering, own-reaction state and the tooltip lives
             in src/lib/reactionBar.ts, because logic in this file cannot be
             tested under this repo's runners. */}
-        {/* "Seen" now rides IN the reaction row as a 👀 chip rather than an eye
-            in the meta row — see src/lib/seenPill.ts for why it is derived from
-            the read markers instead of being a stored reaction, and why it is
-            still never a per-reader timestamp.
-
-            A read-only or deleted message keeps its seen pill but loses its
+        {/* A read-only or deleted message keeps its queued chip but loses its
             reactions: `reactions` is nulled rather than the whole bar dropped,
             so pills never render as clickable no-ops. */}
         {(onToggleReaction || derivedChips) && (
@@ -3421,8 +3426,13 @@ function ChatMessageBubble({
             onToggle={onToggleReaction ?? NOOP_TOGGLE}
             reactionUses={reactionUses}
             leadingSlot={derivedChips}
+            resolveFace={resolveReaderFace}
           />
         )}
+        {/* NOTHING GOES BELOW THIS. The read state used to draw as a separate
+            eye on its own line here; it is a chip in the row above now, and a
+            second line under the pills saying a third thing about the same
+            message is what made this area churn in the first place. */}
       </div>
       {/* Full-height rail bounded to this message row; the toolbar inside is sticky so it
           rides into view as you scroll a tall message (top → mid-viewport → bottom-right)

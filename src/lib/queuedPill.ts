@@ -37,9 +37,19 @@ export interface QueuedState {
   queued: boolean;
   /** How many agents are working in this scope, for the label. */
   workers: number;
+  /**
+   * WHO is working — the agents this message is waiting behind, so the chip can
+   * show their faces rather than an anonymous "Queued".
+   *
+   * These are the running jobs' agent ids, straight off the work store. It is
+   * NOT a claim about who will answer: nothing here knows that. It is the far
+   * narrower and checkable fact "these are the turns in front of you", which is
+   * what makes the wait legible in a channel with three agents in it.
+   */
+  agentIds: readonly string[];
 }
 
-const NOT_QUEUED: QueuedState = { queued: false, workers: 0 };
+const NOT_QUEUED: QueuedState = { queued: false, workers: 0, agentIds: [] };
 
 /**
  * Is this message of yours waiting behind a turn that was already running?
@@ -64,7 +74,7 @@ export function queuedState(
   // millisecond often enough that treating it as queued would put the chip on
   // the message the agent is actually answering.
   if (createdAt <= work.anchorAt + QUEUE_EPSILON_MS) return NOT_QUEUED;
-  return { queued: true, workers: work.jobs };
+  return { queued: true, workers: work.jobs, agentIds: work.agentIds || [] };
 }
 
 /**

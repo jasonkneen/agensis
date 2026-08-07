@@ -15,6 +15,8 @@ import {
   type ReactionMap,
   type ReactionUse,
 } from '../../lib/reactionBar';
+import { FaceStack } from './FaceStack';
+import type { ReaderFace } from '../../lib/readerFaces';
 
 // The reactions bar: the pills under a message, and the picker that adds one.
 //
@@ -45,6 +47,20 @@ export interface ReactionBarProps {
    * for system-asserted chips would be the same information in two places.
    */
   leadingSlot?: React.ReactNode;
+  /**
+   * Optional face lookup. With it, a pill shows WHO holds the reaction instead
+   * of how many do.
+   *
+   * This is what makes 👍-means-acknowledged legible. An agent can react now
+   * (react_to_message, b6c9daa4), so a thumbs-up on your message is a specific
+   * agent saying "got it" — and in a channel with three agents in it, a bare
+   * "2" does not tell you whether the one you asked is among them. Past three
+   * holders it falls back to "+N", which is the one case where the numeral
+   * genuinely says more (see faceStack in src/lib/readerFaces.ts).
+   *
+   * Optional so every existing caller and every existing test keeps the count.
+   */
+  resolveFace?: (userId: string) => ReaderFace;
   className?: string;
 }
 
@@ -54,7 +70,7 @@ export interface ReactionBarProps {
  * shift the row.
  */
 export function ReactionBar({
-  reactions, currentUserId, resolveName, onToggle, reactionUses = [], leadingSlot, className,
+  reactions, currentUserId, resolveName, onToggle, reactionUses = [], leadingSlot, resolveFace, className,
 }: ReactionBarProps) {
   const pills = useMemo(() => reactionPills(reactions, currentUserId), [reactions, currentUserId]);
   if (pills.length === 0 && !leadingSlot) return null;
@@ -83,10 +99,15 @@ export function ReactionBar({
               )}
             >
               {pill.reaction}
-              {/* The numeral is always shown, including at 1. "+1" and a hidden
-                  count both make you hover to learn something the row could
-                  just say. */}
-              <span className="text-[11px] font-medium">{pill.count}</span>
+              {resolveFace ? (
+                /* Who, not how many — see the `resolveFace` prop doc. */
+                <FaceStack readerIds={pill.userIds} resolveFace={resolveFace} />
+              ) : (
+                /* The numeral is always shown, including at 1. "+1" and a
+                   hidden count both make you hover to learn something the row
+                   could just say. */
+                <span className="text-[11px] font-medium">{pill.count}</span>
+              )}
             </button>
           </TooltipTrigger>
           <TooltipContent side="top">{describeReactors(pill, resolveName, currentUserId)}</TooltipContent>

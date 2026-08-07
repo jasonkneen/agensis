@@ -6,11 +6,11 @@ import { ThreadStopButton } from './StopAgentButton';
 import { MarkdownContent } from './MarkdownContent';
 import { ReactionBar } from './ReactionBar';
 import { QueuedPill, SeenPill } from './SeenPill';
+import { buildReaderFaces, type ReaderFace } from '../../lib/readerFaces';
 import { useMessageReactions } from '../../hooks/useMessageReactions';
 import { useReadReceipts } from '../../hooks/useReadReceipts';
 import { useWorkspaceUsers } from '../../hooks/useWorkspaceUsers';
-import { receiptTargetForViewport } from '../../lib/readReceipts';
-import { seenAnchorIds } from '../../lib/seenPill';
+import { isOwnReceiptMessage, receiptTargetForViewport } from '../../lib/readReceipts';
 import { queuedState, type QueuedState } from '../../lib/queuedPill';
 import { useThreadWork } from '../../hooks/useAgentWork';
 import type { ReactionUse } from '../../lib/reactionBar';
@@ -141,13 +141,17 @@ export function ChatThreadPanel({
   const { members: workspaceMembers } = useWorkspaceUsers(workspaceId ?? null);
   // A reader id is a human user id OR an agent id, so resolve against members
   // first and then the agent roster.
-  const resolveReaderName = useCallback((readerId: string) => {
-    const member = workspaceMembers.find(row => String(row.user_id) === String(readerId));
-    if (member) return member.email ? member.email.split('@')[0] : null;
-    const agent = (agents ?? []).find(row => String(row.id) === String(readerId));
-    if (agent) return agent.name || null;
-    return null;
-  }, [workspaceMembers, agents]);
+  // One lookup, shared with the channel and the sub-thread panel — see
+  // src/lib/readerFaces.ts. A face rather than a name because the chips show
+  // WHO; `resolveReaderName` is the name-only view of the same thing.
+  const resolveReaderFace = useMemo(
+    () => buildReaderFaces({ members: workspaceMembers, agents: agents ?? [] }),
+    [workspaceMembers, agents],
+  );
+  const resolveReaderName = useCallback(
+    (readerId: string) => resolveReaderFace(readerId).name,
+    [resolveReaderFace],
+  );
 
   const receipts = useReadReceipts({
     sessionId: threadSessionId,
@@ -171,10 +175,10 @@ export function ChatThreadPanel({
     noteVisibleRead(newestVisibleReply);
   }, [noteVisibleRead, newestVisibleReply]);
 
-  const seenAnchors = useMemo(
-    () => seenAnchorIds(replies, currentUserId || null),
-    [currentUserId, replies],
-  );
+  // No anchoring: every one of your own replies keeps its eye for as long as
+  // the receipt is true, matching the channel. A read receipt is standing
+  // evidence of what was taken in, not a transient notification.
+
   // "Queued", scoped to THIS thread's running job (metadata.threadParentId), so
   // a turn running in the channel does not mark thread replies as queued.
   const panelWork = useThreadWork(parentMessage.id || null);
@@ -289,7 +293,8 @@ export function ChatThreadPanel({
                             ? undefined
                             : (reaction, op) => reactionState.toggle(row.message, reaction, op)}
                           resolveReaderName={resolveReaderName}
-                          readerIds={seenAnchors.has(row.message.id)
+                          resolveReaderFace={resolveReaderFace}
+                          readerIds={isOwnReceiptMessage(row.message, currentUserId || null)
                             ? receipts.readersOfMessage(row.message)
                             : undefined}
                           queued={queuedState(row.message, panelWork, currentUserId || null)}
@@ -375,6 +380,7 @@ export function ThreadBubble({
   reactionUses = [],
   onToggleReaction,
   resolveReaderName,
+  resolveReaderFace,
   readerIds,
   queued,
 }: {
@@ -388,6 +394,8 @@ export function ThreadBubble({
   reactionUses?: readonly ReactionUse[];
   onToggleReaction?: (reaction: string, op: 'add' | 'remove') => void;
   resolveReaderName?: (readerId: string) => string | null;
+  /** Face lookup for the chips that show WHO — readers, reactors, agents worked behind. */
+  resolveReaderFace?: (readerId: string) => ReaderFace;
   /** Undefined on a reply that carries no seen pill; empty when nobody has read it. */
   readerIds?: string[];
   queued?: QueuedState;
@@ -420,15 +428,20 @@ export function ThreadBubble({
   // Built here so the row can ask "is there anything to show?" before rendering
   // a bar at all — an empty bar carries `mt-1` and would add 4px under every
   // reply nobody has read.
-  // Queued first, then seen: "what happened to it" then "did it land". Only
-  // ever rendered together on a mid-turn message that has since been read.
-  const hasReaders = readerIds !== undefined && readerIds.length > 0;
-  const seenPill = (queued?.queued || hasReaders) ? (
+  // Seen, then queued, then the reactions — one row saying what happened to
+  // this reply, matching the channel. SETTLED: see the block at the top of
+  // src/lib/seenPill.ts before moving any of it.
+  const hasSeen = !isParent && readerIds !== undefined && readerIds.length > 0;
+  const seenPill = hasSeen || queued?.queued ? (
     <>
-      {queued?.queued ? <QueuedPill state={queued} /> : null}
-      {hasReaders
-        ? <SeenPill readerIds={readerIds as string[]} resolveName={resolveReaderName || (() => null)} />
-        : null}
+      {hasSeen && (
+        <SeenPill
+          readerIds={readerIds as string[]}
+          resolveName={resolveReaderName || (() => null)}
+          resolveFace={resolveReaderFace}
+        />
+      )}
+      {queued?.queued && <QueuedPill state={queued} resolveFace={resolveReaderFace} />}
     </>
   ) : null;
 
@@ -544,6 +557,7 @@ export function ThreadBubble({
             onToggle={onToggleReaction ?? NOOP_TOGGLE}
             reactionUses={reactionUses}
             leadingSlot={seenPill}
+            resolveFace={resolveReaderFace}
           />
         )}
       </div>
