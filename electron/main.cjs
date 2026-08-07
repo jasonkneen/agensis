@@ -48,9 +48,14 @@ function createWindow() {
     backgroundColor: '#0c0c0c',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     // Nudge the macOS traffic lights left + up so they sit inside the app's top
-    // strip (the renderer reserves ELECTRON_TITLEBAR_INSET px of clear space at
-    // the top when window.electronAPI is present) instead of over the sidebar
-    // WORKSPACE header. Ignored on non-darwin platforms.
+    // strip (the renderer reserves DESKTOP_TITLEBAR_INSET px of clear space at
+    // the top when isDesktopShell()) instead of over the sidebar WORKSPACE
+    // header. Ignored on non-darwin platforms.
+    //
+    // `hiddenInset` above removes the system title bar, so that band is also the
+    // ONLY thing that can move the window: it carries -webkit-app-region: drag
+    // in the rail and the collapsed sidebar. Reserving the space without the
+    // drag region leaves the window immovable.
     trafficLightPosition: process.platform === 'darwin' ? { x: 12, y: 14 } : undefined,
     webPreferences: {
       contextIsolation: true,
