@@ -198,12 +198,26 @@ export function boundChatContext(context, { maxItems = MAX_VOICE_CONTEXT_ITEMS, 
   if (!context || !Array.isArray(context.items)) return context;
   const itemLimit = Math.max(1, Number(maxItems) || MAX_VOICE_CONTEXT_ITEMS);
   const byteLimit = Math.max(256, Number(maxBytes) || MAX_VOICE_CONTEXT_BYTES);
-  const source = context.items.map((item) => boundFunctionItem(item));
+  const source = removeDanglingFunctionItems(context.items.map((item) => boundFunctionItem(item)));
   const system = source.find(isSystemItem);
   let items = source.slice(-itemLimit);
   if (system && !items.includes(system)) items.unshift(system);
+  // A tail can contain an output whose call sits just before the slice. Bring
+  // that call back before applying the bound; otherwise a valid pair would be
+  // discarded merely because the limit split it in two.
+  for (const item of [...items]) {
+    if (item?.type !== 'function_call_output') continue;
+    const callId = String(item.callId || '');
+    const call = source.find((candidate) => candidate?.type === 'function_call'
+      && String(candidate.callId || '') === callId);
+    if (call && !items.includes(call)) items.splice(items.indexOf(item), 0, call);
+  }
   while (items.length > itemLimit) {
-    const index = items.findIndex((item) => !isSystemItem(item) && !activeFunctionItem(item, items));
+    // Prefer ordinary messages. Completed pairs are valid history too, and
+    // should only be evicted as a unit after optional messages are gone.
+    let index = items.findIndex((item) => !isSystemItem(item)
+      && item?.type !== 'function_call' && item?.type !== 'function_call_output');
+    if (index < 0) index = items.findIndex((item) => !isSystemItem(item) && !activeFunctionItem(item, items));
     // Active calls are not discardable: the provider still owes their output.
     // If every remaining item is active, preserving valid in-flight history is
     // the deterministic exception to the item bound; final compaction below

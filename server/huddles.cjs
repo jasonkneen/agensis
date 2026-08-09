@@ -1740,6 +1740,7 @@ function mountHuddleRoutes(app, deps = {}) {
     const candidate = String(req.body?.speakerId || '').trim();
     if (!candidate) return jsonError(res, 400, new Error('speakerId is required for a user voice entry'));
     if (!/^[A-Za-z0-9_.:-]{1,256}$/.test(candidate)) return jsonError(res, 400, new Error('speakerId is invalid'));
+    if (!candidate.startsWith('user:')) return jsonError(res, 403, new Error('A user voice entry needs a human participant'));
     // A final STT event can be queued just as a participant leaves. The live
     // presence row may already be reaped, but a historical join event is still
     // the huddle-scoped proof that this identity belonged here.

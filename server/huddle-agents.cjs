@@ -128,8 +128,12 @@ async function dispatchVoiceAgents({
   let client;
   try {
     const Client = dispatchClientFactory || loadAgentDispatchClient();
+    // Browser room tokens use wss://, but AgentDispatchClient speaks the
+    // HTTPS management API. Keep the original URL in the client response; only
+    // the server-side dispatch host is normalized here.
+    const dispatchUrl = String(url).replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
     client = typeof Client === 'function' && Client.prototype?.createDispatch
-      ? new Client(url, apiKey, apiSecret)
+      ? new Client(dispatchUrl, apiKey, apiSecret)
       : Client;
   } catch (error) {
     log.error?.(`[huddle] livekit-server-sdk has no agent dispatch: ${error?.message || error}`);

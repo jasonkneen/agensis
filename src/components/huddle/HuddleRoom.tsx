@@ -122,8 +122,6 @@ function HuddleVoiceTarget({
   const lastPublished = useRef('');
   const lastQueued = useRef('');
   const publishTail = useRef(Promise.resolve());
-  const latest = useRef({ huddleId, targetAgentId, rosterAgentIds, canControlTarget, connected });
-  latest.current = { huddleId, targetAgentId, rosterAgentIds, canControlTarget, connected };
   const humanIds = [room.localParticipant, ...participants]
     .filter((participant) => participant && participant.attributes?.['agensis.kind'] !== 'agent')
     .map((participant) => String(participant.identity || ''))
@@ -134,6 +132,8 @@ function HuddleVoiceTarget({
   const authoritativeIdentity = targetControllerIdentity || humanIds[0] || '';
   const canControlTarget = !authoritativeIdentity || room.localParticipant.identity === authoritativeIdentity;
   const targetKey = `${huddleId}:${targetAgentId || ''}:${authoritativeIdentity}`;
+  const latest = useRef({ huddleId, targetAgentId, rosterAgentIds, canControlTarget, connected });
+  latest.current = { huddleId, targetAgentId, rosterAgentIds, canControlTarget, connected };
   const previousHuddleId = useRef(huddleId);
   useEffect(() => {
     if (previousHuddleId.current === huddleId) return;
@@ -209,7 +209,7 @@ function HuddleVoiceTarget({
       pendingTargetPayload.current = null;
       onTargetChanged?.(packet.targetAgentId);
     }
-  }, [authoritativeIdentity, canControlTarget, huddleId, onTargetChanged, publish, rosterAgentIds]);
+  }, [authoritativeIdentity, canControlTarget, huddleId, onTargetChanged, publish, room.remoteParticipants, rosterAgentIds]);
 
   const publishOnReconnect = useCallback(() => {
     void publish({ force: true });

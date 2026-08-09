@@ -327,6 +327,23 @@ test('object-valued tool arguments and results are normalized before bounding', 
   assert.ok(context.items[1].output.length <= 4_000);
 });
 
+test('context tail repair keeps a tool call paired with its output', () => {
+  const context = {
+    items: [
+      { type: 'message', role: 'system', content: 'sys' },
+      { type: 'function_call', callId: 'split', name: 'lookup', args: '{}' },
+      { type: 'function_call_output', callId: 'split', output: 'result' },
+      { type: 'message', role: 'user', content: 'older' },
+      { type: 'message', role: 'user', content: 'newer' },
+    ],
+    toJSON() { return this.items; },
+  };
+  boundChatContext(context, { maxItems: 3, maxBytes: 10_000 });
+  assert.equal(context.items.filter((item) => item.callId === 'split').length, 2);
+  assert.equal(context.items[1].type, 'function_call');
+  assert.equal(context.items[2].type, 'function_call_output');
+});
+
 test('context trimming preserves an in-flight call and drops orphan output', () => {
   const context = {
     items: [

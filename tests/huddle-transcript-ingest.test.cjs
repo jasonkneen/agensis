@@ -119,9 +119,13 @@ test('a human turn requires and keeps a verified participant speaker', async () 
 });
 
 test('a user line without a speaker or with a forged speaker is refused', async () => {
-  const { app, inserted } = harness({ historical: [{ identity: 'user:human-1', display_name: 'Jason' }] });
+  const { app, inserted } = harness({ historical: [
+    { identity: 'user:human-1', display_name: 'Jason' },
+    { identity: 'agent:other', display_name: 'Other agent' },
+  ] });
   assert.equal((await post(app, { huddleId: 'hud-1', role: 'user', content: 'anonymous' }, 'agv_good')).status, 400);
   assert.equal((await post(app, { huddleId: 'hud-1', role: 'user', content: 'forged', speakerId: 'user:not-present' }, 'agv_good')).status, 403);
+  assert.equal((await post(app, { huddleId: 'hud-1', role: 'user', content: 'agent voice', speakerId: 'agent:other' }, 'agv_good')).status, 403);
   assert.equal(inserted.length, 0);
 });
 
