@@ -33,6 +33,36 @@ test('a minted voice token is prefixed and carries no readable secret', async ()
 });
 
 
+test('a huddle token is rejected after its huddle ends', async () => {
+  let ended = false;
+  __test.setTestDb({
+    unsafe: async (sql) => {
+      if (/from workspace_agents/.test(sql)) return [{
+        id: AGENT,
+        workspace_id: WORKSPACE,
+        name: 'Voice agent',
+        enabled: true,
+        run_mode: 'builtin',
+        permission_mode: 'default',
+      }];
+      if (/from huddles/.test(sql)) return ended ? [{
+        id: 'huddle-1', workspace_id: WORKSPACE, session_id: 'host-1',
+        transcript_session_id: 'transcript-session-1', ended_at: new Date().toISOString(),
+      }] : [{
+        id: 'huddle-1', workspace_id: WORKSPACE, session_id: 'host-1',
+        transcript_session_id: 'transcript-session-1', ended_at: null,
+      }];
+      return [];
+    },
+  });
+  const token = await createVoiceSessionToken({
+    workspaceId: WORKSPACE, agentId: AGENT, huddleId: 'huddle-1', sessionId: 'transcript-session-1',
+  });
+  assert.ok(await verifyVoiceSessionToken(token));
+  ended = true;
+  assert.equal(await verifyVoiceSessionToken(token), null);
+});
+
 test('a huddle dispatch token is scoped to that huddle transcript', async () => {
   const token = await createVoiceSessionToken({
     workspaceId: WORKSPACE,

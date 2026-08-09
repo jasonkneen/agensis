@@ -96,7 +96,7 @@ export function HuddleDockProvider({ children }: { children: ReactNode }) {
   // Keyed on the TARGET, not on the visible channel. This is the whole point:
   // the hook's identity is stable across navigation, so the socket it owns is
   // never torn down by a route change.
-  const session = useHuddle(target?.workspaceId ?? null, target?.sessionId ?? null);
+  const session = useHuddle(target?.workspaceId ?? null, target?.sessionId ?? null, targetEpoch);
   const targetRef = useRef(target);
   targetRef.current = target;
   const leaveRef = useRef(session?.leave);

@@ -4426,10 +4426,13 @@ async function verifyOauthAccessToken(token) {
 // So: a short-lived HMAC-signed bearer scoped to exactly one agent. For ordinary
 // agent tokens it resolves to the same identity shape as verifyAgentConnectToken;
 // huddle tokens additionally carry a voice marker and transcript-session pin, so
-// the MCP chokepoint can apply the voice read-only allowlist. It is never stored,
-// so there is nothing to leak at rest and nothing to revoke but the clock.
+// the MCP chokepoint can apply the voice read-only allowlist. It is never stored;
+// current agent and huddle state are rechecked on every use instead of maintaining
+// a second bearer-revocation table.
 const VOICE_TOKEN_PREFIX = 'agv_';
-const VOICE_TOKEN_DEFAULT_TTL_MS = 4 * 60 * 60_000;
+// Keep the MCP capability no longer-lived than the one-hour LiveKit join
+// grant. Huddle lifecycle checks below still revoke it earlier.
+const VOICE_TOKEN_DEFAULT_TTL_MS = 60 * 60_000;
 const VOICE_TOKEN_MIN_TTL_MS = 60_000;
 
 async function createVoiceSessionToken({ workspaceId, agentId, huddleId = '', sessionId = '', ttlMs = VOICE_TOKEN_DEFAULT_TTL_MS } = {}) {
@@ -4484,6 +4487,25 @@ async function verifyVoiceSessionToken(token) {
  );
  const agent = rows[0];
  if (!agent || !isAgentEnabled(agent) || !isVoiceCapableRunMode(agent.run_mode)) return null;
+ if (claims.h) {
+  // A voice bearer is a call capability, not a four-hour workspace bearer.
+  // Re-check the huddle lifecycle on every MCP authentication so ending the
+  // call invalidates the worker's read surface even if LiveKit room deletion
+  // was delayed or failed.
+  let huddles;
+  try {
+   huddles = await getDb().unsafe(
+    `select id, workspace_id, session_id, transcript_session_id, started_by, ended_at
+       from huddles where id = $1 and workspace_id = $2 limit 1`,
+    [String(claims.h), String(claims.w)],
+   );
+  } catch {
+   return null;
+  }
+  const huddle = huddles[0];
+  if (!huddle || huddle.ended_at) return null;
+  if (claims.s && String(claims.s) !== String(huddle.transcript_session_id || huddle.session_id || '')) return null;
+ }
  return {
   kind: 'agent',
   agentId: agent.id,
@@ -9530,7 +9552,11 @@ function createApp() {
   verifyVoiceSessionToken,
   parseJsonArray,
   parseJsonObject,
-  publicBaseUrl: normalizeAgentBackendBaseUrl(process.env.AGENSIS_DAEMON_BASE_URL) || '',
+  publicBaseUrl: normalizeAgentBackendBaseUrl(
+   process.env.AGENSIS_DAEMON_BASE_URL
+    || process.env.AGENSIS_PUBLIC_URL
+    || process.env.AGENSIS_APP_URL,
+  ) || '',
  });
 
  // Voice engines for huddles. The Cartesia token exchange is plain HTTP and is

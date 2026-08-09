@@ -2027,6 +2027,44 @@ test('confirm records participant_joined for the CALLER identity, deduped per co
   });
 });
 
+test('confirm and heartbeat require an explicit connection epoch', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' }, huddleRows: [liveHuddleRow()] });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const headers = { Authorization: `Bearer ${token}` };
+    for (const door of ['confirm', 'heartbeat']) {
+      const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/${door}`, {
+        method: 'POST', headers,
+      });
+      assert.equal(res.status, 400, door);
+      const body = await res.json();
+      assert.match(body.error.message, /connectionEpoch is required/);
+    }
+  });
+});
+
+test('a legacy blank presence epoch can be upgraded by a newer confirm', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow()],
+    presenceRows: [presenceRow(`user:${MEMBER}`, { epoch: '' })],
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/confirm`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ connectionEpoch: 123 }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(db.state.presence[0].connection_epoch, '123');
+  });
+});
+
 test('leave records participant_left; a huddle that has ended refuses a confirm', async () => {
   const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' }, huddleRows: [liveHuddleRow()] });
   __test.setTestDb(db);
@@ -2329,6 +2367,29 @@ test('a huddle whose every participant was reaped ENDS, and leaves its marker', 
     // Idempotent: a second read must not end it again or write a second marker.
     await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, { headers: auth });
     assert.equal(db.state.messages.length, 1);
+  });
+});
+
+test('an agent participant cannot keep a human-empty huddle alive', async () => {
+  const rooms = [];
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow({ started_at: ago(20 * MINUTE) })],
+    eventRows: [
+      joinEvent('user:a', 'Ada', 19 * MINUTE, 1),
+      joinEvent('agent:voice', 'Voice', 18 * MINUTE, 2),
+    ],
+    presenceRows: [presenceRow('user:a', { heartbeatAgo: 6 * MINUTE, seenAgo: 6 * MINUTE })],
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db, { endRoom: async (name) => { rooms.push(name); return true; } });
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, { headers: auth });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.data.state.active, false);
+    assert.deepEqual(rooms, [ROOM]);
   });
 });
 

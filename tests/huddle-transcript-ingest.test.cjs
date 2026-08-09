@@ -25,7 +25,7 @@ const HUDDLE = {
   transcript_participants: ['a1'],
 };
 
-function harness({ huddles = [HUDDLE], verify = null, historical = [] } = {}) {
+function harness({ huddles = [HUDDLE], verify = null, historical = [], controllerAuthorized = true } = {}) {
   const inserted = [];
   const byEvent = new Map();
   const db = {
@@ -61,7 +61,9 @@ function harness({ huddles = [HUDDLE], verify = null, historical = [] } = {}) {
   mount(app, {
     getDb: () => db,
     requireAuth: (req, _res, next) => next(),
-    enforceWorkspaceRole: async () => {},
+    enforceWorkspaceRole: async () => {
+      if (!controllerAuthorized) throw new Error('controller revoked');
+    },
     enforceSessionRead: async () => {},
     sessionReadableSql: () => 'true',
     assertWorkspaceRoleLocked: async () => {},
@@ -170,12 +172,38 @@ test('an ended huddle and an empty line are refused quietly, not with a 500', as
   assert.equal(res.status, 200);
   assert.equal(res.body.data.written, false);
   assert.equal(ended.inserted.length, 0);
+  const endedProbe = await post(ended.app, { huddleId: 'hud-1', role: 'user', content: '' }, 'agv_good');
+  assert.equal(endedProbe.status, 200);
+  assert.equal(endedProbe.body.data.reason, 'ended');
 
   const live = harness();
   const empty = await post(live.app, { huddleId: 'hud-1', role: 'user', content: '   ' }, 'agv_good');
   assert.equal(empty.status, 200);
   assert.equal(empty.body.data.written, false);
   assert.equal(live.inserted.length, 0);
+});
+
+test('voice writes stop when the huddle controller loses access', async () => {
+  const { app, inserted } = harness({
+    huddles: [{ ...HUDDLE, started_by: 'starter-1' }],
+    controllerAuthorized: false,
+  });
+  const res = await post(app, { huddleId: 'hud-1', role: 'user', content: 'still here', speakerId: 'user:human-1' }, 'agv_good');
+  assert.equal(res.status, 403);
+  assert.match(res.body.error.message, /controller/i);
+  assert.equal(inserted.length, 0);
+});
+
+test('assistant transcript output shares the bounded voice write budget', async () => {
+  const huddleId = 'hud-rate';
+  const { app, inserted } = harness({ huddles: [{ ...HUDDLE, id: huddleId }] });
+  for (let i = 0; i < 32; i += 1) {
+    const res = await post(app, { huddleId, role: 'assistant', eventId: `assistant-${i}`, content: 'x'.repeat(8000) }, 'agv_good');
+    assert.equal(res.status, 200, `event ${i}`);
+  }
+  const limited = await post(app, { huddleId, role: 'assistant', eventId: 'assistant-over', content: 'x'.repeat(8000) }, 'agv_good');
+  assert.equal(limited.status, 429);
+  assert.equal(inserted.length, 32);
 });
 
 test('same event id is idempotent and non-roster agents are refused', async () => {

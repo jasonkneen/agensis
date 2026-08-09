@@ -123,7 +123,9 @@ function HuddleVoiceTarget({
   const lastQueued = useRef('');
   const publishTail = useRef(Promise.resolve());
   const humanIds = [room.localParticipant, ...participants]
-    .filter((participant) => participant && participant.attributes?.['agensis.kind'] !== 'agent')
+    .filter((participant) => participant
+      && String(participant.identity || '').startsWith('user:')
+      && participant.attributes?.['agensis.kind'] !== 'agent')
     .map((participant) => String(participant.identity || ''))
     .filter(Boolean)
     .sort();
@@ -132,8 +134,8 @@ function HuddleVoiceTarget({
   const authoritativeIdentity = targetControllerIdentity || humanIds[0] || '';
   const canControlTarget = !authoritativeIdentity || room.localParticipant.identity === authoritativeIdentity;
   const targetKey = `${huddleId}:${targetAgentId || ''}:${authoritativeIdentity}`;
-  const latest = useRef({ huddleId, targetAgentId, rosterAgentIds, canControlTarget, connected });
-  latest.current = { huddleId, targetAgentId, rosterAgentIds, canControlTarget, connected };
+  const latest = useRef({ huddleId, targetAgentId, rosterAgentIds, canControlTarget, connected, targetKey });
+  latest.current = { huddleId, targetAgentId, rosterAgentIds, canControlTarget, connected, targetKey };
   const previousHuddleId = useRef(huddleId);
   useEffect(() => {
     if (previousHuddleId.current === huddleId) return;
@@ -163,7 +165,9 @@ function HuddleVoiceTarget({
     // completion can make the retry guard believe the latest packet succeeded.
     publishTail.current = publishTail.current.catch(() => {}).then(async () => {
       if (!latest.current.connected || !latest.current.canControlTarget
-        || latest.current.huddleId !== next.huddleId || room.state !== 'connected') return;
+        || latest.current.huddleId !== next.huddleId
+        || latest.current.targetKey !== queuedKey
+        || room.state !== 'connected') return;
       try {
         await room.localParticipant.publishData(payload, { reliable: true, topic: VOICE_TARGET_TOPIC });
         lastPublished.current = queuedKey;
@@ -188,6 +192,9 @@ function HuddleVoiceTarget({
       return;
     }
     if (participant?.attributes?.['agensis.kind'] === 'agent') return;
+    // Human identities are server-issued user:<uuid> values. An unknown LiveKit
+    // participant kind must never become a target controller by omission.
+    if (!senderIdentity.startsWith('user:')) return;
     if (authoritativeIdentity && participant?.identity !== authoritativeIdentity) return;
     const packet = decodeVoiceTarget(payload, huddleId, rosterAgentIds);
     if (!packet) {

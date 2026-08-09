@@ -458,10 +458,21 @@ function staleHuddleIdentities({
  * make every reap reset the clock it is about to be measured against, and an
  * empty huddle could never reach its grace.
  */
+function isHumanHuddleIdentity(identity) {
+ return String(identity || '').startsWith('user:');
+}
+
 function huddleLastActivityAt(huddle, events = [], presence = []) {
  let latest = timeOf(huddle && huddle.started_at);
  for (const event of Array.isArray(events) ? events : []) {
-  latest = Math.max(latest, timeOf(event && event.created_at));
+  // Agent joins are room implementation detail, not human activity. If they
+  // were allowed to keep the clock alive, an agent left in LiveKit would keep
+  // an otherwise empty huddle open forever.
+  if (String(event?.kind || '') === 'ended'
+    || !String(event?.identity || '').trim()
+    || isHumanHuddleIdentity(event?.identity)) {
+   latest = Math.max(latest, timeOf(event && event.created_at));
+  }
  }
  for (const row of Array.isArray(presence) ? presence : []) {
   latest = Math.max(latest, timeOf(row && row.last_seen_at), timeOf(row && row.heartbeat_at));
@@ -925,6 +936,23 @@ function mountHuddleRoutes(app, deps = {}) {
  // called from, including the "no implicit owner oversight" rule for DMs.
  async function enforceHuddleRead(userId, huddle) {
   if (huddle?.session_id) await enforceSessionRead(userId, huddle.session_id);
+ }
+
+ // The starter is the target-controller authority carried in every dispatch.
+ // LiveKit does not re-check our workspace/session membership after minting a
+ // room token, so the worker's transcript/liveness request re-checks it here.
+ // A revoked starter therefore cannot keep an already-connected worker talking
+ // or publishing target packets indefinitely.
+ async function controllerStillAuthorized(huddle) {
+  const starter = String(huddle?.started_by || '').trim();
+  if (!starter) return true; // legacy/headless huddles elect a live human.
+  try {
+   await enforceWorkspaceRole(starter, huddle.workspace_id, 'read');
+   await enforceHuddleRead(starter, huddle);
+   return true;
+  } catch {
+   return false;
+  }
  }
 
  // A route-level access check is only a useful early error. It is not authority
@@ -1529,7 +1557,8 @@ function mountHuddleRoutes(app, deps = {}) {
    }
    if (stale.length > 0) await markPresenceReaped(huddle, stale);
 
-   const remaining = state.participants.length - stale.length;
+   const humanParticipants = state.participants.filter((participant) => isHumanHuddleIdentity(participant.identity));
+   const remaining = humanParticipants.length - stale.length;
    if (!endIfEmpty) return huddle;
    if (!shouldEndEmptyHuddle({ participantCount: remaining, lastActivityAtMs, nowMs })) return huddle;
    if (await agentBusyInHuddle(huddle)) return huddle;
@@ -1795,7 +1824,6 @@ function mountHuddleRoutes(app, deps = {}) {
    if (requestedRole !== 'assistant' && requestedRole !== 'user') return jsonError(res, 400, new Error('role must be user or assistant'));
    const role = requestedRole;
    const content = String(req.body?.content || '').trim();
-   if (!content) return res.json({ data: { written: false, reason: 'empty' }, error: null });
    if (!huddleId) return jsonError(res, 400, new Error('huddleId is required'));
 
    const rows = await getDb().unsafe(
@@ -1811,6 +1839,9 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
    if (identity.huddleId && String(identity.huddleId) !== huddleId) return jsonError(res, 403, new Error('Voice credential is for another huddle'));
    if (huddle.ended_at) return res.json({ data: { written: false, reason: 'ended' }, error: null });
+   if (!(await controllerStillAuthorized(huddle))) {
+    return jsonError(res, 403, new Error('Huddle controller is no longer authorized'));
+   }
 
    let participantIds = huddle.transcript_participants;
    if (typeof parseJsonArray === 'function') participantIds = parseJsonArray(participantIds);
@@ -1820,6 +1851,10 @@ function mountHuddleRoutes(app, deps = {}) {
    participantIds = (Array.isArray(participantIds) ? participantIds : []).map((value) => String(value || '').trim()).filter(Boolean);
    const agentId = String(identity.agentId || '');
    if (!agentId || !participantIds.includes(agentId)) return jsonError(res, 403, new Error('Agent is not a participant in this huddle'));
+   // Empty authenticated probes are used by the worker to detect huddle and
+   // credential revocation. They must pass lifecycle/roster checks above, but
+   // must not consume a transcript budget or require speaker attribution.
+   if (!content) return res.json({ data: { written: false, reason: 'empty' }, error: null });
    // Any dispatched roster agent may mirror a user row. RoomIO target gating
    // ensures only the active worker receives that turn; this also preserves
    // transcripts when the first roster worker fails or the active target changes.
@@ -1860,16 +1895,22 @@ function mountHuddleRoutes(app, deps = {}) {
      [huddle.id, speakerId],
     );
     speakerName = String(names[0]?.display_name || speakerName).slice(0, 200);
-    // A roster worker is a trusted mirror capability, not an unbounded write
-    // endpoint. Rate-limit user STT separately because a bad worker can retry
-    // faster than a person can speak, after speaker validation so forged claims
-    // cannot consume the real speaker's budget.
-    allowVoiceTranscript({ workspaceId: identity.workspaceId, huddleId: huddle.id, agentId, chars: content.length });
    }
    const sessionId = huddle.transcript_session_id || huddle.session_id;
    const isAgent = role === 'assistant';
    const marker = '\\n… [voice result truncated]';
    const cappedContent = content.length > 8000 ? `${content.slice(0, 8000 - marker.length)}${marker}` : content;
+   // A roster worker is a trusted mirror capability, not an unbounded write
+   // endpoint. Rate-limit BOTH user STT and assistant output after attribution
+   // checks, so a bad worker cannot grow a transcript or realtime fanout even
+   // when it uses a valid read-only voice credential.
+   allowVoiceTranscript({
+    workspaceId: identity.workspaceId,
+    huddleId: huddle.id,
+    agentId,
+    chars: cappedContent.length,
+   });
+
    const inserted = await getDb().unsafe(
     `with inserted as (
        insert into messages (session_id, role, content, sender_kind, sender_id, sender_name, huddle_id, huddle_transcript_event_id)
@@ -1964,7 +2005,11 @@ function mountHuddleRoutes(app, deps = {}) {
    const workspaceId = String(req.params.id || '').trim();
    const huddleId = String(req.params.huddleId || '').trim();
    if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
-   const epoch = normalizeConnectionEpoch(req.body?.connectionEpoch);
+   const rawEpoch = req.body?.connectionEpoch;
+   if (rawEpoch === undefined || rawEpoch === null || rawEpoch === '') {
+    return jsonError(res, 400, new Error('connectionEpoch is required'));
+   }
+   const epoch = normalizeConnectionEpoch(rawEpoch, { fallback: '' });
    if (!epoch) return jsonError(res, 400, new Error('connectionEpoch is invalid'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'write');
    await ensureSchemaOnce();
@@ -2092,7 +2137,11 @@ function mountHuddleRoutes(app, deps = {}) {
    const workspaceId = String(req.params.id || '').trim();
    const huddleId = String(req.params.huddleId || '').trim();
    if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
-   const epoch = normalizeConnectionEpoch(req.body?.connectionEpoch);
+   const rawEpoch = req.body?.connectionEpoch;
+   if (rawEpoch === undefined || rawEpoch === null || rawEpoch === '') {
+    return jsonError(res, 400, new Error('connectionEpoch is required'));
+   }
+   const epoch = normalizeConnectionEpoch(rawEpoch, { fallback: '' });
    if (!epoch) return jsonError(res, 400, new Error('connectionEpoch is invalid'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'write');
    await ensureSchemaOnce();
@@ -2423,6 +2472,7 @@ module.exports = {
  huddleLeftATrace,
  staleHuddleIdentities,
  huddleLastActivityAt,
+ isHumanHuddleIdentity,
  shouldEndEmptyHuddle,
  buildJoinGrant,
  verifyLivekitWebhook,

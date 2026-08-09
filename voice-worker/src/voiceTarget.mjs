@@ -57,7 +57,13 @@ export function isAgentParticipant(participant) {
   if (participant.isAgent === true) return true;
   if (participant.attributes?.['agensis.kind'] === 'agent') return true;
   const kind = participantKind(participant);
-  return typeof kind === 'string' && kind.toLowerCase() === 'agent';
+  // rtc-node exposes ParticipantKind.AGENT as protobuf enum value 4, while
+  // older SDKs exposed the string. Treat every non-standard/unknown kind as
+  // non-human; only the server-issued user:<uuid> identity below can opt back
+  // into the human path. This prevents an enum number from being mistaken for
+  // a controller when agent attributes have not propagated yet.
+  if (kind === 4 || (typeof kind === 'string' && kind.toLowerCase() === 'agent')) return true;
+  return !String(participant.identity || '').startsWith('user:');
 }
 
 export function acceptsTargetPacket({ packet, sender, huddleId, rosterAgentIds, controllerIdentity = '', currentRevision = -1 } = {}) {

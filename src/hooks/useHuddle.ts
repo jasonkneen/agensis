@@ -208,7 +208,7 @@ export function useHuddleRecord(workspaceId: string | null, huddleId: string | n
  * huddle's OWN conversation, and it is where the transcript goes; see
  * lib/huddleTranscript.
  */
-export function useHuddle(workspaceId: string | null, sessionId: string | null) {
+export function useHuddle(workspaceId: string | null, sessionId: string | null, targetEpoch = 0) {
   const [huddle, setHuddle] = useState<Huddle | null>(null);
   const [events, setEvents] = useState<HuddleEvent[]>([]);
   const [configured, setConfigured] = useState(true);
@@ -225,10 +225,12 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
   // be installed into B's room. Advance this epoch during render so even a
   // same-tick response sees the new request generation.
   const baseRef = useRef(base);
+  const targetEpochRef = useRef(targetEpoch);
   const baseEpochRef = useRef(0);
   const connectionEpochRef = useRef(0);
-  if (baseRef.current !== base) {
+  if (baseRef.current !== base || targetEpochRef.current !== targetEpoch) {
     baseRef.current = base;
+    targetEpochRef.current = targetEpoch;
     baseEpochRef.current += 1;
   }
 
@@ -246,7 +248,7 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
     setHuddle(null);
     setEvents([]);
     setError('');
-  }, [base]);
+  }, [base, targetEpoch]);
 
   const refetch = useCallback(async () => {
     const requestEpoch = baseEpochRef.current;

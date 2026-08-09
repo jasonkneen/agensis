@@ -252,6 +252,29 @@ test('a failed transcript write never breaks the call', async () => {
 
 
 
+test('inactive workers do not mirror room speech', async () => {
+  const handlers = new Map();
+  const bodies = [];
+  let active = false;
+  const session = { on: (event, handler) => handlers.set(event, handler), off: () => handlers.clear() };
+  mirrorTranscript({
+    session,
+    meta: { huddleId: 'h1', sessionId: 's1', transcript: { url: 'https://x/t', token: 't' } },
+    shouldMirror: () => active,
+    fetchImpl: async (_url, options) => { bodies.push(JSON.parse(options.body)); return new Response('{}', { status: 200 }); },
+    log: { log: () => {}, error: () => {} },
+  });
+  const onUser = handlers.get(AgentSessionEventTypes.UserInputTranscribed);
+  onUser({ transcript: 'inactive', isFinal: true });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(bodies.length, 0);
+  active = true;
+  onUser({ transcript: 'active', isFinal: true });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0].content, 'active');
+});
+
 test('interrupted assistant items do not become durable speech', async () => {
   const handlers = new Map();
   const bodies = [];
@@ -290,15 +313,18 @@ test('repeated no-id utterances get distinct stable transcript events', async ()
 
 test('voice target packets are closed, revisioned, and human-sender authenticated', () => {
   const packet = makeVoiceTarget({ huddleId: 'h1', targetAgentId: 'a2', revision: 1 });
-  const sender = { identity: 'human-1', kind: 'standard' };
+  const sender = { identity: 'user:human-1', kind: 'standard' };
   assert.deepEqual(decodeVoiceTarget(encodeVoiceTarget(packet)), packet);
   assert.equal(acceptsTargetPacket({ packet, sender, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).accepted, true);
-  assert.equal(acceptsTargetPacket({ packet, sender: { identity: 'human-2', kind: 'standard' }, controllerIdentity: 'human-1', huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'controller');
+  assert.equal(acceptsTargetPacket({ packet, sender: { identity: 'user:human-2', kind: 'standard' }, controllerIdentity: 'user:human-1', huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'controller');
   const request = decodeVoiceTarget(encodeVoiceTargetRequest('h1'));
   assert.equal(isVoiceTargetRequest(request, 'h1'), true);
   assert.equal(isVoiceTargetRequest(request, 'other'), false);
   assert.equal(acceptsTargetPacket({ packet, sender, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 1 }).reason, 'stale');
   assert.equal(acceptsTargetPacket({ packet, sender: { identity: 'agent', kind: 'agent' }, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'sender');
+  assert.equal(acceptsTargetPacket({ packet, sender: { identity: 'AG_xyz', kind: 4 }, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'sender');
+  assert.equal(acceptsTargetPacket({ packet, sender: { identity: 'unknown-participant', kind: 99 }, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'sender');
+  assert.equal(acceptsTargetPacket({ packet, sender: { identity: 'human-1', kind: 'standard' }, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'sender');
   assert.equal(acceptsTargetPacket({ packet: { ...packet, extra: true }, sender, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'keys');
   assert.equal(acceptsTargetPacket({ packet: { ...packet, revision: 0x80000000 }, sender, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'revision');
   assert.equal(acceptsTargetPacket({ packet, sender, huddleId: 'other', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'huddle');

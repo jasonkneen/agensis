@@ -202,7 +202,17 @@ export default defineAgent({
     if (typeof originalToolItemsAdded === 'function') {
       session._toolItemsAdded = function boundedToolItemsAdded(items) {
         const result = originalToolItemsAdded.call(this, items);
-        boundHistories({ isFinal: true });
+        // Realtime's tool path appends the output, then immediately builds its
+        // own chatCtx copy and sends that snapshot. Queue our bound snapshot in
+        // a microtask so it observes that output and is enqueued AFTER the
+        // SDK's call-only snapshot; otherwise the provider can finish with an
+        // orphaned function call and reject the next turn.
+        const schedule = () => queueMicrotask(() => boundHistories({ isFinal: true }));
+        if (result && typeof result.then === 'function') {
+          result.then(schedule, schedule);
+        } else {
+          schedule();
+        }
         return result;
       };
     }
@@ -238,7 +248,15 @@ export default defineAgent({
     // Everything the agent hears and says also belongs in the channel transcript,
     // so the huddle and the written channel remain one conversation rather than
     // two records of the same meeting.
-    const transcript = mirrorTranscript({ session, meta, log });
+    const transcript = mirrorTranscript({
+      session,
+      meta,
+      log,
+      // Only the currently selected responder mirrors room speech. Every
+      // worker is subscribed to the room, but inactive workers must not create
+      // duplicate user rows while the target packet is racing a handoff.
+      shouldMirror: () => targetReady && isTargetAgent({ targetAgentId, agentId: meta.agentId }),
+    });
 
     // A signed voice token is checked again while the job is alive. This closes
     // the otherwise surprising gap where disabling an agent stopped transcript
@@ -256,8 +274,10 @@ export default defineAgent({
           headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
           body: JSON.stringify({ huddleId: meta.huddleId, role: 'user', content: '' }),
         });
-        if (response.status === 401 || response.status === 403) {
-          log.error('[voice] voice credential revoked; leaving the huddle');
+        const probe = await response.json().catch(() => null);
+        const ended = probe?.data?.reason === 'ended';
+        if (response.status === 401 || response.status === 403 || response.status === 404 || ended) {
+          log.error('[voice] voice credential or huddle revoked; leaving the huddle');
           ctx.shutdown('voice credential revoked');
         }
       } catch {
@@ -391,9 +411,12 @@ export default defineAgent({
     const onTargetReconnect = () => {
       targetPacketReceived = false;
       targetRequestAttempts = 0;
-      targetReady = !targetControllerIdentity;
-      targetAgentId = targetReady ? (defaultTargetAgentId || null) : null;
-      targetRevision = targetReady ? 0 : -1;
+      // Reconnect is a new LiveKit transport, not a new target authority. Keep
+      // the last accepted revision so a delayed reliable packet from before the
+      // disconnect cannot become fresh, and stay silent until the controller
+      // republishes a strictly newer state.
+      targetReady = false;
+      targetAgentId = null;
       applyTarget();
       stopTargetRequests();
       requestTarget();
