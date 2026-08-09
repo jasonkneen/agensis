@@ -98,7 +98,7 @@ function voiceSettingsFor(agent, parseJsonObject) {
   return {
     // Engine is per-agent so one huddle can mix a realtime voice and a
     // Cartesia/Deepgram pipeline without either knowing about the other.
-    engine: String(metadata.voice_engine || voice.engine || process.env.AGENSIS_VOICE_ENGINE || '').trim(),
+    engine: String(metadata.voice_engine || voice.engine || process.env.AGENSIS_VOICE_ENGINE || 'cartesia-deepgram').trim(),
     cartesia_voice_id: boundedVoiceId(voice.cartesia_voice_id || voice.voiceId),
     speed: voice.speed,
     emotion: boundedVoiceText(voice.emotion, 128, true),

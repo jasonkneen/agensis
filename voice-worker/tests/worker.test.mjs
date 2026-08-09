@@ -8,7 +8,7 @@ import test from 'node:test';
 import { AgentSessionEventTypes, initializeLogger, llm } from '@livekit/agents';
 import * as openai from '@livekit/agents-plugin-openai';
 
-import { availableEngines, pipelineReasoningEffortFor, resolveEngine, realtimeReasoningFor, VOICE_ENGINES, VOICE_OUTPUT_QUEUE_SIZE_MS } from '../src/providers.mjs';
+import { availableEngines, DEFAULT_VOICE_ENGINE, pipelineReasoningEffortFor, resolveEngine, realtimeReasoningFor, VOICE_ENGINES, VOICE_OUTPUT_QUEUE_SIZE_MS } from '../src/providers.mjs';
 import { initialsFor, parseColor, renderAvatarFrame } from '../src/avatarVideo.mjs';
 import { flattenToolResult, loadMcpTools, rpc, EXCLUDED, VOICE_LAZY_TOOL_ALLOWLIST } from '../src/mcpTools.mjs';
 import { acceptsTargetPacket, decodeVoiceTarget, encodeVoiceTarget, encodeVoiceTargetRequest, isVoiceTargetRequest, makeVoiceTarget } from '../src/voiceTarget.mjs';
@@ -37,12 +37,16 @@ test('the microphone-only worker never requests or publishes camera video', asyn
 
 test('the worker reports voice readiness only after its media session starts', async () => {
   const source = await readFile(new URL('../src/index.mjs', import.meta.url), 'utf8');
-  const pending = source.indexOf("'agensis.voiceReady': 'false'");
+  const pending = source.indexOf('await publishVoiceReady(false)');
+  const closeHandler = source.indexOf('session.on(AgentSessionEventTypes.Close');
   const started = source.indexOf('await session.start({');
-  const ready = source.indexOf("'agensis.voiceReady': 'true'");
+  const ready = source.indexOf('await publishVoiceReady(true)');
   assert.ok(pending >= 0, 'the participant must explicitly begin unready');
+  assert.ok(closeHandler > pending, 'session closure must revoke voice readiness');
+  assert.ok(closeHandler < started, 'the close handler must cover startup failures');
   assert.ok(started > pending, 'the media session starts after the pending state is visible');
   assert.ok(ready > started, 'the browser may only claim hearing after session.start resolves');
+  assert.match(source, /if \(ready && voiceSessionClosed\) return;/, 'a close/start race must not republish a stale ready state');
 });
 
 test('an engine is only offered when this host holds its keys', () => {
@@ -51,21 +55,31 @@ test('an engine is only offered when this host holds its keys', () => {
   assert.ok(availableEngines(FULL_ENV).includes('cartesia-deepgram'));
 });
 
-test('a requested engine wins, but only if its keys are present', () => {
+test('the baseline engine is explicit and never crosses vendors as a fallback', () => {
+  assert.equal(DEFAULT_VOICE_ENGINE, 'cartesia-deepgram');
+
+  const defaultEngine = resolveEngine('', FULL_ENV);
+  assert.equal(defaultEngine.engine, 'cartesia-deepgram');
+  assert.equal(defaultEngine.requested, 'cartesia-deepgram');
+  assert.equal(defaultEngine.usedDefault, true);
+  assert.equal(defaultEngine.fellBack, false);
+
   const ok = resolveEngine('cartesia-deepgram', FULL_ENV);
   assert.equal(ok.engine, 'cartesia-deepgram');
   assert.equal(ok.fellBack, false);
+  assert.equal(ok.usedDefault, false);
 
   // Asking for Cartesia on a host with only an OpenAI key must not silently run
-  // a different vendor without saying which key is missing.
-  const fallback = resolveEngine('cartesia-deepgram', { OPENAI_API_KEY: 'k' });
-  assert.equal(fallback.fellBack, true);
-  assert.equal(fallback.requested, 'cartesia-deepgram');
-  assert.deepEqual(fallback.missing, ['CARTESIA_API_KEY', 'DEEPGRAM_API_KEY']);
-  assert.ok(fallback.engine, 'a working fallback beats a silent huddle');
+  // a different vendor. The missing-key result must fail closed.
+  const unavailable = resolveEngine('cartesia-deepgram', { OPENAI_API_KEY: 'k' });
+  assert.equal(unavailable.engine, '');
+  assert.equal(unavailable.fellBack, false);
+  assert.equal(unavailable.requested, 'cartesia-deepgram');
+  assert.deepEqual(unavailable.missing, ['CARTESIA_API_KEY', 'DEEPGRAM_API_KEY']);
 
   // Nothing configured at all: report it rather than pretending.
   assert.equal(resolveEngine('openai-realtime', {}).engine, '');
+  assert.equal(resolveEngine('not-an-engine', FULL_ENV).engine, '');
 });
 
 test('realtime and pipeline are different SHAPES, not two configs of one thing', () => {

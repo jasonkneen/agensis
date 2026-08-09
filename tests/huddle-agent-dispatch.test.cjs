@@ -268,3 +268,8 @@ test('per-agent voice settings survive into the dispatch metadata', () => {
   assert.equal(settings.speed, 1.1);
   assert.equal(settings.emotion, 'calm');
 });
+
+test('agents without an engine use the Cartesia and Deepgram LiveKit pipeline', () => {
+  const settings = voiceSettingsFor({ identity: '{}', metadata: '{}' }, parseJsonObject);
+  assert.equal(settings.engine, 'cartesia-deepgram');
+});

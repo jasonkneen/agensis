@@ -67,15 +67,13 @@ export default defineAgent({
     const meta = readJobMetadata(ctx);
     const log = console;
 
-    const { engine, fellBack, missing, requested, available } = resolveEngine(meta.voice?.engine || meta.engine);
+    const { engine, missing, requested } = resolveEngine(meta.voice?.engine || meta.engine);
     if (!engine) {
-      // No usable engine is a configuration fault, and a silent no-show is the
-      // worst possible symptom. Say it where an operator will see it and stop.
-      log.error(`[voice] no voice engine available on this worker (needs one of: ${Object.keys(available || {}).length ? available.join(', ') : 'OPENAI_API_KEY, or CARTESIA_API_KEY + DEEPGRAM_API_KEY'})`);
+      // Never substitute a different vendor. In particular, a missing baseline
+      // key must not turn a Cartesia/Deepgram agent into OpenAI Realtime merely
+      // because that engine happened to be first in a registry.
+      log.error(`[voice] engine "${requested}" unavailable${missing?.length ? ` (missing ${missing.join(', ')})` : ''}; refusing to substitute another provider`);
       throw new Error('No voice engine configured');
-    }
-    if (fellBack) {
-      log.error(`[voice] engine "${requested}" unavailable${missing?.length ? ` (missing ${missing.join(', ')})` : ''}; using "${engine}"`);
     }
 
     // Connect and build the provider in parallel with a zero-network bootstrap.
@@ -210,6 +208,18 @@ export default defineAgent({
       };
     }
 
+    let voiceSessionClosed = false;
+    const publishVoiceReady = async (ready) => {
+      // A provider can close between session.start() resolving and this method
+      // running. Never let that race republish a stale green listening state.
+      if (ready && voiceSessionClosed) return;
+      await ctx.room.localParticipant.setAttributes({
+        'agensis.voiceReady': ready ? 'true' : 'false',
+      }).catch((error) => {
+        log.error(`[voice] could not publish ${ready ? 'ready' : 'unready'} state: ${error?.message || error}`);
+      });
+    };
+
     // Say WHO this participant is. LiveKit assigns the worker an opaque identity,
     // so without this the app sees an anonymous participant and cannot match it
     // to the agent — which is the whole difference between "an agent is in the
@@ -221,11 +231,19 @@ export default defineAgent({
       'agensis.name': String(meta.name || meta.handle || 'Agent'),
       'agensis.accentColor': String(meta.accentColor || ''),
       'agensis.engine': engine,
-      // Presence is not readiness. The browser keeps saying "waiting" until
-      // AgentSession has actually opened STT/media below.
-      'agensis.voiceReady': 'false',
     }).catch((error) => {
       log.error(`[voice] could not publish agent attributes: ${error?.message || error}`);
+    });
+    // Presence is not readiness. The browser keeps saying "waiting" until
+    // AgentSession has actually opened STT/media below.
+    await publishVoiceReady(false);
+    const onVoiceSessionClose = () => {
+      voiceSessionClosed = true;
+      void publishVoiceReady(false);
+    };
+    session.on(AgentSessionEventTypes.Close, onVoiceSessionClose);
+    ctx.addShutdownCallback(async () => {
+      session.off?.(AgentSessionEventTypes.Close, onVoiceSessionClose);
     });
 
     // Voice workers are microphone/data-only participants. The join grant
@@ -522,13 +540,7 @@ export default defineAgent({
     boundHistories({ isFinal: true });
     applyTarget();
 
-    await ctx.room.localParticipant.setAttributes({
-      'agensis.voiceReady': 'true',
-    }).catch((error) => {
-      // Fail closed in the UI: if LiveKit cannot publish readiness, it must not
-      // claim that this agent is hearing the microphone.
-      log.error(`[voice] could not publish ready state: ${error?.message || error}`);
-    });
+    await publishVoiceReady(true);
 
     log.log(`[voice] @${meta.handle || 'agent'} joined ${ctx.room.name} on ${engine} with ${Object.keys(tools).length} bootstrap tools`);
 

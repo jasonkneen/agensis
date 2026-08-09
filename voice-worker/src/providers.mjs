@@ -35,6 +35,11 @@ export const DEFAULT_DEEPGRAM_MODEL = 'flux-general-en';
 /** Text model for pipeline mode, when the turn is not owned by a realtime model. */
 export const DEFAULT_PIPELINE_LLM = 'gpt-5.4-mini';
 /**
+ * Baseline voice transport for every agent that has not explicitly selected an
+ * engine. Deepgram owns STT and Cartesia owns TTS inside the LiveKit worker.
+ */
+export const DEFAULT_VOICE_ENGINE = 'cartesia-deepgram';
+/**
  * A short jitter cushion prevents bursty provider frames from overrunning the
  * LiveKit AudioSource's ring buffer. Interruptions clear this queue, so it does
  * not make a handoff or barge-in wait longer.
@@ -84,19 +89,24 @@ export function availableEngines(env = process.env) {
 /**
  * Pick the engine for a job.
  *
- * An explicit request wins, but only if this host holds its keys — silently
- * running a different vendor than the one an agent is configured for is worse
- * than saying so, and a huddle with no voice at all is worse than both.
+ * An explicit request wins, but only if this host holds its keys. Empty agent
+ * configuration means the baseline Cartesia/Deepgram pipeline. An unavailable
+ * or unknown engine fails closed: selecting another vendor by insertion order
+ * can silently turn the baseline pipeline into OpenAI Realtime.
  */
 export function resolveEngine(requested, env = process.env) {
   const available = availableEngines(env);
-  const want = String(requested || '').trim();
-  if (want && available.includes(want)) return { engine: want, fellBack: false, available };
-  if (want && VOICE_ENGINES[want]) {
-    const missing = VOICE_ENGINES[want].needs.filter((k) => !String(env[k] || '').trim());
-    return { engine: available[0] || '', fellBack: true, missing, requested: want, available };
+  const configured = String(requested || '').trim();
+  const want = configured || DEFAULT_VOICE_ENGINE;
+  const usedDefault = !configured;
+  if (available.includes(want)) {
+    return { engine: want, fellBack: false, requested: want, usedDefault, available };
   }
-  return { engine: available[0] || '', fellBack: Boolean(want), requested: want, available };
+  if (VOICE_ENGINES[want]) {
+    const missing = VOICE_ENGINES[want].needs.filter((k) => !String(env[k] || '').trim());
+    return { engine: '', fellBack: false, missing, requested: want, usedDefault, available };
+  }
+  return { engine: '', fellBack: false, requested: want, usedDefault, unknown: true, available };
 }
 
 /**
