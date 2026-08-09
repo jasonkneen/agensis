@@ -22,7 +22,12 @@ const HUDDLE = {
   transcript_session_id: 'transcript-1',
   room_name: 'agensis-hud-1',
   ended_at: null,
-  transcript_participants: ['a1'],
+  transcript_participants: [{
+    id: 'agent:a1',
+    kind: 'agent',
+    agent_id: 'a1',
+    name: 'Claude',
+  }],
 };
 
 function harness({ huddles = [HUDDLE], verify = null, historical = [], controllerAuthorized = true } = {}) {
@@ -31,10 +36,10 @@ function harness({ huddles = [HUDDLE], verify = null, historical = [], controlle
   const db = {
     unsafe: async (sql, params = []) => {
       if (/from huddles/.test(sql)) {
-        return huddles.filter((h) => h.id === params[0] && h.workspace_id === params[1]).map((h) => ({ ...h, transcript_participants: h.transcript_participants || ['a1'] }));
+        return huddles.filter((h) => h.id === params[0] && h.workspace_id === params[1]).map((h) => ({ ...h, transcript_participants: h.transcript_participants || HUDDLE.transcript_participants }));
       }
       if (/chat_sessions transcript_scope/.test(sql)) {
-        return huddles.filter((h) => h.id === params[0] && h.workspace_id === params[1]).map((h) => ({ ...h, transcript_participants: h.transcript_participants || ['a1'] }));
+        return huddles.filter((h) => h.id === params[0] && h.workspace_id === params[1]).map((h) => ({ ...h, transcript_participants: h.transcript_participants || HUDDLE.transcript_participants }));
       }
       if (/from huddle_presence/.test(sql)) return historical.filter((row) => row.identity === params[1]).map((row) => ({ identity: row.identity }));
       if (/from huddle_events/.test(sql)) return historical.filter((row) => row.identity === params[1]).map((row) => ({ display_name: row.display_name, identity: row.identity }));

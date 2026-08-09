@@ -1932,7 +1932,9 @@ function mountHuddleRoutes(app, deps = {}) {
    if (typeof participantIds === 'string') {
     try { participantIds = JSON.parse(participantIds); } catch { participantIds = []; }
    }
-   participantIds = (Array.isArray(participantIds) ? participantIds : []).map((value) => String(value || '').trim()).filter(Boolean);
+   participantIds = (Array.isArray(participantIds) ? participantIds : [])
+    .map(huddleAgents.participantAgentId)
+    .filter(Boolean);
    const agentId = String(identity.agentId || '');
    if (!agentId || !participantIds.includes(agentId)) return jsonError(res, 403, new Error('Agent is not a participant in this huddle'));
    // Empty authenticated probes are used by the worker to detect huddle and
