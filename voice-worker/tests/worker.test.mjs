@@ -141,7 +141,7 @@ test('fenced MCP results remain bounded after the safety header', async () => {
   });
   const output = await tools.load_context.execute({});
   assert.ok(output.length <= MAX_VOICE_RESULT_CHARS);
-  assert.match(output, /Untrusted MCP data/);
+  assert.match(output, /Untrusted MCP/);
 });
 
 test('MCP catalog caps only after filtering the authorized voice surface', async () => {

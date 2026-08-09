@@ -1262,7 +1262,9 @@ function mountHuddleRoutes(app, deps = {}) {
   );
   const currentEpoch = Number(existing[0]?.connection_epoch);
   const incomingEpoch = Number(connectionEpoch);
-  if (Number.isFinite(currentEpoch) && Number.isFinite(incomingEpoch) && incomingEpoch < currentEpoch) return null;
+  if (Number.isFinite(currentEpoch) && Number.isFinite(incomingEpoch) && incomingEpoch < currentEpoch) {
+   return { ...existing[0], _staleConnectionEpoch: true };
+  }
   const rows = await db.unsafe(
    // $6 is cast EXPLICITLY: a bare parameter inside a CASE has no column to
    // infer its type from, and Postgres answers "could not determine data type
@@ -1885,6 +1887,16 @@ function mountHuddleRoutes(app, deps = {}) {
      requireLive: true,
      forUpdate: true,
     });
+    const presence = await touchPresence({
+     db: tx,
+     huddle: locked,
+     userId: req.userId,
+     identity,
+     connectionEpoch: epoch,
+     beat: false,
+    });
+    if (!presence) throw accessChanged();
+    if (presence._staleConnectionEpoch) return { huddle: locked, event: null };
     const event = await appendEvent({
      huddle: locked,
      kind: 'participant_joined',
@@ -1899,15 +1911,6 @@ function mountHuddleRoutes(app, deps = {}) {
      requireLiveHuddle: true,
      deferFanout: true,
     });
-    const presence = await touchPresence({
-     db: tx,
-     huddle: locked,
-     userId: req.userId,
-     identity,
-     connectionEpoch: epoch,
-     beat: false,
-    });
-    if (!presence) throw accessChanged();
     return { huddle: locked, event };
    });
    if (confirmed.event) fanout('huddle_events', 'INSERT', [confirmed.event]);
@@ -2017,7 +2020,7 @@ function mountHuddleRoutes(app, deps = {}) {
      beat: true,
     });
     if (!row) throw accessChanged();
-    if (!row.reaped_at) return { rejoined: false, event: null };
+    if (row._staleConnectionEpoch || !row.reaped_at) return { rejoined: false, event: null };
 
     // We were expired while away — longer than the window, so the roster has
     // already been told we left. Say we are back rather than staying live in
