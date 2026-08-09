@@ -5,9 +5,10 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { AgentSessionEventTypes } from '@livekit/agents';
+import { AgentSessionEventTypes, initializeLogger, llm } from '@livekit/agents';
+import * as openai from '@livekit/agents-plugin-openai';
 
-import { availableEngines, resolveEngine, realtimeReasoningFor, VOICE_ENGINES, VOICE_OUTPUT_QUEUE_SIZE_MS } from '../src/providers.mjs';
+import { availableEngines, pipelineReasoningEffortFor, resolveEngine, realtimeReasoningFor, VOICE_ENGINES, VOICE_OUTPUT_QUEUE_SIZE_MS } from '../src/providers.mjs';
 import { initialsFor, parseColor, renderAvatarFrame } from '../src/avatarVideo.mjs';
 import { flattenToolResult, loadMcpTools, rpc, EXCLUDED, VOICE_LAZY_TOOL_ALLOWLIST } from '../src/mcpTools.mjs';
 import { acceptsTargetPacket, decodeVoiceTarget, encodeVoiceTarget, encodeVoiceTargetRequest, isVoiceTargetRequest, makeVoiceTarget } from '../src/voiceTarget.mjs';
@@ -52,8 +53,57 @@ test('realtime and pipeline are different SHAPES, not two configs of one thing',
 
 test('voice reasoning stays at the provider minimum', () => {
   assert.deepEqual(realtimeReasoningFor('gpt-realtime-2.1-mini'), { effort: 'minimal' });
+  assert.equal(realtimeReasoningFor('GPT-REALTIME-2.1-MINI'), undefined, 'non-canonical aliases are not claimed as wired');
   assert.equal(realtimeReasoningFor('gpt-4o-realtime-preview-2024-10-01'), undefined);
+  assert.equal(pipelineReasoningEffortFor('gpt-5.4-mini'), 'none');
+  assert.equal(pipelineReasoningEffortFor('gpt-5-mini'), 'minimal');
+  assert.equal(pipelineReasoningEffortFor('gpt-4.1'), undefined);
+  assert.equal(pipelineReasoningEffortFor('custom-voice-model'), undefined);
   assert.equal(VOICE_OUTPUT_QUEUE_SIZE_MS, 2000);
+});
+
+test('pipeline reasoning settings reach the OpenAI wire without invalid overrides', async () => {
+  initializeLogger({ pretty: false, level: 'silent' });
+  const calls = [];
+  const client = {
+    baseURL: 'https://api.openai.com/v1',
+    chat: {
+      completions: {
+        create: async (request) => {
+          calls.push(request);
+          return (async function* () {
+            yield { id: 'voice-test', choices: [], usage: { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 } };
+          }());
+        },
+      },
+    },
+  };
+  const tool = llm.tool({
+    name: 'lookup',
+    description: 'lookup',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    execute: async () => '',
+  });
+
+  const cases = [
+    { model: 'gpt-5.4-mini', tools: false, expected: 'none' },
+    // The plugin strips reasoning_effort for this model when tools are present;
+    // its documented model default remains `none`, so do not send an invalid
+    // fallback or reimplement that provider-owned restriction here.
+    { model: 'gpt-5.4-mini', tools: true, expected: undefined },
+    { model: 'gpt-5-mini', tools: true, expected: 'minimal' },
+    { model: 'gpt-4.1', tools: true, expected: undefined },
+  ];
+  for (const item of cases) {
+    const reasoningEffort = pipelineReasoningEffortFor(item.model);
+    const model = new openai.LLM({
+      model: item.model,
+      client,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    });
+    await model.chat({ chatCtx: new llm.ChatContext(), ...(item.tools ? { toolCtx: [tool] } : {}) }).collect();
+    assert.equal(calls.at(-1).reasoning_effort, item.expected, item.model);
+  }
 });
 
 test('spoken worker instructions never make it say its own @handle', async () => {
@@ -63,6 +113,12 @@ test('spoken worker instructions never make it say its own @handle', async () =>
   assert.match(prompt, /never begin with @codex/i);
   assert.match(prompt, /do not narrate reasoning/i);
   assert.match(prompt, /wake-up cue and do not repeat/i);
+  assert.match(prompt, /never let a tool lookup delay your first spoken words/i);
+  assert.ok(
+    prompt.indexOf('never let a tool lookup delay your first spoken words')
+      < prompt.indexOf('small bootstrap tools'),
+    'the immediate acknowledgement rule must precede the bootstrap-tool guidance',
+  );
 });
 
 test('the held video frame is a real image with the agent\'s initials on its colour', () => {

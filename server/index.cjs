@@ -10853,7 +10853,6 @@ module.exports = {
   insertActiveAgentJob,
   buildWhereClause,
   buildDaemonPrompt,
-  buildSystemPrompt,
   agentConnectionCommand,
   buildAgentConnectionCommand,
   publicAgentConnectionCommandAgent,

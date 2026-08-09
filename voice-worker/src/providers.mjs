@@ -43,8 +43,24 @@ export const VOICE_OUTPUT_QUEUE_SIZE_MS = 2_000;
 
 /** Realtime reasoning has no `none` level; minimal is its lowest supported effort. */
 export function realtimeReasoningFor(model) {
-  return /^gpt-realtime-2(?:[.-]|$)/i.test(String(model || '').trim())
+  // The plugin's wire gate is case-sensitive too. Keep this canonical rather
+  // than claiming a reasoning option for an alias the SDK will silently omit.
+  return /^gpt-realtime-2(?:[.-]|$)/.test(String(model || '').trim())
     ? { effort: 'minimal' }
+    : undefined;
+}
+
+/**
+ * OpenAI's pipeline helper owns the model matrix. In particular, gpt-5 and
+ * gpt-5-mini default to `minimal`, while gpt-5.1+ models may default to `none`.
+ * Repeating that list here would drift from the SDK and can send an invalid
+ * value when AGENSIS_VOICE_LLM overrides the default.
+ */
+export function pipelineReasoningEffortFor(model) {
+  const name = String(model || '').trim();
+  if (!name || !openai.supportsReasoningEffort(name)) return undefined;
+  return typeof openai.defaultReasoningEffort === 'function'
+    ? openai.defaultReasoningEffort(name)
     : undefined;
 }
 
@@ -148,6 +164,7 @@ export async function buildEngine({ engine, voice = {}, vad = null, env = proces
     : new openai.TTS({ ...(voice.voiceId ? { voice: String(voice.voiceId) } : {}) });
 
   const llmModel = String(voice.llmModel || env.AGENSIS_VOICE_LLM || DEFAULT_PIPELINE_LLM);
+  const reasoningEffort = pipelineReasoningEffortFor(llmModel);
   return {
     kind: 'pipeline',
     engine,
@@ -155,10 +172,10 @@ export async function buildEngine({ engine, voice = {}, vad = null, env = proces
     tts,
     llm: new openai.LLM({
       model: llmModel,
-      // Pipeline voice has no useful reason to spend a hidden reasoning pass.
-      // Only send this field to models whose API advertises it; older/custom
-      // chat models may reject reasoning_effort altogether.
-      ...(openai.supportsReasoningEffort(llmModel) ? { reasoningEffort: 'none' } : {}),
+      // Use the plugin's model-specific default: it is `none` where supported,
+      // but `minimal` for gpt-5/gpt-5-mini. Older/custom chat models omit the
+      // field entirely because their API may reject reasoning_effort.
+      ...(reasoningEffort ? { reasoningEffort } : {}),
     }),
     vad: await loadVad(vad),
   };
