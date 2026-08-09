@@ -3,6 +3,7 @@
 // how the MCP bridge behaves when the workspace is unreachable.
 
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { AgentSessionEventTypes } from '@livekit/agents';
 
@@ -14,6 +15,12 @@ import { boundChatContext, MAX_VOICE_CONTEXT_BYTES, MAX_VOICE_RESULT_CHARS, VOIC
 import { mirrorTranscript, transcriptEventId } from '../src/transcript.mjs';
 
 const FULL_ENV = { OPENAI_API_KEY: 'k', CARTESIA_API_KEY: 'k', DEEPGRAM_API_KEY: 'k' };
+
+test('the microphone-only worker never requests or publishes camera video', async () => {
+  const source = await readFile(new URL('../src/index.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /publishAvatarVideo/);
+  assert.match(source, /videoEnabled:\s*false/);
+});
 
 test('an engine is only offered when this host holds its keys', () => {
   assert.deepEqual(availableEngines({}), [], 'no keys means no voice, stated plainly');

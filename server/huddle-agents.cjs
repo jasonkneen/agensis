@@ -10,8 +10,9 @@
 //
 // Dispatch makes an agent a real participant. LiveKit spawns the worker
 // (voice-worker/) into the room and hands it the metadata below; from there the
-// agent publishes audio, publishes a held identity image as video, reads and
-// writes room chat, and holds this workspace's MCP tools.
+// agent publishes microphone audio/data, reads and writes room chat, and
+// holds this workspace's MCP tools. The browser roster renders its stored
+// identity; the worker does not publish a camera track.
 //
 // Everything here is best-effort by design: a huddle that cannot reach LiveKit's
 // agent service must still be a working human call. A silent agent is a
@@ -115,6 +116,12 @@ async function dispatchVoiceAgents({
   const { url, apiKey, apiSecret } = livekitConfig();
   if (!url || !apiKey || !apiSecret) return { dispatched: [], failed: [], skipped: 'livekit-not-configured' };
   if (!roomName) return { dispatched: [], failed: [], skipped: 'no-room' };
+  // The worker must have a reachable Fly callback origin for both its
+  // huddle-scoped MCP token and transcript writer. Do not dispatch a worker
+  // with null/Netlify callback URLs; humans can still use the room.
+  if (!/^https?:\/\//i.test(String(baseUrl || ''))) {
+   return { dispatched: [], failed: [], skipped: 'voice-backend-url-not-configured' };
+  }
 
   let agents;
   try {

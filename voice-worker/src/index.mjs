@@ -18,7 +18,6 @@ import { Agent, AgentSession, AgentSessionEventTypes, JobContext, ServerOptions,
 import { RoomEvent } from '@livekit/rtc-node';
 import { buildEngine, loadVad, resolveEngine } from './providers.mjs';
 import { loadMcpTools } from './mcpTools.mjs';
-import { publishAvatarVideo } from './avatarVideo.mjs';
 import { mirrorTranscript } from './transcript.mjs';
 import { boundChatContext, capText } from './voiceBounds.mjs';
 import {
@@ -232,18 +231,9 @@ export default defineAgent({
       log.error(`[voice] could not publish agent attributes: ${error?.message || error}`);
     });
 
-    // The held identity image. Published as a real camera-source track so the
-    // agent occupies a tile in the grid like any other participant.
-    const avatar = await publishAvatarVideo(ctx.room, {
-      name: meta.name,
-      handle: meta.handle,
-      color: meta.accentColor || meta.accent_color,
-      log,
-    }).catch((error) => {
-      // A missing tile is cosmetic; losing the voice over it would not be.
-      log.error(`[voice] avatar video failed: ${error?.message || error}`);
-      return null;
-    });
+    // Voice workers are microphone/data-only participants. The join grant
+    // deliberately has no camera publish source, so do not attempt an avatar
+    // camera track that LiveKit must reject.
 
     // Everything the agent hears and says also belongs in the channel transcript,
     // so the huddle and the written channel remain one conversation rather than
@@ -262,30 +252,39 @@ export default defineAgent({
     // the otherwise surprising gap where disabling an agent stopped transcript
     // writes but left its already-connected microphone and speaker in the room.
     let credentialCheckTimer = null;
-    let credentialCheckInFlight = false;
-    const checkVoiceCredential = async () => {
+    let credentialCheckPromise = null;
+    const checkVoiceCredential = () => {
       const endpoint = String(meta.transcript?.url || '').trim();
       const credential = String(meta.transcript?.token || '').trim();
-      if (!endpoint || !credential || credentialCheckInFlight) return;
-      credentialCheckInFlight = true;
-      try {
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
-          body: JSON.stringify({ huddleId: meta.huddleId, role: 'user', content: '' }),
-        });
-        const probe = await response.json().catch(() => null);
-        const ended = probe?.data?.reason === 'ended';
-        if (response.status === 401 || response.status === 403 || response.status === 404 || ended) {
-          log.error('[voice] voice credential or huddle revoked; leaving the huddle');
-          ctx.shutdown('voice credential revoked');
+      if (!endpoint || !credential) return Promise.resolve(false);
+      if (credentialCheckPromise) return credentialCheckPromise;
+      credentialCheckPromise = (async () => {
+        try {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}` },
+            body: JSON.stringify({ huddleId: meta.huddleId, role: 'user', content: '' }),
+          });
+          const probe = await response.json().catch(() => null);
+          const ended = probe?.data?.reason === 'ended';
+          if (response.status === 401 || response.status === 403 || response.status === 404 || ended) {
+            log.error('[voice] voice credential or huddle revoked; leaving the huddle');
+            ctx.shutdown('voice credential revoked');
+            return false;
+          }
+          return response.ok === undefined
+            ? response.status >= 200 && response.status < 300
+            : response.ok;
+        } catch {
+          // A transient network failure must not eject a live call. The next
+          // heartbeat retries; target activation fails closed until it can
+          // prove the starter is still authorized.
+          return false;
         }
-      } catch {
-        // A transient network failure must not eject a live call. The next
-        // heartbeat retries; transcript writes remain independently best-effort.
-      } finally {
-        credentialCheckInFlight = false;
-      }
+      })().finally(() => {
+        credentialCheckPromise = null;
+      });
+      return credentialCheckPromise;
     };
     if (meta.transcript?.url && meta.transcript?.token) {
       // Check once immediately, then keep the revocation window bounded. A
@@ -299,7 +298,6 @@ export default defineAgent({
       if (credentialCheckTimer) clearInterval(credentialCheckTimer);
       credentialCheckTimer = null;
       transcript.stop();
-      await avatar?.stop();
     });
 
     const rosterAgentIds = Array.isArray(meta.rosterAgentIds)
@@ -368,7 +366,8 @@ export default defineAgent({
       if (targetRequestTimer) clearInterval(targetRequestTimer);
       targetRequestTimer = null;
     };
-    const onTargetData = (payload, participant, _kind, topic) => {
+    let targetPacketChain = Promise.resolve();
+    const handleTargetData = async (payload, participant, _kind, topic) => {
       if (topic !== VOICE_TARGET_TOPIC) return;
       const senderIdentity = String(participant?.identity || '');
       const remoteParticipants = ctx.room.remoteParticipants;
@@ -386,6 +385,10 @@ export default defineAgent({
         currentRevision: targetRevision,
       });
       if (!result.accepted) return;
+      // LiveKit's sender identity is not our authorization system. Revalidate
+      // the starter against the workspace/session before activating media; an
+      // already-issued room grant must not survive a membership revocation.
+      if (targetControllerIdentity && !(await checkVoiceCredential())) return;
       targetPacketReceived = true;
       stopTargetRequests();
       targetReady = true;
@@ -393,6 +396,11 @@ export default defineAgent({
       targetAgentId = result.targetAgentId;
       applyTarget();
       log.log(`[voice] @${meta.handle || 'agent'} target is ${targetAgentId || 'none'}`);
+    };
+    const onTargetData = (payload, participant, _kind, topic) => {
+      targetPacketChain = targetPacketChain
+        .then(() => handleTargetData(payload, participant, _kind, topic))
+        .catch((error) => log.error(`[voice] target packet failed: ${error?.message || error}`));
     };
     const onParticipantConnected = (participant) => {
       if (!isTargetAgent({ targetAgentId, agentId: meta.agentId }) || isAgentParticipant(participant)) return;
@@ -411,6 +419,16 @@ export default defineAgent({
     const onTargetReconnect = () => {
       targetPacketReceived = false;
       targetRequestAttempts = 0;
+      // Legacy/headless rooms have no configured controller to republish a
+      // packet. Preserve their first-agent fallback across reconnects; only a
+      // configured starter requires a fresh authenticated target packet.
+      if (!targetControllerIdentity) {
+        targetReady = true;
+        targetAgentId = defaultTargetAgentId || targetAgentId || null;
+        applyTarget();
+        stopTargetRequests();
+        return;
+      }
       // Reconnect is a new LiveKit transport, not a new target authority. Keep
       // the last accepted revision so a delayed reliable packet from before the
       // disconnect cannot become fresh, and stay silent until the controller
@@ -451,7 +469,7 @@ export default defineAgent({
           : INACTIVE_PARTICIPANT_IDENTITY,
         textEnabled: true,
         audioEnabled: true,
-        videoEnabled: true,
+        videoEnabled: false,
         closeOnDisconnect: false,
       },
       outputOptions: {

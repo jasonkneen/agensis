@@ -4434,6 +4434,7 @@ const VOICE_TOKEN_PREFIX = 'agv_';
 // grant. Huddle lifecycle checks below still revoke it earlier.
 const VOICE_TOKEN_DEFAULT_TTL_MS = 60 * 60_000;
 const VOICE_TOKEN_MIN_TTL_MS = 60_000;
+const VOICE_TOKEN_MAX_TTL_MS = 60 * 60_000;
 
 async function createVoiceSessionToken({ workspaceId, agentId, huddleId = '', sessionId = '', ttlMs = VOICE_TOKEN_DEFAULT_TTL_MS } = {}) {
  const workspace = String(workspaceId || '').trim();
@@ -4441,11 +4442,35 @@ async function createVoiceSessionToken({ workspaceId, agentId, huddleId = '', se
  const huddle = String(huddleId || '').trim();
  const session = String(sessionId || '').trim();
  if (!workspace || !agent) throw new Error('workspaceId and agentId are required');
+ if (huddle || session) {
+  if (!huddle || !session) throw new Error('huddleId and sessionId are required together');
+  const rows = await getDb().unsafe(
+   `select h.id, h.session_id, h.transcript_session_id, h.ended_at,
+           transcript_scope.participants as transcript_participants
+      from huddles h
+      left join chat_sessions transcript_scope
+        on transcript_scope.id = coalesce(h.transcript_session_id, h.session_id)
+       and transcript_scope.workspace_id = h.workspace_id
+     where h.id = $1 and h.workspace_id = $2
+     limit 1`,
+   [huddle, workspace],
+  );
+  const row = rows[0];
+  const transcriptSession = String(row?.transcript_session_id || row?.session_id || '');
+  const participants = parseJsonArray(row?.transcript_participants);
+  if (!row || row.ended_at || transcriptSession !== session || !participants.includes(agent)) {
+   throw new Error('Voice huddle claims are invalid');
+  }
+ }
+ const requestedTtl = Number(ttlMs);
+ const boundedTtl = Number.isFinite(requestedTtl)
+  ? Math.min(VOICE_TOKEN_MAX_TTL_MS, Math.max(VOICE_TOKEN_MIN_TTL_MS, requestedTtl))
+  : VOICE_TOKEN_DEFAULT_TTL_MS;
  const secret = await getAuthSecret();
  const claims = {
   w: workspace,
   a: agent,
-  exp: Date.now() + Math.max(VOICE_TOKEN_MIN_TTL_MS, Number(ttlMs) || VOICE_TOKEN_DEFAULT_TTL_MS),
+  exp: Date.now() + boundedTtl,
  };
  // Huddle dispatches carry a narrower capability without breaking older callers
  // that mint an agent-scoped token for the generic MCP verifier. The transcript
@@ -9547,15 +9572,17 @@ function createApp() {
   webhookRateLimiter,
   // A huddle's agents join it as real LiveKit participants (voice-worker/).
   // The worker reaches back for tools and the transcript, so it needs an
-  // absolute base URL and a credential scoped to the one agent it is being.
+  // absolute base URL and a credential scoped to the one agent it is being dispatched for.
   createVoiceSessionToken,
   verifyVoiceSessionToken,
   parseJsonArray,
   parseJsonObject,
+  // Voice workers call back to the long-running Fly backend. Never point
+  // their MCP/transcript credentials at the app/Netlify origin: that host does
+  // not serve these routes. A missing backend URL disables agent dispatch while
+  // preserving the human-only huddle.
   publicBaseUrl: normalizeAgentBackendBaseUrl(
-   process.env.AGENSIS_DAEMON_BASE_URL
-    || process.env.AGENSIS_PUBLIC_URL
-    || process.env.AGENSIS_APP_URL,
+   process.env.AGENSIS_DAEMON_BASE_URL || '',
   ) || '',
  });
 
@@ -10878,6 +10905,7 @@ module.exports = {
   createVoiceSessionToken,
   verifyVoiceSessionToken,
   VOICE_TOKEN_PREFIX,
+  VOICE_TOKEN_MAX_TTL_MS,
   createCursorBuddyConnectionKey,
   normalizeCursorBuddySurface,
   normalizeCursorBuddyScope,

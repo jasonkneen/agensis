@@ -53,6 +53,7 @@ function harness({ huddles = [HUDDLE], verify = null, historical = [], controlle
       }
       return [];
     },
+    begin: async (callback) => callback({ unsafe: (sql, params = []) => db.unsafe(sql, params) }),
   };
 
   const app = express();

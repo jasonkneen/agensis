@@ -104,6 +104,21 @@ test('dispatch metadata bounds persona text before it crosses LiveKit', async ()
   assert.doesNotMatch(calls[0].handle, /[\r\n]/);
 });
 
+test('agent dispatch fails closed when the Fly callback URL is missing', async () => {
+  const calls = [];
+  const result = await dispatchVoiceAgents({
+    ...base,
+    baseUrl: '',
+    db: fakeDb({
+      participants: ['a1'],
+      agents: [{ id: 'a1', handle: 'claude', enabled: true }],
+    }),
+    dispatchClientFactory: { createDispatch: async (...args) => calls.push(args) },
+  });
+  assert.equal(result.skipped, 'voice-backend-url-not-configured');
+  assert.equal(calls.length, 0);
+});
+
 test('one agent failing does not stop the others, and never throws', async () => {
   const result = await dispatchVoiceAgents({
     ...base,

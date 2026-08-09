@@ -246,12 +246,13 @@ function makeDb({
         if (blocked.has('roster-lock')) return [];
         return (state.chatSessionMembers[params[0]] || []).map((row) => ({ ...row }));
       }
-      if (n.startsWith('select count(*)::int as count from messages where session_id = $1')) {
+      if (n.startsWith('select count(*)::int as count from messages where session_id = $1')
+        || n.startsWith('select count(*)::int as count from messages where huddle_id = $1')) {
         return [{ count: Number(transcriptCounts[params[0]] || 0) }];
       }
       if (
         n.startsWith('select') && n.includes('from huddles h')
-        && (n.includes('for share of h') || n.includes('for update of h'))
+        && (n.includes('for share of h') || n.includes('for update of h') || n.endsWith('for update'))
       ) {
         const [huddleId, workspaceId, sessionId] = params;
         if (blocked.has('huddle-lock')) return [];
@@ -379,6 +380,9 @@ function makeDb({
       if (n.startsWith('update huddles set ended_at = now()')) {
         const row = state.huddles.find((h) => (
           h.id === params[0] && h.workspace_id === params[1] && h.session_id === params[2] && !h.ended_at
+          && (!n.includes('not exists') || !state.presence.some((presence) => (
+            presence.huddle_id === h.id && !presence.reaped_at && String(presence.identity || '').startsWith('user:')
+          )))
         ));
         if (!row) return [];
         row.ended_at = new Date().toISOString();
@@ -408,6 +412,9 @@ function makeDb({
       }
       // --- liveness -------------------------------------------------------
       if (n.startsWith('select connection_epoch from huddle_presence')) {
+        return state.presence.filter((p) => p.huddle_id === params[0] && p.identity === params[1]);
+      }
+      if (n.startsWith('select connection_epoch, heartbeat_at, reaped_at from huddle_presence')) {
         return state.presence.filter((p) => p.huddle_id === params[0] && p.identity === params[1]);
       }
       if (n.startsWith('select huddle_id, identity, connection_epoch, last_seen_at, heartbeat_at, reaped_at from huddle_presence')) {
@@ -447,6 +454,15 @@ function makeDb({
         const row = state.presence.find((p) => p.huddle_id === params[0] && p.identity === params[3]);
         if (row) row.reaped_at = new Date().toISOString();
         return [];
+      }
+      if (n.startsWith('update huddle_presence set reaped_at = now()')) {
+        const [huddleId, identity, epoch, heartbeat] = params;
+        const row = state.presence.find((p) => p.huddle_id === huddleId && p.identity === identity
+          && !p.reaped_at && String(p.connection_epoch || '') === String(epoch || '')
+          && String(p.heartbeat_at || '') === String(heartbeat || ''));
+        if (!row) return [];
+        row.reaped_at = new Date().toISOString();
+        return [{ huddle_id: huddleId, identity }];
       }
       if (n.startsWith('update huddle_presence p set reaped_at = null')) {
         const row = state.presence.find((p) => p.huddle_id === params[0] && p.identity === params[3]);
@@ -1615,6 +1631,23 @@ test('a transcript alone is enough to earn a marker, with no webhook joins at al
   assert.equal(huddles.huddleLeftATrace(null, 5), false);
 });
 
+test('a legacy huddle marker counts only huddle-owned fallback transcript rows', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow({ transcript_session_id: null })],
+    transcriptCounts: { [HUDDLE_ID]: 1 },
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/end`, { method: 'POST', headers: auth });
+    assert.equal(res.status, 200);
+    assert.equal(db.state.messages.length, 1);
+    assert.equal(db.state.messages[0].message_kind, 'huddle');
+  });
+});
+
 test('room_finished writes the marker too — both ways a huddle ends leave a record', async () => {
   const db = makeDb({
     roles: { [`${WS}:${MEMBER}`]: 'editor' },
@@ -2015,8 +2048,8 @@ test('confirm records participant_joined for the CALLER identity, deduped per co
     for (const join of joins) {
       assert.equal(join.identity, `user:${MEMBER}`, 'identity comes from the verified session, never the body');
     }
-    assert.ok(joins.some((e) => e.event_id === `self:join:user:${MEMBER}:111`));
-    assert.ok(joins.some((e) => e.event_id === `self:join:user:${MEMBER}:222`));
+    assert.ok(joins.some((e) => e.event_id === `self:join:${HUDDLE_ID}:user:${MEMBER}:111`));
+    assert.ok(joins.some((e) => e.event_id === `self:join:${HUDDLE_ID}:user:${MEMBER}:222`));
 
     const stale = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/confirm`, {
       method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 111 }),
@@ -2160,7 +2193,7 @@ const presenceRow = (identity, { heartbeatAgo = null, seenAgo = 0, epoch = '111'
 
 const joinEvent = (identity, name, agoMs, seq) => ({
   id: `e-${identity}-${seq}`, huddle_id: HUDDLE_ID, workspace_id: WS, session_id: SESSION,
-  kind: 'participant_joined', identity, display_name: name, event_id: `self:join:${identity}:111`,
+  kind: 'participant_joined', identity, display_name: name, event_id: `self:join:${HUDDLE_ID}:${identity}:111`,
   seq, created_at: ago(agoMs),
 });
 
@@ -2318,9 +2351,9 @@ test('reading a huddle reaps the crashed browser and leaves the live one alone',
     assert.equal(left[0].display_name, 'Ada', 'the leave carries the name the join did');
     // Namespaced and deterministic: a retry, or a second Fly machine reaping the
     // same huddle at the same moment, collapses onto this one row.
-    assert.equal(left[0].event_id, 'reap:leave:user:a:111');
+    assert.equal(left[0].event_id, `reap:leave:${HUDDLE_ID}:user:a:111`);
     // And it can never collide with the browser's own leave for that connection.
-    assert.notEqual(left[0].event_id, 'self:leave:user:a:111');
+    assert.notEqual(left[0].event_id, `self:leave:${HUDDLE_ID}:user:a:111`);
 
     // Live, so the card corrects itself without a refetch.
     assert.ok(broadcasts.some((b) => b.table === 'huddle_events' && b.eventType === 'INSERT'));
@@ -2424,11 +2457,10 @@ test('an agent presence row cannot subtract a live human or reset activity', asy
   });
 });
 
-test('an empty huddle does NOT end while an agent is mid-turn', async () => {
-  // The reap has removed everybody, but an agent is still writing into the
-  // huddle's transcript. Ending the room here files the marker before the
-  // answer arrives, and the human comes back to a call that closed itself
-  // mid-sentence.
+test('an agent mid-turn cannot keep a human-empty huddle alive', async () => {
+  // AgentDispatch workers have no durable agent_jobs row for this room. A
+  // worker must not turn that implementation detail into an unbounded huddle;
+  // late output is best-effort and the ended huddle gate rejects it.
   const db = makeDb({
     roles: { [`${WS}:${MEMBER}`]: 'editor' },
     huddleRows: [liveHuddleRow({ started_at: ago(20 * MINUTE) })],
@@ -2444,9 +2476,9 @@ test('an empty huddle does NOT end while an agent is mid-turn', async () => {
     const body = await res.json();
     // The ghost still goes — that part is not in question.
     assert.equal(body.data.state.participantCount, 0);
-    assert.equal(body.data.state.active, true, 'the huddle stays open for the agent');
-    assert.equal(db.state.huddles[0].ended_at, null);
-    assert.equal(db.state.messages.length, 0);
+    assert.equal(body.data.state.active, false);
+    assert.ok(db.state.huddles[0].ended_at);
+    assert.equal(db.state.messages.length, 1);
   });
 });
 
@@ -2598,7 +2630,7 @@ test('a browser that was reaped while away is put BACK on the roster by its next
 
     const joins = db.state.events.filter((e) => e.kind === 'participant_joined');
     assert.equal(joins.length, 2, 'the original join, plus the re-announcement');
-    assert.match(joins[1].event_id, /^reap:rejoin:user:user-member:/);
+    assert.match(joins[1].event_id, new RegExp(`^reap:rejoin:${HUDDLE_ID}:user:user-member:`));
     assert.equal(db.state.presence[0].reaped_at, null, 'and the flag is cleared, so it happens once');
 
     // A retry of the same beat must not announce a second time.
@@ -2664,7 +2696,7 @@ test('a reaped participant who genuinely comes back through LiveKit is present a
   // reap is a real rejoin and must show.
   const state = huddles.foldHuddleState(liveHuddleRow(), [
     ev('participant_joined', 'user:a', '2026-07-26T10:00:00.000Z', { seq: 1 }),
-    ev('participant_left', 'user:a', '2026-07-26T10:05:00.000Z', { seq: 2, event_id: 'reap:leave:user:a:111' }),
+    ev('participant_left', 'user:a', '2026-07-26T10:05:00.000Z', { seq: 2, event_id: `reap:leave:${HUDDLE_ID}:user:a:111` }),
     ev('participant_joined', 'user:a', '2026-07-26T10:06:00.000Z', { seq: 3 }),
   ]);
   assert.deepEqual(state.participants.map((p) => p.identity), ['user:a']);

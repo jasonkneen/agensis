@@ -16,7 +16,12 @@ const assert = require('node:assert/strict');
 process.env.AUTH_SECRET = process.env.AUTH_SECRET || 'test-secret-for-voice-tokens';
 
 const { __test } = require('../server/index.cjs');
-const { createVoiceSessionToken, verifyVoiceSessionToken, VOICE_TOKEN_PREFIX } = __test;
+const {
+  createVoiceSessionToken,
+  verifyVoiceSessionToken,
+  VOICE_TOKEN_PREFIX,
+  VOICE_TOKEN_MAX_TTL_MS,
+} = __test;
 
 const WORKSPACE = '3a9ce2ab-27e7-42db-90fa-7e1ba32cf62e';
 const AGENT = '0d212ca9-63ef-4baf-b636-856833ed37e7';
@@ -47,10 +52,10 @@ test('a huddle token is rejected after its huddle ends', async () => {
       }];
       if (/from huddles/.test(sql)) return ended ? [{
         id: 'huddle-1', workspace_id: WORKSPACE, session_id: 'host-1',
-        transcript_session_id: 'transcript-session-1', ended_at: new Date().toISOString(),
+        transcript_session_id: 'transcript-session-1', transcript_participants: [AGENT], ended_at: new Date().toISOString(),
       }] : [{
         id: 'huddle-1', workspace_id: WORKSPACE, session_id: 'host-1',
-        transcript_session_id: 'transcript-session-1', ended_at: null,
+        transcript_session_id: 'transcript-session-1', transcript_participants: [AGENT], ended_at: null,
       }];
       return [];
     },
@@ -64,6 +69,12 @@ test('a huddle token is rejected after its huddle ends', async () => {
 });
 
 test('a huddle dispatch token is scoped to that huddle transcript', async () => {
+  __test.setTestDb({
+    unsafe: async (sql) => /from huddles/.test(sql) ? [{
+      id: 'huddle-1', workspace_id: WORKSPACE, session_id: 'host-1',
+      transcript_session_id: 'transcript-session-1', transcript_participants: [AGENT], ended_at: null,
+    }] : [],
+  });
   const token = await createVoiceSessionToken({
     workspaceId: WORKSPACE,
     agentId: AGENT,
@@ -116,6 +127,16 @@ test('an expired token is rejected', async () => {
   })).toString('base64url');
   const signature = crypto.createHmac('sha256', process.env.AUTH_SECRET).update(payload).digest('base64url');
   assert.equal(await verifyVoiceSessionToken(`${VOICE_TOKEN_PREFIX}${payload}.${signature}`), null);
+});
+
+test('the TTL ceiling rejects infinite or multi-hour voice credentials', async () => {
+  for (const ttlMs of [Infinity, Number.MAX_SAFE_INTEGER]) {
+    const before = Date.now();
+    const token = await createVoiceSessionToken({ workspaceId: WORKSPACE, agentId: AGENT, ttlMs });
+    const [payload] = token.slice(VOICE_TOKEN_PREFIX.length).split('.');
+    const { exp } = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    assert.ok(exp <= before + VOICE_TOKEN_MAX_TTL_MS + 1000);
+  }
 });
 
 test('the TTL floor stops a zero or negative lifetime being minted', async () => {

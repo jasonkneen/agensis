@@ -81,16 +81,16 @@ export function useHuddleHeartbeat(
 ) {
   // A 409 means the huddle is over. Stop beating into it — the roster update
   // arrives over the websocket, but a browser whose socket died would otherwise
-  // beat at a dead huddle for as long as the tab stayed open.
-  const stoppedRef = useRef(false);
-
+  // beat at a dead huddle for as long as the tab stayed open. This flag belongs
+  // to one effect generation; a response from an old epoch must never stop the
+  // heartbeat for a newly joined connection.
   useEffect(() => {
-    stoppedRef.current = false;
     if (!enabled || !workspaceId || !huddleId) return;
     let cancelled = false;
+    let stopped = false;
 
     const beat = async () => {
-      if (cancelled || stoppedRef.current) return;
+      if (cancelled || stopped) return;
       const path = `/backend/workspaces/${encodeURIComponent(workspaceId)}/huddles/${encodeURIComponent(huddleId)}/heartbeat`;
       try {
         const response = await fetch(apiUrl(path), {
@@ -98,7 +98,7 @@ export function useHuddleHeartbeat(
           headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
           body: JSON.stringify({ connectionEpoch }),
         });
-        if (response.status === 409) stoppedRef.current = true;
+        if (!cancelled && response.status === 409) stopped = true;
       } catch {
         // A missed beat is not an error: the whole design tolerates several,
         // and the next one refreshes presence with no visible flicker.
@@ -115,6 +115,7 @@ export function useHuddleHeartbeat(
 
     return () => {
       cancelled = true;
+      stopped = true;
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisibility);
     };
