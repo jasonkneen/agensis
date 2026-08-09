@@ -40,6 +40,19 @@ interface HuddlePayload {
  * misses; the server's own value always wins.
  */
 export const DEFAULT_HUDDLE_HEARTBEAT_MS = 30_000;
+const MAX_CONNECTION_EPOCH = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Give each local connection a strictly newer epoch, even when the wall clock
+ * moves backwards or two joins complete in the same millisecond. The server
+ * treats this as an ordering token, not as a trusted timestamp.
+ */
+export function nextHuddleConnectionEpoch(previous: number, now = Date.now()): number {
+  const prior = Number.isSafeInteger(previous) && previous >= 0 ? previous : 0;
+  const clock = Number.isSafeInteger(now) && now >= 0 ? now : 0;
+  if (prior >= MAX_CONNECTION_EPOCH) return MAX_CONNECTION_EPOCH;
+  return Math.min(MAX_CONNECTION_EPOCH, Math.max(clock, prior + 1));
+}
 
 /**
  * Say "still here" for as long as this browser holds a huddle connection.
@@ -213,6 +226,7 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
   // same-tick response sees the new request generation.
   const baseRef = useRef(base);
   const baseEpochRef = useRef(0);
+  const connectionEpochRef = useRef(0);
   if (baseRef.current !== base) {
     baseRef.current = base;
     baseEpochRef.current += 1;
@@ -354,13 +368,15 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
     const data = await post(base, undefined, requestEpoch);
     if (baseEpochRef.current !== requestEpoch) return null;
     if (data?.token && data.url && data.roomName && data.huddle?.id) {
+      const joinedAtMs = nextHuddleConnectionEpoch(connectionEpochRef.current);
+      connectionEpochRef.current = joinedAtMs;
       const next: HuddleConnection = {
         token: data.token,
         url: data.url,
         identity: data.identity || '',
         roomName: data.roomName,
         huddleId: data.huddle.id,
-        joinedAtMs: Date.now(),
+        joinedAtMs,
         heartbeatIntervalMs: data.heartbeatIntervalMs || DEFAULT_HUDDLE_HEARTBEAT_MS,
       };
       setConnection(next);

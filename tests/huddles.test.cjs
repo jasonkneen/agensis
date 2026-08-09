@@ -294,8 +294,13 @@ function makeDb({
         return [];
       }
       if (n.startsWith('insert into chat_session_members')) return [];
+      if (n.startsWith('select id, session_id, role, content, message_kind, huddle_id, sender_kind, sender_name, created_at from messages')) {
+        return state.messages.filter((message) => message.huddle_id === params[0] && message.message_kind === params[1]);
+      }
       if (n.startsWith('insert into messages')) {
         const [sessionId, content, kind, huddleId] = params;
+        const existingMarker = state.messages.find((message) => message.huddle_id === huddleId && message.message_kind === kind);
+        if (existingMarker) return [existingMarker];
         const row = {
           id: `msg-${state.messages.length + 1}`,
           session_id: sessionId,
@@ -417,6 +422,12 @@ function makeDb({
         const now = new Date().toISOString();
         const existing = state.presence.find((p) => p.huddle_id === huddleId && p.identity === identity);
         if (existing) {
+          const currentEpoch = String(existing.connection_epoch || '');
+          const incomingEpoch = String(epoch || '');
+          const numeric = /^\d+$/.test(currentEpoch) && /^\d+$/.test(incomingEpoch);
+          const allowed = currentEpoch === '' || currentEpoch === incomingEpoch
+            || (numeric && BigInt(currentEpoch) <= BigInt(incomingEpoch));
+          if (!allowed) return [];
           // RETURNING hands back the row AFTER the update, and the real
           // statement never clears reaped_at — which is exactly how the
           // heartbeat learns it was reaped while away.
@@ -1347,12 +1358,24 @@ test('room names are namespaced, and foreign room names are not claimed', () => 
   assert.equal(huddles.huddleIdFromRoomName(''), '');
 });
 
+test('connection epochs are bounded, canonical, and safely comparable', () => {
+  assert.equal(huddles.normalizeConnectionEpoch('001'), '1');
+  assert.equal(huddles.normalizeConnectionEpoch('owner'), 'owner');
+  assert.equal(huddles.normalizeConnectionEpoch('bad epoch'), null);
+  assert.equal(huddles.normalizeConnectionEpoch(1.5), null);
+  assert.equal(huddles.compareConnectionEpochs('1', '001'), 0);
+  assert.equal(huddles.compareConnectionEpochs('1', '2'), -1);
+  assert.equal(huddles.compareConnectionEpochs('newer', 'older'), null);
+});
+
 test('the join grant is room-scoped and carries no admin powers', () => {
   const grant = huddles.buildJoinGrant('agensis-x');
   assert.equal(grant.room, 'agensis-x');
   assert.equal(grant.roomJoin, true);
   assert.equal(grant.canPublish, true);
+  assert.deepEqual(grant.canPublishSources, [2], 'publish is limited to the microphone source');
   assert.equal(grant.canSubscribe, true);
+  assert.equal(grant.canPublishData, true, 'target packets still use the data channel');
   // Anything that would let a participant manage the LiveKit project must be absent.
   for (const forbidden of ['roomAdmin', 'roomCreate', 'roomList', 'roomRecord', 'ingressAdmin']) {
     assert.equal(grant[forbidden], undefined, `grant must not include ${forbidden}`);

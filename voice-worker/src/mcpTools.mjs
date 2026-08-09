@@ -53,7 +53,8 @@ function parseLoadContextArgs(args) {
 function parseLoadToolsArgs(args) {
   if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some((key) => key !== 'names')) return null;
   if (!Array.isArray(args.names) || args.names.length < 1 || args.names.length > MAX_PROGRESSIVE_TOOLS) return null;
-  const names = args.names.map((name) => String(name));
+  if (args.names.some((name) => typeof name !== 'string')) return null;
+  const names = args.names.slice();
   if (new Set(names).size !== names.length || names.some((name) => !NAME_RE.test(name))) return null;
   return names;
 }
@@ -105,7 +106,8 @@ async function readResponseText(response, maxBytes = MAX_MCP_RESPONSE_BYTES) {
 export async function rpc({ url, token, method, params, signal, timeoutMs = 5_000, fetchImpl = fetch } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  if (signal) signal.addEventListener('abort', () => controller.abort(), { once: true });
+  if (signal?.aborted) controller.abort();
+  else if (signal) signal.addEventListener('abort', () => controller.abort(), { once: true });
   const request = { jsonrpc: '2.0', id: ++rpcId, method, params: params ?? {} };
   if (!capJsonBytes(request, MAX_TOOL_INPUT_BYTES)) throw new Error('MCP request exceeded voice limit');
   try {

@@ -182,6 +182,12 @@ function protectedFunctionItem(item, items) {
     || items.some((candidate) => candidate?.type === 'function_call' && String(candidate.callId || '') === callId);
 }
 
+function completedFunctionCall(item, items) {
+  return item?.type === 'function_call'
+    && Boolean(String(item.callId || ''))
+    && functionCallHasOutput(item, items);
+}
+
 function functionPairIndexes(item, items) {
   const callId = String(item?.callId || '');
   if (!callId) return [];
@@ -232,10 +238,31 @@ export function boundChatContext(context, { maxItems = MAX_VOICE_CONTEXT_ITEMS, 
 
   const bytes = () => chatContextBytes(context);
   while (context.items.length > 1 && bytes() > byteLimit) {
-    const index = context.items.findIndex((item) => !isSystemItem(item) && !protectedFunctionItem(item, context.items));
-    if (index < 0) break;
-    context.items.splice(index, 1);
-    context.items = removeDanglingFunctionItems(context.items);
+    const ordinaryIndex = context.items.findIndex((item) => !isSystemItem(item) && !protectedFunctionItem(item, context.items));
+    if (ordinaryIndex >= 0) {
+      context.items.splice(ordinaryIndex, 1);
+      context.items = removeDanglingFunctionItems(context.items);
+      continue;
+    }
+    // Completed function pairs are protected from single-item deletion, but
+    // they are still optional history. Evict the oldest pair as a unit before
+    // conceding a byte-bound exception for an active call whose output has not
+    // arrived yet. This keeps provider history valid without allowing a large
+    // sequence of completed calls to defeat MAX_VOICE_CONTEXT_BYTES.
+    const completedIndexes = context.items
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => completedFunctionCall(item, context.items));
+    // Retain the newest completed pair as a provider-safe history anchor. It is
+    // the same deliberate soft-bound exception as an active call; older
+    // completed pairs are expendable and are removed oldest-first.
+    if (completedIndexes.length > 1) {
+      const completedIndex = completedIndexes[0].index;
+      const pair = functionPairIndexes(context.items[completedIndex], context.items);
+      for (const pairIndex of pair.reverse()) context.items.splice(pairIndex, 1);
+      context.items = removeDanglingFunctionItems(context.items);
+      continue;
+    }
+    break;
   }
   if (bytes() > byteLimit && context.items.length) {
     // First shrink the newest message without touching a function-call pair;
@@ -248,7 +275,7 @@ export function boundChatContext(context, { maxItems = MAX_VOICE_CONTEXT_ITEMS, 
         // Never delete the output that completes a call. Shrink its untrusted
         // body further; the paired call/output is more useful than an invalid
         // orphaned history, even if provider overhead leaves a few extra bytes.
-        context.items[newestIndex] = compactFunctionItem(newest, 512);
+        context.items[newestIndex] = compactFunctionItem(newest, Math.min(512, Math.max(64, Math.floor(byteLimit / 3))));
       } else {
         const replacement = boundedMessage(newest);
         if (replacement) context.items[newestIndex] = replacement;
@@ -259,8 +286,9 @@ export function boundChatContext(context, { maxItems = MAX_VOICE_CONTEXT_ITEMS, 
       // A protected call/output pair may be the only remaining history. Strip
       // all provider-optional metadata from both halves before conceding that
       // the pair's structural overhead cannot fit.
+      const compactOutputChars = Math.min(512, Math.max(64, Math.floor(byteLimit / 3)));
       context.items = context.items.map(item => protectedFunctionItem(item, context.items)
-        ? compactFunctionItem(item)
+        ? compactFunctionItem(item, compactOutputChars)
         : item);
       context.items = removeDanglingFunctionItems(context.items);
       const systemIndex = context.items.findIndex(isSystemItem);

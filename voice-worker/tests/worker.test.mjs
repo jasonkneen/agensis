@@ -8,7 +8,7 @@ import { AgentSessionEventTypes } from '@livekit/agents';
 
 import { availableEngines, resolveEngine, VOICE_ENGINES } from '../src/providers.mjs';
 import { initialsFor, parseColor, renderAvatarFrame } from '../src/avatarVideo.mjs';
-import { flattenToolResult, loadMcpTools, EXCLUDED, VOICE_LAZY_TOOL_ALLOWLIST } from '../src/mcpTools.mjs';
+import { flattenToolResult, loadMcpTools, rpc, EXCLUDED, VOICE_LAZY_TOOL_ALLOWLIST } from '../src/mcpTools.mjs';
 import { acceptsTargetPacket, decodeVoiceTarget, encodeVoiceTarget, encodeVoiceTargetRequest, isVoiceTargetRequest, makeVoiceTarget } from '../src/voiceTarget.mjs';
 import { boundChatContext, MAX_VOICE_CONTEXT_BYTES, MAX_VOICE_RESULT_CHARS, VOICE_RESULT_TRUNCATION_MARKER } from '../src/voiceBounds.mjs';
 import { mirrorTranscript, transcriptEventId } from '../src/transcript.mjs';
@@ -92,6 +92,39 @@ test('MCP catalog is deferred: an unreachable endpoint does not delay the bootst
   const result = await tools.load_context.execute({});
   assert.match(result, /voice result unavailable/);
   assert.deepEqual(loadMcpTools({ url: '' }), {}, 'no endpoint configured is not an error');
+});
+
+test('progressive MCP rejects non-string tool names before network access', async () => {
+  let calls = 0;
+  const tools = loadMcpTools({
+    url: 'https://agensis.test/backend/mcp',
+    sessionId: 'session-1',
+    fetchImpl: async () => { calls += 1; throw new Error('must not fetch'); },
+    log: { log: () => {}, error: () => {} },
+  });
+  for (const names of [[null], [true], [42]]) {
+    const result = await tools.load_tools.execute({ names });
+    assert.match(result, /voice result unavailable/);
+  }
+  assert.equal(calls, 0);
+});
+
+test('an already-aborted MCP caller signal aborts before fetch', async () => {
+  const signal = AbortSignal.abort();
+  let observed;
+  await assert.rejects(
+    () => rpc({
+      url: 'https://agensis.test/backend/mcp',
+      method: 'ping',
+      signal,
+      fetchImpl: async (_url, options) => {
+        observed = options.signal.aborted;
+        throw new DOMException('The operation was aborted.', 'AbortError');
+      },
+    }),
+    /aborted/i,
+  );
+  assert.equal(observed, true);
 });
 
 test('progressive MCP loads are authorized, named, and deferred', async () => {
@@ -300,6 +333,22 @@ test('context bounds preserve item count and cap one oversized message', () => {
 });
 
 
+test('context bounds document the protected system plus active-call exception', () => {
+  const context = {
+    items: [
+      { type: 'message', role: 'system', content: 'system instructions' },
+      { type: 'function_call', callId: 'active', name: 'lookup', args: '{}' },
+    ],
+    toJSON() { return this.items; },
+  };
+  boundChatContext(context, { maxItems: 1, maxBytes: MAX_VOICE_CONTEXT_BYTES });
+  // The provider must receive the live call until its output arrives. Keeping
+  // the system item plus that call is the explicit, structural exception to
+  // maxItems; both halves remain normalized and bounded.
+  assert.deepEqual(context.items.map((item) => item.type), ['message', 'function_call']);
+  assert.equal(context.items[1].callId, 'active');
+});
+
 test('context serialization failures are replaced instead of counted as zero bytes', () => {
   const circular = {};
   circular.self = circular;
@@ -368,6 +417,25 @@ test('context trimming preserves an in-flight call and drops orphan output', () 
   assert.equal(context.items.filter((item) => item.type === 'function_call_output' && item.callId === 'ordered').length, 1);
 });
 
+
+test('byte trimming evicts completed call pairs before preserving active calls', () => {
+  const context = {
+    items: [
+      { type: 'message', role: 'system', content: 'sys' },
+      { type: 'function_call', callId: 'done-1', name: 'lookup', args: '{}' },
+      { type: 'function_call_output', callId: 'done-1', output: 'x'.repeat(2_000) },
+      { type: 'function_call', callId: 'done-2', name: 'lookup', args: '{}' },
+      { type: 'function_call_output', callId: 'done-2', output: 'x'.repeat(2_000) },
+      { type: 'function_call', callId: 'active', name: 'lookup', args: '{}' },
+    ],
+    toJSON() { return this.items; },
+  };
+  boundChatContext(context, { maxItems: 24, maxBytes: 512 });
+  assert.equal(context.items.some((item) => item.callId === 'active'), true);
+  assert.equal(context.items.some((item) => item.callId === 'done-1'), false);
+  assert.equal(context.items.some((item) => item.callId === 'done-2'), true, 'newest completed pair is the protected history anchor');
+  assert.ok(Buffer.byteLength(JSON.stringify(context.toJSON()), 'utf8') <= 512);
+});
 
 test('an oversized tool result is reduced without deleting its call pair', () => {
   const context = {

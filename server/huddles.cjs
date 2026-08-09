@@ -149,6 +149,45 @@ function userIdFromIdentity(identity) {
  return value.startsWith('user:') ? value.slice(5) : '';
 }
 
+// Connection epochs come from browsers, so they are untrusted input. Current
+// clients use a millisecond integer, while older test/SDK callers used opaque
+// retry labels. Accept both bounded forms, canonicalize decimal strings (so
+// `001` and `1` cannot evade a stale-leave check), and reject values that could
+// be ambiguous or expensive to compare in SQL.
+const CONNECTION_EPOCH_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const DECIMAL_EPOCH_RE = /^\d+$/;
+
+function normalizeConnectionEpoch(value, { fallback = '0' } = {}) {
+ const rawValue = value === undefined || value === null || value === '' ? fallback : value;
+ if (typeof rawValue === 'number') {
+  return Number.isSafeInteger(rawValue) && rawValue >= 0 ? String(rawValue) : null;
+ }
+ if (typeof rawValue !== 'string') return null;
+ const raw = rawValue.trim();
+ if (!raw || !CONNECTION_EPOCH_RE.test(raw)) return null;
+ if (!DECIMAL_EPOCH_RE.test(raw)) return raw;
+ try {
+  return String(BigInt(raw));
+ } catch {
+  return null;
+ }
+}
+
+// Returns -1/0/1 for a safely comparable pair, or null when two different
+// opaque epochs cannot be ordered. A null result is fail-closed at the SQL
+// upsert and treated as stale by the caller.
+function compareConnectionEpochs(current, incoming) {
+ const left = String(current || '');
+ const right = String(incoming || '');
+ if (!left || !right) return null;
+ if (DECIMAL_EPOCH_RE.test(left) && DECIMAL_EPOCH_RE.test(right)) {
+  const a = BigInt(left);
+  const b = BigInt(right);
+  return a < b ? -1 : a > b ? 1 : 0;
+ }
+ return left === right ? 0 : null;
+}
+
 function tokenTtlSeconds() {
  const raw = Number(process.env.LIVEKIT_TOKEN_TTL_SECONDS || DEFAULT_TOKEN_TTL_SECONDS);
  if (!Number.isFinite(raw)) return DEFAULT_TOKEN_TTL_SECONDS;
@@ -454,12 +493,15 @@ function shouldEndEmptyHuddle({
 }
 
 // The video grant a join token carries. Room-scoped, publish+subscribe audio,
-// nothing else — no room admin, no room list, no recording.
+// plus data for target/control packets, nothing else — no camera, room admin,
+// room list, or recording. TrackSource.MICROPHONE is enum value 2 in the
+// LiveKit protocol; the server SDK serializes it to "microphone" in the JWT.
 function buildJoinGrant(roomName) {
  return {
   roomJoin: true,
   room: roomName,
   canPublish: true,
+  canPublishSources: [2],
   canSubscribe: true,
   canPublishData: true,
   canUpdateOwnMetadata: false,
@@ -1194,9 +1236,9 @@ function mountHuddleRoutes(app, deps = {}) {
   * Leave ONE marker in the host channel saying the huddle happened.
   *
   * Called from BOTH ways a huddle ends (the End button and LiveKit's
-  * room_finished webhook), in each case only on the request that actually
-  * flipped `ended_at` — the `returning` guard on those UPDATEs is what makes
-  * "exactly one marker" true without a second uniqueness mechanism.
+  * room_finished webhook). The lifecycle UPDATE elects the first writer, and
+  * the marker itself has a deterministic transcript-event key so a retry can
+  * repair a crash between the `ended_at` commit and this insert.
   *
   * role='assistant' because messages.role is CHECKed to ('user','assistant');
   * sender_kind='system' is what distinguishes it from something an agent said,
@@ -1213,15 +1255,25 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!huddleLeftATrace(state, count)) return null;
    // Read AFTER ended_at is set, so this is exactly "still running now that the
    // call is over" — the state the sentence is describing.
+   const existing = await getDb().unsafe(
+    `select id, session_id, role, content, message_kind, huddle_id, sender_kind, sender_name, created_at
+       from messages
+      where huddle_id = $1 and message_kind = $2
+      limit 1`,
+    [huddle.id, HUDDLE_MARKER_KIND],
+   );
+   if (existing[0]) return existing[0];
    const content = huddleMarkerContent(state, everJoinedNames(events), {
     workContinuing: await agentBusyInHuddle(huddle),
    });
    if (!content) return null;
+   const markerEventId = `huddle-marker:${huddle.id}`;
    const rows = await getDb().unsafe(
-    `insert into messages (session_id, role, content, message_kind, huddle_id, sender_kind, sender_name)
-          values ($1, 'assistant', $2, $3, $4, 'system', 'Huddle')
+    `insert into messages (session_id, role, content, message_kind, huddle_id, huddle_transcript_event_id, sender_kind, sender_name)
+          values ($1, 'assistant', $2, $3, $4, $5, 'system', 'Huddle')
+       on conflict (huddle_id, huddle_transcript_event_id) do nothing
           returning *`,
-    [huddle.session_id, content, HUDDLE_MARKER_KIND, huddle.id],
+    [huddle.session_id, content, HUDDLE_MARKER_KIND, huddle.id, markerEventId],
    );
    if (rows[0]) fanout('messages', 'INSERT', [rows[0]]);
    return rows[0] || null;
@@ -1254,15 +1306,17 @@ function mountHuddleRoutes(app, deps = {}) {
   // Confirm/heartbeat calls can cross on the network. Never let an older
   // connection epoch overwrite a newer row, even though both requests are
   // otherwise authenticated as the same user.
+  const incomingEpoch = normalizeConnectionEpoch(connectionEpoch, { fallback: '' });
+  if (!incomingEpoch) return null;
   const existing = await db.unsafe(
    `select connection_epoch from huddle_presence
        where huddle_id = $1 and identity = $2
        for update`,
    [huddle.id, identity],
   );
-  const currentEpoch = Number(existing[0]?.connection_epoch);
-  const incomingEpoch = Number(connectionEpoch);
-  if (Number.isFinite(currentEpoch) && Number.isFinite(incomingEpoch) && incomingEpoch < currentEpoch) {
+  const currentRaw = String(existing[0]?.connection_epoch || '').trim();
+  const ordering = compareConnectionEpochs(currentRaw, incomingEpoch);
+  if (currentRaw && (ordering === null || ordering > 0)) {
    return { ...existing[0], _staleConnectionEpoch: true };
   }
   const rows = await db.unsafe(
@@ -1285,22 +1339,57 @@ function mountHuddleRoutes(app, deps = {}) {
             set connection_epoch = excluded.connection_epoch,
                 last_seen_at = now(),
                 heartbeat_at = case when $6::boolean then now() else huddle_presence.heartbeat_at end
+          where huddle_presence.connection_epoch = ''
+             or huddle_presence.connection_epoch = excluded.connection_epoch
+             or (
+               huddle_presence.connection_epoch ~ '^\\d+$'
+               and excluded.connection_epoch ~ '^\\d+$'
+               and huddle_presence.connection_epoch::numeric <= excluded.connection_epoch::numeric
+             )
          returning ${PRESENCE_COLUMNS}`,
    [
     huddle.id,
     huddle.workspace_id,
     huddle.session_id,
     identity,
-    String(connectionEpoch || ''),
+    incomingEpoch,
     Boolean(beat),
     userId,
    ],
   );
-  return rows[0] || null;
+  if (rows[0]) return rows[0];
+  // If the initial SELECT saw no row, another transaction may have inserted a
+  // newer epoch before this UPSERT reached its conflict clause. Re-read under
+  // the transaction lock so the route can treat that no-op as an idempotent
+  // stale request rather than appending a false join or returning a misleading
+  // authorization failure.
+  const current = await db.unsafe(
+   `select connection_epoch from huddle_presence
+       where huddle_id = $1 and identity = $2
+       for update`,
+   [huddle.id, identity],
+  );
+  const currentAfter = String(current[0]?.connection_epoch || '').trim();
+  const afterOrdering = compareConnectionEpochs(currentAfter, incomingEpoch);
+  if (currentAfter && (afterOrdering === null || afterOrdering > 0)) {
+   return { ...current[0], _staleConnectionEpoch: true };
+  }
+  return null;
  }
 
  async function clearPresence(huddle, identity, { db = getDb(), connectionEpoch = null } = {}) {
-  const epochClause = connectionEpoch == null ? '' : 'and p.connection_epoch = $5';
+  const normalizedEpoch = connectionEpoch == null
+   ? null
+   : normalizeConnectionEpoch(connectionEpoch, { fallback: '' });
+  if (connectionEpoch != null && !normalizedEpoch) return;
+  const epochClause = normalizedEpoch == null ? '' : `and (
+           p.connection_epoch = $5
+           or case
+                when p.connection_epoch ~ '^\\d+$' and $5 ~ '^\\d+$'
+                then p.connection_epoch::numeric = $5::numeric
+                else false
+              end
+         )`;
   await db.unsafe(
    `delete from huddle_presence p
           using huddles h
@@ -1310,9 +1399,9 @@ function mountHuddleRoutes(app, deps = {}) {
             and h.session_id = $3
             and p.identity = $4
             ${epochClause}`,
-   connectionEpoch == null
+   normalizedEpoch == null
      ? [huddle.id, huddle.workspace_id, huddle.session_id, identity]
-     : [huddle.id, huddle.workspace_id, huddle.session_id, identity, connectionEpoch],
+     : [huddle.id, huddle.workspace_id, huddle.session_id, identity, normalizedEpoch],
   );
  }
 
@@ -1403,7 +1492,14 @@ function mountHuddleRoutes(app, deps = {}) {
   * attached to — a huddle you cannot see is worse than a huddle with a ghost.
   */
  async function reapHuddle(huddle, { endIfEmpty = true } = {}) {
-  if (!huddle || huddle.ended_at) return huddle;
+  if (!huddle) return huddle;
+  if (huddle.ended_at) {
+   // A process can die after the lifecycle UPDATE commits but before its
+   // marker insert. Reads are a repair opportunity; writeHuddleMarker is
+   // idempotent and returns immediately when the marker already exists.
+   await writeHuddleMarker(huddle);
+   return huddle;
+  }
   try {
    const events = await loadEvents(huddle.id);
    const presence = await loadPresence(huddle.id);
@@ -1732,7 +1828,9 @@ function mountHuddleRoutes(app, deps = {}) {
    // unique fallback rather than collapsing two identical human utterances; it
    // cannot promise retry idempotency without a source id.
    const eventId = rawEventId || `legacy:${crypto.randomUUID()}`;
-   if (!/^[A-Za-z0-9._:-]{1,256}$/.test(eventId)) return jsonError(res, 400, new Error('eventId is invalid'));
+   if (!/^[A-Za-z0-9._:-]{1,256}$/.test(eventId) || eventId.startsWith('huddle-marker:')) {
+    return jsonError(res, 400, new Error('eventId is invalid'));
+   }
 
    let speakerId = '';
    let speakerName = 'Participant';
@@ -1866,6 +1964,8 @@ function mountHuddleRoutes(app, deps = {}) {
    const workspaceId = String(req.params.id || '').trim();
    const huddleId = String(req.params.huddleId || '').trim();
    if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
+   const epoch = normalizeConnectionEpoch(req.body?.connectionEpoch);
+   if (!epoch) return jsonError(res, 400, new Error('connectionEpoch is invalid'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'write');
    await ensureSchemaOnce();
    const huddle = await huddleInWorkspace(huddleId, workspaceId);
@@ -1877,7 +1977,6 @@ function mountHuddleRoutes(app, deps = {}) {
    // here: somebody is walking in the door as this runs.
    await reapHuddle(huddle, { endIfEmpty: false });
    const identity = participantIdentity(req.userId);
-   const epoch = String(req.body?.connectionEpoch || '0');
    const displayName = await displayNameFor(req.userId);
    const confirmed = await getDb().begin(async (tx) => {
     const locked = await lockActorHuddle(tx, {
@@ -1932,14 +2031,14 @@ function mountHuddleRoutes(app, deps = {}) {
    const workspaceId = String(req.params.id || '').trim();
    const huddleId = String(req.params.huddleId || '').trim();
    if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
+   const epoch = normalizeConnectionEpoch(req.body?.connectionEpoch, { fallback: '' });
+   if (!epoch) return jsonError(res, 400, new Error('connectionEpoch is required'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'write');
    await ensureSchemaOnce();
    const huddle = await huddleInWorkspace(huddleId, workspaceId);
    if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
    await enforceHuddleRead(req.userId, huddle);
    const identity = participantIdentity(req.userId);
-   const epoch = String(req.body?.connectionEpoch || '').trim();
-   if (!epoch) return jsonError(res, 400, new Error('connectionEpoch is required'));
    const departed = await getDb().begin(async (tx) => {
     const locked = await lockActorHuddle(tx, {
      huddleId,
@@ -1957,7 +2056,7 @@ function mountHuddleRoutes(app, deps = {}) {
     );
     // A delayed tab may leave after this user has rejoined with a newer epoch.
     // It must not append a false leave or delete the current presence row.
-    if (presence[0] && String(presence[0].connection_epoch || '') !== epoch) {
+    if (presence[0] && compareConnectionEpochs(presence[0].connection_epoch, epoch) !== 0) {
      return { huddle: locked, event: null, stale: true };
     }
     const event = await appendEvent({
@@ -1993,6 +2092,8 @@ function mountHuddleRoutes(app, deps = {}) {
    const workspaceId = String(req.params.id || '').trim();
    const huddleId = String(req.params.huddleId || '').trim();
    if (!workspaceId || !huddleId) return jsonError(res, 400, new Error('workspaceId and huddleId are required'));
+   const epoch = normalizeConnectionEpoch(req.body?.connectionEpoch);
+   if (!epoch) return jsonError(res, 400, new Error('connectionEpoch is invalid'));
    await enforceWorkspaceRole(req.userId, workspaceId, 'write');
    await ensureSchemaOnce();
    const huddle = await huddleInWorkspace(huddleId, workspaceId);
@@ -2001,7 +2102,6 @@ function mountHuddleRoutes(app, deps = {}) {
    if (huddle.ended_at) return jsonError(res, 409, new Error('This huddle has ended'));
 
    const identity = participantIdentity(req.userId);
-   const epoch = String(req.body?.connectionEpoch || '0');
    const displayName = await displayNameFor(req.userId);
    const heartbeat = await getDb().begin(async (tx) => {
     const locked = await lockActorHuddle(tx, {
@@ -2129,6 +2229,9 @@ function mountHuddleRoutes(app, deps = {}) {
      // The row is authoritative; a failed teardown must not fail the request.
      console.warn('[huddles] could not delete LiveKit room:', (error && error.message) || error);
     }
+   } else {
+    // Repair a marker lost after a previous request committed ended_at.
+    await writeHuddleMarker(huddle);
    }
    res.json({ data: await huddlePayload(huddle), error: null });
   } catch (error) {
@@ -2265,6 +2368,10 @@ function mountHuddleRoutes(app, deps = {}) {
      await writeHuddleMarker(updated[0]);
      await clearAllPresence(updated[0]);
     }
+   } else if (kind === 'ended') {
+    // Redelivery after a crash may find ended_at already committed while the
+    // marker is still missing; repair it without appending another event.
+    await writeHuddleMarker(huddle);
    } else if (kind !== 'ended') {
     const participant = payload.participant || {};
     // An ordinary join/leave is not cleanup. It may only extend the append-only
@@ -2308,6 +2415,8 @@ module.exports = {
  huddleIdFromRoomName,
  participantIdentity,
  userIdFromIdentity,
+ normalizeConnectionEpoch,
+ compareConnectionEpochs,
  foldHuddleState,
  huddleMarkerContent,
  everJoinedNames,
