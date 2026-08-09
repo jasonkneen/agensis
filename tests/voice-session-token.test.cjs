@@ -33,11 +33,17 @@ test('a minted voice token is prefixed and carries no readable secret', async ()
 });
 
 
-test('a huddle dispatch token is scoped to that huddle', async () => {
-  const token = await createVoiceSessionToken({ workspaceId: WORKSPACE, agentId: AGENT, huddleId: 'huddle-1' });
+test('a huddle dispatch token is scoped to that huddle transcript', async () => {
+  const token = await createVoiceSessionToken({
+    workspaceId: WORKSPACE,
+    agentId: AGENT,
+    huddleId: 'huddle-1',
+    sessionId: 'transcript-session-1',
+  });
   const [payload] = token.slice(VOICE_TOKEN_PREFIX.length).split('.');
   const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
   assert.equal(claims.h, 'huddle-1');
+  assert.equal(claims.s, 'transcript-session-1');
 });
 
 test('minting requires both a workspace and an agent', async () => {

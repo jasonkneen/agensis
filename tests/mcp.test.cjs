@@ -7,6 +7,12 @@ const { roleHasWorkspaceCapability } = __test;
 const WS = 'ws-1';
 const OTHER_WS = 'ws-2';
 const AGENT = { kind: 'agent', agentId: 'agent-1', workspaceId: WS, name: 'Coder', handle: 'coder', agent: { model: 'claude-opus-4-8', description: 'coding agent' } };
+const VOICE_AGENT = {
+ ...AGENT,
+ voiceSession: true,
+ voiceSessionId: 'ch-1',
+ huddleId: 'huddle-1',
+};
 const INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-1', name: 'cursor@x.com', autoApprove: true, role: 'editor' };
 const VIEWER_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-viewer', name: 'viewer@x.com', autoApprove: true, role: 'viewer' };
 const COMMENTER_INVITE = { kind: 'invite', workspaceId: WS, inviteId: 'inv-commenter', name: 'commenter@x.com', autoApprove: true, role: 'commenter' };
@@ -141,6 +147,7 @@ function makeDeps(overrides = {}) {
     'editor-invite-token': EDITOR_INVITE,
     'admin-invite-token': ADMIN_INVITE,
     'flow-token': FLOW_CHANNEL,
+    'voice-token': VOICE_AGENT,
     'controller-register-token': CONTROLLER_REGISTER,
     'controller-manage-token': CONTROLLER_MANAGE,
     'controller-resources-token': CONTROLLER_RESOURCES,
@@ -310,6 +317,42 @@ test('standing permission-rule tools are manage-only and dispatch through the au
     assert.equal(entry.input.workspaceId, WS);
     assert.equal(entry.input.agentId, 'agent-1');
   }
+});
+
+test('voice session credentials expose only pinned read tools and transcript context', async () => {
+  const db = makeDb();
+  const { deps } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+
+  const listed = await call(handler, {
+    token: 'voice-token',
+    body: rpc('tools/list'),
+  });
+  assert.deepEqual(
+    listed.body.result.tools.map((tool) => tool.name).sort(),
+    ['list_docs', 'list_skills', 'read_channel', 'read_doc', 'read_skill', 'search_docs'],
+  );
+
+  const allowed = await call(handler, {
+    token: 'voice-token',
+    body: rpc('tools/call', { name: 'read_channel', arguments: { channel_id: 'ch-1', limit: 4 } }),
+  });
+  assert.equal(allowed.body.result.isError ?? false, false);
+
+  const wrongChannel = await call(handler, {
+    token: 'voice-token',
+    body: rpc('tools/call', { name: 'read_channel', arguments: { channel_id: 'other-channel' } }),
+  });
+  assert.equal(wrongChannel.body.result.isError, true);
+  assert.match(wrongChannel.body.result.content[0].text, /pinned to this huddle transcript/i);
+
+  const write = await call(handler, {
+    token: 'voice-token',
+    body: rpc('tools/call', { name: 'post_message', arguments: { channel_id: 'ch-1', content: 'escape' } }),
+  });
+  assert.equal(write.body.result.isError, true);
+  assert.match(write.body.result.content[0].text, /voice session token/i);
+  assert.equal(db.inserted.length, 0, 'a voice bearer cannot reach a workspace write');
 });
 
 test('whoami returns the resolved agent identity', async () => {

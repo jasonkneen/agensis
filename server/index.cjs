@@ -4423,19 +4423,20 @@ async function verifyOauthAccessToken(token) {
 //   - the agent's own connect token would mean rotating a RUNNING daemon's
 //     identity just to start a call.
 //
-// So: a short-lived HMAC-signed bearer scoped to exactly one agent. It carries no
-// authority beyond that agent's own, because it resolves to the SAME identity
-// object verifyAgentConnectToken returns — every tool authorization rule then
-// applies to it unchanged, with nothing new to keep in sync. It is never stored,
+// So: a short-lived HMAC-signed bearer scoped to exactly one agent. For ordinary
+// agent tokens it resolves to the same identity shape as verifyAgentConnectToken;
+// huddle tokens additionally carry a voice marker and transcript-session pin, so
+// the MCP chokepoint can apply the voice read-only allowlist. It is never stored,
 // so there is nothing to leak at rest and nothing to revoke but the clock.
 const VOICE_TOKEN_PREFIX = 'agv_';
 const VOICE_TOKEN_DEFAULT_TTL_MS = 4 * 60 * 60_000;
 const VOICE_TOKEN_MIN_TTL_MS = 60_000;
 
-async function createVoiceSessionToken({ workspaceId, agentId, huddleId = '', ttlMs = VOICE_TOKEN_DEFAULT_TTL_MS } = {}) {
+async function createVoiceSessionToken({ workspaceId, agentId, huddleId = '', sessionId = '', ttlMs = VOICE_TOKEN_DEFAULT_TTL_MS } = {}) {
  const workspace = String(workspaceId || '').trim();
  const agent = String(agentId || '').trim();
  const huddle = String(huddleId || '').trim();
+ const session = String(sessionId || '').trim();
  if (!workspace || !agent) throw new Error('workspaceId and agentId are required');
  const secret = await getAuthSecret();
  const claims = {
@@ -4444,8 +4445,11 @@ async function createVoiceSessionToken({ workspaceId, agentId, huddleId = '', tt
   exp: Date.now() + Math.max(VOICE_TOKEN_MIN_TTL_MS, Number(ttlMs) || VOICE_TOKEN_DEFAULT_TTL_MS),
  };
  // Huddle dispatches carry a narrower capability without breaking older callers
- // that mint an agent-scoped token for the generic MCP verifier.
+ // that mint an agent-scoped token for the generic MCP verifier. The transcript
+ // session is a second, independent pin: huddle identity alone must not let a
+ // compromised voice bearer read an arbitrary channel in the workspace.
  if (huddle) claims.h = huddle;
+ if (session) claims.s = session;
  const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
  const signature = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
  return `${VOICE_TOKEN_PREFIX}${payload}.${signature}`;
@@ -4485,6 +4489,8 @@ async function verifyVoiceSessionToken(token) {
   agentId: agent.id,
   workspaceId: agent.workspace_id,
   huddleId: String(claims.h || ''),
+  voiceSession: true,
+  voiceSessionId: String(claims.s || ''),
   name: agent.name,
   handle: agent.handle || slugHandle(agent.name),
   agent: agentRuntimePayload(agent),

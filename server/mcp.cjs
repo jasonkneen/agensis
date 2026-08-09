@@ -2607,10 +2607,35 @@ function buildTools() {
 // door the call came through.
 // =============================================================================
 
+// A voice bearer is deliberately narrower than a normal agent bearer. The
+// worker's local allowlist is useful for prompt/context cost, but it is not an
+// authorization boundary: a leaked `agv_` token must not be able to call
+// post_message, dispatch_agent, or mutate workspace state by hand. Keep this
+// list identical to voice-worker/src/mcpTools.mjs and fail closed when a new
+// MCP tool is added until it is reviewed for voice use.
+const VOICE_MCP_TOOL_ALLOWLIST = new Set([
+ 'read_channel', 'list_docs', 'read_doc', 'search_docs', 'list_skills', 'read_skill',
+]);
+
+function isVoiceSessionIdentity(identity) {
+ return identity?.kind === 'agent' && identity?.voiceSession === true;
+}
+
+function voiceToolAllowed(tool, identity) {
+ if (!isVoiceSessionIdentity(identity)) return true;
+ if (!VOICE_MCP_TOOL_ALLOWLIST.has(tool.name)) return false;
+ // The worker forcibly supplies its transcript session, but the server must
+ // enforce the same pin for a caller that uses the bearer outside the worker.
+ if (tool.name === 'read_channel') {
+  return Boolean(identity.voiceSessionId);
+ }
+ return true;
+}
+
 /** Every gate that decides whether an identity may SEE a tool. */
 function toolAllowedForIdentity(tool, identity) {
  const kinds = tool.kinds || ['agent', 'invite'];
- if (!kinds.includes(identity.kind) || !connectionCanUseTool(identity, tool.name)) return false;
+ if (!kinds.includes(identity.kind) || !voiceToolAllowed(tool, identity) || !connectionCanUseTool(identity, tool.name)) return false;
  if (identity.kind !== 'controller') return true;
  if (tool.name === 'whoami') return true;
  return Boolean(tool.controllerScope) && controllerHasScope(identity, tool.controllerScope);
@@ -2634,6 +2659,15 @@ async function runToolForIdentity({ name, args, identity, db, deps, toolMap }) {
  const kinds = tool.kinds || ['agent', 'invite'];
  if (!kinds.includes(identity.kind)) {
   return { ok: false, error: `Tool "${tool.name}" is not available for a ${identity.kind} token.` };
+ }
+ if (!voiceToolAllowed(tool, identity)) {
+  return { ok: false, error: `Tool "${tool.name}" is not available for a voice session token.` };
+ }
+ if (isVoiceSessionIdentity(identity) && tool.name === 'read_channel') {
+  const requestedChannelId = typeof args?.channel_id === 'string' ? args.channel_id.trim() : '';
+  if (!requestedChannelId || requestedChannelId !== identity.voiceSessionId) {
+   return { ok: false, error: 'Voice context is pinned to this huddle transcript.' };
+  }
  }
  if (
   identity.kind === 'controller'

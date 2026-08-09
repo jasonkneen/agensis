@@ -148,7 +148,12 @@ async function dispatchVoiceAgents({
     const handle = boundedVoiceId(agent.handle || agent.name || String(agent.id), String(agent.id));
     try {
       // Scoped to THIS agent and expiring on its own — see createVoiceSessionToken.
-      const mcpToken = await createVoiceSessionToken({ workspaceId, agentId: agent.id, huddleId });
+      const mcpToken = await createVoiceSessionToken({
+       workspaceId,
+       agentId: agent.id,
+       huddleId,
+       sessionId: transcriptSessionId || sessionId,
+      });
       const metadata = JSON.stringify({
         workspaceId,
         // MCP read_channel and transcript writes belong to the huddle's own
