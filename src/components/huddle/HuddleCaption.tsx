@@ -23,6 +23,7 @@ export function HuddleCaption({
   speakingName,
   activeHandle,
   engineNotice,
+  transcriptInHuddle = true,
   className,
 }: {
   transcribing: boolean;
@@ -38,6 +39,8 @@ export function HuddleCaption({
   activeHandle: string;
   /** '' when Deepgram and Cartesia are both in use; otherwise which one is not. */
   engineNotice: string;
+  /** Legacy huddles persist voice in the host channel rather than a private session. */
+  transcriptInHuddle?: boolean;
   className?: string;
 }) {
   // Input is suppressed while a reply plays, so "listening" must not claim
@@ -75,8 +78,10 @@ export function HuddleCaption({
     // Naming the addressee here is the cheapest place to answer "who am I
     // talking to" in words, and it teaches the say-a-name switch by example.
     status = activeHandle
-      ? `Listening — @${activeHandle} hears you. Start with another agent's name to switch.`
-      : 'Listening — what you say goes in the huddle, not the channel.';
+      ? `Listening — @${activeHandle} hears you. Use the agent switcher to change the floor.`
+      : transcriptInHuddle
+        ? 'Listening — what you say goes in the huddle, not the channel.'
+        : 'Listening — what you say goes in the channel.';
   } else if (transcribing) {
     status = 'Starting the microphone…';
   } else if (outputUnavailable) {

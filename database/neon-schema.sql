@@ -1988,6 +1988,10 @@ CREATE TABLE IF NOT EXISTS huddle_presence (
 -- session already takes.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_id uuid;
 CREATE INDEX IF NOT EXISTS idx_messages_huddle ON messages(huddle_id) WHERE huddle_id IS NOT NULL;
+-- Stable source event key for at-least-once LiveKit transcript delivery.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_transcript_event_id text;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_huddle_transcript_event
+  ON messages(huddle_id, huddle_transcript_event_id);
 
 -- ---------------------------------------------------------------------------
 -- In-app feedback -> the System workspace.

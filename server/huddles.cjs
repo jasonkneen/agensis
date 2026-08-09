@@ -598,6 +598,13 @@ const HUDDLES_SCHEMA_SQL = `
     -- table on purpose (see DB_TABLE_ACCESS.huddles), and notes should be
     -- editable by anyone who could speak in the call, not just workspace admins.
     ALTER TABLE huddles ADD COLUMN IF NOT EXISTS notes text NOT NULL DEFAULT '';
+    -- Voice transcript idempotency is bootstrapped here because this module owns
+    -- the Fly huddle route. The canonical schema and migration carry the same
+    -- full (not partial) unique index.
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_id uuid;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_transcript_event_id text;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_huddle_transcript_event
+      ON messages(huddle_id, huddle_transcript_event_id);
     CREATE INDEX IF NOT EXISTS idx_huddles_workspace_id ON huddles(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_huddles_session_started ON huddles(session_id, started_at DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_huddles_one_live_per_session ON huddles(session_id) WHERE ended_at IS NULL;
@@ -725,6 +732,35 @@ async function deleteLivekitRoom(roomName) {
 // ---------------------------------------------------------------------------
 
 const HUDDLE_COLUMNS = 'id, workspace_id, session_id, room_name, started_by, started_at, ended_at, transcript_session_id, notes';
+
+const VOICE_TRANSCRIPT_WINDOW_MS = 60_000;
+const VOICE_TRANSCRIPT_MAX_EVENTS_PER_WINDOW = 120;
+const VOICE_TRANSCRIPT_MAX_CHARS_PER_WINDOW = 256_000;
+const voiceTranscriptBuckets = new Map();
+
+function allowVoiceTranscript({ workspaceId, huddleId, agentId, chars }) {
+ const key = `${workspaceId}:${huddleId}:${agentId}`;
+ const now = Date.now();
+ let bucket = voiceTranscriptBuckets.get(key);
+ if (!bucket || now - bucket.startedAt >= VOICE_TRANSCRIPT_WINDOW_MS) {
+  bucket = { startedAt: now, events: 0, chars: 0 };
+  voiceTranscriptBuckets.set(key, bucket);
+ }
+ if (bucket.events >= VOICE_TRANSCRIPT_MAX_EVENTS_PER_WINDOW
+   || bucket.chars + chars > VOICE_TRANSCRIPT_MAX_CHARS_PER_WINDOW) {
+  const error = new Error('Voice transcript rate limit exceeded');
+  error.status = 429;
+  throw error;
+ }
+ bucket.events += 1;
+ bucket.chars += chars;
+ // Bound the process-local map if a hostile fleet creates many short-lived keys.
+ if (voiceTranscriptBuckets.size > 10_000) {
+  for (const [candidate, value] of voiceTranscriptBuckets) {
+   if (now - value.startedAt >= VOICE_TRANSCRIPT_WINDOW_MS) voiceTranscriptBuckets.delete(candidate);
+  }
+ }
+}
 // Notes are quick call notes, not a document editor — generous enough for a
 // long meeting's worth of typing, small enough that nobody can park megabytes
 // of text on a huddle row through a request the 50mb express.json limit would
@@ -785,6 +821,8 @@ function mountHuddleRoutes(app, deps = {}) {
    db: getDb(),
    workspaceId: huddle.workspace_id,
    sessionId: huddle.session_id,
+   transcriptSessionId: huddle.transcript_session_id || huddle.session_id,
+   targetControllerIdentity: huddle.started_by ? `user:${String(huddle.started_by)}` : '',
    huddleId: huddle.id,
    roomName: huddle.room_name,
    livekitConfig,
@@ -1213,6 +1251,18 @@ function mountHuddleRoutes(app, deps = {}) {
   * value the reaper last wrote.
   */
  async function touchPresence({ db = getDb(), huddle, userId, identity, connectionEpoch, beat }) {
+  // Confirm/heartbeat calls can cross on the network. Never let an older
+  // connection epoch overwrite a newer row, even though both requests are
+  // otherwise authenticated as the same user.
+  const existing = await db.unsafe(
+   `select connection_epoch from huddle_presence
+       where huddle_id = $1 and identity = $2
+       for update`,
+   [huddle.id, identity],
+  );
+  const currentEpoch = Number(existing[0]?.connection_epoch);
+  const incomingEpoch = Number(connectionEpoch);
+  if (Number.isFinite(currentEpoch) && Number.isFinite(incomingEpoch) && incomingEpoch < currentEpoch) return null;
   const rows = await db.unsafe(
    // $6 is cast EXPLICITLY: a bare parameter inside a CASE has no column to
    // infer its type from, and Postgres answers "could not determine data type
@@ -1247,16 +1297,20 @@ function mountHuddleRoutes(app, deps = {}) {
   return rows[0] || null;
  }
 
- async function clearPresence(huddle, identity) {
-  await getDb().unsafe(
+ async function clearPresence(huddle, identity, { db = getDb(), connectionEpoch = null } = {}) {
+  const epochClause = connectionEpoch == null ? '' : 'and p.connection_epoch = $5';
+  await db.unsafe(
    `delete from huddle_presence p
           using huddles h
           where p.huddle_id = h.id
             and h.id = $1
             and h.workspace_id = $2
             and h.session_id = $3
-            and p.identity = $4`,
-   [huddle.id, huddle.workspace_id, huddle.session_id, identity],
+            and p.identity = $4
+            ${epochClause}`,
+   connectionEpoch == null
+     ? [huddle.id, huddle.workspace_id, huddle.session_id, identity]
+     : [huddle.id, huddle.workspace_id, huddle.session_id, identity, connectionEpoch],
   );
  }
 
@@ -1618,11 +1672,11 @@ function mountHuddleRoutes(app, deps = {}) {
   }
  });
 
- // What was SAID in the huddle, written into the channel it belongs to.
+ // What was SAID in the huddle, written into its dedicated transcript session.
  //
- // The voice worker posts here as each turn finalises. A huddle and its channel
- // are one conversation held two ways — without this, the spoken half dies with
- // the room: nobody who missed the call can read it and no agent can search it.
+ // The voice worker posts here as each turn finalises. The dedicated huddle
+ // transcript is durable and searchable — without this, the spoken half dies
+ // with the room: nobody who missed the call can read it or search it.
  //
  // Authenticated by the per-agent voice credential, NOT a human session: the
  // caller is a worker process, and the credential already names exactly which
@@ -1638,39 +1692,116 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!identity) return jsonError(res, 401, new Error('A voice session credential is required'));
 
    const huddleId = String(req.body?.huddleId || '').trim();
-   const role = req.body?.role === 'assistant' ? 'assistant' : 'user';
+   const rawEventId = String(req.body?.eventId || '').trim();
+   const requestedRole = String(req.body?.role || '');
+   if (requestedRole !== 'assistant' && requestedRole !== 'user') return jsonError(res, 400, new Error('role must be user or assistant'));
+   const role = requestedRole;
    const content = String(req.body?.content || '').trim();
    if (!content) return res.json({ data: { written: false, reason: 'empty' }, error: null });
    if (!huddleId) return jsonError(res, 400, new Error('huddleId is required'));
 
-   // The huddle is the authority on where its transcript goes — never the
-   // caller's sessionId, which would let a valid credential write anywhere in
-   // the workspace it happened to name.
    const rows = await getDb().unsafe(
-    `select ${HUDDLE_COLUMNS} from huddles where id = $1 and workspace_id = $2 limit 1`,
+    `select ${HUDDLE_COLUMNS.split(', ').map((column) => `h.${column}`).join(', ')}, transcript_scope.participants as transcript_participants
+       from huddles h
+       left join chat_sessions transcript_scope
+         on transcript_scope.id = coalesce(h.transcript_session_id, h.session_id)
+        and transcript_scope.workspace_id = h.workspace_id
+      where h.id = $1 and h.workspace_id = $2 limit 1`,
     [huddleId, identity.workspaceId],
    );
    const huddle = rows[0];
    if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
+   if (identity.huddleId && String(identity.huddleId) !== huddleId) return jsonError(res, 403, new Error('Voice credential is for another huddle'));
    if (huddle.ended_at) return res.json({ data: { written: false, reason: 'ended' }, error: null });
 
+   let participantIds = huddle.transcript_participants;
+   if (typeof parseJsonArray === 'function') participantIds = parseJsonArray(participantIds);
+   if (typeof participantIds === 'string') {
+    try { participantIds = JSON.parse(participantIds); } catch { participantIds = []; }
+   }
+   participantIds = (Array.isArray(participantIds) ? participantIds : []).map((value) => String(value || '').trim()).filter(Boolean);
+   const agentId = String(identity.agentId || '');
+   if (!agentId || !participantIds.includes(agentId)) return jsonError(res, 403, new Error('Agent is not a participant in this huddle'));
+   // Any dispatched roster agent may mirror a user row. RoomIO target gating
+   // ensures only the active worker receives that turn; this also preserves
+   // transcripts when the first roster worker fails or the active target changes.
+
+   // New workers always supply an event id. A legacy caller without one gets a
+   // unique fallback rather than collapsing two identical human utterances; it
+   // cannot promise retry idempotency without a source id.
+   const eventId = rawEventId || `legacy:${crypto.randomUUID()}`;
+   if (!/^[A-Za-z0-9._:-]{1,256}$/.test(eventId)) return jsonError(res, 400, new Error('eventId is invalid'));
+
+   let speakerId = '';
+   let speakerName = 'Participant';
+   if (role === 'user') {
+    const candidate = String(req.body?.speakerId || '').trim();
+    if (!candidate) return jsonError(res, 400, new Error('speakerId is required for a user voice entry'));
+    if (!/^[A-Za-z0-9_.:-]{1,256}$/.test(candidate)) return jsonError(res, 400, new Error('speakerId is invalid'));
+    // A final STT event can be queued just as a participant leaves. The live
+    // presence row may already be reaped, but a historical join event is still
+    // the huddle-scoped proof that this identity belonged here.
+    const participant = await getDb().unsafe(
+     `select identity from huddle_presence
+        where huddle_id = $1 and identity = $2 and reaped_at is null
+      union all
+      select identity from huddle_events
+        where huddle_id = $1 and identity = $2 and kind = 'participant_joined'
+      limit 1`,
+     [huddle.id, candidate],
+    );
+    if (!participant[0]?.identity) return jsonError(res, 403, new Error('Speaker is not a participant in this huddle'));
+    speakerId = String(participant[0].identity);
+    const names = await getDb().unsafe(
+     `select display_name from huddle_events
+        where huddle_id = $1 and identity = $2 and kind = 'participant_joined'
+        order by created_at desc, seq desc limit 1`,
+     [huddle.id, speakerId],
+    );
+    speakerName = String(names[0]?.display_name || speakerName).slice(0, 200);
+    // A roster worker is a trusted mirror capability, not an unbounded write
+    // endpoint. Rate-limit user STT separately because a bad worker can retry
+    // faster than a person can speak, after speaker validation so forged claims
+    // cannot consume the real speaker's budget.
+    allowVoiceTranscript({ workspaceId: identity.workspaceId, huddleId: huddle.id, agentId, chars: content.length });
+   }
    const sessionId = huddle.transcript_session_id || huddle.session_id;
    const isAgent = role === 'assistant';
+   const marker = '\\n… [voice result truncated]';
+   const cappedContent = content.length > 8000 ? `${content.slice(0, 8000 - marker.length)}${marker}` : content;
    const inserted = await getDb().unsafe(
-    `insert into messages (session_id, role, content, sender_kind, sender_id, sender_name, huddle_id)
-         values ($1, $2, $3, $4, $5, $6, $7) returning *`,
+    `with inserted as (
+       insert into messages (session_id, role, content, sender_kind, sender_id, sender_name, huddle_id, huddle_transcript_event_id)
+            values ($1, $2, $3, $4, $5, $6, $7, $8)
+         on conflict (huddle_id, huddle_transcript_event_id) do nothing
+         returning *, true as _huddle_transcript_inserted
+     )
+     select * from inserted
+     union all
+     select messages.*, false as _huddle_transcript_inserted
+       from messages
+      where not exists (select 1 from inserted)
+        and messages.huddle_id = $7 and messages.huddle_transcript_event_id = $8
+      limit 1`,
     [
      sessionId,
-     isAgent ? 'assistant' : 'user',
-     content.slice(0, 8000),
+     role,
+     cappedContent,
      isAgent ? 'agent' : 'user',
-     isAgent ? String(identity.agentId || '') : '',
-     isAgent ? (identity.name || identity.handle || 'Agent') : String(req.body?.speaker || 'Participant'),
+     isAgent ? agentId : speakerId,
+     isAgent ? (identity.name || identity.handle || 'Agent') : speakerName,
      huddle.id,
+     eventId,
     ],
    );
-   if (inserted[0]) notifyDbSubscribers('messages', 'INSERT', inserted);
-   res.json({ data: { written: Boolean(inserted[0]), sessionId }, error: null });
+   const row = inserted[0];
+   const insertedNow = row?._huddle_transcript_inserted === true;
+   if (insertedNow) {
+    const realtimeRow = { ...row };
+    delete realtimeRow._huddle_transcript_inserted;
+    notifyDbSubscribers('messages', 'INSERT', [realtimeRow]);
+   }
+   res.json({ data: { written: Boolean(row), duplicate: row?._huddle_transcript_inserted === false, sessionId }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
@@ -1752,6 +1883,7 @@ function mountHuddleRoutes(app, deps = {}) {
      sessionId: huddle.session_id,
      userId: req.userId,
      requireLive: true,
+     forUpdate: true,
     });
     const event = await appendEvent({
      huddle: locked,
@@ -1802,19 +1934,39 @@ function mountHuddleRoutes(app, deps = {}) {
    if (!huddle) return jsonError(res, 404, new Error('Huddle not found in this workspace'));
    await enforceHuddleRead(req.userId, huddle);
    const identity = participantIdentity(req.userId);
-   await appendEvent({
-    huddle,
-    kind: 'participant_left',
-    identity,
-    displayName: await displayNameFor(req.userId),
-    eventId: `self:leave:${identity}:${String(req.body?.connectionEpoch || '0')}`,
+   const epoch = String(req.body?.connectionEpoch || '').trim();
+   if (!epoch) return jsonError(res, 400, new Error('connectionEpoch is required'));
+   const departed = await getDb().begin(async (tx) => {
+    const locked = await lockActorHuddle(tx, {
+     huddleId,
+     workspaceId,
+     sessionId: huddle.session_id,
+     userId: req.userId,
+     requireLive: false,
+     forUpdate: true,
+    });
+    const presence = await tx.unsafe(
+     `select connection_epoch from huddle_presence
+         where huddle_id = $1 and identity = $2
+         for update`,
+     [locked.id, identity],
+    );
+    // A delayed tab may leave after this user has rejoined with a newer epoch.
+    // It must not append a false leave or delete the current presence row.
+    if (presence[0] && String(presence[0].connection_epoch || '') !== epoch) {
+     return { huddle: locked, event: null, stale: true };
+    }
+    const event = await appendEvent({
+     huddle: locked,
+     kind: 'participant_left',
+     identity,
+     displayName: await displayNameFor(req.userId),
+     eventId: `self:leave:${identity}:${epoch}`,
+    }, { db: tx, deferFanout: true });
+    await clearPresence(locked, identity, { db: tx, connectionEpoch: epoch });
+    return { huddle: locked, event, stale: false };
    });
-   // They said so themselves — there is nothing left to expire. Dropping the
-   // row is also what keeps the table one-per-live-participant rather than
-   // one-per-person-who-was-ever-here. Best-effort for the same reason as the
-   // seed above: the leave EVENT is what takes you out of the room.
-   await clearPresence(huddle, identity)
-    .catch((error) => console.warn('[huddles] could not clear presence:', (error && error.message) || error));
+   if (departed.event) fanout('huddle_events', 'INSERT', [departed.event]);
    res.json({ data: await huddlePayload(await huddleInWorkspace(huddleId, workspaceId)), error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -1854,6 +2006,7 @@ function mountHuddleRoutes(app, deps = {}) {
      sessionId: huddle.session_id,
      userId: req.userId,
      requireLive: true,
+     forUpdate: true,
     });
     const row = await touchPresence({
      db: tx,

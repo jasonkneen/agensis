@@ -30,6 +30,8 @@ function fakeDb({ participants = [], agents = [] } = {}) {
 const base = {
   workspaceId: 'ws-1',
   sessionId: 'sess-1',
+  transcriptSessionId: 'transcript-1',
+  targetControllerIdentity: 'user:starter',
   huddleId: 'hud-1',
   roomName: 'agensis-hud-1',
   livekitConfig,
@@ -68,8 +70,38 @@ test('every agent in the channel roster is dispatched into the room', async () =
   assert.equal(metadata.mcp.url, 'https://agensis-backend.fly.dev/backend/mcp');
   assert.equal(metadata.mcp.token, 'agv_token_for_a1');
   assert.equal(metadata.transcript.url, 'https://agensis-backend.fly.dev/backend/huddles/transcript');
+  assert.deepEqual(metadata.rosterAgentIds, ['a1', 'a2']);
+  assert.equal(metadata.targetAgentId, 'a1');
+  assert.equal(metadata.targetRevision, 0);
+  assert.equal(metadata.sessionId, 'transcript-1');
+  assert.equal(metadata.hostSessionId, 'sess-1');
+  assert.equal(metadata.transcriptSessionId, 'transcript-1');
+  assert.equal(metadata.targetControllerIdentity, 'user:starter');
   // Each agent gets its OWN credential — one leaking must not speak for another.
   assert.equal(JSON.parse(calls[1].opts.metadata).mcp.token, 'agv_token_for_a2');
+});
+
+
+test('dispatch metadata bounds persona text before it crosses LiveKit', async () => {
+  const calls = [];
+  await dispatchVoiceAgents({
+    ...base,
+    db: fakeDb({
+      participants: ['a1'],
+      agents: [{
+        id: 'a1', name: `Name\n${'x'.repeat(500)}`, handle: `handle\n${'y'.repeat(500)}`,
+        soul: 's'.repeat(20_000), instructions: 'i'.repeat(20_000), enabled: true,
+      }],
+    }),
+    dispatchClientFactory: { createDispatch: async (_room, _name, opts) => calls.push(JSON.parse(opts.metadata)) },
+  });
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].name.length <= 128);
+  assert.ok(calls[0].handle.length <= 128);
+  assert.ok(calls[0].soul.length <= 2_800);
+  assert.ok(calls[0].instructions.length <= 2_800);
+  assert.doesNotMatch(calls[0].name, /[\r\n]/);
+  assert.doesNotMatch(calls[0].handle, /[\r\n]/);
 });
 
 test('one agent failing does not stop the others, and never throws', async () => {
@@ -123,6 +155,24 @@ test('a disabled agent is never given a voice', async () => {
   });
   assert.deepEqual(result.dispatched, ['claude']);
   assert.deepEqual(calls, ['claude']);
+});
+
+
+test('external connector agents are not impersonated by the voice worker', async () => {
+  const calls = [];
+  const result = await dispatchVoiceAgents({
+    ...base,
+    db: fakeDb({
+      participants: ['a1', 'a2'],
+      agents: [
+        { id: 'a1', handle: 'relay', run_mode: 'daemon', enabled: true },
+        { id: 'a2', handle: 'connector', run_mode: 'external', enabled: true },
+      ],
+    }),
+    dispatchClientFactory: { createDispatch: async (_room, _name, opts) => calls.push(JSON.parse(opts.metadata).handle) },
+  });
+  assert.deepEqual(result.dispatched, ['relay']);
+  assert.deepEqual(calls, ['relay']);
 });
 
 test('per-agent voice settings survive into the dispatch metadata', () => {

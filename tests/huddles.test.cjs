@@ -402,6 +402,9 @@ function makeDb({
         return [row];
       }
       // --- liveness -------------------------------------------------------
+      if (n.startsWith('select connection_epoch from huddle_presence')) {
+        return state.presence.filter((p) => p.huddle_id === params[0] && p.identity === params[1]);
+      }
       if (n.startsWith('select huddle_id, identity, connection_epoch, last_seen_at, heartbeat_at, reaped_at from huddle_presence')) {
         return state.presence.filter((p) => p.huddle_id === params[0]);
       }
@@ -441,7 +444,8 @@ function makeDb({
         return [{ huddle_id: params[0] }];
       }
       if (n.startsWith('delete from huddle_presence p using huddles h') && n.includes('p.identity = $4')) {
-        state.presence = state.presence.filter((p) => !(p.huddle_id === params[0] && p.identity === params[3]));
+        state.presence = state.presence.filter((p) => !(p.huddle_id === params[0] && p.identity === params[3]
+          && (!n.includes('p.connection_epoch = $5') || p.connection_epoch === params[4])));
         return [];
       }
       if (n.startsWith('delete from huddle_presence p using huddles h')) {
@@ -1990,6 +1994,13 @@ test('confirm records participant_joined for the CALLER identity, deduped per co
     }
     assert.ok(joins.some((e) => e.event_id === `self:join:user:${MEMBER}:111`));
     assert.ok(joins.some((e) => e.event_id === `self:join:user:${MEMBER}:222`));
+
+    const stale = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/confirm`, {
+      method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 111 }),
+    });
+    assert.equal(stale.status, 200);
+    assert.equal(db.state.presence.find((row) => row.identity === `user:${MEMBER}`)?.connection_epoch, '222');
+    assert.equal(db.state.events.filter((e) => e.kind === 'participant_joined').length, 2);
   });
 });
 
@@ -2012,6 +2023,30 @@ test('leave records participant_left; a huddle that has ended refuses a confirm'
       method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 333 }),
     });
     assert.equal(confirm.status, 409, 'no joining a huddle that has ended');
+  });
+});
+
+
+test('a stale leave cannot remove a newer connection epoch', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' }, huddleRows: [liveHuddleRow()] });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    for (const epoch of [111, 222]) {
+      const joined = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/confirm`, {
+        method: 'POST', headers, body: JSON.stringify({ connectionEpoch: epoch }),
+      });
+      assert.equal(joined.status, 200);
+    }
+    const before = db.state.events.filter((event) => event.kind === 'participant_left').length;
+    const stale = await fetch(`${baseUrl}/backend/workspaces/${WS}/huddles/${HUDDLE_ID}/leave`, {
+      method: 'POST', headers, body: JSON.stringify({ connectionEpoch: 111 }),
+    });
+    assert.equal(stale.status, 200);
+    assert.equal(db.state.events.filter((event) => event.kind === 'participant_left').length, before);
+    assert.equal(db.state.presence.find((row) => row.identity === `user:${MEMBER}`)?.connection_epoch, '222');
   });
 });
 

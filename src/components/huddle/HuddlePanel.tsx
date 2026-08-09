@@ -27,7 +27,7 @@ import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS } f
 import { useComposerAutosize } from '@/hooks/useComposerAutosize';
 import { useHuddleRecord } from '@/hooks/useHuddle';
 import { useHuddleTranscript } from '@/hooks/useHuddleTranscript';
-import { huddleComposerPlaceholder, hasOwnTranscript, canComposeInHuddle } from '@/lib/huddleTranscript';
+import { huddleComposerPlaceholder, canComposeInHuddle, huddleTranscriptTarget } from '@/lib/huddleTranscript';
 import { withAgentMention, type HuddleAgentOption } from '@/lib/huddleAgents';
 import { isActivityPlaceholderMessage, extractActivityVerb } from '@/lib/activityStatus';
 import { EMPTY_STREAM_RESPONSE } from '@/lib/chatStream';
@@ -43,10 +43,10 @@ import type { Message } from '@/types';
 // one marker row when the call ends.
 //
 // This panel renders the conversation and lets you type into it. It does NOT
-// own the call: LiveKit, the microphone and the speech pipeline all live in the
-// huddle card, which stays mounted in the channel header for the whole call.
-// That split is the point — closing this panel must not drop the call, and
-// mounting LiveKitRoom inside a panel that can unmount is exactly how it would.
+// own the call: LiveKit, the microphone and the speech pipeline all live in
+// the huddle card, which stays mounted in the channel header for the whole call.
+// Legacy huddles fall back to their host channel; new huddles use their private
+// transcript session.
 
 interface HuddlePanelProps {
   workspaceId: string | null;
@@ -88,7 +88,7 @@ export function HuddlePanel({
   const fetched = useHuddleRecord(workspaceId, needsFetch ? huddleId : null);
   const state = needsFetch ? fetched.state : current;
 
-  const transcriptSessionId = state?.transcriptSessionId ?? null;
+  const transcriptSessionId = huddleTranscriptTarget(state, state?.sessionId ?? null) || null;
   const transcript = useHuddleTranscript(workspaceId, transcriptSessionId);
 
   const activeAgent = useMemo(
@@ -145,13 +145,10 @@ export function HuddlePanel({
                     ? 'One moment.'
                     : 'Start one from the channel toolbar and the conversation appears here.'}
                 />
-              ) : !hasOwnTranscript(state) ? (
-                // A huddle from before transcript sessions existed. Its
-                // conversation really is in the channel, so say that instead of
-                // showing an empty panel that looks broken.
+              ) : !transcriptSessionId ? (
                 <PanelNotice
-                  title="This huddle has no separate transcript"
-                  body="It ran before huddles kept their own conversation, so what was said is in the channel itself."
+                  title="This huddle has no transcript"
+                  body="There is no conversation session attached to this huddle."
                 />
               ) : transcript.loading ? (
                 <PanelNotice title="Loading the transcript" body="One moment." />

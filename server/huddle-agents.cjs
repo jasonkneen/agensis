@@ -18,6 +18,27 @@
 // degradation; a failed join is an outage.
 
 const AGENT_NAME = process.env.LIVEKIT_AGENT_NAME || 'agensis-voice';
+const MAX_VOICE_METADATA_ID_CHARS = 128;
+const MAX_VOICE_METADATA_PERSONA_CHARS = 2_800;
+
+function boundedVoiceText(value, max = MAX_VOICE_METADATA_PERSONA_CHARS, singleLine = false) {
+  let text = String(value ?? '');
+  if (singleLine) text = text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const marker = singleLine ? ' … [voice metadata truncated]' : '\n… [voice metadata truncated]';
+  return text.length > max ? `${text.slice(0, Math.max(0, max - marker.length))}${marker}` : text;
+}
+
+function boundedVoiceId(value, fallback = '') {
+  const text = boundedVoiceText(value || fallback, MAX_VOICE_METADATA_ID_CHARS, true);
+  return text.replace(/[<>]/g, '');
+}
+
+function isVoiceCapableRunMode(value) {
+  const mode = String(value || '').trim();
+  // Empty is the historical/builtin default. Connectors and sandbox
+  // provisioners have no local LiveKit worker to impersonate.
+  return !mode || mode === 'builtin' || mode === 'daemon';
+}
 
 /** Lazily required so a deployment without the SDK still serves human huddles. */
 function loadAgentDispatchClient() {
@@ -42,12 +63,14 @@ async function agentsForSession({ db, workspaceId, sessionId, parseJsonArray }) 
     .filter(Boolean);
   if (!ids.length) return [];
   const rows = await db.unsafe(
-    `select id, name, handle, accent_color, avatar, soul, instructions, system_prompt, identity, metadata, enabled
+    `select id, name, handle, accent_color, avatar, soul, instructions, system_prompt, identity, metadata, enabled, run_mode
        from workspace_agents
       where workspace_id = $1 and id = any($2::uuid[])`,
     [workspaceId, ids],
   );
-  return rows.filter((row) => row.enabled !== false);
+  const order = new Map(ids.map((id, index) => [String(id), index]));
+  return rows.filter((row) => row.enabled !== false && isVoiceCapableRunMode(row.run_mode)).sort((a, b) =>
+    (order.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER) - (order.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER));
 }
 
 /** The per-agent voice settings the app already stores, plus the chosen engine. */
@@ -59,11 +82,11 @@ function voiceSettingsFor(agent, parseJsonObject) {
     // Engine is per-agent so one huddle can mix a realtime voice and a
     // Cartesia/Deepgram pipeline without either knowing about the other.
     engine: String(metadata.voice_engine || voice.engine || process.env.AGENSIS_VOICE_ENGINE || '').trim(),
-    cartesia_voice_id: voice.cartesia_voice_id || voice.voiceId || '',
+    cartesia_voice_id: boundedVoiceId(voice.cartesia_voice_id || voice.voiceId),
     speed: voice.speed,
-    emotion: voice.emotion,
-    realtimeVoice: voice.realtime_voice || voice.realtimeVoice || '',
-    realtimeModel: metadata.realtime_model || '',
+    emotion: boundedVoiceText(voice.emotion, 128, true),
+    realtimeVoice: boundedVoiceId(voice.realtime_voice || voice.realtimeVoice),
+    realtimeModel: boundedVoiceId(metadata.realtime_model),
   };
 }
 
@@ -76,6 +99,8 @@ async function dispatchVoiceAgents({
   db,
   workspaceId,
   sessionId,
+  transcriptSessionId = sessionId,
+  targetControllerIdentity = '',
   huddleId,
   roomName,
   livekitConfig,
@@ -116,23 +141,32 @@ async function dispatchVoiceAgents({
   // Sequential on purpose: LiveKit's agent service is the shared resource here,
   // and a channel with a dozen agents should not open a dozen sockets at once.
   for (const agent of agents) {
-    const handle = agent.handle || agent.name || String(agent.id);
+    const handle = boundedVoiceId(agent.handle || agent.name || String(agent.id), String(agent.id));
     try {
       // Scoped to THIS agent and expiring on its own — see createVoiceSessionToken.
-      const mcpToken = await createVoiceSessionToken({ workspaceId, agentId: agent.id });
+      const mcpToken = await createVoiceSessionToken({ workspaceId, agentId: agent.id, huddleId });
       const metadata = JSON.stringify({
         workspaceId,
-        sessionId,
+        // MCP read_channel and transcript writes belong to the huddle's own
+        // inherited session. Keep the host separately for roster lookup and
+        // authorization/debugging.
+        sessionId: transcriptSessionId || sessionId,
+        hostSessionId: sessionId,
+        transcriptSessionId: transcriptSessionId || sessionId,
         huddleId,
         agentId: agent.id,
         handle,
-        name: agent.name || handle,
-        accentColor: agent.accent_color || '',
-        soul: agent.soul || '',
-        instructions: agent.instructions || agent.system_prompt || '',
+        name: boundedVoiceId(agent.name || handle, handle),
+        accentColor: boundedVoiceId(agent.accent_color),
+        soul: boundedVoiceText(agent.soul),
+        instructions: boundedVoiceText(agent.instructions || agent.system_prompt),
         voice: voiceSettingsFor(agent, parseJsonObject),
         mcp: baseUrl ? { url: `${baseUrl.replace(/\/$/, '')}/backend/mcp`, token: mcpToken } : null,
         transcript: baseUrl ? { url: `${baseUrl.replace(/\/$/, '')}/backend/huddles/transcript`, token: mcpToken } : null,
+        rosterAgentIds: agents.map((rosterAgent) => String(rosterAgent.id)),
+        targetControllerIdentity: String(targetControllerIdentity || ''),
+        targetAgentId: agents[0]?.id || null,
+        targetRevision: 0,
       });
       await client.createDispatch(roomName, agentName, { metadata });
       dispatched.push(handle);
@@ -149,4 +183,4 @@ async function dispatchVoiceAgents({
   return { dispatched, failed };
 }
 
-module.exports = { AGENT_NAME, agentsForSession, dispatchVoiceAgents, voiceSettingsFor };
+module.exports = { AGENT_NAME, agentsForSession, dispatchVoiceAgents, isVoiceCapableRunMode, voiceSettingsFor };

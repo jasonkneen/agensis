@@ -78,6 +78,7 @@ const {
  unavailable: skillContentUnavailable,
 } = require('./skill-content.cjs');
 const { mountHuddleRoutes, ensureHuddlesSchema, deleteLivekitRoom } = require('./huddles.cjs');
+const { isVoiceCapableRunMode } = require('./huddle-agents.cjs');
 const {
  createAgentPermissions,
  ensureAgentPermissionsSchema,
@@ -1697,6 +1698,10 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_canvas_layers_workspace_id ON canvas_layers(workspace_id);
 
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_id uuid;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_transcript_event_id text;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_huddle_transcript_event
+      ON messages(huddle_id, huddle_transcript_event_id);
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_kind text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_id text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text DEFAULT '';
@@ -4427,16 +4432,21 @@ const VOICE_TOKEN_PREFIX = 'agv_';
 const VOICE_TOKEN_DEFAULT_TTL_MS = 4 * 60 * 60_000;
 const VOICE_TOKEN_MIN_TTL_MS = 60_000;
 
-async function createVoiceSessionToken({ workspaceId, agentId, ttlMs = VOICE_TOKEN_DEFAULT_TTL_MS } = {}) {
+async function createVoiceSessionToken({ workspaceId, agentId, huddleId = '', ttlMs = VOICE_TOKEN_DEFAULT_TTL_MS } = {}) {
  const workspace = String(workspaceId || '').trim();
  const agent = String(agentId || '').trim();
+ const huddle = String(huddleId || '').trim();
  if (!workspace || !agent) throw new Error('workspaceId and agentId are required');
  const secret = await getAuthSecret();
- const payload = Buffer.from(JSON.stringify({
+ const claims = {
   w: workspace,
   a: agent,
   exp: Date.now() + Math.max(VOICE_TOKEN_MIN_TTL_MS, Number(ttlMs) || VOICE_TOKEN_DEFAULT_TTL_MS),
- })).toString('base64url');
+ };
+ // Huddle dispatches carry a narrower capability without breaking older callers
+ // that mint an agent-scoped token for the generic MCP verifier.
+ if (huddle) claims.h = huddle;
+ const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
  const signature = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
  return `${VOICE_TOKEN_PREFIX}${payload}.${signature}`;
 }
@@ -4469,11 +4479,12 @@ async function verifyVoiceSessionToken(token) {
   [String(claims.a), String(claims.w)],
  );
  const agent = rows[0];
- if (!agent || !isAgentEnabled(agent)) return null;
+ if (!agent || !isAgentEnabled(agent) || !isVoiceCapableRunMode(agent.run_mode)) return null;
  return {
   kind: 'agent',
   agentId: agent.id,
   workspaceId: agent.workspace_id,
+  huddleId: String(claims.h || ''),
   name: agent.name,
   handle: agent.handle || slugHandle(agent.name),
   agent: agentRuntimePayload(agent),

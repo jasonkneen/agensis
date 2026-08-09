@@ -29,6 +29,12 @@ import { createRoot, type Root } from 'react-dom/client';
 const stub = vi.hoisted(() => ({
   /** Props the last-rendered LiveKitRoom was given. */
   room: { token: '', serverUrl: '', connect: false, audio: false, mounts: 0 },
+  roomContext: {
+    state: 'connected',
+    localParticipant: { publishData: vi.fn(async () => {}) },
+    on: vi.fn(),
+    off: vi.fn(),
+  },
   /** The stubbed room reports a live session as soon as it mounts. */
   autoConnect: true,
   /** …or reports that it could not be established. */
@@ -78,6 +84,7 @@ vi.mock('@livekit/components-react', async () => {
       isMicrophoneEnabled: stub.micEnabled,
     }),
     useParticipants: () => [],
+    useRoomContext: () => stub.roomContext,
   };
 });
 
@@ -181,6 +188,14 @@ function OpenHuddle({ agents = AGENTS }: { agents?: HuddleAgentOption[] }) {
     open?.({ workspaceId: 'ws-1', sessionId: 'session-1', title: 'design', agents });
   }, [open, agents]);
   return null;
+}
+
+function OpenButtons() {
+  const dock = useHuddleDock();
+  return createElement('div', null,
+    createElement('button', { 'data-open-one': '', onClick: () => dock?.openHuddle({ workspaceId: 'ws-1', sessionId: 'session-1', title: 'one' }) }),
+    createElement('button', { 'data-open-two': '', onClick: () => dock?.openHuddle({ workspaceId: 'ws-1', sessionId: 'session-2', title: 'two' }) }),
+  );
 }
 
 /** What a "You were in a huddle" marker row in the transcript does. */
@@ -291,6 +306,23 @@ describe('HuddleDock mounts the call', () => {
     const session = fakeSession(true);
     render(session);
     expect(session.confirmJoin).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('switching the dock target cleans up the old call', () => {
+  it('leaves before joining a different session instead of retaining the old socket', () => {
+    const session = fakeSession(true);
+    stub.session = session;
+    act(() => root.render(createElement(
+      HuddleDockProvider,
+      null,
+      createElement(OpenButtons),
+      createElement(HuddleDock),
+    )));
+    act(() => (container.querySelector('[data-open-one]') as HTMLButtonElement).click());
+    act(() => (container.querySelector('[data-open-two]') as HTMLButtonElement).click());
+    expect(session.leave).toHaveBeenCalledTimes(1);
   });
 });
 

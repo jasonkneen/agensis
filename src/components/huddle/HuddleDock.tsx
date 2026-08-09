@@ -18,7 +18,6 @@ import { huddleDuration } from '@/lib/huddleState';
 import { huddleTranscriptTarget } from '@/lib/huddleTranscript';
 import type { HuddleAgentOption } from '@/lib/huddleAgents';
 import { useHuddleHeartbeat } from '@/hooks/useHuddle';
-import { useHuddleSend } from '@/hooks/useHuddleTranscript';
 import type { HuddleState } from '@/types';
 import { useHuddleDock } from './HuddleDockContext';
 import { HuddleSessionContext } from './HuddleSessionContext';
@@ -50,17 +49,12 @@ import { HuddleMicButton, HuddleRoom, HuddleSpeakingNow } from './HuddleRoom';
 // BELOW modals: a dialog must still be able to open over a call, or a confirm
 // raised from inside the huddle would be painted behind it.
 //
-// AGENTS IN THE HUDDLE happen here, not in the media plane. While connected,
-// microphone speech becomes an ordinary chat message addressed to the huddle's
-// OWN session, which dispatches the agent exactly as typing would, and new
-// agent messages in that session are read aloud. The agent never touches audio,
-// so this works for daemon, builtin and MCP agents alike.
-//
-// A CHANNEL needs one more thing than a DM: an addressee. A plain message wakes
-// nobody in a channel, so the strip picks an ACTIVE AGENT and the transcript is
-// posted @mentioning them — the composer's own dispatch path, no second route.
-// Hand it no agents (a DM) and none of that happens: the utterance is posted
-// verbatim.
+// AGENTS IN THE HUDDLE are real LiveKit participants. The browser publishes
+// the selected active agent as a reliable room signal; that worker owns the
+// human audio input and publishes speech back into the room. Other agent tiles
+// remain visible but stay silent until selected. Typed channel messages keep
+// their existing @handle/composer dispatch path; they are not duplicated into
+// the voice media plane.
 // ---------------------------------------------------------------------------
 
 const PANEL_WIDTH = 380;
@@ -72,15 +66,35 @@ export function HuddleDock() {
   const [captionsOn, setCaptionsOn] = useState(true);
   const [local, setLocal] = useState<HuddleLocalState>(IDLE_HUDDLE_LOCAL);
   const [outputMuted, setOutputMuted] = useState(false);
-  // Which agent hears you. Pure UI state for THIS call: nothing is persisted,
-  // because "who am I talking to right now" is not a property of the channel.
+  // Which agent owns the shared voice floor. It is room-scoped ephemeral state,
+  // mirrored from the huddle controller rather than persisted to the channel.
+  // Keep the huddle key beside the selection: the dock survives navigation and
+  // can render huddle B before the target packet arrives, so a selection from A
+  // must never become B's first publish.
   const [activeAgentId, setActiveAgentId] = useState('');
+  const [activeAgentHuddleId, setActiveAgentHuddleId] = useState('');
 
   const session = dock?.session ?? null;
   const state = session?.state ?? null;
   const connection = session?.connection ?? null;
   const workspaceId = dock?.target?.workspaceId ?? null;
-  const agents = dock?.target?.agents ?? NO_AGENTS;
+  const targetAgents = dock?.target?.agents ?? NO_AGENTS;
+
+  // Voice workers receive a roster snapshot when the huddle starts. Keep the
+  // selector on that same snapshot: a live channel roster can gain an agent
+  // later, but no worker (and no target validator) exists for it in this room.
+  const voiceRoster = useRef<{ huddleId: string; ids: string[] | null }>({ huddleId: '', ids: null });
+  const voiceHuddleId = connection?.huddleId || '';
+  if (voiceRoster.current.huddleId !== voiceHuddleId) {
+    voiceRoster.current = { huddleId: voiceHuddleId, ids: null };
+  }
+  if (voiceHuddleId && voiceRoster.current.ids === null && targetAgents.length > 0) {
+    voiceRoster.current.ids = targetAgents.map(agent => agent.id);
+  }
+  const agents = useMemo(() => {
+    const ids = voiceRoster.current.ids;
+    return ids ? targetAgents.filter(agent => ids.includes(agent.id)) : targetAgents;
+  }, [targetAgents]);
   // READING one huddle rather than being in a call. The channel marker
   // ("You were in a huddle · 12:04 · Ada, Sam") opens this, and the huddle it
   // points at may have ended months ago. The dock is the only place a huddle is
@@ -93,21 +107,40 @@ export function HuddleDock() {
   // channel genuinely was the transcript — so the fallback is the old
   // behaviour, not a leak of the new one.
   const transcriptSessionId = huddleTranscriptTarget(state, dock?.target?.sessionId ?? null);
-  const { send } = useHuddleSend(workspaceId, transcriptSessionId || null);
 
   // The first agent is active until you pick another, and an agent that leaves
   // the roster mid-call hands the floor back to the first rather than leaving
   // the strip pointing at nobody.
+  const selectedAgentId = activeAgentHuddleId === voiceHuddleId ? activeAgentId : '';
   const activeAgent = useMemo(
-    () => agents.find(agent => agent.id === activeAgentId) || agents[0] || null,
-    [agents, activeAgentId],
+    () => agents.find(agent => agent.id === selectedAgentId) || agents[0] || null,
+    [agents, selectedAgentId],
   );
+  // The target is a shared room floor, not a per-browser preference. The
+  // huddle starter is the sole publisher so two humans cannot race revisions
+  // and make different workers answer at once.
+  const legacyHumanIds = [...new Set([
+    ...local.roomParticipants.filter(participant => participant.kind === 'human').map(participant => participant.identity),
+    connection?.identity || '',
+  ].filter(Boolean))].sort();
+  const legacyControllerIdentity = legacyHumanIds[0] || connection?.identity || '';
+  const canControlTarget = state?.startedBy
+    ? !connection?.identity || connection.identity === `user:${state.startedBy}`
+    : !legacyControllerIdentity || legacyControllerIdentity === connection?.identity;
 
   // Stable identity (HuddleRoom reports through it from an effect), and a no-op
   // when nothing actually changed.
   const handleLocalChange = useCallback((next: HuddleLocalState) => {
     setLocal(prev => (sameHuddleLocalState(prev, next) ? prev : next));
   }, []);
+  const handleTargetChanged = useCallback((next: string | null) => {
+    setActiveAgentHuddleId(voiceHuddleId);
+    setActiveAgentId(next || '');
+  }, [voiceHuddleId]);
+  const handleAgentSelect = useCallback((next: string) => {
+    setActiveAgentHuddleId(voiceHuddleId);
+    setActiveAgentId(next);
+  }, [voiceHuddleId]);
 
   useEffect(() => {
     if (!connection) setLocal(IDLE_HUDDLE_LOCAL);
@@ -179,10 +212,8 @@ export function HuddleDock() {
   dockRef.current = dock;
 
   const handleLeave = useCallback(() => {
-    // Posts /leave for this connection epoch, so presence is cleaned up now
-    // rather than by the 150s reaper. Dropping the connection unmounts
-    // HuddleRoom, and unmounting it is what disconnects LiveKit.
-    sessionRef.current?.leave();
+    // closeHuddle posts /leave for this connection epoch before clearing the
+    // one-slot target, so presence is cleaned up rather than left to the reaper.
     dockRef.current?.closeHuddle();
   }, []);
 
@@ -286,8 +317,8 @@ export function HuddleDock() {
                 className="size-7 p-0 text-muted-foreground"
                 onClick={() => setOutputMuted(value => !value)}
                 aria-pressed={outputMuted}
-                aria-label={outputMuted ? 'Read agent replies aloud' : 'Stop reading agent replies aloud'}
-                title={outputMuted ? 'Read agent replies aloud' : 'Stop reading agent replies aloud'}
+                aria-label={outputMuted ? 'Play huddle audio' : 'Mute huddle audio'}
+                title={outputMuted ? 'Play huddle audio' : 'Mute huddle audio'}
               >
                 {outputMuted ? <VolumeX className="size-3.5" /> : <Volume2 className="size-3.5" />}
               </Button>
@@ -298,8 +329,9 @@ export function HuddleDock() {
                 <HuddleAgentStrip
                   agents={agents}
                   activeId={activeAgent?.id || ''}
-                  onSelect={setActiveAgentId}
-                  enabled
+                  onSelect={handleAgentSelect}
+                  enabled={canControlTarget}
+                  selectable={canControlTarget}
                 />
               )}
             </div>
@@ -349,7 +381,8 @@ export function HuddleDock() {
           {connection && captionsOn && (
             <HuddleCaption
               className="shrink-0 border-b border-border px-3 py-1.5"
-              transcribing={!!transcriptSessionId}
+              transcribing={!!connection}
+              transcriptInHuddle={!!transcriptSessionId}
               micEnabled={local.micEnabled}
               // Transcription now happens in the room, so "listening" is simply
               // whether our track is live — there is no separate recogniser to
@@ -357,8 +390,8 @@ export function HuddleDock() {
               listening={local.connected && local.micEnabled}
               interim=""
               inputError=""
-              inputUnavailable={false}
-              outputUnavailable={false}
+              inputUnavailable=""
+              outputUnavailable=""
               outputMuted={outputMuted}
               speakingName={speakingName}
               activeHandle={activeAgent?.handle || ''}
@@ -406,6 +439,11 @@ export function HuddleDock() {
             connection={connection}
             onLeave={handleLeave}
             onLocalChange={handleLocalChange}
+            targetAgentId={activeAgent?.id || null}
+            rosterAgentIds={agents.map(agent => agent.id)}
+            targetControllerIdentity={state?.startedBy ? `user:${state.startedBy}` : ''}
+            onTargetChanged={handleTargetChanged}
+            outputMuted={outputMuted}
           >
             {body}
           </HuddleRoom>

@@ -209,11 +209,9 @@ describe('huddleAgentOptions', () => {
     expect(options[0].id).toBe('ag1');
   });
 
-  it('keeps an unresolved agent participant so the numbering has no hole', () => {
+  it('does not offer an unresolved participant with no voice-capable agent', () => {
     const options = huddleAgentOptions([], [participant({ id: 'p9', name: 'Ghost', handle: 'ghost' })]);
-    expect(options).toHaveLength(1);
-    expect(options[0]).toMatchObject({ handle: 'ghost', name: 'Ghost' });
-    expect(options[0].accent).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(options).toEqual([]);
   });
 
   it('drops users, nameless rows and duplicates', () => {
@@ -231,6 +229,21 @@ describe('huddleAgentOptions', () => {
 
   it('survives missing input', () => {
     expect(huddleAgentOptions([], [])).toEqual([]);
+  });
+
+  it('does not offer external connectors or sandbox provisioners to voice', () => {
+    const options = huddleAgentOptions([
+      agent({ id: 'relay', name: 'Relay', run_mode: 'daemon' }),
+      agent({ id: 'connector', name: 'Connector', run_mode: 'external' }),
+      agent({ id: 'sandbox', name: 'Sandbox', run_mode: 'sandbox' }),
+      agent({ id: 'disabled', name: 'Disabled', enabled: false }),
+    ], [
+      participant({ id: 'agent:relay', agent_id: 'relay', name: 'Relay' }),
+      participant({ id: 'agent:connector', agent_id: 'connector', name: 'Connector' }),
+      participant({ id: 'agent:sandbox', agent_id: 'sandbox', name: 'Sandbox' }),
+      participant({ id: 'agent:disabled', agent_id: 'disabled', name: 'Disabled' }),
+    ]);
+    expect(options.map(item => item.id)).toEqual(['relay']);
   });
 });
 
@@ -261,7 +274,7 @@ describe('huddleAgentOptions carries the agent voice', () => {
   it("is '' when only a participant row exists — participants are denormalised and carry no identity", () => {
     // A voice chosen after someone joined the channel would never appear if we
     // read it from the participant snapshot.
-    expect(huddleAgentOptions([], [participant])[0].voiceId).toBe('');
+    expect(huddleAgentOptions([], [participant])).toEqual([]);
   });
 
   it('assigns distinct defaults once the voice catalogue is available', () => {

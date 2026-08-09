@@ -74,10 +74,9 @@ interface HuddleDockValue {
   /**
    * Keep the target's agent roster current while the channel is on screen.
    *
-   * A snapshot taken at open time is wrong twice over: the participant list is
-   * still loading when the button is clicked (so the call starts agent-less and
-   * every spoken sentence wakes nobody), and an agent added mid-call would
-   * never appear. Ignored for any session that is not the current target.
+   * Before a call connects this fills the dispatch snapshot, so a late-loading
+   * roster is not lost. Once connected, the dock freezes the voice selector to
+   * the dispatched roster; an agent added mid-call has no worker in this room.
    */
   setTargetAgents: (sessionId: string, agents: HuddleAgentOption[]) => void;
   /** Drop the panel entirely — used after leaving or ending. */
@@ -91,47 +90,59 @@ const HuddleDockContext = createContext<HuddleDockValue | null>(null);
 
 export function HuddleDockProvider({ children }: { children: ReactNode }) {
   const [target, setTarget] = useState<HuddleTarget | null>(null);
+  const [targetEpoch, setTargetEpoch] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
 
   // Keyed on the TARGET, not on the visible channel. This is the whole point:
   // the hook's identity is stable across navigation, so the socket it owns is
   // never torn down by a route change.
   const session = useHuddle(target?.workspaceId ?? null, target?.sessionId ?? null);
+  const targetRef = useRef(target);
+  targetRef.current = target;
+  const leaveRef = useRef(session?.leave);
+  leaveRef.current = session?.leave;
+  const joinedRef = useRef<string>('');
 
   const openHuddle = useCallback((next: HuddleTarget) => {
-    setTarget(current => {
-      // Switching conversations mid-call: nothing here can leave the old call,
-      // because the hook for it is about to be re-keyed and its cleanup will
-      // run. Recorded rather than silently relied upon.
-      if (current && current.sessionId === next.sessionId) return current;
-      return next;
-    });
+    const current = targetRef.current;
+    const sameLiveCall = Boolean(current && current.workspaceId === next.workspaceId
+      && current.sessionId === next.sessionId && !current.huddleId && !next.huddleId
+      && session?.state?.active);
+    if (sameLiveCall) {
+      setCollapsed(false);
+      return;
+    }
+    // useHuddle is intentionally one stable hook, so changing its base does
+    // not unmount the old instance. Leave before re-keying or the old room's
+    // presence/socket survives while the new startOrJoin is in flight.
+    leaveRef.current?.();
+    joinedRef.current = '';
+    setTargetEpoch(epoch => epoch + 1);
+    setTarget(next);
     setCollapsed(false);
-  }, []);
+  }, [session?.state?.active]);
 
   // JOIN the call once per target. openHuddle only records WHICH conversation
   // the dock is for; without this the panel opened and nothing ever connected,
   // because the old toolbar button called startOrJoin() itself and the lifted
   // path dropped that step. Keyed on sessionId so re-renders do not re-join,
   // and so switching conversations joins the new one exactly once.
-  const joinedRef = useRef<string>('');
   const startOrJoin = session?.startOrJoin;
   useEffect(() => {
     const sessionId = target?.sessionId || '';
     // A record has no sessionId, so reading an ended huddle can never start a
     // new one in the channel it happened in — which is exactly what a naive
-    // "open this huddle" would have done.
+    // "open this huddle" would have done. The epoch matters when a new live
+    // huddle starts in the SAME session after the old one ended.
+    const joinKey = `${targetEpoch}:${target?.workspaceId || ''}:${sessionId}`;
     if (!sessionId || !startOrJoin) return;
-    if (joinedRef.current === sessionId) return;
-    joinedRef.current = sessionId;
+    if (joinedRef.current === joinKey) return;
+    joinedRef.current = joinKey;
     void startOrJoin();
-  }, [target?.sessionId, startOrJoin]);
+  }, [targetEpoch, target?.workspaceId, target?.sessionId, startOrJoin]);
 
   // Held in a ref so openHuddleRecord can hang up without depending on the
   // session object, which useHuddle rebuilds on every render.
-  const leaveRef = useRef(session?.leave);
-  leaveRef.current = session?.leave;
-
   const openHuddleRecord = useCallback((record: { workspaceId: string; huddleId: string; title: string }) => {
     // Reading an old huddle takes the dock's one slot. Post the leave first so
     // presence is cleaned up now rather than by the server's staleness reaper —
@@ -139,6 +150,7 @@ export function HuddleDockProvider({ children }: { children: ReactNode }) {
     // roster claiming someone is still in a call they walked out of.
     leaveRef.current?.();
     joinedRef.current = '';
+    setTargetEpoch(epoch => epoch + 1);
     setTarget({
       workspaceId: record.workspaceId,
       sessionId: '',
@@ -160,6 +172,7 @@ export function HuddleDockProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const closeHuddle = useCallback(() => {
+    leaveRef.current?.();
     setTarget(null);
     setCollapsed(false);
     // Clear the guard, so reopening the SAME conversation later joins again
