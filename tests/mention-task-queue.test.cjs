@@ -538,6 +538,57 @@ test('a mention with no task is not held back by a busy agent', async () => {
   assert.equal(world.log.taskWrites.length, 0);
 });
 
+// --- (5b) a document mention tells the agent to answer IN THE DOCUMENT -------
+
+test('a document mention names the comment tools instead of sending the agent to its DM', async () => {
+  // The instruction is the whole point of waking the agent. A document comment
+  // is the one source it can answer IN PLACE, so "reply here in your DM" would
+  // send the answer to a room the person who asked is not looking at.
+  const world = makeWorld({ tasks: [] });
+  __test.setTestDb(world.db);
+  const { run } = jobRunner(world);
+
+  await mention(documentComment(), 'document_comments', run);
+
+  const posted = world.state.messages[0].content;
+  assert.match(posted, /list_comments\(doc_id: "doc-1"\)/, 'told how to read the whole thread');
+  assert.match(posted, /reply_to_comment\(comment_id: "dc-1"/, 'and how to answer in it');
+  // The comment id is not derivable from the quoted text, so omitting it would
+  // leave the agent unable to use the tool it was just told to use.
+  assert.ok(posted.includes('dc-1'), 'the comment id is carried, not just described');
+  assert.ok(!/reply here in your DM/.test(posted), 'not the task-shaped instruction');
+});
+
+test('a task mention still says to answer in the DM', async () => {
+  // The counterpart: a task has no comment thread an agent can post into, so
+  // the DM really is where its reply belongs. MUTATION: give every source the
+  // document hint and this goes red.
+  const world = makeWorld({ tasks: [taskRow('t-1')] });
+  __test.setTestDb(world.db);
+  const { run } = jobRunner(world);
+
+  await mention(taskComment('t-1'), 'task_comments', run);
+
+  const posted = world.state.messages.map(message => message.content).join('\n');
+  assert.match(posted, /reply here in your DM/);
+  assert.ok(!/reply_to_comment/.test(posted), 'and is not offered a tool that does not apply');
+});
+
+test('an agent-authored DOCUMENT comment never re-arms the dispatch', async () => {
+  // document_comments.agent_id is new. The guard in dispatchCommentMentions was
+  // already written (it returns early on any row with an agent_id) but until the
+  // column existed an agent reply on a document was indistinguishable from a
+  // human's — so an agent that replied with an @mention would wake itself.
+  const world = makeWorld({ tasks: [] });
+  __test.setTestDb(world.db);
+  const { runs, run } = jobRunner(world);
+
+  await mention({ ...documentComment('@coder following up'), agent_id: AGENT.id }, 'document_comments', run);
+
+  assert.equal(runs.length, 0, 'no turn');
+  assert.equal(world.state.messages.length, 0, 'and nothing posted');
+});
+
 // --- (6) the guards that were already there still hold ----------------------
 
 test('an agent-authored comment never re-arms the mention dispatch', async () => {

@@ -115,6 +115,28 @@ function mountAgentsRoutes(app, deps = {}) {
   }
  });
 
+ // The library's equivalent of memory-refresh above, and the same contract:
+ // read-gated ("you can refresh what you can read", matching agent_documents
+ // select:'read'), fire-and-forget, and the answer arrives as a realtime change
+ // on agent_documents rather than in this response. A daemon that is offline
+ // simply reports nudged:false — the library is a mirror, and a refresh button
+ // that blocked on somebody's laptop being awake would be a worse lie than a
+ // stale row with a visible last-synced time.
+ app.post('/backend/agents/:id/documents-refresh', requireAuth, async (req, res) => {
+  try {
+   const agentId = String(req.params.id || '').trim();
+   const rows = await getDb().unsafe('select * from workspace_agents where id = $1 limit 1', [agentId]);
+   const agent = rows[0];
+   if (!agent) return jsonError(res, 404, new Error('Agent not found'));
+   await enforceWorkspaceRole(req.userId, agent.workspace_id, 'read');
+   const connection = findConnectedAgent(agent.workspace_id, agent.id, agent.handle || agent.name);
+   if (connection) sendWs(connection.ws, { type: 'agent_documents_refresh' });
+   res.json({ data: { nudged: Boolean(connection) }, error: null });
+  } catch (error) {
+   jsonError(res, error.status || 500, error);
+  }
+ });
+
  // Tell a linked host to replace its own process.
  //
  // A running daemon has its module graph already loaded, so publishing a new CLI

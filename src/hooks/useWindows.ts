@@ -504,7 +504,7 @@ export function useWindows() {
 
   const openWindow = useCallback((
     type: FloatingWindowType,
-    opts?: { title?: string; sessionId?: string; documentId?: string; canvasId?: string; ownerUserId?: string | null; focusTaskId?: string }
+    opts?: { title?: string; sessionId?: string; documentId?: string; canvasId?: string; ownerUserId?: string | null; focusTaskId?: string; focusLibraryKey?: string }
   ) => {
     setWindows(prev => {
       if (opts?.sessionId) {
@@ -540,7 +540,7 @@ export function useWindows() {
           nextZIndexRef.current++;
           return prev.map(w =>
             w.id === existing.id
-              ? { ...w, minimized: false, zIndex: nextZIndexRef.current, focusTaskId: opts?.focusTaskId ?? w.focusTaskId }
+              ? { ...w, minimized: false, zIndex: nextZIndexRef.current, focusTaskId: opts?.focusTaskId ?? w.focusTaskId, focusLibraryKey: opts?.focusLibraryKey ?? w.focusLibraryKey }
               : w
           );
         }
@@ -579,6 +579,7 @@ export function useWindows() {
         locked: false,
         shared: false,
         focusTaskId: opts?.focusTaskId,
+        focusLibraryKey: opts?.focusLibraryKey,
       };
 
       return [...prev, win];

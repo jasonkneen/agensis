@@ -883,6 +883,115 @@ no publish lane (run it from a checkout), and `cli/**/*.mjs` is listed in
 `tests/lint-coverage.test.cjs` — those three hold the bearer token, the
 redaction and the egress allowlist. Full reference: `cli/README.md`.
 
+### Document library and per-agent sharing
+
+Every document the workspace can reach, in one place, however many machines hold
+a copy. Collation: `src/lib/documentLibrary.ts` (pure). Surfaces: the sidebar's
+Documents section and the Library window
+(`src/components/windows/DocumentLibraryWindowContent.tsx`).
+
+- **THREE daemon mirrors, one pattern.** `agent_memory_files`,
+  `agent_skill_documents` and now `agent_documents` are all daemon-written,
+  read-only in-app, UPSERT by `UNIQUE(agent_id, path)`, and prune what the daemon
+  stopped reporting. Adding a fourth means copying that shape, not inventing one.
+  The new wire action is `agent_document_sync`; its validator is
+  `server/document-library.cjs`, and its drift hash (`documentsHash`) rides the
+  same heartbeat channel as the other two.
+- **`agent_documents` is NOT rows in `documents`.** That table is
+  workspace-authored, editable, and each row is the only copy of itself. These
+  are read-only snapshots of files on other machines, and the SAME document
+  routinely arrives from several agents at once — three checkouts of one repo is
+  the normal case. Merging would either collapse them (losing the disagreement
+  the library exists to show) or fill the sidebar with duplicates.
+- **Identity is the filename, not the content hash.** Hash equality proves two
+  copies are identical; it cannot recognise that one agent's README is a newer
+  edit of another's, which is exactly the case the compare view is for. So the
+  collation key is the normalized basename (title as fallback, for a workspace
+  document that has no path), and the hash is used AFTERWARDS to say whether the
+  copies agree. `identical` is asserted only on equal, non-empty hashes —
+  unknown is never agreement.
+- **"Latest" means the newest FILE**, ranked on the agent's reported
+  `source_modified_at` and falling back to `last_synced`. Ranking on sync time
+  alone would promote whichever daemon reconnected most recently.
+- **The mirror carries markdown and plain text only** (`DOCUMENT_EXTENSIONS`,
+  plus a closed list of extensionless names like `README`). That is a security
+  rule, not tidiness: the moment it accepts `.env` or `.pem` it becomes a way to
+  siphon a working directory into a shared workspace through a feature labelled
+  "documents".
+- **`workspace_agents.sharing` gates all four channels** (`memory`, `skills`,
+  `tools`, `documents`) — `shared/agentSharing.cjs`, twinned in
+  `src/lib/agentSharing.ts`. Read FAIL-OPEN, like `ambient_replies`: absent means
+  shared, only an explicit `false` withholds, because every channel was mirroring
+  before the column existed.
+- **Enforced at INGEST, and it PRUNES.** A withheld channel refuses the daemon's
+  push AND deletes what that agent already mirrored; switching one off through
+  the agent update route prunes eagerly rather than waiting for the next sync,
+  and switching one on nudges live daemons to re-push. A flag that only hid rows
+  in the UI would leave the bodies in the workspace database, which is not what
+  "stop sharing my memory" means. `tools` is the exception in mechanism only:
+  the advert is redacted into `agent_connections.capabilities` at ingest, because
+  `publicAgentConnection` is a pure row mapper on the fanout path with no agent
+  row in hand.
+- **Bodies never ride realtime.** `agent_documents.content` is in
+  `REALTIME_HEAVY_FIELDS` and the list is metadata-only; a body is fetched one
+  row at a time when a document is opened.
+
+### Agents on document comment threads
+
+`@mentioning` an agent in a document comment has woken it in its DM for a while
+(`dispatchCommentMentions`). What was missing is everything after that: the agent
+arrived holding a quoted string with no way to read the thread or answer where
+the person was looking. MCP tools: `list_comments`, `reply_to_comment`,
+`resolve_comment`.
+
+- **`document_comments.agent_id` is a LOOP GUARD before it is a byline.**
+  `dispatchCommentMentions` returns early for any comment row carrying an
+  agent_id, precisely so an agent's own reply cannot wake an agent. Document
+  comments are in `COMMENT_MENTION_TABLES`, so without the column an agent that
+  replied with an `@mention` would re-arm the dispatch that woke it. The guard
+  was already written; this is the field it needed.
+- **It is privileged** (`PRIVILEGED_DB_COLUMNS_BY_TABLE`), so the generic browser
+  write path strips it. A client that could set it could both put words in an
+  agent's mouth and post a comment that evades the dispatch. A loop guard a
+  client can set is not a guard. (`task_comments.agent_id` is NOT protected —
+  known gap, predates the rule.)
+- **A reply attaches to the THREAD ROOT.** The pane renders two levels; a
+  reply-to-a-reply pointing at its immediate parent would build a depth nothing
+  can draw and would simply not appear.
+- **Replying never resolves.** An agent that answers and silently closes the
+  thread takes the decision away from whoever asked.
+- **The mention hint is source-specific.** A document comment can be answered in
+  place, so the agent is told to use `list_comments`/`reply_to_comment` and given
+  the comment id; a task or memory-file mention still says to answer in the DM,
+  because there is no thread there to post into.
+
+### The agent share policy (`.agensis-share`)
+
+The MACHINE's half of sharing, next to the workspace's half above. A robots.txt-
+shaped file in the agent's root folder declaring what that computer will
+contribute. Parser/evaluator: `shared/agentSharePolicy.cjs` (pure). Full contract
+for the daemon repo: [docs/agent-share-policy.md](./docs/agent-share-policy.md).
+
+- **The two halves AND together**: `effective = workspace switch AND machine
+  policy`. Neither can widen the other. Written as an AND rather than a
+  precedence order because precedence invites "which wins?", and the answer is
+  always "the more restrictive one".
+- **Enforced TWICE.** The daemon never enumerates what it withholds (the real
+  control), and the server applies the same rules again at ingest against the
+  declaration the daemon reported. The second pass is what makes it a control
+  rather than a convention.
+- **Fail open on absence, fail closed on garbage.** No file means no
+  machine-side restrictions — every agent that connected before this existed has
+  none. But a line that does not parse becomes an `errors[]` entry rather than
+  being discarded: somebody wrote it meaning to restrict something.
+- **First-match-wins path rules**, and an unmatched path is ALLOWED — the rules
+  are exceptions, not an allowlist. Path rules do not apply to skills (a skill is
+  addressed by name; its path is an advisory label).
+- **The UI states both sides separately.** A channel the machine withholds
+  renders as `Blocked` and the switch is disabled, because "we turned it off
+  here" is a toggle away and "that machine declines" needs a file change on
+  someone else's computer.
+
 ## Tests (three runners)
 
 - `npm test` — Node's built-in runner over `tests/*.test.cjs`

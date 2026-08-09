@@ -18,6 +18,11 @@ interface DocWindowContentProps {
   workspaceId?: string;
   userId?: string;
   currentUserEmail?: string;
+  /**
+   * Agent id -> name, for comments an AGENT authored. Optional: the panel
+   * falls back to "Agent", which is vaguer but still true about who wrote it.
+   */
+  agentNames?: Record<string, string>;
   onAutoSave: (id: string, updates: { title?: string; content?: string }) => void;
   onToggleFavorite: (id: string, current: boolean) => void;
   onDelete: (id: string) => void;
@@ -306,6 +311,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
   workspaceId,
   userId,
   currentUserEmail,
+  agentNames,
   onAutoSave,
   onToggleFavorite,
   onDelete,
@@ -796,6 +802,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
             workspaceId={workspaceId}
             userId={userId}
             currentUserEmail={currentUserEmail}
+            agentNames={agentNames}
             documentTitle={doc.title}
             pendingAnchor={pendingAnchor}
             onAnchorConsumed={() => setPendingAnchor('')}
