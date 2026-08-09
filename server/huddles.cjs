@@ -887,23 +887,34 @@ function mountHuddleRoutes(app, deps = {}) {
   * pressing "Huddle" must get their room back immediately, and an agent that
   * takes a second to join is not a reason to hold the response open.
   */
- const dispatchIntoRoom = (huddle) => {
+ const dispatchTails = new Map();
+ const dispatchIntoRoom = (huddle, { recoverExisting = false } = {}) => {
   if (!huddle || !createVoiceSessionToken || typeof dispatchAgents !== 'function') return;
-  Promise.resolve(dispatchAgents({
-   db: getDb(),
-   workspaceId: huddle.workspace_id,
-   sessionId: huddle.session_id,
-   transcriptSessionId: huddle.transcript_session_id || huddle.session_id,
-   targetControllerIdentity: huddle.started_by ? `user:${String(huddle.started_by)}` : '',
-   huddleId: huddle.id,
-   roomName: huddle.room_name,
-   livekitConfig,
-   createVoiceSessionToken,
-   parseJsonArray,
-   parseJsonObject,
-   baseUrl: publicBaseUrl,
-  })).catch((error) => {
-   console.error(`[huddle] agent dispatch failed for ${huddle.room_name}: ${error?.message || error}`);
+  const roomName = String(huddle.room_name || '');
+  const previous = dispatchTails.get(roomName) || Promise.resolve();
+  // Serialize reconciliations per room. Two people can press Join together;
+  // the second lookup must happen after the first createDispatch completes or
+  // both requests can observe an empty room and launch duplicate workers.
+  const task = previous.catch(() => {}).then(() => dispatchAgents({
+    db: getDb(),
+    workspaceId: huddle.workspace_id,
+    sessionId: huddle.session_id,
+    transcriptSessionId: huddle.transcript_session_id || huddle.session_id,
+    targetControllerIdentity: huddle.started_by ? `user:${String(huddle.started_by)}` : '',
+    huddleId: huddle.id,
+    roomName,
+    livekitConfig,
+    createVoiceSessionToken,
+    parseJsonArray,
+    parseJsonObject,
+    baseUrl: publicBaseUrl,
+    recoverExisting,
+  }));
+  dispatchTails.set(roomName, task);
+  void task.catch((error) => {
+    console.error(`[huddle] agent dispatch failed for ${roomName}: ${error?.message || error}`);
+  }).finally(() => {
+    if (dispatchTails.get(roomName) === task) dispatchTails.delete(roomName);
   });
  };
 
@@ -1847,11 +1858,10 @@ function mountHuddleRoutes(app, deps = {}) {
     );
    }
 
-   // The agents join the moment the room exists, not when someone speaks — a
-   // huddle should already have its people in it when the human arrives. Only on
-   // creation: joining an existing huddle must not dispatch a second copy of
-   // every agent into a room they are already in.
-   if (created) dispatchIntoRoom(huddle);
+   // The agents join the moment the room exists, not when someone speaks. A
+   // later join also reconciles LiveKit's durable dispatch list, which repairs
+   // a room whose first launch failed without duplicating active workers.
+   dispatchIntoRoom(huddle, { recoverExisting: !created });
 
    res.status(created ? 201 : 200).json({
     data: {
@@ -2078,6 +2088,7 @@ function mountHuddleRoutes(app, deps = {}) {
    const lockedJoin = await mintLockedJoin({ huddle, workspaceId, userId: req.userId, name });
    const lockedHuddle = lockedJoin.huddle;
    const token = lockedJoin.token;
+   dispatchIntoRoom(lockedHuddle, { recoverExisting: true });
    res.json({
     data: {
      ...(await huddlePayload(lockedHuddle)),

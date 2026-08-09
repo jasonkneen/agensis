@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { CHROME_DEPTH } from '@/lib/chromeDepth';
 import {
   buildRoomDockParticipants,
+  huddleVoiceInputState,
   HUDDLE_DOCK_TABS,
   IDLE_HUDDLE_LOCAL,
   normalizeHuddleDockTab,
@@ -115,6 +116,10 @@ export function HuddleDock() {
   const activeAgent = useMemo(
     () => agents.find(agent => agent.id === selectedAgentId) || agents[0] || null,
     [agents, selectedAgentId],
+  );
+  const voiceInput = useMemo(
+    () => huddleVoiceInputState(local, activeAgent?.id || ''),
+    [local, activeAgent?.id],
   );
   // The target is a shared room floor, not a per-browser preference. The
   // huddle starter is the sole publisher so two humans cannot race revisions
@@ -384,13 +389,12 @@ export function HuddleDock() {
               transcribing={!!connection}
               transcriptInHuddle={!!transcriptSessionId}
               micEnabled={local.micEnabled}
-              // Transcription now happens in the room, so "listening" is simply
-              // whether our track is live — there is no separate recogniser to
-              // be up or down, and no browser-side error to report.
-              listening={local.connected && local.micEnabled}
+              // A live mic is only transport. The selected agent's room worker
+              // owns STT, so "Hearing you" waits for that participant too.
+              listening={voiceInput.listening}
               interim=""
               inputError=""
-              inputUnavailable=""
+              inputUnavailable={voiceInput.unavailable}
               outputUnavailable=""
               outputMuted={outputMuted}
               speakingName={speakingName}

@@ -17,10 +17,32 @@ import { mirrorTranscript, transcriptEventId } from '../src/transcript.mjs';
 
 const FULL_ENV = { OPENAI_API_KEY: 'k', CARTESIA_API_KEY: 'k', DEEPGRAM_API_KEY: 'k' };
 
+test('the voice worker has a reproducible LiveKit Cloud deployment contract', async () => {
+  const dockerfile = await readFile(new URL('../Dockerfile', import.meta.url), 'utf8');
+  const config = await readFile(new URL('../livekit.toml', import.meta.url), 'utf8');
+  assert.match(dockerfile, /COPY package\.json package-lock\.json/);
+  assert.match(dockerfile, /ONNXRUNTIME_NODE_INSTALL=skip/);
+  assert.match(dockerfile, /RUN npm ci/);
+  assert.match(dockerfile, /CMD \["npm", "start"\]/);
+  assert.doesNotMatch(dockerfile, /pnpm/);
+  assert.match(config, /\[project\][\s\S]*subdomain\s*=\s*"llmvoiceserver-lbgzvp9r"/);
+  assert.match(config, /\[agent\][\s\S]*id\s*=\s*"[^"]+"/);
+});
+
 test('the microphone-only worker never requests or publishes camera video', async () => {
   const source = await readFile(new URL('../src/index.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /publishAvatarVideo/);
   assert.match(source, /videoEnabled:\s*false/);
+});
+
+test('the worker reports voice readiness only after its media session starts', async () => {
+  const source = await readFile(new URL('../src/index.mjs', import.meta.url), 'utf8');
+  const pending = source.indexOf("'agensis.voiceReady': 'false'");
+  const started = source.indexOf('await session.start({');
+  const ready = source.indexOf("'agensis.voiceReady': 'true'");
+  assert.ok(pending >= 0, 'the participant must explicitly begin unready');
+  assert.ok(started > pending, 'the media session starts after the pending state is visible');
+  assert.ok(ready > started, 'the browser may only claim hearing after session.start resolves');
 });
 
 test('an engine is only offered when this host holds its keys', () => {

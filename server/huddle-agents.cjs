@@ -56,6 +56,13 @@ function loadAgentDispatchClient() {
   return require('livekit-server-sdk').AgentDispatchClient;
 }
 
+/** The canonical agent id carried by a persisted participant roster entry. */
+function participantAgentId(participant) {
+  if (typeof participant === 'string') return participant.trim().replace(/^agent:/, '');
+  if (!participant || typeof participant !== 'object' || participant.kind !== 'agent') return '';
+  return String(participant.agent_id || participant.id || '').trim().replace(/^agent:/, '');
+}
+
 /**
  * The agents that belong in this huddle: the channel's own agent participants.
  *
@@ -69,7 +76,7 @@ async function agentsForSession({ db, workspaceId, sessionId, parseJsonArray }) 
     [sessionId, workspaceId],
   );
   const ids = (parseJsonArray(sessions[0]?.participants) || [])
-    .map((value) => String(value || '').trim())
+    .map(participantAgentId)
     .filter(Boolean);
   if (!ids.length) return [];
   const rows = await db.unsafe(
@@ -103,7 +110,7 @@ function voiceSettingsFor(agent, parseJsonObject) {
 /**
  * Dispatch every agent in the channel into the huddle's room.
  *
- * @returns {Promise<{ dispatched: string[], failed: Array<{ handle: string, error: string }>, skipped?: string }>}
+ * @returns {Promise<{ dispatched: string[], alreadyDispatched?: string[], failed: Array<{ handle: string, error: string }>, skipped?: string }>}
  */
 async function dispatchVoiceAgents({
   db,
@@ -120,6 +127,7 @@ async function dispatchVoiceAgents({
   baseUrl = '',
   agentName = AGENT_NAME,
   dispatchClientFactory = null,
+  recoverExisting = false,
   log = console,
 } = {}) {
   const { url, apiKey, apiSecret } = livekitConfig();
@@ -156,12 +164,42 @@ async function dispatchVoiceAgents({
     return { dispatched: [], failed: [], skipped: 'no-dispatch-client' };
   }
 
+  const existingAgentIds = new Set();
+  if (recoverExisting) {
+    // Rejoining an active huddle is also its repair path. Reconcile with
+    // LiveKit's durable dispatch records first: a room whose original dispatch
+    // never happened gets its workers, while an already-running room never gets
+    // a duplicate copy of each agent.
+    if (typeof client.listDispatch !== 'function') {
+      return { dispatched: [], failed: [], skipped: 'dispatch-state-unavailable' };
+    }
+    try {
+      const existing = await client.listDispatch(roomName);
+      for (const dispatch of existing || []) {
+        if (dispatch?.agentName && dispatch.agentName !== agentName) continue;
+        const metadata = parseJsonObject(dispatch?.metadata) || {};
+        const agentId = String(metadata.agentId || '').trim();
+        if (agentId) existingAgentIds.add(agentId);
+      }
+    } catch (error) {
+      // Creating blindly after a failed lookup can put two workers for the same
+      // agent into one room. Wait for the next join/retry instead.
+      log.error?.(`[huddle] could not reconcile agent dispatches for ${roomName}: ${error?.message || error}`);
+      return { dispatched: [], failed: [], skipped: 'dispatch-state-unavailable' };
+    }
+  }
+
   const dispatched = [];
+  const alreadyDispatched = [];
   const failed = [];
   // Sequential on purpose: LiveKit's agent service is the shared resource here,
   // and a channel with a dozen agents should not open a dozen sockets at once.
   for (const agent of agents) {
     const handle = boundedVoiceId(agent.handle || agent.name || String(agent.id), String(agent.id));
+    if (existingAgentIds.has(String(agent.id))) {
+      alreadyDispatched.push(handle);
+      continue;
+    }
     try {
       // Scoped to THIS agent and expiring on its own — see createVoiceSessionToken.
       const mcpToken = await createVoiceSessionToken({
@@ -205,7 +243,7 @@ async function dispatchVoiceAgents({
   }
 
   if (dispatched.length) log.log?.(`[huddle] dispatched ${dispatched.map((h) => `@${h}`).join(', ')} into ${roomName}`);
-  return { dispatched, failed };
+  return { dispatched, alreadyDispatched, failed };
 }
 
 module.exports = { AGENT_NAME, agentsForSession, dispatchVoiceAgents, isVoiceCapableRunMode, voiceSettingsFor };

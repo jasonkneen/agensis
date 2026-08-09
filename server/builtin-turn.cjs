@@ -723,7 +723,9 @@ function createBuiltinTurn(deps = {}) {
      if (!voiceHuddle || !messageId) return;
      const prev = voiceSpoken;
      // Fire-and-forget: must not stall the stream write path. Failures leave
-     // the durable message path as the fallback (useHuddleVoice still listens).
+     // the durable message path as the fallback. Older browser clients may
+     // still consume this compatibility lane; current huddles use LiveKit's
+     // room-connected voice worker instead.
      void publishHuddleVoiceText({
       workspaceId: String(workspaceId || agent.workspace_id || ''),
       sessionId,

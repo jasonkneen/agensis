@@ -1085,6 +1085,28 @@ test('a second starter joins the SAME huddle instead of opening a second room', 
   });
 });
 
+test('joining an existing huddle reconciles its voice dispatch so a failed first launch can heal', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' }, huddleRows: [liveHuddleRow()] });
+  __test.setTestDb(db);
+  const dispatches = [];
+  const { app } = makeApp(db, {
+    createVoiceSessionToken: async () => 'voice-token',
+    dispatchAgents: async (args) => { dispatches.push(args); },
+  });
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(res.status, 200);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(dispatches.length, 1);
+    assert.equal(dispatches[0].roomName, `agensis-${HUDDLE_ID}`);
+    assert.equal(dispatches[0].recoverExisting, true);
+  });
+});
+
 test('joining an ENDED huddle is refused rather than minting a dead credential', async () => {
   const db = makeDb({
     roles: { [`${WS}:${MEMBER}`]: 'editor' },

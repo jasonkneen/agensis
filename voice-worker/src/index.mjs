@@ -221,6 +221,9 @@ export default defineAgent({
       'agensis.name': String(meta.name || meta.handle || 'Agent'),
       'agensis.accentColor': String(meta.accentColor || ''),
       'agensis.engine': engine,
+      // Presence is not readiness. The browser keeps saying "waiting" until
+      // AgentSession has actually opened STT/media below.
+      'agensis.voiceReady': 'false',
     }).catch((error) => {
       log.error(`[voice] could not publish agent attributes: ${error?.message || error}`);
     });
@@ -518,6 +521,14 @@ export default defineAgent({
     sessionStarted = true;
     boundHistories({ isFinal: true });
     applyTarget();
+
+    await ctx.room.localParticipant.setAttributes({
+      'agensis.voiceReady': 'true',
+    }).catch((error) => {
+      // Fail closed in the UI: if LiveKit cannot publish readiness, it must not
+      // claim that this agent is hearing the microphone.
+      log.error(`[voice] could not publish ready state: ${error?.message || error}`);
+    });
 
     log.log(`[voice] @${meta.handle || 'agent'} joined ${ctx.room.name} on ${engine} with ${Object.keys(tools).length} bootstrap tools`);
 

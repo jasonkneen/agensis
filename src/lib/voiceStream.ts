@@ -3,9 +3,10 @@
 // the echo guard. No React, no DOM, no network — every decision that can be
 // got wrong here is a function of its arguments and nothing else.
 //
-// Its counterparts with side effects are src/lib/deepgramMic.ts (capture) and
-// src/lib/cartesiaSpeaker.ts (playback), which are deliberately thin: they own
-// an AudioContext and a socket and defer every judgement to this file.
+// This is the retained pure model of the former browser voice pipeline. Current
+// huddles run STT/TTS inside voice-worker/ and do not import this module; its
+// tests continue to pin sentence and format rules shared with server-side
+// compatibility paths without reopening a second browser microphone.
 
 // ---------------------------------------------------------------------------
 // Audio format

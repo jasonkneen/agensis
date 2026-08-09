@@ -46,10 +46,9 @@ export interface HuddleTarget {
   /**
    * The conversation's agents, in roster order. Carried on the target because
    * the dock is mounted above every view and cannot see a channel's
-   * participants — but it needs them for two things a call is useless without:
-   * the @mention that makes a spoken sentence wake anybody in a channel, and
-   * the participant chips (an agent never holds a LiveKit connection, so a
-   * three-agent call built from presence alone looks empty).
+   * participants — but it needs them before the room roster is available so it
+   * can select which dispatched voice worker owns the floor and label that
+   * target consistently. Actual participant chips come from LiveKit presence.
    *
    * Empty in a DM, where the single agent already answers a plain message.
    */
@@ -96,7 +95,11 @@ export function HuddleDockProvider({ children }: { children: ReactNode }) {
   // Keyed on the TARGET, not on the visible channel. This is the whole point:
   // the hook's identity is stable across navigation, so the socket it owns is
   // never torn down by a route change.
-  const session = useHuddle(target?.workspaceId ?? null, target?.sessionId ?? null, targetEpoch);
+  // Opening the dock immediately calls startOrJoin(), and that POST already
+  // returns the complete huddle payload with the LiveKit token. Skip the hook's
+  // usual initial GET here so the microphone reaches the room with one request,
+  // while channel-scoped read-only huddle state keeps its normal initial load.
+  const session = useHuddle(target?.workspaceId ?? null, target?.sessionId ?? null, targetEpoch, false);
   const targetRef = useRef(target);
   targetRef.current = target;
   const leaveRef = useRef(session?.leave);

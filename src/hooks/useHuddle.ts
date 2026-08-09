@@ -209,7 +209,12 @@ export function useHuddleRecord(workspaceId: string | null, huddleId: string | n
  * huddle's OWN conversation, and it is where the transcript goes; see
  * lib/huddleTranscript.
  */
-export function useHuddle(workspaceId: string | null, sessionId: string | null, targetEpoch = 0) {
+export function useHuddle(
+  workspaceId: string | null,
+  sessionId: string | null,
+  targetEpoch = 0,
+  loadInitialState = true,
+) {
   const [huddle, setHuddle] = useState<Huddle | null>(null);
   const [events, setEvents] = useState<HuddleEvent[]>([]);
   const [configured, setConfigured] = useState(true);
@@ -229,6 +234,7 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null, 
   const targetEpochRef = useRef(targetEpoch);
   const baseEpochRef = useRef(0);
   const connectionEpochRef = useRef(0);
+  const pendingStartRequestsRef = useRef(new Map<number, number>());
   if (baseRef.current !== base || targetEpochRef.current !== targetEpoch) {
     baseRef.current = base;
     targetEpochRef.current = targetEpoch;
@@ -268,8 +274,13 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null, 
   }, [base, applyPayload]);
 
   useEffect(() => {
+    // The app-level dock immediately calls startOrJoin(), whose POST returns
+    // this same complete payload plus the LiveKit token. Let that caller skip
+    // the parallel GET so room startup does not spend an extra database read on
+    // the microphone's critical path. Channel-scoped readers keep the default.
+    if (!loadInitialState) return;
     void refetch();
-  }, [refetch]);
+  }, [loadInitialState, refetch]);
 
   // Two subscriptions, both filtered on session_id (the RBAC gate resolves a
   // session's workspace, so this stays membership-checked server-side).
@@ -298,6 +309,11 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null, 
       // A NEW huddle in this channel arrives with an empty log — fetch it rather
       // than rendering a row whose events we have never seen.
       if (row.id !== huddle?.id) {
+        // The app-level dock owns startup with startOrJoin(). Creation fanout is
+        // emitted before that POST response, so fetching here would reintroduce
+        // the redundant GET this mode deliberately removed. The POST applies
+        // the complete huddle plus event log a moment later.
+        if (!loadInitialState && pendingStartRequestsRef.current.has(subscriptionEpoch)) return;
         void refetch();
         return;
       }
@@ -368,7 +384,18 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null, 
   const startOrJoin = useCallback(async () => {
     if (!base) return null;
     const requestEpoch = baseEpochRef.current;
-    const data = await post(base, undefined, requestEpoch);
+    pendingStartRequestsRef.current.set(
+      requestEpoch,
+      (pendingStartRequestsRef.current.get(requestEpoch) || 0) + 1,
+    );
+    let data: HuddlePayload | null = null;
+    try {
+      data = await post(base, undefined, requestEpoch);
+    } finally {
+      const remaining = (pendingStartRequestsRef.current.get(requestEpoch) || 1) - 1;
+      if (remaining > 0) pendingStartRequestsRef.current.set(requestEpoch, remaining);
+      else pendingStartRequestsRef.current.delete(requestEpoch);
+    }
     if (baseEpochRef.current !== requestEpoch) return null;
     if (data?.token && data.url && data.roomName && data.huddle?.id) {
       const joinedAtMs = nextHuddleConnectionEpoch(connectionEpochRef.current);
