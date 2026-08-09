@@ -78,7 +78,7 @@ const {
  unavailable: skillContentUnavailable,
 } = require('./skill-content.cjs');
 const { mountHuddleRoutes, ensureHuddlesSchema, deleteLivekitRoom } = require('./huddles.cjs');
-const { isVoiceCapableRunMode } = require('./huddle-agents.cjs');
+const { isVoiceCapableRunMode, participantAgentId } = require('./huddle-agents.cjs');
 const {
  createAgentPermissions,
  ensureAgentPermissionsSchema,
@@ -4531,8 +4531,10 @@ async function createVoiceSessionToken({ workspaceId, agentId, huddleId = '', se
   );
   const row = rows[0];
   const transcriptSession = String(row?.transcript_session_id || row?.session_id || '');
-  const participants = parseJsonArray(row?.transcript_participants);
-  if (!row || row.ended_at || transcriptSession !== session || !participants.includes(agent)) {
+  const participantAgentIds = new Set(
+   parseJsonArray(row?.transcript_participants).map(participantAgentId).filter(Boolean),
+  );
+  if (!row || row.ended_at || transcriptSession !== session || !participantAgentIds.has(agent)) {
    throw new Error('Voice huddle claims are invalid');
   }
  }

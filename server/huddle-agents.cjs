@@ -246,4 +246,11 @@ async function dispatchVoiceAgents({
   return { dispatched, alreadyDispatched, failed };
 }
 
-module.exports = { AGENT_NAME, agentsForSession, dispatchVoiceAgents, isVoiceCapableRunMode, voiceSettingsFor };
+module.exports = {
+  AGENT_NAME,
+  agentsForSession,
+  dispatchVoiceAgents,
+  isVoiceCapableRunMode,
+  participantAgentId,
+  voiceSettingsFor,
+};
