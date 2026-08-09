@@ -46,6 +46,23 @@ export const DEFAULT_VOICE_ENGINE = 'cartesia-deepgram';
  */
 export const VOICE_OUTPUT_QUEUE_SIZE_MS = 2_000;
 
+/**
+ * Deepgram Flux is not a V1 model. It requires Deepgram's turn-aware
+ * `/v2/listen` websocket, exposed by LiveKit as `STTv2`. Nova and the older
+ * models remain on the ordinary `/v1/listen` `STT` class.
+ */
+export function createDeepgramStt(model = DEFAULT_DEEPGRAM_MODEL, env = process.env) {
+  const name = String(model || '').trim() || DEFAULT_DEEPGRAM_MODEL;
+  const apiKey = String(env.DEEPGRAM_API_KEY || '').trim();
+  const options = {
+    model: name,
+    ...(apiKey ? { apiKey } : {}),
+  };
+  return name.startsWith('flux-')
+    ? new deepgram.STTv2(options)
+    : new deepgram.STT(options);
+}
+
 /** Realtime reasoning has no `none` level; minimal is its lowest supported effort. */
 export function realtimeReasoningFor(model) {
   // The plugin's wire gate is case-sensitive too. Keep this canonical rather
@@ -158,12 +175,15 @@ export async function buildEngine({ engine, voice = {}, vad = null, env = proces
   }
 
   // Pipeline: three vendors plus VAD. Each is independently swappable.
+  const deepgramModel = String(voice.sttModel || '').trim() || DEFAULT_DEEPGRAM_MODEL;
+  const usingDeepgramFlux = engine === 'cartesia-deepgram' && deepgramModel.startsWith('flux-');
   const stt = engine === 'cartesia-deepgram'
-    ? new deepgram.STT({ model: String(voice.sttModel || DEFAULT_DEEPGRAM_MODEL) })
+    ? createDeepgramStt(deepgramModel, env)
     : new openai.STT();
 
   const tts = engine === 'cartesia-deepgram'
     ? new cartesia.TTS({
+      ...(env.CARTESIA_API_KEY ? { apiKey: String(env.CARTESIA_API_KEY) } : {}),
       model: String(voice.ttsModel || DEFAULT_CARTESIA_MODEL),
       // The per-agent voice the app already stores. Keeping the same field names
       // means an agent that had a voice keeps it across this migration.
@@ -180,7 +200,9 @@ export async function buildEngine({ engine, voice = {}, vad = null, env = proces
     engine,
     stt,
     tts,
+    ...(usingDeepgramFlux ? { turnDetection: 'stt' } : {}),
     llm: new openai.LLM({
+      ...(env.OPENAI_API_KEY ? { apiKey: String(env.OPENAI_API_KEY) } : {}),
       model: llmModel,
       // Use the plugin's model-specific default: it is `none` where supported,
       // but `minimal` for gpt-5/gpt-5-mini. Older/custom chat models omit the

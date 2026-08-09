@@ -6,9 +6,10 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { AgentSessionEventTypes, initializeLogger, llm } from '@livekit/agents';
+import * as deepgram from '@livekit/agents-plugin-deepgram';
 import * as openai from '@livekit/agents-plugin-openai';
 
-import { availableEngines, DEFAULT_VOICE_ENGINE, pipelineReasoningEffortFor, resolveEngine, realtimeReasoningFor, VOICE_ENGINES, VOICE_OUTPUT_QUEUE_SIZE_MS } from '../src/providers.mjs';
+import { availableEngines, buildEngine, createDeepgramStt, DEFAULT_VOICE_ENGINE, pipelineReasoningEffortFor, resolveEngine, realtimeReasoningFor, VOICE_ENGINES, VOICE_OUTPUT_QUEUE_SIZE_MS } from '../src/providers.mjs';
 import { initialsFor, parseColor, renderAvatarFrame } from '../src/avatarVideo.mjs';
 import { flattenToolResult, loadMcpTools, rpc, EXCLUDED, VOICE_LAZY_TOOL_ALLOWLIST } from '../src/mcpTools.mjs';
 import { acceptsTargetPacket, decodeVoiceTarget, encodeVoiceTarget, encodeVoiceTargetRequest, isVoiceTargetRequest, makeVoiceTarget } from '../src/voiceTarget.mjs';
@@ -85,6 +86,27 @@ test('the baseline engine is explicit and never crosses vendors as a fallback', 
 test('realtime and pipeline are different SHAPES, not two configs of one thing', () => {
   assert.equal(VOICE_ENGINES['openai-realtime'].kind, 'realtime');
   assert.equal(VOICE_ENGINES['cartesia-deepgram'].kind, 'pipeline');
+});
+
+test('Deepgram Flux uses its required V2 websocket while Nova stays on V1', async () => {
+  initializeLogger({ pretty: false, level: 'silent' });
+  const env = { DEEPGRAM_API_KEY: 'test-key' };
+  const flux = createDeepgramStt('flux-general-en', env);
+  const nova = createDeepgramStt('nova-3', env);
+
+  assert.ok(flux instanceof deepgram.STTv2, 'Flux must connect through /v2/listen');
+  assert.equal(flux.model, 'flux-general-en');
+  assert.ok(nova instanceof deepgram.STT, 'Nova models use /v1/listen');
+  assert.equal(nova.model, 'nova-3');
+
+  const built = await buildEngine({
+    engine: 'cartesia-deepgram',
+    voice: { sttModel: 'flux-general-en' },
+    vad: {},
+    env: FULL_ENV,
+  });
+  assert.ok(built.stt instanceof deepgram.STTv2, 'the real engine builder must use the V2 provider');
+  assert.equal(built.turnDetection, 'stt', 'Flux owns semantic end-of-turn detection');
 });
 
 test('voice reasoning stays at the provider minimum', () => {

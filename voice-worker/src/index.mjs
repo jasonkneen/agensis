@@ -120,6 +120,7 @@ export default defineAgent({
       ...(built.stt ? { stt: built.stt } : {}),
       ...(built.tts ? { tts: built.tts } : {}),
       ...(built.vad ? { vad: built.vad } : {}),
+      ...(built.turnDetection ? { turnHandling: { turnDetection: built.turnDetection } } : {}),
     });
     let pendingBoundContext = null;
     let boundUpdateRunning = false;
