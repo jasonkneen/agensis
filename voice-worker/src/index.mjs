@@ -10,9 +10,9 @@
 // stream.
 //
 // Here the agent is a participant: it subscribes to room audio, publishes its own
-// audio track, publishes a held identity image as video, sends and receives chat
-// on the room's text stream, and holds the workspace's MCP tools. Humans and
-// agents are the same kind of thing on the same transport.
+// microphone track, sends and receives chat on the room's text stream, and holds
+// the workspace's MCP tools. Camera publishing is deliberately not part of the
+// voice contract; humans and agents otherwise share the same transport.
 
 import { Agent, AgentSession, AgentSessionEventTypes, JobContext, ServerOptions, cli, defineAgent } from '@livekit/agents';
 import { RoomEvent } from '@livekit/rtc-node';

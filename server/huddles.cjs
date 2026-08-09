@@ -1028,14 +1028,23 @@ function mountHuddleRoutes(app, deps = {}) {
   workspaceId,
   sessionId,
   userId,
+  roleCapability = 'read',
   requireLive = true,
   forUpdate = false,
  }) {
-  // Lock every row in one order across every actor path: host, private member,
-  // then huddle. Besides making the access decision stable, the order matters
-  // to clear-session, which also starts with the host before it settles linked
-  // huddles. A joined SELECT leaves PostgreSQL free to acquire those row locks
-  // in a plan-dependent order.
+  // Every actor path acquires workspace role rows BEFORE host/member rows.
+  // This is the canonical lock order: a starter revoke/role update cannot
+  // deadlock a huddle mutation that is already holding chat_sessions.
+  if (typeof assertWorkspaceRoleLocked === 'function') {
+   await assertWorkspaceRoleLocked({
+    userId,
+    workspaceId,
+    capability: roleCapability,
+    db: (sql, params) => tx.unsafe(sql, params),
+   });
+  }
+  // Then lock host, private member, and huddle in that order. A joined SELECT
+  // leaves PostgreSQL free to acquire those row locks in a plan-dependent order.
   await lockActorSession(tx, { sessionId, workspaceId, userId });
   const liveSql = requireLive ? 'and h.ended_at is null' : '';
   // A route that will UPDATE the huddle must take the write-compatible lock
@@ -1205,6 +1214,7 @@ function mountHuddleRoutes(app, deps = {}) {
     workspaceId,
     sessionId: huddle.session_id,
     userId,
+    roleCapability: 'write',
     requireLive: true,
    });
    const token = await mintToken({
@@ -1981,17 +1991,8 @@ function mountHuddleRoutes(app, deps = {}) {
     let live;
     const starter = String(huddle.started_by || '').trim();
     if (starter) {
-     // Match the human mutation lock order (workspace role -> host/member ->
-     // huddle). This makes a starter revoke serialize with the final voice
-     // write instead of racing the earlier controllerStillAuthorized check.
-     if (typeof assertWorkspaceRoleLocked === 'function') {
-      await assertWorkspaceRoleLocked({
-       userId: starter,
-       workspaceId: huddle.workspace_id,
-       capability: 'read',
-       db: (sql, params) => tx.unsafe(sql, params),
-      });
-     }
+     // lockActorHuddle takes the workspace role lock first, then host/member,
+     // so starter revocation has the same serial boundary as human mutations.
      live = await lockActorHuddle(tx, {
       huddleId: huddle.id,
       workspaceId: huddle.workspace_id,
@@ -2132,6 +2133,7 @@ function mountHuddleRoutes(app, deps = {}) {
      workspaceId,
      sessionId: huddle.session_id,
      userId: req.userId,
+     roleCapability: 'write',
      requireLive: true,
      forUpdate: true,
     });
@@ -2193,6 +2195,7 @@ function mountHuddleRoutes(app, deps = {}) {
      workspaceId,
      sessionId: huddle.session_id,
      userId: req.userId,
+     roleCapability: 'write',
      requireLive: false,
      forUpdate: true,
     });
@@ -2261,6 +2264,7 @@ function mountHuddleRoutes(app, deps = {}) {
      workspaceId,
      sessionId: huddle.session_id,
      userId: req.userId,
+     roleCapability: 'write',
      requireLive: true,
      forUpdate: true,
     });
@@ -2347,6 +2351,7 @@ function mountHuddleRoutes(app, deps = {}) {
      workspaceId,
      sessionId: existing.session_id,
      userId: req.userId,
+     roleCapability: 'write',
      requireLive: false,
      forUpdate: true,
     });
@@ -2422,6 +2427,7 @@ function mountHuddleRoutes(app, deps = {}) {
      workspaceId,
      sessionId: existing.session_id,
      userId: req.userId,
+     roleCapability: 'write',
      requireLive: false,
      forUpdate: true,
     });
