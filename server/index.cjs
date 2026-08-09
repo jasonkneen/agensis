@@ -111,6 +111,7 @@ const { createAgentConnections } = require('./agent-connections.cjs');
 const { createTaskDispatch } = require('./task-dispatch.cjs');
 const { createAgentJobs } = require('./agent-jobs.cjs');
 const { createBuiltinTurn } = require('./builtin-turn.cjs');
+const { createVoicePublish } = require('./voice-publish.cjs');
 const {
  installCreatedSessionMemberships,
  lockPrivateSessionRoster,
@@ -8892,6 +8893,7 @@ const builtinTurn = createBuiltinTurn({
  roleHasWorkspaceCapability,
  workspaceResources,
  sessionHasLiveHuddle: (...a) => sessionHasLiveHuddle(...a),
+ publishHuddleVoiceText: (...a) => publishHuddleVoiceText(...a),
  slugHandle,
  notifyDbSubscribers: (...a) => realtime.notifyDbSubscribers(...a),
  sendWs: (...a) => realtime.sendWs(...a),
@@ -9002,6 +9004,14 @@ const {
  enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
 });
 
+// Ephemeral speakable sentences for live huddles (Cartesia leads the durable
+// message fanout). See server/voice-publish.cjs and shared/voice-speakable.cjs.
+const voicePublish = createVoicePublish({
+ sessionRealtimeAudience: (...a) => sessionRealtimeAudience(...a),
+ relayBroadcastToUserIds: (...a) => realtime.relayBroadcastToUserIds(...a),
+});
+const { publishHuddleVoiceText } = voicePublish;
+
 // Agent jobs hold no in-process state — a job's liveness is a database fact, so
 // a restart cannot lose it. See server/agent-jobs.cjs.
 const agentJobs = createAgentJobs({
@@ -9026,6 +9036,7 @@ const agentJobs = createAgentJobs({
  getConnectedAgents: () => agentConnections.connectedAgents,
  scheduleTaskQueueDrain: (...a) => taskDispatch.scheduleTaskQueueDrain(...a),
  recordAnthropicUsage: (...a) => recordAnthropicUsage(...a),
+ publishHuddleVoiceText: (...a) => publishHuddleVoiceText(...a),
 });
 const {
  insertActiveAgentJob, agentHasActiveJob, agentHasAnyActiveJob,

@@ -16,8 +16,14 @@ import {
 } from '../lib/voiceStream';
 import { CartesiaSpeaker } from '../lib/cartesiaSpeaker';
 import { DeepgramMic, micUnavailableReason } from '../lib/deepgramMic';
-import { apiAuthHeaders, apiUrl, voiceRealtime } from '../lib/backendClient';
+import { apiAuthHeaders, apiUrl, backendClient, voiceRealtime } from '../lib/backendClient';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
+import {
+  acceptHuddleVoiceSentence,
+  huddleVoiceChannel,
+  HUDDLE_VOICE_EVENT,
+  type HuddleVoiceSentencePayload,
+} from '../lib/huddleVoiceText';
 
 // Voice for a huddle, WITHOUT putting the agent anywhere near audio.
 //
@@ -814,6 +820,42 @@ export function useCartesiaSpeechOutput(
 
   const deduper = useRealtimeDeduper();
 
+  // Ephemeral speakable sentences (server → Cartesia without waiting on the
+  // durable messages fanout). Channel is workspace-scoped; payload is
+  // session-scoped and re-checked here.
+  useEffect(() => {
+    if (!active || !workspaceId || !sessionId) return;
+    const channelName = huddleVoiceChannel(workspaceId);
+    if (!channelName) return;
+    const channel = backendClient.channel(channelName);
+    channel.on(
+      'broadcast',
+      { event: HUDDLE_VOICE_EVENT },
+      (message: { payload?: HuddleVoiceSentencePayload }) => {
+        if (!enabledRef.current) return;
+        const id = String(message?.payload?.messageId || '');
+        const already = spokenTextRef.current.get(id) || '';
+        const accepted = acceptHuddleVoiceSentence(message?.payload, sessionId, already);
+        if (!accepted) return;
+        spokenTextRef.current.set(accepted.messageId, accepted.spokenAfter);
+        const voiceId = voiceIdForSpeechItem(
+          { agentId: accepted.agentId },
+          rosterRef.current,
+        );
+        if (typeof performance !== 'undefined' && performance.mark) {
+          try {
+            performance.mark(`huddle-voice-ephemeral:${accepted.messageId}:${accepted.offset}`);
+          } catch { /* ignore */ }
+        }
+        speakerRef.current?.speak(accepted.sentence, accepted.agentName, voiceId);
+      },
+    );
+    channel.subscribe();
+    return () => {
+      void channel.unsubscribe();
+    };
+  }, [active, workspaceId, sessionId]);
+
   useTableSubscription<VoiceMessage>(
     {
       enabled: active,
@@ -852,7 +894,8 @@ export function useCartesiaSpeechOutput(
       const alreadySpoken = spokenTextRef.current.get(id) || '';
       if (alreadySpoken === item.text) return;
 
-      // Say the finished sentences NOW; hold only the trailing fragment.
+      // Durable fallback / catch-up: sentenceChunks skips anything already in
+      // alreadySpoken (including prefixes advanced by the ephemeral lane).
       emit(id, item, sentenceChunks(item.text, alreadySpoken));
       pendingRef.current.set(id, {
         item,

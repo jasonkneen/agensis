@@ -1961,6 +1961,25 @@ test('the voice note reaches EVERY run lane, and defaults to off', () => {
   assert.match(source, /function buildDaemonPrompt\([^)]*voiceHuddle = false[^)]*\)/);
 });
 
+test('the daemon job carries the authoritative huddle flag to its runtime', () => {
+  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
+  const start = source.indexOf('const daemonPrompt = buildDaemonPrompt');
+  const end = source.indexOf('if (!delivered)', start);
+  assert.ok(start >= 0 && end > start, 'daemon dispatch block was not found');
+  const dispatch = source.slice(start, end);
+
+  assert.match(
+    dispatch,
+    /mode:\s*'daemon',[\s\S]*?voiceHuddle/,
+    'the durable job metadata must remember whether this was a huddle turn',
+  );
+  assert.match(
+    dispatch,
+    /type:\s*'agent_job',[\s\S]*?job:\s*\{[\s\S]*?voiceHuddle/,
+    'the live daemon payload must receive the server-derived huddle flag',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Self-reported presence. In 48 real huddles the LiveKit webhook (an external
 // dashboard step) delivered ZERO participant events, so every roster read

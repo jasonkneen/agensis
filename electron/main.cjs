@@ -451,6 +451,24 @@ app.whenReady().then(async () => {
   // autostart. Retries while the backend (local 3142 or Fly) is still coming up.
   const runRestore = async (reason) => {
     try {
+      // Before spawning anything, kill hung orphans (alive pid, silent
+      // heartbeat) and scrub stale state left by a previous force-quit. The
+      // CLI connect path does the same sweep; doing it here means a cold
+      // desktop launch does not sit next to five storming connect processes.
+      try {
+        const { sweepDaemonHealthOnStartup } = require('./local-runtime/daemonHealth.cjs');
+        const health = sweepDaemonHealthOnStartup({
+          log: (line) => console.log(line),
+        });
+        console.log(
+          `[desktop-local] health (${reason}) scanned=${health.scanned} `
+          + `healthy=${health.healthy} hung=${health.hung} staleDead=${health.staleDead} `
+          + `fixed=${health.actions.length}`,
+        );
+      } catch (healthError) {
+        console.error('[desktop-local] health sweep failed:', healthError?.message || healthError);
+      }
+
       syncLoginItemFromAutostart();
       const store = getLocalRuntimeAutostart();
       const pending = store.list();
@@ -482,18 +500,37 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
+function tearDownLocalRuntimes() {
   // Tear down live daemons on quit (clean). Disk autostart list is preserved
-  // so the next launch / reboot restore brings them back.
+  // so the next launch / reboot restore brings them back. The CLI also watches
+  // AGENSIS_SUPERVISOR_PID and exits if this process disappears without us
+  // getting here (force-quit / crash).
   try {
     localRuntime.stopAll();
   } catch {
     // ignore teardown races
   }
+}
+
+app.on('before-quit', () => {
+  tearDownLocalRuntimes();
   if (backendServer) {
     backendServer.close();
     backendServer = null;
   }
+});
+
+// before-quit is not guaranteed on every platform path (e.g. some SIGTERM
+// routes). Belt-and-braces with the supervisor-pid watchdog in the CLI.
+app.on('will-quit', () => {
+  tearDownLocalRuntimes();
+});
+
+process.once('SIGTERM', () => {
+  tearDownLocalRuntimes();
+});
+process.once('SIGINT', () => {
+  tearDownLocalRuntimes();
 });
 
 app.on('activate', () => {
