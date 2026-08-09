@@ -11,7 +11,7 @@ import { availableEngines, resolveEngine, VOICE_ENGINES } from '../src/providers
 import { initialsFor, parseColor, renderAvatarFrame } from '../src/avatarVideo.mjs';
 import { flattenToolResult, loadMcpTools, rpc, EXCLUDED, VOICE_LAZY_TOOL_ALLOWLIST } from '../src/mcpTools.mjs';
 import { acceptsTargetPacket, decodeVoiceTarget, encodeVoiceTarget, encodeVoiceTargetRequest, isVoiceTargetRequest, makeVoiceTarget } from '../src/voiceTarget.mjs';
-import { boundChatContext, MAX_VOICE_CONTEXT_BYTES, MAX_VOICE_RESULT_CHARS, VOICE_RESULT_TRUNCATION_MARKER } from '../src/voiceBounds.mjs';
+import { boundChatContext, createSerializedBoundedContextUpdater, MAX_VOICE_CONTEXT_BYTES, MAX_VOICE_RESULT_CHARS, VOICE_RESULT_TRUNCATION_MARKER } from '../src/voiceBounds.mjs';
 import { mirrorTranscript, transcriptEventId } from '../src/transcript.mjs';
 
 const FULL_ENV = { OPENAI_API_KEY: 'k', CARTESIA_API_KEY: 'k', DEEPGRAM_API_KEY: 'k' };
@@ -360,6 +360,33 @@ test('voice MCP surface excludes job/control tools and caps results', () => {
   const value = flattenToolResult('x'.repeat(MAX_VOICE_RESULT_CHARS + 100));
   assert.equal(value.length, MAX_VOICE_RESULT_CHARS);
   assert.ok(value.endsWith(VOICE_RESULT_TRUNCATION_MARKER));
+});
+
+test('realtime context updates are bounded before provider calls and serialized', async () => {
+  const calls = [];
+  let releaseFirst;
+  const firstDone = new Promise((resolve) => { releaseFirst = resolve; });
+  const providerUpdate = (context) => {
+    calls.push(context);
+    return calls.length === 1 ? firstDone : Promise.resolve();
+  };
+  const update = createSerializedBoundedContextUpdater(providerUpdate);
+  const makeContext = (suffix) => ({
+    items: [{ type: 'message', role: 'user', content: [`${'x'.repeat(MAX_VOICE_CONTEXT_BYTES)}-${suffix}`] }],
+    copy() { return { items: this.items.map((item) => ({ ...item, content: [...item.content] })) }; },
+  });
+
+  const first = update(makeContext('first'));
+  const second = update(makeContext('second'));
+  await Promise.resolve();
+  assert.equal(calls.length, 1);
+  assert.ok(Buffer.byteLength(JSON.stringify(calls[0].items), 'utf8') <= MAX_VOICE_CONTEXT_BYTES);
+  assert.equal(calls[0].items.length, 1);
+
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.equal(calls.length, 2);
+  assert.ok(Buffer.byteLength(JSON.stringify(calls[1].items), 'utf8') <= MAX_VOICE_CONTEXT_BYTES);
 });
 
 test('context bounds preserve item count and cap one oversized message', () => {

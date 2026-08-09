@@ -19,7 +19,7 @@ import { RoomEvent } from '@livekit/rtc-node';
 import { buildEngine, loadVad, resolveEngine } from './providers.mjs';
 import { loadMcpTools } from './mcpTools.mjs';
 import { mirrorTranscript } from './transcript.mjs';
-import { boundChatContext, capText } from './voiceBounds.mjs';
+import { boundChatContext, capText, createSerializedBoundedContextUpdater } from './voiceBounds.mjs';
 import {
   VOICE_TARGET_TOPIC,
   INACTIVE_PARTICIPANT_IDENTITY,
@@ -195,23 +195,40 @@ export default defineAgent({
     session.on(AgentSessionEventTypes.ConversationItemAdded, boundHistories);
     session.on(AgentSessionEventTypes.UserInputTranscribed, boundHistories);
     // The SDK records function calls/outputs through this internal path without
-    // emitting ConversationItemAdded. Keep the hard bound true after tool turns,
-    // not only after the next user or assistant event.
+    // emitting ConversationItemAdded. Mirror newly-added tool items into the
+    // Agent context so later bounded snapshots retain complete call/output
+    // pairs. The realtime provider update itself is wrapped below; issuing a
+    // competing update here would race the SDK's synchronous tool update and
+    // could overwrite a valid output with the agent-only context.
     const originalToolItemsAdded = session._toolItemsAdded;
     if (typeof originalToolItemsAdded === 'function') {
       session._toolItemsAdded = function boundedToolItemsAdded(items) {
         const result = originalToolItemsAdded.call(this, items);
-        // Realtime's tool path appends the output, then immediately builds its
-        // own chatCtx copy and sends that snapshot. Queue our bound snapshot in
-        // a microtask so it observes that output and is enqueued AFTER the
-        // SDK's call-only snapshot; otherwise the provider can finish with an
-        // orphaned function call and reject the next turn.
-        const schedule = () => queueMicrotask(() => boundHistories({ isFinal: true }));
-        if (result && typeof result.then === 'function') {
-          result.then(schedule, schedule);
-        } else {
-          schedule();
+        const target = agent?._chatCtx;
+        if (target && Array.isArray(target.items) && Array.isArray(items) && items.length > 0) {
+          const identities = new Set(target.items);
+          const toolKeys = new Set(target.items.map((item) => {
+            if (item?.type !== 'function_call' && item?.type !== 'function_call_output') return '';
+            return `${item.type}:${String(item.callId || '')}`;
+          }).filter(Boolean));
+          const missing = [];
+          for (const item of items) {
+            if (identities.has(item)) continue;
+            const key = item?.type === 'function_call' || item?.type === 'function_call_output'
+              ? `${item.type}:${String(item.callId || '')}`
+              : '';
+            if (key && toolKeys.has(key)) continue;
+            missing.push(item);
+            identities.add(item);
+            if (key) toolKeys.add(key);
+          }
+          if (missing.length > 0) {
+            if (typeof target.insert === 'function') target.insert(missing);
+            else target.items.push(...missing);
+          }
         }
+        boundChatContext(target);
+        boundChatContext(this.history);
         return result;
       };
     }
@@ -484,16 +501,7 @@ export default defineAgent({
     const realtime = agent.getActivityOrThrow?.().realtimeLLMSession;
     if (realtime?.updateChatCtx) {
       const originalRealtimeUpdateChatCtx = realtime.updateChatCtx;
-      let remoteUpdateTail = Promise.resolve();
-      realtime.updateChatCtx = function boundedRealtimeUpdateChatCtx(chatCtx) {
-        const run = remoteUpdateTail.then(() => {
-          const bounded = chatCtx?.copy ? chatCtx.copy() : chatCtx;
-          boundChatContext(bounded);
-          return originalRealtimeUpdateChatCtx.call(this, bounded);
-        });
-        remoteUpdateTail = run.catch(() => {});
-        return run;
-      };
+      realtime.updateChatCtx = createSerializedBoundedContextUpdater(originalRealtimeUpdateChatCtx);
       restoreRealtimeContextUpdate = () => {
         realtime.updateChatCtx = originalRealtimeUpdateChatCtx;
         restoreRealtimeContextUpdate = () => {};

@@ -305,3 +305,22 @@ export function boundChatContext(context, { maxItems = MAX_VOICE_CONTEXT_ITEMS, 
   }
   return context;
 }
+
+/**
+ * Wrap a realtime provider context update with an immediate bound snapshot and
+ * a serialized provider call. The SDK can issue an update synchronously while
+ * a previous create/delete acknowledgement is still pending; copying and
+ * bounding before entering the promise tail keeps every provider-bound payload
+ * within the limit without allowing updates to overtake one another.
+ */
+export function createSerializedBoundedContextUpdater(updateChatCtx) {
+  if (typeof updateChatCtx !== 'function') throw new TypeError('updateChatCtx must be a function');
+  let tail = Promise.resolve();
+  return function serializedBoundedContextUpdater(chatContext) {
+    const bounded = chatContext?.copy ? chatContext.copy() : chatContext;
+    boundChatContext(bounded);
+    const run = tail.then(() => updateChatCtx.call(this, bounded));
+    tail = run.catch(() => {});
+    return run;
+  };
+}
