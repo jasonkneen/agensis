@@ -34,6 +34,19 @@ export const DEFAULT_CARTESIA_MODEL = 'sonic-3.5';
 export const DEFAULT_DEEPGRAM_MODEL = 'flux-general-en';
 /** Text model for pipeline mode, when the turn is not owned by a realtime model. */
 export const DEFAULT_PIPELINE_LLM = 'gpt-5.4-mini';
+/**
+ * A short jitter cushion prevents bursty provider frames from overrunning the
+ * LiveKit AudioSource's ring buffer. Interruptions clear this queue, so it does
+ * not make a handoff or barge-in wait longer.
+ */
+export const VOICE_OUTPUT_QUEUE_SIZE_MS = 2_000;
+
+/** Realtime reasoning has no `none` level; minimal is its lowest supported effort. */
+export function realtimeReasoningFor(model) {
+  return /^gpt-realtime-2(?:[.-]|$)/i.test(String(model || '').trim())
+    ? { effort: 'minimal' }
+    : undefined;
+}
 
 /**
  * Engines a workspace can ask for. The id is what a human picks in the app and
@@ -104,11 +117,14 @@ export async function buildEngine({ engine, voice = {}, vad = null, env = proces
     // One model hears, thinks and speaks. `turnDetection` is server-side, so no
     // Silero and no separate endpointing — asking for both is how you get an
     // agent that interrupts itself.
+    const model = String(voice.realtimeModel || env.AGENSIS_REALTIME_MODEL || DEFAULT_REALTIME_MODEL);
+    const reasoning = realtimeReasoningFor(model);
     return {
       kind: 'realtime',
       engine,
       llm: new openai.realtime.RealtimeModel({
-        model: String(voice.realtimeModel || env.AGENSIS_REALTIME_MODEL || DEFAULT_REALTIME_MODEL),
+        model,
+        ...(reasoning ? { reasoning } : {}),
         ...(voice.realtimeVoice ? { voice: String(voice.realtimeVoice) } : {}),
         ...(Number.isFinite(Number(voice.temperature)) ? { temperature: Number(voice.temperature) } : {}),
       }),
@@ -131,12 +147,19 @@ export async function buildEngine({ engine, voice = {}, vad = null, env = proces
     })
     : new openai.TTS({ ...(voice.voiceId ? { voice: String(voice.voiceId) } : {}) });
 
+  const llmModel = String(voice.llmModel || env.AGENSIS_VOICE_LLM || DEFAULT_PIPELINE_LLM);
   return {
     kind: 'pipeline',
     engine,
     stt,
     tts,
-    llm: new openai.LLM({ model: String(voice.llmModel || env.AGENSIS_VOICE_LLM || DEFAULT_PIPELINE_LLM) }),
+    llm: new openai.LLM({
+      model: llmModel,
+      // Pipeline voice has no useful reason to spend a hidden reasoning pass.
+      // Only send this field to models whose API advertises it; older/custom
+      // chat models may reject reasoning_effort altogether.
+      ...(openai.supportsReasoningEffort(llmModel) ? { reasoningEffort: 'none' } : {}),
+    }),
     vad: await loadVad(vad),
   };
 }

@@ -6071,6 +6071,8 @@ async function buildAgentActivityDigest(workspaceId, agentId, currentSessionId) 
 // must not be told to answer in half-sentences.
 const VOICE_HUDDLE_NOTE = [
  'You are in a LIVE VOICE HUDDLE. Everything you write is read aloud to the person you are talking to, and what they say is transcribed into this conversation.',
+ 'This is speech, not chat markup. Never begin with @handle, an "at <handle>" phrase, your own name, or a speaker label. If the user addresses you by name, treat it as a wake-up cue and do not repeat it aloud.',
+ 'Do not narrate hidden reasoning or say "thinking". Answer immediately in plain spoken sentences.',
  'Reply IMMEDIATELY with one short sentence — the headline or an acknowledgement — as its own message, BEFORE you go and do the work. Then keep going in short messages as you learn things.',
  // These three constraints are not style, they are the latency mechanism, and
  // each one names a specific thing that made the first word late:
@@ -6083,7 +6085,7 @@ const VOICE_HUDDLE_NOTE = [
  //     from a broken call. Answering first costs nothing: the work still happens,
  //     in the messages that follow.
  'Your FIRST sentence must be at most a dozen words and must END IN A FULL STOP. Do not open with a preamble, a restatement of the question, or a heading — the first full stop is the moment your voice is heard.',
- 'Do not reason at length before that first sentence. Say it, then think, then keep talking as you learn things.',
+ 'Do not reason at length before that first sentence. Say it, then continue only with concise spoken results; never narrate the reasoning.',
  'It may say what you are ABOUT to do. It must never say you have already done it.',
  'Speak in plain sentences. Code blocks, tables and long lists are dropped before speaking, so say what they mean instead.',
  // The base system prompt (and, for daemon agents, the daemon's own prompt
@@ -6618,11 +6620,18 @@ function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivit
  if (intentNote) lines.push(intentNote, '');
  if (voiceHuddle) lines.push(VOICE_HUDDLE_NOTE, '');
  if (coParticipants.length > 0) {
-  lines.push(
-   `You are @${selfHandle} in a multi-agent channel. Other agents present: ${coParticipants.map((p) => `@${p.handle}`).join(', ')}.`,
-   'To bring another agent in, address them by @handle. If the request is fully handled, reply without mentioning anyone.',
-   '',
-  );
+  if (voiceHuddle) {
+   lines.push(
+    'Other agents may appear in the transcript, but this is a spoken huddle. Do not mention, tag, or address an agent by handle aloud.',
+    '',
+   );
+  } else {
+   lines.push(
+    `You are @${selfHandle} in a multi-agent channel. Other agents present: ${coParticipants.map((p) => `@${p.handle}`).join(', ')}.`,
+    'To bring another agent in, address them by @handle. If the request is fully handled, reply without mentioning anyone.',
+    '',
+   );
+  }
  }
  if (recentActivity) {
   lines.push(
@@ -6633,9 +6642,13 @@ function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivit
  }
  lines.push('Conversation so far:');
  for (const message of contextMessages) {
-  lines.push(message.role === 'assistant' ? `[@${selfHandle} (you)]: ${message.content}` : message.content);
+  lines.push(message.role === 'assistant'
+   ? `${voiceHuddle ? '[you]' : `[@${selfHandle} (you)]`}: ${message.content}`
+   : message.content);
  }
- lines.push('', 'Write your next reply as @' + selfHandle + '.');
+ lines.push('', voiceHuddle
+  ? 'Write only the next spoken reply. Begin directly with the answer; never prefix it with your name, an @mention, or a speaker label.'
+  : 'Write your next reply as @' + selfHandle + '.');
  return lines.join('\n');
 }
 
@@ -8411,6 +8424,7 @@ async function inspectProjectPath(inputPath) {
 
 function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
  const sections = [];
+ const voiceHuddle = String(agentContext?.systemPrompt || '').includes('<voice_huddle>');
  if (agentContext && (agentContext.systemPrompt || agentContext.name)) {
   if (agentContext.name) {
    sections.push(`You are "${agentContext.name}", an AI agent collaborating in a shared agensis workspace.`);
@@ -8432,13 +8446,19 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
   }
   if (Array.isArray(agentContext.coParticipants) && agentContext.coParticipants.length > 0) {
    const roster = agentContext.coParticipants.map((peer) => `@${peer.handle}${peer.name ? ` (${peer.name})` : ''}`).join(', ');
-   sections.push(
-    '',
-    `This is a multi-agent channel. Other agents you can collaborate with: ${roster}.`,
-    '- In the conversation history, each message is prefixed with the speaker, e.g. "[@handle]: ...". Messages without a prefix are your own.',
-    '- To bring another agent into the conversation, address them by @handle in your reply. Only mention an agent when you genuinely need their help — do not @ them out of politeness, or the conversation will loop.',
-    '- If the request is already fully handled, answer without mentioning anyone so the conversation can end.',
-   );
+   sections.push('');
+   if (voiceHuddle) {
+    sections.push(
+     'Other agents may be present in the transcript, but this is a spoken huddle. Do not mention, tag, or address an agent by handle aloud.',
+    );
+   } else {
+    sections.push(
+     `This is a multi-agent channel. Other agents you can collaborate with: ${roster}.`,
+     '- In the conversation history, each message is prefixed with the speaker, e.g. "[@handle]: ...". Messages without a prefix are your own.',
+     '- To bring another agent into the conversation, address them by @handle in your reply. Only mention an agent when you genuinely need their help — do not @ them out of politeness, or the conversation will loop.',
+     '- If the request is already fully handled, answer without mentioning anyone so the conversation can end.',
+    );
+   }
   }
   sections.push('');
  } else {
@@ -8455,6 +8475,14 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
   '- If you do not know something from the provided context, say so rather than inventing.',
   '- You are one of potentially many people in this workspace; speak in a way that is useful to the whole team, not just a single user.',
  );
+ if (voiceHuddle) {
+  sections.push(
+   '',
+   '<voice_output_rules>',
+   'Speak directly to the human. Never output a mention, your own name, an "at <handle>" phrase, a speaker label, or hidden reasoning. Begin with the answer.',
+   '</voice_output_rules>',
+  );
+ }
 
  if (workspaceContext) {
   const wsBlocks = [];
@@ -10825,6 +10853,7 @@ module.exports = {
   insertActiveAgentJob,
   buildWhereClause,
   buildDaemonPrompt,
+  buildSystemPrompt,
   agentConnectionCommand,
   buildAgentConnectionCommand,
   publicAgentConnectionCommandAgent,

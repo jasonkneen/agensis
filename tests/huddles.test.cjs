@@ -1967,11 +1967,9 @@ test('the realtime fanout does not strip huddle fields', async () => {
 // Agents in the huddle
 // ---------------------------------------------------------------------------
 //
-// The agent never touches audio: speech becomes text in the browser and is
-// posted as a normal message, and agent messages are read aloud by the browser.
-// So the ONLY thing the server contributes is etiquette — telling the agent
-// that what it writes is about to be spoken, and that the first sentence must
-// leave immediately. Two ways that can be wrong:
+// The LiveKit worker owns agent audio now. The server still contributes the
+// shared written-turn etiquette — telling every lane that its output is spoken,
+// and that the first sentence must leave immediately. Two ways that can be wrong:
 //
 //   1. it is never added (the feature is inert), or
 //   2. it is added to a channel where nobody is in a call (every agent in the
@@ -1994,7 +1992,36 @@ test('the voice note is added ONLY when a huddle is live for the session', () =>
   assert.ok(spoken.indexOf('LIVE VOICE HUDDLE') < spoken.indexOf('Conversation so far:'));
   // Still the same prompt otherwise.
   assert.ok(spoken.includes('[Jason]: what is the build doing'));
-  assert.ok(spoken.trimEnd().endsWith('Write your next reply as @coder.'));
+  assert.ok(spoken.trimEnd().endsWith('never prefix it with your name, an @mention, or a speaker label.'));
+  assert.match(spoken, /never begin with @handle/i);
+  assert.match(spoken, /do not narrate hidden reasoning/i);
+  assert.doesNotMatch(spoken, /Write your next reply as @coder\./);
+});
+
+test('voice daemon prompts suppress self-tags and labels', () => {
+  const agent = { id: 'a1', name: 'Codex', handle: 'codex' };
+  const spoken = __test.buildDaemonPrompt(
+    [{ role: 'assistant', content: 'I am checking the build.' }],
+    agent,
+    [{ handle: 'reviewer', name: 'Reviewer' }],
+    '',
+    true,
+  );
+  assert.match(spoken, /\[you\]: I am checking/);
+  assert.match(spoken, /do not mention, tag, or address an agent by handle aloud/i);
+  assert.doesNotMatch(spoken, /Write your next reply as @codex/);
+  assert.doesNotMatch(spoken, /\[@codex \(you\)\]/);
+});
+
+test('builtin voice prompts suppress self-tags after multi-agent guidance', () => {
+  const prompt = __test.buildSystemPrompt('', '', '', {
+    name: 'Codex',
+    systemPrompt: '<voice_huddle>spoken rules</voice_huddle>',
+    coParticipants: [{ handle: 'reviewer', name: 'Reviewer' }],
+  });
+  assert.match(prompt, /Do not mention, tag, or address an agent by handle aloud/i);
+  assert.match(prompt, /never output a mention, your own name/i);
+  assert.doesNotMatch(prompt, /address an agent by @handle in your reply/i);
 });
 
 test('the voice note reaches EVERY run lane, and defaults to off', () => {

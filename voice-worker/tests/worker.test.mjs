@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { AgentSessionEventTypes } from '@livekit/agents';
 
-import { availableEngines, resolveEngine, VOICE_ENGINES } from '../src/providers.mjs';
+import { availableEngines, resolveEngine, realtimeReasoningFor, VOICE_ENGINES, VOICE_OUTPUT_QUEUE_SIZE_MS } from '../src/providers.mjs';
 import { initialsFor, parseColor, renderAvatarFrame } from '../src/avatarVideo.mjs';
 import { flattenToolResult, loadMcpTools, rpc, EXCLUDED, VOICE_LAZY_TOOL_ALLOWLIST } from '../src/mcpTools.mjs';
 import { acceptsTargetPacket, decodeVoiceTarget, encodeVoiceTarget, encodeVoiceTargetRequest, isVoiceTargetRequest, makeVoiceTarget } from '../src/voiceTarget.mjs';
@@ -48,6 +48,21 @@ test('a requested engine wins, but only if its keys are present', () => {
 test('realtime and pipeline are different SHAPES, not two configs of one thing', () => {
   assert.equal(VOICE_ENGINES['openai-realtime'].kind, 'realtime');
   assert.equal(VOICE_ENGINES['cartesia-deepgram'].kind, 'pipeline');
+});
+
+test('voice reasoning stays at the provider minimum', () => {
+  assert.deepEqual(realtimeReasoningFor('gpt-realtime-2.1-mini'), { effort: 'minimal' });
+  assert.equal(realtimeReasoningFor('gpt-4o-realtime-preview-2024-10-01'), undefined);
+  assert.equal(VOICE_OUTPUT_QUEUE_SIZE_MS, 2000);
+});
+
+test('spoken worker instructions never make it say its own @handle', async () => {
+  const { buildVoiceInstructions } = await import('../src/voicePrompt.mjs');
+  const prompt = buildVoiceInstructions({ name: 'Codex', handle: 'codex' }, 'openai-realtime');
+  assert.match(prompt, /never say or spell your own name, handle/i);
+  assert.match(prompt, /never begin with @codex/i);
+  assert.match(prompt, /do not narrate reasoning/i);
+  assert.match(prompt, /wake-up cue and do not repeat/i);
 });
 
 test('the held video frame is a real image with the agent\'s initials on its colour', () => {
