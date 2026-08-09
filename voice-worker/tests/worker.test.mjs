@@ -275,6 +275,23 @@ test('inactive workers do not mirror room speech', async () => {
   assert.equal(bodies[0].content, 'active');
 });
 
+test('a queued transcript is dropped when the worker loses the target before POST', async () => {
+  const handlers = new Map();
+  const bodies = [];
+  let checks = 0;
+  const session = { on: (event, handler) => handlers.set(event, handler), off: () => handlers.clear() };
+  mirrorTranscript({
+    session,
+    meta: { huddleId: 'h1', sessionId: 's1', transcript: { url: 'https://x/t', token: 't' } },
+    shouldMirror: () => checks++ === 0,
+    fetchImpl: async (_url, options) => { bodies.push(JSON.parse(options.body)); return new Response('{}', { status: 200 }); },
+    log: { log: () => {}, error: () => {} },
+  });
+  handlers.get(AgentSessionEventTypes.UserInputTranscribed)({ transcript: 'stale', isFinal: true });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(bodies.length, 0);
+});
+
 test('interrupted assistant items do not become durable speech', async () => {
   const handlers = new Map();
   const bodies = [];

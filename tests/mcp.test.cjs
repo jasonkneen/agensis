@@ -321,7 +321,10 @@ test('standing permission-rule tools are manage-only and dispatch through the au
 
 test('voice session credentials expose only pinned read tools and transcript context', async () => {
   const db = makeDb();
-  const { deps } = makeDeps({ db });
+  const { deps } = makeDeps({
+    db,
+    deps: { listWorkspaceSkills: async () => [] },
+  });
   const handler = createMcpHandler(deps);
 
   const listed = await call(handler, {
@@ -338,6 +341,19 @@ test('voice session credentials expose only pinned read tools and transcript con
     body: rpc('tools/call', { name: 'read_channel', arguments: { channel_id: 'ch-1', limit: 4 } }),
   });
   assert.equal(allowed.body.result.isError ?? false, false);
+
+  // Documents and skills are deliberate agent-equivalent workspace reads; the
+  // only huddle resource is the transcript-pinned channel tool above.
+  const docs = await call(handler, {
+   token: 'voice-token',
+   body: rpc('tools/call', { name: 'list_docs', arguments: { limit: 2 } }),
+  });
+  assert.equal(docs.body.result.isError ?? false, false);
+  const skills = await call(handler, {
+   token: 'voice-token',
+   body: rpc('tools/call', { name: 'list_skills', arguments: {} }),
+  });
+  assert.equal(skills.body.result.isError ?? false, false);
 
   const wrongChannel = await call(handler, {
     token: 'voice-token',

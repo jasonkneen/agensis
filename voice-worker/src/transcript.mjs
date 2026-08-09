@@ -63,13 +63,17 @@ export function mirrorTranscript({ session, meta, log = console, fetchImpl = fet
   const mirrorInstanceId = randomUUID();
   let ephemeralEventSequence = 0;
 
+  const canMirror = () => {
+    try { return Boolean(shouldMirror()); } catch { return false; }
+  };
+
   const drain = async () => {
     if (draining) return;
     draining = true;
     try {
       while (!stopped && queue.length) {
         const item = queue.shift();
-        if (Date.now() - item.createdAt > MAX_TRANSCRIPT_QUEUE_AGE_MS) {
+        if (Date.now() - item.createdAt > MAX_TRANSCRIPT_QUEUE_AGE_MS || !canMirror()) {
           seen.delete(item.eventId);
           continue;
         }
@@ -84,9 +88,16 @@ export function mirrorTranscript({ session, meta, log = console, fetchImpl = fet
           source: 'huddle',
         });
         let delivered = false;
+        let droppedForTargetChange = false;
         try {
           let response;
           for (let attempt = 0; attempt < 2 && !stopped; attempt += 1) {
+            // A target can change while a previous write is in flight. Do not
+            // retry an old worker's queued speech after it loses the floor.
+            if (!canMirror()) {
+              droppedForTargetChange = true;
+              break;
+            }
             response = await fetchImpl(url, {
               method: 'POST',
               headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
@@ -94,6 +105,10 @@ export function mirrorTranscript({ session, meta, log = console, fetchImpl = fet
               signal: currentAbort.signal,
             });
             if (response.ok) { delivered = true; break; }
+          }
+          if (droppedForTargetChange) {
+            seen.delete(item.eventId);
+            continue;
           }
           if (!delivered && !stopped) throw new Error(`HTTP ${response?.status || 'unknown'}`);
         } catch (error) {

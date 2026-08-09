@@ -2379,7 +2379,10 @@ test('an agent participant cannot keep a human-empty huddle alive', async () => 
       joinEvent('user:a', 'Ada', 19 * MINUTE, 1),
       joinEvent('agent:voice', 'Voice', 18 * MINUTE, 2),
     ],
-    presenceRows: [presenceRow('user:a', { heartbeatAgo: 6 * MINUTE, seenAgo: 6 * MINUTE })],
+    presenceRows: [
+      presenceRow('user:a', { heartbeatAgo: 6 * MINUTE, seenAgo: 6 * MINUTE }),
+      presenceRow('agent:voice', { heartbeatAgo: 5_000, seenAgo: 5_000 }),
+    ],
   });
   __test.setTestDb(db);
   const { app } = makeApp(db, { endRoom: async (name) => { rooms.push(name); return true; } });
@@ -2390,6 +2393,34 @@ test('an agent participant cannot keep a human-empty huddle alive', async () => 
     const body = await res.json();
     assert.equal(body.data.state.active, false);
     assert.deepEqual(rooms, [ROOM]);
+  });
+});
+
+test('an agent presence row cannot subtract a live human or reset activity', async () => {
+  const db = makeDb({
+    roles: { [`${WS}:${MEMBER}`]: 'editor' },
+    huddleRows: [liveHuddleRow({ started_at: ago(20 * MINUTE) })],
+    eventRows: [
+      joinEvent('user:a', 'Ada', 5_000, 1),
+      joinEvent('agent:voice', 'Voice', 18 * MINUTE, 2),
+    ],
+    presenceRows: [
+      presenceRow('user:a', { heartbeatAgo: 5_000, seenAgo: 5_000 }),
+      presenceRow('agent:voice', { heartbeatAgo: 6 * MINUTE, seenAgo: 6 * MINUTE }),
+    ],
+  });
+  __test.setTestDb(db);
+  const { app } = makeApp(db);
+  await withServer(app, async (baseUrl) => {
+    const auth = { Authorization: `Bearer ${await __test.issueToken(MEMBER, '1')}` };
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, { headers: auth });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.data.state.active, true);
+    assert.deepEqual(
+      new Set(body.data.state.participants.map((participant) => participant.identity)),
+      new Set(['user:a', 'agent:voice']),
+    );
   });
 });
 

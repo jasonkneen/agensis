@@ -440,7 +440,9 @@ function staleHuddleIdentities({
  const stale = [];
  for (const participant of Array.isArray(participants) ? participants : []) {
   const identity = String((participant && participant.identity) || '');
-  if (!identity) continue;
+  // huddle_presence is the browser self-report lane. Agent liveness comes from
+  // the worker/LiveKit lifecycle, never this human heartbeat table.
+  if (!identity || !isHumanHuddleIdentity(identity)) continue;
   const row = rows.get(identity);
   if (!row) continue;
   const beat = timeOf(row.heartbeat_at);
@@ -475,6 +477,10 @@ function huddleLastActivityAt(huddle, events = [], presence = []) {
   }
  }
  for (const row of Array.isArray(presence) ? presence : []) {
+  // Older adapters omit identity on synthetic activity rows. Count those for
+  // compatibility, but never let an explicitly identified agent heartbeat
+  // keep a human-empty huddle alive.
+  if (String(row?.identity || '').trim() && !isHumanHuddleIdentity(row.identity)) continue;
   latest = Math.max(latest, timeOf(row && row.last_seen_at), timeOf(row && row.heartbeat_at));
  }
  return latest;

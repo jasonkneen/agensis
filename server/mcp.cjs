@@ -2624,8 +2624,12 @@ function isVoiceSessionIdentity(identity) {
 function voiceToolAllowed(tool, identity) {
  if (!isVoiceSessionIdentity(identity)) return true;
  if (!VOICE_MCP_TOOL_ALLOWLIST.has(tool.name)) return false;
- // The worker forcibly supplies its transcript session, but the server must
- // enforce the same pin for a caller that uses the bearer outside the worker.
+ // Workspace document/skill reads are intentionally agent-equivalent: they
+ // have no channel selector, are read-only, and are needed for voice context
+ // loading. The huddle-specific resource is read_channel, whose argument the
+ // worker forcibly supplies and the server pins to the transcript session.
+ // Keeping that distinction explicit prevents a future tool from silently
+ // joining the broader read surface without review.
  if (tool.name === 'read_channel') {
   return Boolean(identity.voiceSessionId);
  }
