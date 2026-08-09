@@ -104,6 +104,13 @@ export function mirrorTranscript({ session, meta, log = console, fetchImpl = fet
               body,
               signal: currentAbort.signal,
             });
+            // A response can settle in the same turn that target routing
+            // changes. Do not mark an old worker's item delivered after the
+            // floor has moved; the server remains the final durable boundary.
+            if (!canMirror()) {
+              droppedForTargetChange = true;
+              break;
+            }
             if (response.ok) { delivered = true; break; }
           }
           if (droppedForTargetChange) {
@@ -113,6 +120,10 @@ export function mirrorTranscript({ session, meta, log = console, fetchImpl = fet
           if (!delivered && !stopped) throw new Error(`HTTP ${response?.status || 'unknown'}`);
         } catch (error) {
           if (!stopped) {
+            if (!canMirror()) {
+              seen.delete(item.eventId);
+              continue;
+            }
             log.error?.(`[voice] transcript write failed: ${error?.message || error}`);
             if (item.attempts < 3 && Date.now() - item.createdAt <= MAX_TRANSCRIPT_QUEUE_AGE_MS) {
               item.attempts += 1;
@@ -199,6 +210,11 @@ export function mirrorTranscript({ session, meta, log = console, fetchImpl = fet
   session.on(AgentSessionEventTypes.ConversationItemAdded, onItem);
 
   return {
+    // Target changes are not process shutdowns. Abort only the in-flight POST;
+    // queued items are discarded by the next drain's canMirror check.
+    cancelPending() {
+      currentAbort?.abort();
+    },
     stop() {
       stopped = true;
       queue.length = 0;

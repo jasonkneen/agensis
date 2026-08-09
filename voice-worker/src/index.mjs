@@ -353,6 +353,7 @@ export default defineAgent({
       const wasActive = lastAppliedActive;
       lastAppliedActive = active;
       if (!active) {
+        if (wasActive === true) transcript.cancelPending?.();
         if (sessionStarted && wasActive === true) {
           try {
             const interruption = session.interrupt({ force: true });

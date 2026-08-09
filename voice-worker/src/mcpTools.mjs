@@ -65,6 +65,17 @@ function parseLoadSkillArgs(args) {
   return args.name;
 }
 
+function parseReadChannelArgs(args, sessionId) {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return null;
+  const keys = Object.keys(args);
+  if (keys.some((key) => !['channel_id', 'limit'].includes(key))) return null;
+  if (args.channel_id !== undefined
+    && (typeof args.channel_id !== 'string' || args.channel_id.trim() !== sessionId)) return null;
+  if (args.limit !== undefined
+    && (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 20)) return null;
+  return { channel_id: sessionId, limit: args.limit ?? 8 };
+}
+
 function unavailable(reason = 'request failed') {
   return `${VOICE_RESULT_UNAVAILABLE_MARKER}\n${String(reason).slice(0, 200)}`;
 }
@@ -220,10 +231,8 @@ export function loadMcpTools({ url, token, sessionId = '', log = console, onTool
   const execute = async (name, args, ctx) => {
     const body = args && typeof args === 'object' ? args : {};
     if (!capJsonBytes(body, MAX_TOOL_INPUT_BYTES)) return unavailable('tool arguments exceeded voice limit');
-    const safeArgs = name === 'read_channel'
-      ? { channel_id: sessionId, limit: Number.isInteger(body.limit) ? Math.min(20, Math.max(1, body.limit)) : 8 }
-      : body;
-    if (name === 'read_channel' && body.channel_id && body.channel_id !== sessionId) return unavailable('channel is outside this huddle');
+    const safeArgs = name === 'read_channel' ? parseReadChannelArgs(body, sessionId) : body;
+    if (name === 'read_channel' && !safeArgs) return unavailable('invalid read_channel arguments');
     try {
       const result = await rpc({ fetchImpl, url, token, method: 'tools/call', params: { name, arguments: safeArgs }, signal: ctx?.signal });
       return boundedFencedResult(flattenToolResult(result), `MCP ${name}`);

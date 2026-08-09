@@ -41,6 +41,15 @@ function isVoiceCapableRunMode(value) {
   return !mode || mode === 'builtin' || mode === 'daemon';
 }
 
+function isVoiceBackendUrl(value) {
+  try {
+    const parsed = new URL(String(value || '').trim());
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && Boolean(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /** Lazily required so a deployment without the SDK still serves human huddles. */
 function loadAgentDispatchClient() {
   // eslint-disable-next-line global-require
@@ -119,7 +128,7 @@ async function dispatchVoiceAgents({
   // The worker must have a reachable Fly callback origin for both its
   // huddle-scoped MCP token and transcript writer. Do not dispatch a worker
   // with null/Netlify callback URLs; humans can still use the room.
-  if (!/^https?:\/\//i.test(String(baseUrl || ''))) {
+  if (!isVoiceBackendUrl(baseUrl)) {
    return { dispatched: [], failed: [], skipped: 'voice-backend-url-not-configured' };
   }
 

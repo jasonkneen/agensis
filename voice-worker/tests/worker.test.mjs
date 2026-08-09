@@ -169,6 +169,32 @@ test('progressive MCP loads are authorized, named, and deferred', async () => {
 });
 
 
+test('loaded read_channel rejects unknown or malformed arguments before MCP', async () => {
+  let loadedTool;
+  const calls = [];
+  const tools = loadMcpTools({
+    url: 'https://agensis.test/backend/mcp', token: 'agv_secret', sessionId: 'huddle-session',
+    onToolsLoaded: async (loaded) => { loadedTool = loaded.read_channel; },
+    fetchImpl: async (_url, options) => {
+      calls.push(JSON.parse(options.body));
+      const request = JSON.parse(options.body);
+      const result = request.method === 'tools/list'
+        ? { tools: [{ name: 'read_channel', description: 'read', inputSchema: { type: 'object', properties: {}, additionalProperties: false } }] }
+        : { content: [{ type: 'text', text: 'safe' }] };
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }), { status: 200 });
+    },
+    log: { log: () => {}, error: () => {} },
+  });
+  await tools.load_tools.execute({ names: ['read_channel'] });
+  assert.ok(loadedTool);
+  assert.match(await loadedTool.execute({ channel_id: 'other' }), /voice result unavailable/);
+  assert.match(await loadedTool.execute({ limit: 0 }), /voice result unavailable/);
+  assert.match(await loadedTool.execute({ cursor: 'forbidden' }), /voice result unavailable/);
+  await loadedTool.execute({});
+  const call = calls.find((request) => request.method === 'tools/call');
+  assert.deepEqual(call.params.arguments, { channel_id: 'huddle-session', limit: 8 });
+});
+
 test('fenced MCP results remain bounded after the safety header', async () => {
   const tools = loadMcpTools({
     url: 'https://agensis.test/backend/mcp', token: 'agv_secret', sessionId: 'session-1',
@@ -297,6 +323,34 @@ test('a queued transcript is dropped when the worker loses the target before POS
   handlers.get(AgentSessionEventTypes.UserInputTranscribed)({ transcript: 'stale', isFinal: true });
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(bodies.length, 0);
+});
+
+test('an in-flight transcript POST is aborted when the worker loses the target', async () => {
+  const handlers = new Map();
+  let active = true;
+  let calls = 0;
+  let aborted = false;
+  const session = { on: (event, handler) => handlers.set(event, handler), off: () => handlers.clear() };
+  const mirror = mirrorTranscript({
+    session,
+    meta: { huddleId: 'h1', sessionId: 's1', transcript: { url: 'https://x/t', token: 't' } },
+    shouldMirror: () => active,
+    fetchImpl: async (_url, options) => {
+      calls += 1;
+      await new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')); }, { once: true });
+      });
+      return new Response('{}', { status: 200 });
+    },
+    log: { log: () => {}, error: () => {} },
+  });
+  handlers.get(AgentSessionEventTypes.UserInputTranscribed)({ transcript: 'stale', isFinal: true });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  active = false;
+  mirror.cancelPending();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(calls, 1);
+  assert.equal(aborted, true);
 });
 
 test('interrupted assistant items do not become durable speech', async () => {
