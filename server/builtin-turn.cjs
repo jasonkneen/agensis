@@ -29,6 +29,7 @@ const { ADVANCE_AGENT_READ_MARKER_SQL } = require('../shared/read-receipts.cjs')
 function createBuiltinTurn(deps = {}) {
  const {
   VOICE_HUDDLE_NOTE,
+  anthropicFetch: injectedAnthropicFetch,
   agentContextFromRow,
   agentRuntimePayload,
   buildAgentActivityDigest,
@@ -866,6 +867,7 @@ function createBuiltinTurn(deps = {}) {
         tools,
         workspaceId,
         signal: abortController.signal,
+        voiceHuddle,
        }, (partial) => { latest = partial; flush(); });
        // The provider completed its first response from this exact prompt, so
        // the read is now proven. Mark the captured message id, never whatever
@@ -1213,18 +1215,23 @@ function createBuiltinTurn(deps = {}) {
   }
  }
 
- async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null, usageKind = 'completion' }) {
+ // Tests can observe the exact provider body without replacing global fetch;
+ // production keeps the bounded header-timeout wrapper above.
+ const sendAnthropicRequest = injectedAnthropicFetch || anthropicFetch;
+
+ async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null, usageKind = 'completion', voiceHuddle = false }) {
   const apiKey = await getAnthropicApiKey(workspaceId);
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
 
   const resolvedModel = resolveAnthropicModel(model);
-  const response = await anthropicFetch({
+  const response = await sendAnthropicRequest({
    apiKey,
    body: {
     model: resolvedModel,
     max_tokens: 4096,
     messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
     system: buildSystemPrompt(memory, documents, workspaceContext, agentContext),
+    ...(voiceHuddle ? { thinking: { type: 'disabled' } } : {}),
    },
   });
 
@@ -1270,7 +1277,7 @@ function createBuiltinTurn(deps = {}) {
  async function streamAnthropicTurn({
   model, messages, memory, documents, workspaceContext, agentContext,
   tools = null, maxTokens = 4096, workspaceId = null,
-  usageKind = 'builtin_turn', signal = null,
+  usageKind = 'builtin_turn', signal = null, voiceHuddle = false,
  }, onDelta) {
   throwIfAborted(signal);
   const apiKey = await getAnthropicApiKey(workspaceId);
@@ -1284,6 +1291,7 @@ function createBuiltinTurn(deps = {}) {
    stream: true,
    messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
    system: buildSystemPrompt(memory, documents, workspaceContext, agentContext),
+   ...(voiceHuddle ? { thinking: { type: 'disabled' } } : {}),
   };
   // Omitted entirely when empty — an empty `tools: []` is not the same request as
   // no tools at all, and the final "answer now" call of the loop depends on the
@@ -1293,7 +1301,7 @@ function createBuiltinTurn(deps = {}) {
   // The streaming call, and the one the headers-only deadline was designed for:
   // the timer is released as soon as headers land, so the token stream below can
   // run for as long as the model needs.
-  const response = await anthropicFetch({ apiKey, body: payload, signal });
+  const response = await sendAnthropicRequest({ apiKey, body: payload, signal });
 
   if (!response.ok || !response.body) {
    throw new Error(await response.text().catch(() => 'Anthropic stream failed'));

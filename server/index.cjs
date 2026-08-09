@@ -78,6 +78,7 @@ const {
  unavailable: skillContentUnavailable,
 } = require('./skill-content.cjs');
 const { mountHuddleRoutes, ensureHuddlesSchema, deleteLivekitRoom } = require('./huddles.cjs');
+const { isVoiceCapableRunMode } = require('./huddle-agents.cjs');
 const {
  createAgentPermissions,
  ensureAgentPermissionsSchema,
@@ -1714,6 +1715,10 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_canvas_layers_workspace_id ON canvas_layers(workspace_id);
 
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_id uuid;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_transcript_event_id text;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_huddle_transcript_event
+      ON messages(huddle_id, huddle_transcript_event_id);
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_kind text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_id text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text DEFAULT '';
@@ -4480,8 +4485,142 @@ async function verifyOauthAccessToken(token) {
  }
 }
 
+// A credential minted for ONE huddle, for ONE agent.
+//
+// The LiveKit voice worker needs this workspace's MCP tools — a voice agent that
+// cannot read a document or hand work to another agent is a talking head. Neither
+// existing credential fits:
+//
+//   - the workspace `agw_` bearer is stored only as a HASH, so the plaintext is
+//     unrecoverable, and minting a fresh one ROTATES the human's MCP client out
+//     of existence (see createWorkspaceMcpToken);
+//   - the agent's own connect token would mean rotating a RUNNING daemon's
+//     identity just to start a call.
+//
+// So: a short-lived HMAC-signed bearer scoped to exactly one agent. For ordinary
+// agent tokens it resolves to the same identity shape as verifyAgentConnectToken;
+// huddle tokens additionally carry a voice marker and transcript-session pin, so
+// the MCP chokepoint can apply the voice read-only allowlist. It is never stored;
+// current agent and huddle state are rechecked on every use instead of maintaining
+// a second bearer-revocation table.
+const VOICE_TOKEN_PREFIX = 'agv_';
+// Keep the MCP capability no longer-lived than the one-hour LiveKit join
+// grant. Huddle lifecycle checks below still revoke it earlier.
+const VOICE_TOKEN_DEFAULT_TTL_MS = 60 * 60_000;
+const VOICE_TOKEN_MIN_TTL_MS = 60_000;
+const VOICE_TOKEN_MAX_TTL_MS = 60 * 60_000;
+
+async function createVoiceSessionToken({ workspaceId, agentId, huddleId = '', sessionId = '', ttlMs = VOICE_TOKEN_DEFAULT_TTL_MS } = {}) {
+ const workspace = String(workspaceId || '').trim();
+ const agent = String(agentId || '').trim();
+ const huddle = String(huddleId || '').trim();
+ const session = String(sessionId || '').trim();
+ if (!workspace || !agent) throw new Error('workspaceId and agentId are required');
+ if (huddle || session) {
+  if (!huddle || !session) throw new Error('huddleId and sessionId are required together');
+  const rows = await getDb().unsafe(
+   `select h.id, h.session_id, h.transcript_session_id, h.ended_at,
+           transcript_scope.participants as transcript_participants
+      from huddles h
+      left join chat_sessions transcript_scope
+        on transcript_scope.id = coalesce(h.transcript_session_id, h.session_id)
+       and transcript_scope.workspace_id = h.workspace_id
+     where h.id = $1 and h.workspace_id = $2
+     limit 1`,
+   [huddle, workspace],
+  );
+  const row = rows[0];
+  const transcriptSession = String(row?.transcript_session_id || row?.session_id || '');
+  const participants = parseJsonArray(row?.transcript_participants);
+  if (!row || row.ended_at || transcriptSession !== session || !participants.includes(agent)) {
+   throw new Error('Voice huddle claims are invalid');
+  }
+ }
+ const requestedTtl = Number(ttlMs);
+ const boundedTtl = Number.isFinite(requestedTtl)
+  ? Math.min(VOICE_TOKEN_MAX_TTL_MS, Math.max(VOICE_TOKEN_MIN_TTL_MS, requestedTtl))
+  : VOICE_TOKEN_DEFAULT_TTL_MS;
+ const secret = await getAuthSecret();
+ const claims = {
+  w: workspace,
+  a: agent,
+  exp: Date.now() + boundedTtl,
+ };
+ // Huddle dispatches carry a narrower capability without breaking older callers
+ // that mint an agent-scoped token for the generic MCP verifier. The transcript
+ // session is a second, independent pin: huddle identity alone must not let a
+ // compromised voice bearer read an arbitrary channel in the workspace.
+ if (huddle) claims.h = huddle;
+ if (session) claims.s = session;
+ const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
+ const signature = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+ return `${VOICE_TOKEN_PREFIX}${payload}.${signature}`;
+}
+
+async function verifyVoiceSessionToken(token) {
+ if (typeof token !== 'string' || !token.startsWith(VOICE_TOKEN_PREFIX)) return null;
+ const [payload, signature] = token.slice(VOICE_TOKEN_PREFIX.length).split('.');
+ if (!payload || !signature) return null;
+ const secret = await getAuthSecret();
+ const expected = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+ const given = Buffer.from(signature);
+ const want = Buffer.from(expected);
+ // Length check first: timingSafeEqual throws on a mismatch.
+ if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) return null;
+ let claims;
+ try {
+  claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+ } catch {
+  return null;
+ }
+ if (!claims?.w || !claims?.a) return null;
+ if (!(Number(claims.exp) > Date.now())) return null;
+ // The signature proves the CLAIM, never the agent's current state — a disabled
+ // or deleted agent must lose its voice immediately, not when the token lapses.
+ const rows = await getDb().unsafe(
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, metadata, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
+     from workspace_agents
+     where id = $1 and workspace_id = $2
+     limit 1`,
+  [String(claims.a), String(claims.w)],
+ );
+ const agent = rows[0];
+ if (!agent || !isAgentEnabled(agent) || !isVoiceCapableRunMode(agent.run_mode)) return null;
+ if (claims.h) {
+  // A voice bearer is a call capability, not a four-hour workspace bearer.
+  // Re-check the huddle lifecycle on every MCP authentication so ending the
+  // call invalidates the worker's read surface even if LiveKit room deletion
+  // was delayed or failed.
+  let huddles;
+  try {
+   huddles = await getDb().unsafe(
+    `select id, workspace_id, session_id, transcript_session_id, started_by, ended_at
+       from huddles where id = $1 and workspace_id = $2 limit 1`,
+    [String(claims.h), String(claims.w)],
+   );
+  } catch {
+   return null;
+  }
+  const huddle = huddles[0];
+  if (!huddle || huddle.ended_at) return null;
+  if (claims.s && String(claims.s) !== String(huddle.transcript_session_id || huddle.session_id || '')) return null;
+ }
+ return {
+  kind: 'agent',
+  agentId: agent.id,
+  workspaceId: agent.workspace_id,
+  huddleId: String(claims.h || ''),
+  voiceSession: true,
+  voiceSessionId: String(claims.s || ''),
+  name: agent.name,
+  handle: agent.handle || slugHandle(agent.name),
+  agent: agentRuntimePayload(agent),
+ };
+}
+
 async function verifyMcpToken(token, req = null) {
  return (await verifyAgentConnectToken(token, req))
+  || (await verifyVoiceSessionToken(token))
   || (await verifyFlowConnectionToken(token))
   || (await verifyControllerToken(token))
   || (await verifyWorkspaceMcpToken(token))
@@ -6084,6 +6223,8 @@ async function buildAgentActivityDigest(workspaceId, agentId, currentSessionId) 
 // must not be told to answer in half-sentences.
 const VOICE_HUDDLE_NOTE = [
  'You are in a LIVE VOICE HUDDLE. Everything you write is read aloud to the person you are talking to, and what they say is transcribed into this conversation.',
+ 'This is speech, not chat markup. Never begin with @handle, an "at <handle>" phrase, your own name, or a speaker label. If the user addresses you by name, treat it as a wake-up cue and do not repeat it aloud.',
+ 'Do not narrate hidden reasoning or say "thinking". Answer immediately in plain spoken sentences.',
  'Reply IMMEDIATELY with one short sentence — the headline or an acknowledgement — as its own message, BEFORE you go and do the work. Then keep going in short messages as you learn things.',
  // These three constraints are not style, they are the latency mechanism, and
  // each one names a specific thing that made the first word late:
@@ -6096,7 +6237,7 @@ const VOICE_HUDDLE_NOTE = [
  //     from a broken call. Answering first costs nothing: the work still happens,
  //     in the messages that follow.
  'Your FIRST sentence must be at most a dozen words and must END IN A FULL STOP. Do not open with a preamble, a restatement of the question, or a heading — the first full stop is the moment your voice is heard.',
- 'Do not reason at length before that first sentence. Say it, then think, then keep talking as you learn things.',
+ 'Do not reason at length before that first sentence. Say it, then continue only with concise spoken results; never narrate the reasoning.',
  'It may say what you are ABOUT to do. It must never say you have already done it.',
  'Speak in plain sentences. Code blocks, tables and long lists are dropped before speaking, so say what they mean instead.',
  // The base system prompt (and, for daemon agents, the daemon's own prompt
@@ -6631,11 +6772,18 @@ function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivit
  if (intentNote) lines.push(intentNote, '');
  if (voiceHuddle) lines.push(VOICE_HUDDLE_NOTE, '');
  if (coParticipants.length > 0) {
-  lines.push(
-   `You are @${selfHandle} in a multi-agent channel. Other agents present: ${coParticipants.map((p) => `@${p.handle}`).join(', ')}.`,
-   'To bring another agent in, address them by @handle. If the request is fully handled, reply without mentioning anyone.',
-   '',
-  );
+  if (voiceHuddle) {
+   lines.push(
+    'Other agents may appear in the transcript, but this is a spoken huddle. Do not mention, tag, or address an agent by handle aloud.',
+    '',
+   );
+  } else {
+   lines.push(
+    `You are @${selfHandle} in a multi-agent channel. Other agents present: ${coParticipants.map((p) => `@${p.handle}`).join(', ')}.`,
+    'To bring another agent in, address them by @handle. If the request is fully handled, reply without mentioning anyone.',
+    '',
+   );
+  }
  }
  if (recentActivity) {
   lines.push(
@@ -6646,9 +6794,13 @@ function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivit
  }
  lines.push('Conversation so far:');
  for (const message of contextMessages) {
-  lines.push(message.role === 'assistant' ? `[@${selfHandle} (you)]: ${message.content}` : message.content);
+  lines.push(message.role === 'assistant'
+   ? `${voiceHuddle ? '[you]' : `[@${selfHandle} (you)]`}: ${message.content}`
+   : message.content);
  }
- lines.push('', 'Write your next reply as @' + selfHandle + '.');
+ lines.push('', voiceHuddle
+  ? 'Write only the next spoken reply. Begin directly with the answer; never prefix it with your name, an @mention, or a speaker label.'
+  : 'Write your next reply as @' + selfHandle + '.');
  return lines.join('\n');
 }
 
@@ -8424,6 +8576,7 @@ async function inspectProjectPath(inputPath) {
 
 function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
  const sections = [];
+ const voiceHuddle = String(agentContext?.systemPrompt || '').includes('<voice_huddle>');
  if (agentContext && (agentContext.systemPrompt || agentContext.name)) {
   if (agentContext.name) {
    sections.push(`You are "${agentContext.name}", an AI agent collaborating in a shared agensis workspace.`);
@@ -8445,13 +8598,19 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
   }
   if (Array.isArray(agentContext.coParticipants) && agentContext.coParticipants.length > 0) {
    const roster = agentContext.coParticipants.map((peer) => `@${peer.handle}${peer.name ? ` (${peer.name})` : ''}`).join(', ');
-   sections.push(
-    '',
-    `This is a multi-agent channel. Other agents you can collaborate with: ${roster}.`,
-    '- In the conversation history, each message is prefixed with the speaker, e.g. "[@handle]: ...". Messages without a prefix are your own.',
-    '- To bring another agent into the conversation, address them by @handle in your reply. Only mention an agent when you genuinely need their help — do not @ them out of politeness, or the conversation will loop.',
-    '- If the request is already fully handled, answer without mentioning anyone so the conversation can end.',
-   );
+   sections.push('');
+   if (voiceHuddle) {
+    sections.push(
+     'Other agents may be present in the transcript, but this is a spoken huddle. Do not mention, tag, or address an agent by handle aloud.',
+    );
+   } else {
+    sections.push(
+     `This is a multi-agent channel. Other agents you can collaborate with: ${roster}.`,
+     '- In the conversation history, each message is prefixed with the speaker, e.g. "[@handle]: ...". Messages without a prefix are your own.',
+     '- To bring another agent into the conversation, address them by @handle in your reply. Only mention an agent when you genuinely need their help — do not @ them out of politeness, or the conversation will loop.',
+     '- If the request is already fully handled, answer without mentioning anyone so the conversation can end.',
+    );
+   }
   }
   sections.push('');
  } else {
@@ -8468,6 +8627,14 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
   '- If you do not know something from the provided context, say so rather than inventing.',
   '- You are one of potentially many people in this workspace; speak in a way that is useful to the whole team, not just a single user.',
  );
+ if (voiceHuddle) {
+  sections.push(
+   '',
+   '<voice_output_rules>',
+   'Speak directly to the human. Never output a mention, your own name, an "at <handle>" phrase, a speaker label, or hidden reasoning. Begin with the answer.',
+   '</voice_output_rules>',
+  );
+ }
 
  if (workspaceContext) {
   const wsBlocks = [];
@@ -9595,6 +9762,20 @@ function createApp() {
   installCreatedSessionMemberships,
   lockPrivateSessionRoster,
   webhookRateLimiter,
+  // A huddle's agents join it as real LiveKit participants (voice-worker/).
+  // The worker reaches back for tools and the transcript, so it needs an
+  // absolute base URL and a credential scoped to the one agent it is being dispatched for.
+  createVoiceSessionToken,
+  verifyVoiceSessionToken,
+  parseJsonArray,
+  parseJsonObject,
+  // Voice workers call back to the long-running Fly backend. Never point
+  // their MCP/transcript credentials at the app/Netlify origin: that host does
+  // not serve these routes. A missing backend URL disables agent dispatch while
+  // preserving the human-only huddle.
+  publicBaseUrl: normalizeAgentBackendBaseUrl(
+   process.env.AGENSIS_DAEMON_BASE_URL || '',
+  ) || '',
  });
 
  // Voice engines for huddles. The Cartesia token exchange is plain HTTP and is
@@ -10944,6 +11125,11 @@ module.exports = {
   verifyUserAuthMcpToken,
   verifyMcpToken,
   createWorkspaceMcpToken,
+  // Per-huddle, per-agent voice credential for the LiveKit worker.
+  createVoiceSessionToken,
+  verifyVoiceSessionToken,
+  VOICE_TOKEN_PREFIX,
+  VOICE_TOKEN_MAX_TTL_MS,
   createCursorBuddyConnectionKey,
   normalizeCursorBuddySurface,
   normalizeCursorBuddyScope,

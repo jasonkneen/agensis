@@ -44,6 +44,12 @@ function lookupKey(value: unknown): string {
     .toLowerCase();
 }
 
+function isVoiceCapableAgent(agent: WorkspaceAgent | null): boolean {
+  if (!agent || agent.enabled === false) return false;
+  const mode = String(agent.run_mode || '').trim();
+  return !mode || mode === 'builtin' || mode === 'daemon';
+}
+
 // Mirrors the composer's participant<->agent matcher (agentMatchesLookupKey in
 // ChatWindowContent). Kept local so this module stays pure and importable from
 // a test without dragging a 3,000-line component in behind it.
@@ -77,10 +83,9 @@ function resolveAgent(participant: ChannelParticipant, agents: WorkspaceAgent[])
  * channel, and an agent that is not a participant would be silently added to
  * the roster by the server the first time you spoke to it.
  *
- * A participant that no longer resolves to a workspace agent is still listed
- * when it carries a usable handle or name — the server matches mentions by
- * handle, so it can still be dispatched, and dropping it would leave a hole in
- * the numbering.
+ * A participant that no longer resolves to a workspace agent is omitted: the
+ * voice worker cannot be dispatched for an unknown runtime, and offering it
+ * would publish a target that makes every worker go silent.
  */
 export function huddleAgentOptions(
   agents: WorkspaceAgent[],
@@ -99,6 +104,7 @@ export function huddleAgentOptions(
   for (const participant of list) {
     if (!participant || participant.kind !== 'agent') continue;
     const agent = resolveAgent(participant, pool);
+    if (!isVoiceCapableAgent(agent) || ['external', 'sandbox'].includes(String((participant as ChannelParticipant & { run_mode?: string }).run_mode || '').trim())) continue;
     const rawHandle = agent?.handle || participant.handle || '';
     const rawName = agent?.name || participant.name || '';
     // agentHandle() falls back to the literal 'agent' for an empty input, which

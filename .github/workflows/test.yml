@@ -40,6 +40,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Install voice worker dependencies
+        run: npm ci --prefix voice-worker --no-audit --no-fund
+
+      - name: Voice worker tests
+        run: npm test --prefix voice-worker
+
       - name: Backend tests (node:test)
         run: npm test
 

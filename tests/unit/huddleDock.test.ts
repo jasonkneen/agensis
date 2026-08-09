@@ -186,7 +186,9 @@ describe('sameHuddleLocalState', () => {
     )).toBe(false);
   });
 
-  it('starts idle: nothing connected, nothing publishing, nothing wrong', () => {
-    expect(IDLE_HUDDLE_LOCAL).toEqual({ connected: false, micEnabled: false, speaker: '', failed: '' });
+  it('starts idle: nothing connected, nothing publishing, nobody in the room', () => {
+    expect(IDLE_HUDDLE_LOCAL).toEqual({
+      connected: false, micEnabled: false, speaker: '', failed: '', roomParticipants: [],
+    });
   });
 });

@@ -57,7 +57,7 @@ export function HuddleToolbarButton({
 
   // Already in this call — the dock owns leaving. A second control that looked
   // like "join" but meant nothing would just be a trap.
-  if (connection || dock?.target?.sessionId === sessionId) {
+  if (connection || (dock?.target?.sessionId === sessionId && dock?.session?.state?.active)) {
     return (
       <span
         className={cn('flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-emerald-500', className)}
