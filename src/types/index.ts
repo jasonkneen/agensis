@@ -223,6 +223,41 @@ export interface AgentMemoryFile {
  updated_at: string;
 }
 
+/**
+ * One markdown document a connected agent mirrored up from its own locations.
+ *
+ * The third daemon mirror, alongside AgentMemoryFile and the skill documents.
+ * Read-only: the daemon is the only writer (see the DDL note on agent_documents
+ * for why these are not rows in `documents`).
+ *
+ * `content` is ABSENT on list rows, exactly like Document.content and
+ * AgentMemoryFile.content_cache. The list is metadata-only and the body is
+ * fetched when a document is opened — the realtime fanout strips it too, so a
+ * re-sync of a repo's docs tree does not push every body to every browser.
+ */
+export interface AgentDocument {
+ id: string;
+ workspace_id: string;
+ agent_id: string;
+ /** Where the file sits on the AGENT's machine. A label; agensis never opens it. */
+ path: string;
+ title: string;
+ /** The daemon's grouping hint, or one derived from the path. May be ''. */
+ domain: string;
+ summary: string;
+ content?: string;
+ byte_size: number;
+ truncated: boolean;
+ /** The daemon's hash of the FILE. Equal hashes mean identical copies. */
+ content_hash: string;
+ /** mtime on the agent's disk. Null when the daemon did not report one. */
+ source_modified_at: string | null;
+ last_synced: string;
+ version?: number;
+ created_at: string;
+ updated_at: string;
+}
+
 export interface MemoryFileComment {
  id: string;
  workspace_id: string;
@@ -292,9 +327,9 @@ export interface CanvasGroup {
 
 export type CanvasTool = 'select' | 'pen' | 'rect' | 'ellipse' | 'diamond' | 'line' | 'arrow' | 'text' | 'eraser' | 'sticky_note';
 
-export type ActiveView = 'chat' | 'document' | 'memory' | 'skills' | 'files' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules' | 'automations';
+export type ActiveView = 'chat' | 'document' | 'memory' | 'skills' | 'library' | 'files' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules' | 'automations';
 
-export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'tasks' | 'activity' | 'agents' | 'resources' | 'users' | 'schedules' | 'automations' | 'inbox' | 'tenants' | 'browser' | 'terminal';
+export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'library' | 'tasks' | 'activity' | 'agents' | 'resources' | 'users' | 'schedules' | 'automations' | 'inbox' | 'tenants' | 'browser' | 'terminal';
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
@@ -382,6 +417,14 @@ export interface DocumentComment {
  document_id?: string;
  workspace_id: string;
  user_id: string | null;
+ /**
+  * Set when an AGENT authored this comment (through the reply_to_comment MCP
+  * tool), in which case user_id is null. Server-stamped from the verified
+  * token and privileged in shared/backend-core.cjs, so a browser cannot forge
+  * it — which matters because dispatchCommentMentions treats a row with an
+  * agent_id as "do not wake anyone", i.e. it is a loop guard as well as a byline.
+  */
+ agent_id?: string | null;
  parent_id: string | null;
  content: string;
  anchor_text: string;
@@ -572,6 +615,11 @@ export interface FloatingWindow {
  /** A task to scroll to and expand once the tasks window renders (e.g. from
   *  search) — consumed and cleared by the window content, not persisted. */
  focusTaskId?: string;
+ /** A library document to open once the library window renders (e.g. from the
+  *  sidebar's Documents section). Same contract as focusTaskId: consumed by the
+  *  window content, not persisted. Keyed on the COLLATION key, not a row id —
+  *  the whole point of the library is that one document is many rows. */
+ focusLibraryKey?: string;
  /** Set when this window is tiled with another (drag-to-split) — windows
   *  sharing a groupId are shown as one unit in the dock and move together. */
  groupId?: string | null;
@@ -764,6 +812,17 @@ export interface WorkspaceAgent {
   * replies dispatch regardless. See shared/ambientAddressing.cjs.
   */
  ambient_replies?: boolean;
+ /**
+  * What this agent CONTRIBUTES to the workspace: memory files, skill bodies,
+  * its tool advert, and documents.
+  *
+  * Optional and read FAIL-OPEN through src/lib/agentSharing.ts on every side,
+  * so an agent row predating the column reads as sharing everything — which is
+  * what it has in fact been doing. Never read the raw object: a missing key
+  * means "shared", and a `!sharing.documents` written by hand gets that
+  * backwards. Enforced server-side at ingest, not here.
+  */
+ sharing?: Partial<Record<'memory' | 'skills' | 'tools' | 'documents', boolean>> | null;
  permission_mode?: AgentPermissionMode;
  version?: number;
  created_by: string | null;
@@ -788,6 +847,18 @@ export interface AgentCapabilities {
  codingRoute?: boolean;
  shared?: boolean;
  memoryRoot: string | null;
+ /**
+  * The machine's own `.agensis-share` declaration, parsed by the daemon and
+  * re-validated by the server. See src/lib/agentSharePolicy.ts.
+  *
+  * Absent for a daemon that has no policy file, or one too old to send it —
+  * both mean "no machine-side restrictions", never "shares nothing".
+  */
+ sharePolicy?: {
+  declared: boolean;
+  channels: Partial<Record<'memory' | 'skills' | 'tools' | 'documents', boolean>>;
+  rules: Array<{ allow: boolean; pattern: string }>;
+ };
 }
 
 export interface AgentConnection {

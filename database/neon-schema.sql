@@ -680,6 +680,13 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   -- Explicit addressing (@mention, @channel, DM, thread reply) ignores this
   -- column entirely — see shared/ambientAddressing.cjs.
   ambient_replies boolean NOT NULL DEFAULT true,
+  -- What this agent CONTRIBUTES to the workspace: {memory, skills, tools,
+  -- documents}. DEFAULT '{}' and read FAIL-OPEN in shared/agentSharing.cjs —
+  -- absent key means shared, only an explicit false withholds — because all
+  -- four channels were mirroring for every connected agent before the column
+  -- existed. Enforced at ingest in server/agent-connections.cjs: a withheld
+  -- channel refuses the daemon's push AND prunes what it already mirrored.
+  sharing jsonb NOT NULL DEFAULT '{}'::jsonb,
   permission_mode text NOT NULL DEFAULT 'default',
   mcp_approved boolean NOT NULL DEFAULT false,
   version integer NOT NULL DEFAULT 1,
@@ -745,6 +752,48 @@ CREATE TABLE IF NOT EXISTS agent_skill_documents (
 
 CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_workspace_id ON agent_skill_documents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_agent_id ON agent_skill_documents(agent_id);
+
+-- Agent document mirror: the MARKDOWN a connected agent can see from its own
+-- locations (its repo, its docs/ tree, whatever the daemon was pointed at).
+-- Third member of the daemon-mirror family, same shape as the two above:
+-- daemon-written, read-only in-app, UPSERT by UNIQUE(agent_id, path), prune
+-- what the daemon stopped reporting. Pushed via `agent_document_sync`.
+--
+-- Deliberately NOT rows in `documents`. That table is workspace-authored and
+-- every row is the only copy of itself; these are read-only snapshots of files
+-- on other machines, and the same document routinely arrives from several
+-- agents at once (three checkouts of one repo). Merging would either collapse
+-- them — losing the disagreement the library exists to show — or fill the
+-- sidebar with duplicates. src/lib/documentLibrary.ts collates across both.
+CREATE TABLE IF NOT EXISTS agent_documents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+  path text NOT NULL,
+  title text NOT NULL DEFAULT '',
+  -- The daemon's own grouping hint (a folder, a repo area). Advisory: the
+  -- library derives one from the path when this is empty.
+  domain text NOT NULL DEFAULT '',
+  summary text DEFAULT '',
+  content text DEFAULT '',
+  byte_size bigint DEFAULT 0,
+  truncated boolean NOT NULL DEFAULT false,
+  -- Hash of the FILE, not the row. Two agents holding the same checkout agree,
+  -- which is how the library says "identical" without fetching both bodies.
+  content_hash text NOT NULL DEFAULT '',
+  -- mtime on the agent's disk. Versions rank by this (falling back to
+  -- last_synced) so "newest" means the newest FILE, not the latest reconnect.
+  source_modified_at timestamptz,
+  last_synced timestamptz DEFAULT now(),
+  version integer NOT NULL DEFAULT 1,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE (agent_id, path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_documents_workspace_id ON agent_documents(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_agent_documents_agent_id ON agent_documents(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_documents_domain ON agent_documents(workspace_id, domain);
 
 -- Agent templates ("persona packs") as DATA rather than code. Validator:
 -- shared/agentTemplates.cjs. Routes: server/agent-templates-routes.cjs.
@@ -1299,6 +1348,11 @@ CREATE TABLE IF NOT EXISTS document_comments (
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
+
+-- Agent-authored comments (an agent replying in a document thread) attribute to
+-- an agent, not a user — mirrors task_comments.agent_id. Load-bearing for the
+-- mention loop guard in dispatchCommentMentions, not just for attribution.
+ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS agent_id uuid;
 
 CREATE INDEX IF NOT EXISTS idx_document_comments_document_id ON document_comments(document_id);
 CREATE INDEX IF NOT EXISTS idx_document_comments_workspace_id ON document_comments(workspace_id);
