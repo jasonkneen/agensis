@@ -107,7 +107,10 @@ export function HuddleDockProvider({ children }: { children: ReactNode }) {
     const current = targetRef.current;
     const sameLiveCall = Boolean(current && current.workspaceId === next.workspaceId
       && current.sessionId === next.sessionId && !current.huddleId && !next.huddleId
-      && session?.state?.active);
+      // The database row can remain live after LiveKit drops. If the local
+      // connection is gone, reopening must run startOrJoin instead of taking
+      // the early-return path for a call that no longer exists in this tab.
+      && session?.connection && session?.state?.active);
     if (sameLiveCall) {
       setCollapsed(false);
       return;
@@ -120,7 +123,7 @@ export function HuddleDockProvider({ children }: { children: ReactNode }) {
     setTargetEpoch(epoch => epoch + 1);
     setTarget(next);
     setCollapsed(false);
-  }, [session?.state?.active]);
+  }, [session?.connection, session?.state?.active]);
 
   // JOIN the call once per target. openHuddle only records WHICH conversation
   // the dock is for; without this the panel opened and nothing ever connected,

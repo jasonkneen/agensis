@@ -1560,7 +1560,11 @@ function mountHuddleRoutes(app, deps = {}) {
      [locked.id],
     );
     const presence = await tx.unsafe(
-     `select ${PRESENCE_COLUMNS} from huddle_presence where huddle_id = $1`,
+     // Keep an exact textual timestamp alongside the driver Date. postgres.js
+     // rounds timestamptz values to milliseconds, so binding heartbeat_at back
+     // as a Date can miss a row whose stored value has microseconds.
+     `select ${PRESENCE_COLUMNS}, heartbeat_at::text as heartbeat_at_key
+        from huddle_presence where huddle_id = $1`,
      [locked.id],
     );
     const state = foldHuddleState(locked, events);
@@ -1577,7 +1581,7 @@ function mountHuddleRoutes(app, deps = {}) {
     for (const identity of stale.filter((candidate) => isHumanHuddleIdentity(candidate))) {
      const snapshot = rowsByIdentity.get(identity);
      const currentRows = await tx.unsafe(
-      `select connection_epoch, heartbeat_at, reaped_at
+      `select connection_epoch, heartbeat_at::text as heartbeat_at_key, reaped_at
          from huddle_presence
         where huddle_id = $1 and identity = $2
         for update`,
@@ -1589,7 +1593,7 @@ function mountHuddleRoutes(app, deps = {}) {
      // invariant true for maintenance/import callers using the same DB.
      if (!current || current.reaped_at
        || String(current.connection_epoch || '') !== String(snapshot?.connection_epoch || '')
-       || String(current.heartbeat_at || '') !== String(snapshot?.heartbeat_at || '')) continue;
+       || String(current.heartbeat_at_key || '') !== String(snapshot?.heartbeat_at_key || '')) continue;
      const reaped = await tx.unsafe(
       `update huddle_presence
           set reaped_at = now()
@@ -1597,9 +1601,9 @@ function mountHuddleRoutes(app, deps = {}) {
           and identity = $2
           and reaped_at is null
           and connection_epoch = $3
-          and heartbeat_at = $4
+          and heartbeat_at::text = $4
         returning huddle_id, identity`,
-      [locked.id, identity, snapshot?.connection_epoch || '', snapshot?.heartbeat_at || null],
+      [locked.id, identity, snapshot?.connection_epoch || '', snapshot?.heartbeat_at_key || ''],
      );
      if (reaped.length !== 1) continue;
      const event = await appendEvent({

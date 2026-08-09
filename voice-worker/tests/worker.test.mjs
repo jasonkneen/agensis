@@ -341,9 +341,11 @@ test('voice target packets are closed, revisioned, and human-sender authenticate
   assert.deepEqual(decodeVoiceTarget(encodeVoiceTarget(packet)), packet);
   assert.equal(acceptsTargetPacket({ packet, sender, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).accepted, true);
   assert.equal(acceptsTargetPacket({ packet, sender: { identity: 'user:human-2', kind: 'standard' }, controllerIdentity: 'user:human-1', huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'controller');
-  const request = decodeVoiceTarget(encodeVoiceTargetRequest('h1'));
+  const request = decodeVoiceTarget(encodeVoiceTargetRequest('h1', 7));
   assert.equal(isVoiceTargetRequest(request, 'h1'), true);
+  assert.equal(request.currentRevision, 7);
   assert.equal(isVoiceTargetRequest(request, 'other'), false);
+  assert.equal(isVoiceTargetRequest({ ...request, currentRevision: -1 }, 'h1'), false);
   assert.equal(acceptsTargetPacket({ packet, sender, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 1 }).reason, 'stale');
   assert.equal(acceptsTargetPacket({ packet, sender: { identity: 'agent', kind: 'agent' }, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'sender');
   assert.equal(acceptsTargetPacket({ packet, sender: { identity: 'AG_xyz', kind: 4 }, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'sender');

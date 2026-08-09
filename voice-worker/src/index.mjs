@@ -28,6 +28,7 @@ import {
   decodeVoiceTarget,
   encodeVoiceTargetRequest,
   isAgentParticipant,
+  isVoiceTargetRequest,
   isTargetAgent,
 } from './voiceTarget.mjs';
 
@@ -369,12 +370,13 @@ export default defineAgent({
 
     applyTarget();
     let targetPacketReceived = false;
+    let targetTransportEpoch = 0;
     let targetRequestTimer = null;
     let targetRequestAttempts = 0;
     const requestTarget = () => {
       if (!ctx.room.localParticipant?.publishData || !meta.huddleId) return;
       targetRequestAttempts += 1;
-      const pending = ctx.room.localParticipant.publishData(encodeVoiceTargetRequest(meta.huddleId), {
+      const pending = ctx.room.localParticipant.publishData(encodeVoiceTargetRequest(meta.huddleId, targetRevision), {
         reliable: true, topic: VOICE_TARGET_TOPIC,
       });
       void Promise.resolve(pending).catch(() => {});
@@ -393,6 +395,16 @@ export default defineAgent({
       // fallback for SDK fakes/older runtimes that do not expose the map.
       if (senderIdentity && remoteParticipants?.has && !remoteParticipants.has(senderIdentity)) return;
       const packet = decodeVoiceTarget(payload);
+      if (isVoiceTargetRequest(packet, meta.huddleId)) {
+        // A remounted controller asks the worker for its revision floor. Only
+        // the authenticated controller may trigger the replay request; agents
+        // and other humans must not influence target traffic.
+        if (!participant?.identity || isAgentParticipant(participant)) return;
+        const controller = currentTargetController();
+        if (controller && String(participant.identity) !== controller) return;
+        requestTarget();
+        return;
+      }
       const result = acceptsTargetPacket({
         packet,
         sender: participant,
@@ -402,10 +414,21 @@ export default defineAgent({
         currentRevision: targetRevision,
       });
       if (!result.accepted) return;
+      const packetTransportEpoch = targetTransportEpoch;
       // LiveKit's sender identity is not our authorization system. Revalidate
       // the starter against the workspace/session before activating media; an
       // already-issued room grant must not survive a membership revocation.
       if (targetControllerIdentity && !(await checkVoiceCredential())) return;
+      // The credential probe yields. The controller may leave, reconnect, or a
+      // newer packet may win while it is in flight; never activate from the
+      // stale pre-probe authorization snapshot.
+      if (packetTransportEpoch !== targetTransportEpoch) return;
+      const latestParticipants = ctx.room.remoteParticipants;
+      if (latestParticipants?.has && !latestParticipants.has(senderIdentity)) return;
+      if (latestParticipants?.get && latestParticipants.get(senderIdentity) !== participant) return;
+      const latestController = currentTargetController();
+      if (latestController && latestController !== senderIdentity) return;
+      if (result.revision <= targetRevision) return;
       targetPacketReceived = true;
       stopTargetRequests();
       targetReady = true;
@@ -434,6 +457,9 @@ export default defineAgent({
     ctx.room.on(RoomEvent.ParticipantConnected, onParticipantConnected);
     ctx.room.on(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
     const onTargetReconnect = () => {
+      targetTransportEpoch = targetTransportEpoch >= Number.MAX_SAFE_INTEGER
+        ? Number.MAX_SAFE_INTEGER
+        : targetTransportEpoch + 1;
       targetPacketReceived = false;
       targetRequestAttempts = 0;
       // Legacy/headless rooms have no configured controller to republish a

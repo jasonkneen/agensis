@@ -2,6 +2,9 @@ export const VOICE_TARGET_TOPIC = 'agensis.voice.target';
 export const VOICE_TARGET_VERSION = 1;
 export const VOICE_TARGET_REQUEST_TYPE = 'voice_target_request';
 export const MAX_TARGET_REVISION = 0x7fffffff;
+// A remount may need to catch up, but an agent must not jump the controller
+// counter to MAX and permanently disable publishing.
+export const MAX_TARGET_REVISION_SYNC_LEAD = 1024;
 
 const TARGET_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -20,6 +23,8 @@ export type VoiceTargetRequest = {
   type: 'voice_target_request';
   version: 1;
   huddleId: string;
+  /** The worker's last accepted revision, when it is asking for a replay. */
+  currentRevision?: number;
 };
 
 export type VoiceTargetPacket = {
@@ -39,9 +44,13 @@ export function makeVoiceTarget({
   return { type: 'voice_target', version: VOICE_TARGET_VERSION, huddleId, targetAgentId, revision };
 }
 
-export function makeVoiceTargetRequest(huddleId: string): VoiceTargetRequest {
+export function makeVoiceTargetRequest(huddleId: string, currentRevision?: number): VoiceTargetRequest {
   assertTargetHuddleId(huddleId);
-  return { type: VOICE_TARGET_REQUEST_TYPE, version: VOICE_TARGET_VERSION, huddleId };
+  if (currentRevision === undefined) {
+    return { type: VOICE_TARGET_REQUEST_TYPE, version: VOICE_TARGET_VERSION, huddleId };
+  }
+  assertTargetRevision(currentRevision);
+  return { type: VOICE_TARGET_REQUEST_TYPE, version: VOICE_TARGET_VERSION, huddleId, currentRevision };
 }
 
 export function decodeVoiceTargetRequest(data: Uint8Array | string, huddleId: string): VoiceTargetRequest | null {
@@ -50,9 +59,12 @@ export function decodeVoiceTargetRequest(data: Uint8Array | string, huddleId: st
     const packet = JSON.parse(raw);
     if (!packet || typeof packet !== 'object' || Array.isArray(packet)) return null;
     const keys = Object.keys(packet);
-    if (keys.length !== 3 || keys.some((key) => !['type', 'version', 'huddleId'].includes(key))) return null;
+    if (keys.length < 3 || keys.length > 4 || keys.some((key) => !['type', 'version', 'huddleId', 'currentRevision'].includes(key))) return null;
     if (packet.type !== VOICE_TARGET_REQUEST_TYPE || packet.version !== VOICE_TARGET_VERSION
       || packet.huddleId !== huddleId || !TARGET_ID_RE.test(packet.huddleId)) return null;
+    if (Object.prototype.hasOwnProperty.call(packet, 'currentRevision')
+      && (!Number.isInteger(packet.currentRevision)
+        || packet.currentRevision < 0 || packet.currentRevision > MAX_TARGET_REVISION)) return null;
     return packet as VoiceTargetRequest;
   } catch {
     return null;

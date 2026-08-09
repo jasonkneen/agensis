@@ -6,9 +6,10 @@ export const VOICE_TARGET_TYPE = 'voice_target';
 export const VOICE_TARGET_REQUEST_TYPE = 'voice_target_request';
 export const INACTIVE_PARTICIPANT_IDENTITY = '__agensis_voice_inactive__';
 export const MAX_TARGET_REVISION = 0x7fffffff;
+export const MAX_TARGET_REVISION_SYNC_LEAD = 1024;
 
 const PACKET_KEYS = new Set(['type', 'version', 'huddleId', 'targetAgentId', 'revision']);
-const REQUEST_KEYS = new Set(['type', 'version', 'huddleId']);
+const REQUEST_KEYS = new Set(['type', 'version', 'huddleId', 'currentRevision']);
 const ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
 function text(value) {
@@ -84,19 +85,22 @@ export function isTargetAgent({ targetAgentId, agentId } = {}) {
 }
 
 
-export function encodeVoiceTargetRequest(huddleId) {
-  return new TextEncoder().encode(JSON.stringify({
-    type: VOICE_TARGET_REQUEST_TYPE, version: VOICE_TARGET_VERSION, huddleId,
-  }));
+export function encodeVoiceTargetRequest(huddleId, currentRevision = -1) {
+  const packet = { type: VOICE_TARGET_REQUEST_TYPE, version: VOICE_TARGET_VERSION, huddleId };
+  if (Number.isInteger(currentRevision) && currentRevision >= 0) packet.currentRevision = currentRevision;
+  return new TextEncoder().encode(JSON.stringify(packet));
 }
 
 export function isVoiceTargetRequest(packet, huddleId) {
   if (!packet || typeof packet !== 'object' || Array.isArray(packet)) return false;
   const keys = Object.keys(packet);
-  return keys.length === REQUEST_KEYS.size
-    && keys.every((key) => REQUEST_KEYS.has(key))
-    && packet.type === VOICE_TARGET_REQUEST_TYPE
-    && packet.version === VOICE_TARGET_VERSION
-    && text(packet.huddleId) === text(huddleId)
-    && ID_RE.test(packet.huddleId);
+  if (keys.length < REQUEST_KEYS.size - 1 || keys.length > REQUEST_KEYS.size
+    || keys.some((key) => !REQUEST_KEYS.has(key))) return false;
+  if (packet.type !== VOICE_TARGET_REQUEST_TYPE
+    || packet.version !== VOICE_TARGET_VERSION
+    || text(packet.huddleId) !== text(huddleId)
+    || !ID_RE.test(packet.huddleId)) return false;
+  return packet.currentRevision === undefined
+    || (Number.isInteger(packet.currentRevision)
+      && packet.currentRevision >= 0 && packet.currentRevision <= MAX_TARGET_REVISION);
 }

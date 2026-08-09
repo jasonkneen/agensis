@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { LiveKitRoom, RoomAudioRenderer, useLocalParticipant, useParticipants, useRoomContext } from '@livekit/components-react';
 import { RoomEvent } from 'livekit-client';
-import { MAX_TARGET_REVISION, VOICE_TARGET_TOPIC, decodeVoiceTarget, decodeVoiceTargetRequest, makeVoiceTarget } from '@/lib/voiceTarget';
+import { MAX_TARGET_REVISION, MAX_TARGET_REVISION_SYNC_LEAD, VOICE_TARGET_TOPIC, decodeVoiceTarget, decodeVoiceTargetRequest, makeVoiceTarget, makeVoiceTargetRequest } from '@/lib/voiceTarget';
 import { Loader2, Mic, MicOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -104,6 +104,28 @@ export function HuddleRoom({
  * A component rather than a hook in the parent because these hooks need the
  * room context, and the room context only exists BELOW <LiveKitRoom>.
  */
+const TARGET_REVISION_STORAGE_PREFIX = 'agensis.voice.target.revision:';
+
+function storedTargetRevision(huddleId: string): number {
+  if (!huddleId || typeof window === 'undefined') return 0;
+  try {
+    const value = Number(window.sessionStorage.getItem(`${TARGET_REVISION_STORAGE_PREFIX}${huddleId}`));
+    return Number.isInteger(value) && value >= 0 && value <= MAX_TARGET_REVISION ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function rememberTargetRevision(huddleId: string, revision: number): void {
+  if (!huddleId || typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(`${TARGET_REVISION_STORAGE_PREFIX}${huddleId}`, String(revision));
+  } catch {
+    // Storage can be disabled in privacy mode; the live worker handshake still
+    // repairs a remount when the browser cannot retain this local hint.
+  }
+}
+
 /** Publishes the active agent as a versioned reliable room packet. */
 function HuddleVoiceTarget({
   connected, huddleId, targetAgentId, rosterAgentIds, targetControllerIdentity, onTargetChanged,
@@ -136,24 +158,32 @@ function HuddleVoiceTarget({
   const targetKey = `${huddleId}:${targetAgentId || ''}:${authoritativeIdentity}`;
   const latest = useRef({ huddleId, targetAgentId, rosterAgentIds, canControlTarget, connected, targetKey });
   latest.current = { huddleId, targetAgentId, rosterAgentIds, canControlTarget, connected, targetKey };
-  const previousHuddleId = useRef(huddleId);
+  const previousHuddleId = useRef('');
   useEffect(() => {
     if (previousHuddleId.current === huddleId) return;
     previousHuddleId.current = huddleId;
-    revision.current = 0;
+    revision.current = storedTargetRevision(huddleId);
     pendingTargetPayload.current = null;
     lastPublished.current = '';
     lastQueued.current = '';
   }, [huddleId]);
 
-  const publish = useCallback(({ force = false } = {}) => {
+  const publish = useCallback(({ force = false, minRevision = -1 } = {}) => {
     if (!canControlTarget || !connected || room.state !== 'connected' || !huddleId) return;
     const next = latest.current;
     if (!force && (lastPublished.current === targetKey || lastQueued.current === targetKey)) return;
+    // A worker can retain a larger revision than a remounted browser. Advance
+    // past that floor before publishing; otherwise every packet from the new
+    // component is stale forever until the counter catches up.
+    if (Number.isInteger(minRevision) && minRevision > revision.current) {
+      revision.current = Math.min(MAX_TARGET_REVISION, minRevision);
+      rememberTargetRevision(next.huddleId, revision.current);
+    }
     // A saturated revision cannot be advanced safely. Re-publishing MAX would
     // be rejected by every worker as stale, so only a new huddle may reset it.
     if (revision.current >= MAX_TARGET_REVISION) return;
     revision.current += 1;
+    rememberTargetRevision(next.huddleId, revision.current);
     const revisionToPublish = revision.current;
     const queuedKey = targetKey;
     lastQueued.current = queuedKey;
@@ -187,8 +217,17 @@ function HuddleVoiceTarget({
     // human controller answers; target-state packets below still reject agents.
     const senderIdentity = String(participant?.identity || '');
     if (senderIdentity && room.remoteParticipants?.has && !room.remoteParticipants.has(senderIdentity)) return;
-    if (decodeVoiceTargetRequest(payload, huddleId)) {
-      if (canControlTarget && participant?.attributes?.['agensis.kind'] === 'agent') void publish({ force: true });
+    const request = decodeVoiceTargetRequest(payload, huddleId);
+    if (request) {
+      const requesterAgentId = String(participant?.attributes?.['agensis.agentId'] || '').trim();
+      const isKnownAgent = rosterAgentIds.length === 0 || !requesterAgentId || rosterAgentIds.includes(requesterAgentId);
+      const requestedRevision = request.currentRevision ?? -1;
+      const isPlausibleFloor = requestedRevision < 0
+        || requestedRevision <= revision.current + MAX_TARGET_REVISION_SYNC_LEAD;
+      if (canControlTarget && participant?.attributes?.['agensis.kind'] === 'agent'
+        && isKnownAgent && isPlausibleFloor) {
+        void publish({ force: true, minRevision: requestedRevision });
+      }
       return;
     }
     if (participant?.attributes?.['agensis.kind'] === 'agent') return;
@@ -213,14 +252,22 @@ function HuddleVoiceTarget({
     }
     if (packet.revision > revision.current) {
       revision.current = packet.revision;
+      rememberTargetRevision(huddleId, revision.current);
       pendingTargetPayload.current = null;
       onTargetChanged?.(packet.targetAgentId);
     }
   }, [authoritativeIdentity, canControlTarget, huddleId, onTargetChanged, publish, room.remoteParticipants, rosterAgentIds]);
 
+  const requestTargetSync = useCallback(() => {
+    if (!canControlTarget || !connected || room.state !== 'connected' || !huddleId) return;
+    const payload = new TextEncoder().encode(JSON.stringify(makeVoiceTargetRequest(huddleId)));
+    void Promise.resolve(room.localParticipant.publishData(payload, { reliable: true, topic: VOICE_TARGET_TOPIC })).catch(() => {});
+  }, [canControlTarget, connected, huddleId, room]);
+
   const publishOnReconnect = useCallback(() => {
     void publish({ force: true });
-  }, [publish]);
+    void requestTargetSync();
+  }, [publish, requestTargetSync]);
   const publishForHumanJoin = useCallback((participant: { attributes?: Record<string, string> }) => {
     if (participant.attributes?.['agensis.kind'] === 'agent') return;
     void publish({ force: true });
@@ -229,23 +276,34 @@ function HuddleVoiceTarget({
   useEffect(() => {
     if (pendingTargetPayload.current && rosterAgentIds.length > 0) {
       const pending = decodeVoiceTarget(pendingTargetPayload.current, huddleId, rosterAgentIds);
-      pendingTargetPayload.current = null;
-      if (pending && pending.revision > revision.current) {
-        revision.current = pending.revision;
-        onTargetChanged?.(pending.targetAgentId);
+      // Keep an authenticated packet until the roster contains its target. A
+      // partial roster is normal during room startup; dropping it here makes a
+      // later-complete roster unable to apply the already-received state.
+      if (pending) {
+        pendingTargetPayload.current = null;
+        if (pending.revision > revision.current) {
+          revision.current = pending.revision;
+          rememberTargetRevision(huddleId, revision.current);
+          onTargetChanged?.(pending.targetAgentId);
+        }
       }
     }
     if (!connected) return undefined;
-    void publish();
+    // Install listeners before requesting a replay: a local test room or a
+    // very fast worker may answer the sync packet in the same turn.
     room.on(RoomEvent.DataReceived, onTargetData);
     room.on(RoomEvent.ParticipantConnected, publishForHumanJoin);
     room.on(RoomEvent.Reconnected, publishOnReconnect);
+    void publish();
+    // Ask a live worker to replay its revision floor. This is what makes a
+    // page/component remount safe without trusting a volatile useRef counter.
+    void requestTargetSync();
     return () => {
       room.off(RoomEvent.DataReceived, onTargetData);
       room.off(RoomEvent.ParticipantConnected, publishForHumanJoin);
       room.off(RoomEvent.Reconnected, publishOnReconnect);
     };
-  }, [connected, huddleId, onTargetChanged, onTargetData, publish, publishForHumanJoin, publishOnReconnect, room, rosterAgentIds]);
+  }, [connected, huddleId, onTargetChanged, onTargetData, publish, publishForHumanJoin, publishOnReconnect, requestTargetSync, room, rosterAgentIds]);
 
   return null;
 }

@@ -414,11 +414,15 @@ function makeDb({
       if (n.startsWith('select connection_epoch from huddle_presence')) {
         return state.presence.filter((p) => p.huddle_id === params[0] && p.identity === params[1]);
       }
-      if (n.startsWith('select connection_epoch, heartbeat_at, reaped_at from huddle_presence')) {
-        return state.presence.filter((p) => p.huddle_id === params[0] && p.identity === params[1]);
+      if (n.startsWith('select connection_epoch, heartbeat_at::text as heartbeat_at_key, reaped_at from huddle_presence')) {
+        return state.presence
+          .filter((p) => p.huddle_id === params[0] && p.identity === params[1])
+          .map((p) => ({ ...p, heartbeat_at_key: p.heartbeat_at }));
       }
-      if (n.startsWith('select huddle_id, identity, connection_epoch, last_seen_at, heartbeat_at, reaped_at from huddle_presence')) {
-        return state.presence.filter((p) => p.huddle_id === params[0]);
+      if (n.startsWith('select huddle_id, identity, connection_epoch, last_seen_at, heartbeat_at, reaped_at, heartbeat_at::text as heartbeat_at_key from huddle_presence')) {
+        return state.presence
+          .filter((p) => p.huddle_id === params[0])
+          .map((p) => ({ ...p, heartbeat_at_key: p.heartbeat_at }));
       }
       if (n.startsWith('insert into huddle_presence')) {
         const [huddleId, workspaceId, sessionId, identity, epoch, beat, userId] = params;
@@ -456,10 +460,10 @@ function makeDb({
         return [];
       }
       if (n.startsWith('update huddle_presence set reaped_at = now()')) {
-        const [huddleId, identity, epoch, heartbeat] = params;
+        const [huddleId, identity, epoch, heartbeatKey] = params;
         const row = state.presence.find((p) => p.huddle_id === huddleId && p.identity === identity
           && !p.reaped_at && String(p.connection_epoch || '') === String(epoch || '')
-          && String(p.heartbeat_at || '') === String(heartbeat || ''));
+          && String(p.heartbeat_at || '') === String(heartbeatKey || ''));
         if (!row) return [];
         row.reaped_at = new Date().toISOString();
         return [{ huddle_id: huddleId, identity }];
@@ -643,6 +647,13 @@ test.afterEach(() => {
 test('the legacy test DB adapter executes savepoint callbacks instead of bypassing them', async () => {
   const db = {
     async unsafe() { return []; },
+  };
+  db.begin = async (fn) => {
+    const transaction = {
+      unsafe: db.unsafe,
+      savepoint: async (savepointFn) => savepointFn(transaction),
+    };
+    return fn(transaction);
   };
   __test.setTestDb(db);
   let calls = 0;

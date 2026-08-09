@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { MAX_TARGET_REVISION, decodeVoiceTarget, decodeVoiceTargetRequest, makeVoiceTarget, makeVoiceTargetRequest } from '../../src/lib/voiceTarget';
 
 describe('voice target wire packets', () => {
-  it('accepts only a matching request shape', () => {
+  it('accepts matching requests and carries a worker revision floor', () => {
     const request = makeVoiceTargetRequest('h1');
     const bytes = new TextEncoder().encode(JSON.stringify(request));
     expect(decodeVoiceTargetRequest(bytes, 'h1')).toEqual(request);
     expect(decodeVoiceTargetRequest(bytes, 'other')).toBeNull();
+    const replay = makeVoiceTargetRequest('h1', 7);
+    expect(decodeVoiceTargetRequest(new TextEncoder().encode(JSON.stringify(replay)), 'h1')).toEqual(replay);
     expect(decodeVoiceTargetRequest(new TextEncoder().encode(JSON.stringify({ ...request, extra: true })), 'h1')).toBeNull();
+    expect(decodeVoiceTargetRequest(new TextEncoder().encode(JSON.stringify({ ...replay, currentRevision: -1 })), 'h1')).toBeNull();
   });
 
   it('refuses invalid constructor revisions and huddle ids', () => {
