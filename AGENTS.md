@@ -328,6 +328,49 @@ starting point. Validator: `shared/agentTemplates.cjs`. Routes:
   on the daemon lane it is interpolated as prompt text, and on the builtin lane
   the tool list comes from `toolSpecs`, not the column.
 
+### The agent marketplace (`marketplace_listings`, `marketplace_hires`)
+
+Cross-workspace sharing of agents, in the Create Agent screen. Validator:
+`shared/marketplace.cjs`. Routes: `server/marketplace-routes.cjs` (Fly-owned;
+Netlify forwards). Full design incl. the hire execution lane and the
+`agensis-agent` repo work it needs: [docs/agent-marketplace.md](./docs/agent-marketplace.md).
+
+- **Two listing shapes.** A `template` listing shares the full persona body —
+  browsing shows it, "Use" prefills the existing create form
+  (review-before-instantiate, unchanged), "Save" copies it into
+  `workspace_agent_templates` **through `importAgentTemplate`**, so a
+  marketplace copy gets the import lane's manage gate, refusals and audit row.
+  Do not build a second, softer copy door. A `hire` listing shares
+  capabilities ONLY.
+- **A hire listing structurally carries no body**, three layers deep: the
+  validator refuses a template on a hire listing, the
+  `marketplace_listings_hire_carries_no_body` CHECK refuses non-empty prose
+  columns, and `publicMarketplaceListing` never reads the prose columns on the
+  hire branch. "The projection strips it" alone is not a control here any more
+  than it was for `channel_bridges.config`.
+- **The template-table rule applies across the TENANT boundary**: no
+  privilege-bearing column exists on `marketplace_listings`, in any of the
+  three schema places, and `tests/marketplace.test.cjs` fails if one appears.
+  Publishing derives the body via `agentToTemplateDraft` — picks named fields,
+  never spreads the agent row.
+- **The hired roster row is server-authored from NO caller fields.** The
+  caller names a listing id; `hiredAgentDraft` supplies cosmetics/intent and
+  the SQL supplies literals — empty prompt/skills/tools, `run_mode
+  'external'`, `permission_mode 'default'`, `ambient_replies false`. This does
+  not contradict "there is no server-side create-agent route": that rule is
+  about caller-supplied template prose dodging the form's column guards, and a
+  hire carries none. The host linkage sits in
+  `workspace_agents.metadata.marketplace_hire` (metadata stays MANAGE_ONLY).
+- **A hired agent is a disconnected Connector until the host serves it** —
+  turns queue and the server posts its waiting notice; it never impersonates.
+  The serving lane (hire-scoped bearers, the CLI's safe hired profile) is
+  designed in the doc above and NOT yet wired; do not shortcut it by routing
+  hirer prompts into the host's existing daemon connection.
+- **RBAC**: browse is any signed-in user; publish, unpublish, copy and hire
+  are `manage`, and each writes the audit log (`marketplace.*` actions;
+  hiring writes BOTH workspaces' logs). Neither table is in `ALLOWED_TABLES` —
+  the dedicated routes are the only doors.
+
 ### Workspace automations (`automations`, `automation_runs`)
 
 "When X happens inside agensis, do Y inside agensis", without a code change.

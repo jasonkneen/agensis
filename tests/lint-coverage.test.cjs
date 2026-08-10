@@ -40,6 +40,11 @@ const MUST_BE_LINTED = [
   // follows, and the read-marker comparison that decides unread. A silent
   // change here does not error — it just quietly stops surfacing replies.
   'server/thread-inbox.cjs',
+  // The marketplace validator and its routes move agent prose ACROSS tenant
+  // boundaries and server-author the hired roster row. A shadowed variable in
+  // the privilege-strip path is a cross-tenant leak, not a style problem.
+  'shared/marketplace.cjs',
+  'server/marketplace-routes.cjs',
   'shared/channelIntent.cjs',
   'shared/backend-core.cjs',
   // Owns the workspace-hierarchy rules the authorization path depends on:

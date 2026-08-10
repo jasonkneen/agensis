@@ -89,6 +89,10 @@ import {
 import { useCartesiaVoices } from '../../hooks/useCartesiaVoices';
 import { useAgentTemplates } from '../../hooks/useAgentTemplates';
 import { useWorkspaceSkills } from '../../hooks/useWorkspaceSkills';
+import {
+  AgentMarketplaceSection,
+  ShareAgentToMarketplaceDialog,
+} from '@/components/agents/AgentMarketplacePanel';
 
 // 418 English voices in one <select> is a scroll nobody finishes; the search
 // box above it is the real control.
@@ -770,6 +774,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
       : { ok: true, text: 'Imported. It is in the list below.' });
   };
 
+  // Which agent the share-to-marketplace dialog is open for. Publishing is
+  // manage-gated server-side; the dialog reports a 403 as what it is.
+  const [shareAgentId, setShareAgentId] = useState<string | null>(null);
+
   const [templateSavedFor, setTemplateSavedFor] = useState<string | null>(null);
   const handleSaveAsTemplate = async (id: string) => {
     const saved = await saveAgentAsTemplate(id);
@@ -842,6 +850,17 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         onToggleWebhook={(webhook, enabled) => onUpdateWebhook(webhook.id, { enabled })}
         onUpdateAgent={onUpdateAgent}
       />
+      {shareAgentId != null && (
+        <ShareAgentToMarketplaceDialog
+          workspaceId={workspaceId}
+          agent={(() => {
+            const target = agents.find(agent => agent.id === shareAgentId);
+            return target ? { id: target.id, name: target.name, description: target.description || '' } : null;
+          })()}
+          open
+          onClose={() => setShareAgentId(null)}
+        />
+      )}
 
       <div className="agents-window-body min-h-0 flex-1 overflow-hidden p-3">
         {createStep === 'choose' ? (
@@ -987,6 +1006,12 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   </div>
                 );
               })()}
+
+              {/* Community listings. "Use" prefills the same form a workspace
+                  template does; hiring is a manage-gated server action. The
+                  section renders nothing when the server has no marketplace
+                  routes or nothing is published. */}
+              <AgentMarketplaceSection workspaceId={workspaceId} onUseTemplate={applyTemplate} />
             </div>
           </div>
         ) : createStep === 'form' ? (
@@ -1357,6 +1382,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   onDelete={() => handleDelete(selectedAgent.id)}
                   onSaveAsTemplate={() => { void handleSaveAsTemplate(selectedAgent.id); }}
                   templateSaved={templateSavedFor === selectedAgent.id}
+                  onShareToMarketplace={() => setShareAgentId(selectedAgent.id)}
                   onToggleEnabled={() => onUpdateAgent(selectedAgent.id, { enabled: selectedAgent.enabled === false })}
                   capabilities={capabilities}
                   runtimeChoices={runtimeChoices}
@@ -2057,6 +2083,7 @@ function AgentDetailPane({
   backButtonClass,
   onSaveAsTemplate,
   templateSaved,
+  onShareToMarketplace,
 }: {
   agent: WorkspaceAgent | null;
   isEditing: boolean;
@@ -2069,6 +2096,8 @@ function AgentDetailPane({
   onSaveAsTemplate: () => void;
   /** True briefly after a successful save, so the click has a visible result. */
   templateSaved: boolean;
+  /** Open the share-to-marketplace dialog. Publishing itself is manage-gated. */
+  onShareToMarketplace: () => void;
   onToggleEnabled: () => void;
   capabilities: SystemCapabilities | null;
   runtimeChoices: AgentRuntimeChoice[];
@@ -2500,6 +2529,16 @@ function AgentDetailPane({
           >
             {templateSaved ? <Check data-icon="inline-start" /> : <Sparkles data-icon="inline-start" />}
             {templateSaved ? 'Saved as template' : 'Save as template'}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onShareToMarketplace}
+            title="Share this agent to the marketplace — as a copyable template, or for hire with only its capabilities visible. Its permissions, folder access and connect token are never shared."
+          >
+            <Share2 data-icon="inline-start" />
+            Share to marketplace
           </Button>
           <Button
             type="button"

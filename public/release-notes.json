@@ -1,5 +1,18 @@
 [
   {
+    "version": "agent-marketplace",
+    "date": "2026-08-10",
+    "title": "Agent marketplace: share templates, hire agents",
+    "summary": "The create-agent screen now has a marketplace. Share an agent you've tuned as a copyable template — other workspaces read the full definition in the create form before anything is saved — or offer it for hire, where hirers see only the capabilities you list and get a roster entry served by your workspace. A listing never carries permissions, folder access, or connect tokens, and hiring never copies the prompt or skills.",
+    "highlights": [
+      "Browse community listings in Create Agent; Use prefills the form, Save copies into workspace templates",
+      "Share to marketplace from any agent's detail pane, as a template or for hire",
+      "Hire listings show capabilities only — the definition stays with the host workspace",
+      "Hired agents arrive as Connector entries; turns wait with a clear notice while the host is offline",
+      "Publishing, hiring, and copies are manage-gated and recorded in the audit log"
+    ]
+  },
+  {
     "version": "desktop-local-sdk-runtime",
     "date": "2026-08-02",
     "title": "Start on this Mac uses Claude Agent SDK and Codex app-server",

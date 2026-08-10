@@ -548,6 +548,12 @@ function isFlyOwnedControlPath(pathname) {
   || /^\/backend\/workspaces\/[^/]+\/audit$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/(?:automations|automation-runs)(?:\/[^/]+)?$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/agent-templates(?:\/|$)/.test(pathname)
+  // The agent marketplace: server-owned validation, cross-workspace audit
+  // writes, and (on hire) a server-authored Connector roster row. One
+  // canonical implementation on Fly; a second partial one here would be a
+  // different door with different rules.
+  || /^\/backend\/marketplace(?:\/|$)/.test(pathname)
+  || /^\/backend\/workspaces\/[^/]+\/marketplace(?:\/|$)/.test(pathname)
   || /^\/backend\/webhooks\/[^/]+$/.test(pathname)
   // HTTP mirrors for features whose canonical implementation needs the Fly
   // process (or whose Netlify lane intentionally has no route).  Keep the

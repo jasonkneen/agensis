@@ -3139,6 +3139,19 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  // Crossing a workspace boundary is not a non-event — nobody here wrote that
  // prose, and a teammate's agent will later speak it.
  'agent_template.imported',
+ // The agent marketplace. Publishing pushes a workspace's prose across the
+ // TENANT boundary (and a 'hire' listing stands up an offer of the host's own
+ // compute); hiring creates a standing arrangement with another tenant's
+ // agent. Both directions of a hire are recorded — 'agent_hired' in the
+ // hiring workspace, 'listing_hired' in the host's — because each side
+ // deserves its own record of the arrangement. Copying a template listing is
+ // NOT a marketplace action here on purpose: the copy routes through the
+ // import lane and lands as agent_template.imported above.
+ 'marketplace.listing_published',
+ 'marketplace.listing_removed',
+ 'marketplace.agent_hired',
+ 'marketplace.listing_hired',
+ 'marketplace.hire_ended',
 ]));
 
 /** What an unrecognised action records as, rather than throwing in production. */
