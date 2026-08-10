@@ -44,7 +44,14 @@ export function transcriptEventId({ huddleId, itemId, speakerId, role, content, 
  * @param {{ session: object, meta: object, log?: Console, fetchImpl?: typeof fetch }} opts
  * @returns {{ stop: () => void }}
  */
-export function mirrorTranscript({ session, meta, log = console, fetchImpl = fetch, shouldMirror = () => true } = {}) {
+export function mirrorTranscript({
+  session,
+  meta,
+  log = console,
+  fetchImpl = fetch,
+  shouldMirror = () => true,
+  mirrorAssistant = true,
+} = {}) {
   const url = String(meta?.transcript?.url || '').trim();
   const token = String(meta?.transcript?.token || '').trim();
   const sessionId = String(meta?.transcriptSessionId || meta?.sessionId || '').trim();
@@ -188,7 +195,7 @@ export function mirrorTranscript({ session, meta, log = console, fetchImpl = fet
   };
 
   const onItem = (event) => {
-    if (!shouldMirror()) return;
+    if (!mirrorAssistant || !shouldMirror()) return;
     const item = event?.item ?? event;
     if (String(item?.role || '') !== 'assistant') return;
     // Interrupting a target can still emit the partial assistant item that was

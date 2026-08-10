@@ -12,6 +12,10 @@ const {
 } = require('../shared/voice-speakable.cjs');
 
 const { createVoicePublish } = require('../server/voice-publish.cjs');
+const {
+  LIVEKIT_VOICE_REPLY_TOPIC,
+  publishLivekitHuddleVoice,
+} = require('../server/huddles.cjs');
 
 // Keep the soft limit aligned with the browser (src/lib/voiceStream.ts).
 test('SENTENCE_SOFT_LIMIT matches the client constant', () => {
@@ -118,6 +122,62 @@ test('publishHuddleVoiceText passes private member set to fanout', async () => {
     previousSpoken: '',
   });
   assert.equal(allowedSeen, members);
+});
+
+test('publishHuddleVoiceText relays the real agent sentence into LiveKit', async () => {
+  const roomSentences = [];
+  const { publishHuddleVoiceText } = createVoicePublish({
+    sessionRealtimeAudience: async () => ({ memberUserIds: null }),
+    relayBroadcastToUserIds: () => {},
+    relayRoomSentence: async (payload) => { roomSentences.push(payload); },
+  });
+  await publishHuddleVoiceText({
+    workspaceId: 'ws-1',
+    sessionId: 'sess-1',
+    messageId: 'msg-1',
+    agentId: 'ag-1',
+    agentName: 'Claude',
+    fullText: 'The selected agent answered.',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(roomSentences.length, 1);
+  assert.deepEqual(
+    { sessionId: roomSentences[0].sessionId, agentId: roomSentences[0].agentId, sentence: roomSentences[0].sentence },
+    { sessionId: 'sess-1', agentId: 'ag-1', sentence: 'The selected agent answered.' },
+  );
+});
+
+test('the LiveKit relay resolves the active huddle and sends a scoped server packet', async () => {
+  const sent = [];
+  const db = {
+    unsafe: async (sql, params) => {
+      assert.match(sql, /transcript_session_id = \$1/);
+      assert.deepEqual(params, ['sess-1']);
+      return [{ id: 'hud-1', room_name: 'agensis-hud-1' }];
+    },
+  };
+  const delivered = await publishLivekitHuddleVoice({
+    db,
+    sessionId: 'sess-1',
+    payload: {
+      sessionId: 'sess-1',
+      messageId: 'msg-1',
+      agentId: 'ag-1',
+      agentName: 'Claude',
+      sentence: 'Done.',
+      offset: 4,
+      seq: 1,
+    },
+    sendData: async (roomName, bytes, topic) => sent.push({ roomName, packet: JSON.parse(Buffer.from(bytes).toString('utf8')), topic }),
+  });
+  assert.equal(delivered, true);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].roomName, 'agensis-hud-1');
+  assert.equal(sent[0].topic, LIVEKIT_VOICE_REPLY_TOPIC);
+  assert.deepEqual(
+    { huddleId: sent[0].packet.huddleId, sessionId: sent[0].packet.sessionId, agentId: sent[0].packet.agentId, sentence: sent[0].packet.sentence },
+    { huddleId: 'hud-1', sessionId: 'sess-1', agentId: 'ag-1', sentence: 'Done.' },
+  );
 });
 
 test('workspaceIdFromRealtimeChannel accepts huddle-voice prefix', () => {

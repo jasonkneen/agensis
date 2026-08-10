@@ -15,7 +15,6 @@
     "@livekit/agents": "1.6.1",
     "@livekit/agents-plugin-cartesia": "1.6.1",
     "@livekit/agents-plugin-deepgram": "1.6.1",
-    "@livekit/agents-plugin-openai": "1.6.1",
     "@livekit/agents-plugin-silero": "1.6.1",
     "@livekit/rtc-node": "0.13.33"
   },

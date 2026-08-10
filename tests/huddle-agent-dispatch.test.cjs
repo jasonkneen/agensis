@@ -263,7 +263,7 @@ test('per-agent voice settings survive into the dispatch metadata', () => {
     metadata: JSON.stringify({ voice_engine: 'openai-realtime' }),
   }, parseJsonObject);
 
-  assert.equal(settings.engine, 'openai-realtime');
+  assert.equal(settings.engine, 'cartesia-deepgram', 'obsolete local-LLM metadata cannot replace the media bridge');
   assert.equal(settings.cartesia_voice_id, 'v-123', 'an agent that had a voice keeps it across this migration');
   assert.equal(settings.speed, 1.1);
   assert.equal(settings.emotion, 'calm');

@@ -72,6 +72,7 @@
 
 const crypto = require('crypto');
 const huddleAgents = require('./huddle-agents.cjs');
+const { slugMentionHandle } = require('../shared/channelMentions.cjs');
 
 // The LiveKit project is shared with other apps, so every room this app creates
 // is namespaced. Never derive a room name any other way.
@@ -83,6 +84,8 @@ const ROOM_PREFIX = 'agensis-';
 const DEFAULT_TOKEN_TTL_SECONDS = 600;
 const MIN_TOKEN_TTL_SECONDS = 60;
 const MAX_TOKEN_TTL_SECONDS = 3600;
+const LIVEKIT_VOICE_REPLY_TOPIC = 'agensis.voice.reply';
+const LIVEKIT_VOICE_REPLY_VERSION = 1;
 
 // Clock skew tolerated when checking a webhook token's nbf/exp.
 const WEBHOOK_CLOCK_SKEW_SECONDS = 60;
@@ -787,6 +790,73 @@ async function deleteLivekitRoom(roomName) {
  return true;
 }
 
+/**
+ * Put one completed sentence from the REAL Agensis agent into its active
+ * LiveKit huddle. The room worker owns Cartesia playback; it does not own an
+ * LLM or invent a second answer.
+ *
+ * `sendData` is a test seam with signature (roomName, bytes, topic). Production
+ * uses LiveKit's server API, which delivers a participant-less data packet so
+ * the worker can distinguish this trusted server lane from browser data.
+ */
+async function publishLivekitHuddleVoice({ db, sessionId, payload, sendData = null } = {}) {
+ const scopedSessionId = String(sessionId || payload?.sessionId || '').trim();
+ const messageId = String(payload?.messageId || '').trim();
+ const agentId = String(payload?.agentId || '').trim();
+ const sentence = String(payload?.sentence || '').trim().slice(0, 2_000);
+ if (!db || !scopedSessionId || !messageId || !agentId || !sentence) return false;
+
+ const rows = await db.unsafe(
+  `select id, room_name
+     from huddles
+    where ended_at is null
+      and (transcript_session_id = $1
+       or (transcript_session_id is null and session_id = $1))
+    order by started_at desc
+    limit 1`,
+  [scopedSessionId],
+ );
+ const huddle = rows[0];
+ if (!huddle?.room_name) return false;
+
+ const packet = {
+  v: LIVEKIT_VOICE_REPLY_VERSION,
+  huddleId: String(huddle.id),
+  sessionId: scopedSessionId,
+  messageId,
+  agentId,
+  agentName: String(payload?.agentName || '').slice(0, 200),
+  sentence,
+  offset: Number.isFinite(Number(payload?.offset)) ? Number(payload.offset) : 0,
+  seq: Number.isFinite(Number(payload?.seq)) ? Number(payload.seq) : 0,
+ };
+ const bytes = Buffer.from(JSON.stringify(packet), 'utf8');
+
+ if (typeof sendData === 'function') {
+  await sendData(String(huddle.room_name), bytes, LIVEKIT_VOICE_REPLY_TOPIC);
+  return true;
+ }
+
+ const { url, apiKey, apiSecret } = livekitConfig();
+ if (!url || !apiKey || !apiSecret) return false;
+ let RoomServiceClient;
+ let DataPacket_Kind;
+ try {
+  ({ RoomServiceClient, DataPacket_Kind } = loadLivekitServerSdk());
+ } catch {
+  return false;
+ }
+ const httpUrl = url.replace(/^ws:/i, 'http:').replace(/^wss:/i, 'https:');
+ const client = new RoomServiceClient(httpUrl, apiKey, apiSecret);
+ await client.sendData(
+  String(huddle.room_name),
+  bytes,
+  DataPacket_Kind.RELIABLE,
+  { topic: LIVEKIT_VOICE_REPLY_TOPIC },
+ );
+ return true;
+}
+
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
@@ -880,6 +950,10 @@ function mountHuddleRoutes(app, deps = {}) {
   parseJsonObject = null,
   publicBaseUrl = '',
   dispatchAgents = huddleAgents.dispatchVoiceAgents,
+  // A final human STT turn is a real chat turn, not merely a transcript row.
+  // Production injects the same dispatcher used by typed chat. Optional keeps
+  // human-only/Netlify mounts inert when no agent runtime exists there.
+  continueConversation = null,
  } = deps;
 
  /**
@@ -1986,8 +2060,15 @@ function mountHuddleRoutes(app, deps = {}) {
    }
    const sessionId = huddle.transcript_session_id || huddle.session_id;
    const isAgent = role === 'assistant';
+   const selectedHandle = slugMentionHandle(identity.handle || identity.name || agentId);
+   const escapedHandle = selectedHandle.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+   const addressedContent = !isAgent && !new RegExp(`(^|\\s)@${escapedHandle}\\b`, 'i').test(content)
+    ? `@${selectedHandle} ${content}`
+    : content;
    const marker = '\\n… [voice result truncated]';
-   const cappedContent = content.length > 8000 ? `${content.slice(0, 8000 - marker.length)}${marker}` : content;
+   const cappedContent = addressedContent.length > 8000
+    ? `${addressedContent.slice(0, 8000 - marker.length)}${marker}`
+    : addressedContent;
    // A roster worker is a trusted mirror capability, not an unbounded write
    // endpoint. Rate-limit BOTH user STT and assistant output after attribution
    // checks, so a bad worker cannot grow a transcript or realtime fanout even
@@ -2062,6 +2143,23 @@ function mountHuddleRoutes(app, deps = {}) {
     const realtimeRow = { ...row };
     delete realtimeRow._huddle_transcript_inserted;
     notifyDbSubscribers('messages', 'INSERT', [realtimeRow]);
+    if (!isAgent && typeof continueConversation === 'function') {
+     // The signed worker identity says which roster agent was selected. Keep
+     // the visible @handle in the durable message AND pass the same exact id to
+     // dispatch, so a rename/race cannot make voice wake a different agent.
+     const target = {
+      workspaceId: String(identity.workspaceId),
+      sessionId: String(row.session_id || sessionId),
+      targetAgentId: agentId,
+     };
+     void Promise.resolve(continueConversation(target)).then((result) => {
+      if (result && result.started === false) {
+       console.warn(`[huddle] voice dispatch did not start huddle=${huddle.id} agent=${agentId} reason=${result.reason || 'unknown'}`);
+      }
+     }).catch((error) => {
+      console.error(`[huddle] voice dispatch failed huddle=${huddle.id} agent=${agentId}: ${error?.message || error}`);
+     });
+    }
    }
    res.json({ data: { written: Boolean(row), duplicate: row?._huddle_transcript_inserted === false, sessionId }, error: null });
   } catch (error) {
@@ -2581,6 +2679,8 @@ module.exports = {
  HUDDLE_HEARTBEAT_INTERVAL_MS,
  HUDDLE_PRESENCE_STALE_MS,
  HUDDLE_EMPTY_GRACE_MS,
+ LIVEKIT_VOICE_REPLY_TOPIC,
+ LIVEKIT_VOICE_REPLY_VERSION,
  HUDDLES_SCHEMA_SQL,
  NOTES_MAX_LENGTH,
  ensureHuddlesSchema,
@@ -2606,6 +2706,7 @@ module.exports = {
  webhookEventTime,
  livekitConfigured,
  deleteLivekitRoom,
+ publishLivekitHuddleVoice,
  tokenTtlSeconds,
  mintJoinToken,
 };

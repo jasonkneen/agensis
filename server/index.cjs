@@ -77,7 +77,12 @@ const {
  readLibraryEntry,
  unavailable: skillContentUnavailable,
 } = require('./skill-content.cjs');
-const { mountHuddleRoutes, ensureHuddlesSchema, deleteLivekitRoom } = require('./huddles.cjs');
+const {
+ mountHuddleRoutes,
+ ensureHuddlesSchema,
+ deleteLivekitRoom,
+ publishLivekitHuddleVoice,
+} = require('./huddles.cjs');
 const { isVoiceCapableRunMode, participantAgentId } = require('./huddle-agents.cjs');
 const {
  createAgentPermissions,
@@ -9329,6 +9334,11 @@ const {
 const voicePublish = createVoicePublish({
  sessionRealtimeAudience: (...a) => sessionRealtimeAudience(...a),
  relayBroadcastToUserIds: (...a) => realtime.relayBroadcastToUserIds(...a),
+ relayRoomSentence: (payload) => publishLivekitHuddleVoice({
+  db: getDb(),
+  sessionId: payload?.sessionId,
+  payload,
+ }),
 });
 const { publishHuddleVoiceText } = voicePublish;
 
@@ -9769,6 +9779,10 @@ function createApp() {
   // absolute base URL and a credential scoped to the one agent it is being dispatched for.
   createVoiceSessionToken,
   verifyVoiceSessionToken,
+  // Final Deepgram turns are ordinary addressed chat turns. The route stores
+  // @handle text and resumes this exact selected agent through the same runtime
+  // dispatcher as typed huddle messages.
+  continueConversation: (...args) => continueConversation(...args),
   parseJsonArray,
   parseJsonObject,
   // Voice workers call back to the long-running Fly backend. Never point

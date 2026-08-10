@@ -21,6 +21,8 @@ function createVoicePublish(deps = {}) {
   const {
     sessionRealtimeAudience = async () => null,
     relayBroadcastToUserIds = () => {},
+    relayRoomSentence = async () => false,
+    log = console,
   } = deps;
 
   /**
@@ -76,21 +78,32 @@ function createVoicePublish(deps = {}) {
         seq,
         offset: piece.offset,
       });
+      const payload = {
+        sessionId: String(sessionId),
+        messageId: String(messageId),
+        agentId: String(agentId),
+        agentName: String(agentName || ''),
+        sentence: piece.sentence,
+        offset: piece.offset,
+        spokenAfter: piece.spokenAfter,
+        seq,
+      };
       relayBroadcastToUserIds(
         channel,
         HUDDLE_VOICE_EVENT,
-        {
-          sessionId: String(sessionId),
-          messageId: String(messageId),
-          agentId: String(agentId),
-          agentName: String(agentName || ''),
-          sentence: piece.sentence,
-          offset: piece.offset,
-          spokenAfter: piece.spokenAfter,
-          seq,
-        },
+        payload,
         allowedUserIds,
       );
+      // LiveKit is the current media lane. Do not block model streaming on its
+      // server API: the worker deduplicates messageId+offset, and the durable
+      // text row remains authoritative if this best-effort packet fails.
+      try {
+        void Promise.resolve(relayRoomSentence(payload)).catch((error) => {
+          log.warn?.(`[voice] LiveKit sentence relay failed message=${messageId} offset=${piece.offset}: ${error?.message || error}`);
+        });
+      } catch (error) {
+        log.warn?.(`[voice] LiveKit sentence relay failed message=${messageId} offset=${piece.offset}: ${error?.message || error}`);
+      }
     }
 
     return lastSpoken;

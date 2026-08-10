@@ -93,17 +93,15 @@ async function agentsForSession({ db, workspaceId, sessionId, parseJsonArray }) 
 /** The per-agent voice settings the app already stores, plus the chosen engine. */
 function voiceSettingsFor(agent, parseJsonObject) {
   const identity = parseJsonObject(agent.identity) || {};
-  const metadata = parseJsonObject(agent.metadata) || {};
   const voice = parseJsonObject(identity.voice) || identity.voice || {};
   return {
-    // Engine is per-agent so one huddle can mix a realtime voice and a
-    // Cartesia/Deepgram pipeline without either knowing about the other.
-    engine: String(metadata.voice_engine || voice.engine || process.env.AGENSIS_VOICE_ENGINE || 'cartesia-deepgram').trim(),
+    // The LiveKit worker is the agent's media bridge, not a second model. Old
+    // `openai-realtime` metadata from the aborted implementation is ignored so
+    // it cannot strand an otherwise valid agent on an unavailable engine.
+    engine: 'cartesia-deepgram',
     cartesia_voice_id: boundedVoiceId(voice.cartesia_voice_id || voice.voiceId),
     speed: voice.speed,
     emotion: boundedVoiceText(voice.emotion, 128, true),
-    realtimeVoice: boundedVoiceId(voice.realtime_voice || voice.realtimeVoice),
-    realtimeModel: boundedVoiceId(metadata.realtime_model),
   };
 }
 
