@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Captions, CaptionsOff, ChevronDown, Headphones, Radio, Volume2, VolumeX, X } from 'lucide-react';
+import { Captions, CaptionsOff, ChevronDown, GripVertical, Headphones, Radio, Volume2, VolumeX, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
@@ -85,6 +85,78 @@ export function HuddleDock() {
   const [activeAgentId, setActiveAgentId] = useState('');
   const [showLeaveDialog, setShowLeaveDialog] = useState(false);
   const [activeAgentHuddleId, setActiveAgentHuddleId] = useState('');
+
+  // WHERE THE PANEL SITS. null means "leave it pinned bottom-right", which is
+  // the default and what everyone who never touches the grip keeps. Once it has
+  // been dragged we own both axes explicitly, so the CSS anchor is dropped.
+  const panelRef = useRef<HTMLElement | null>(null);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const dragRef = useRef<{ dx: number; dy: number } | null>(null);
+
+  const clamp = useCallback((x: number, y: number) => {
+    const rect = panelRef.current?.getBoundingClientRect();
+    const w = rect?.width ?? PANEL_WIDTH;
+    const h = rect?.height ?? 0;
+    return {
+      x: Math.min(Math.max(x, 8), Math.max(8, window.innerWidth - w - 8)),
+      y: Math.min(Math.max(y, 8), Math.max(8, window.innerHeight - h - 8)),
+    };
+  }, []);
+
+  const startDrag = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    const rect = panelRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    event.preventDefault();
+    dragRef.current = { dx: event.clientX - rect.left, dy: event.clientY - rect.top };
+    setPos(clamp(rect.left, rect.top));
+
+    const move = (e: PointerEvent) => {
+      const grab = dragRef.current;
+      if (!grab) return;
+      setPos(clamp(e.clientX - grab.dx, e.clientY - grab.dy));
+    };
+    const stop = () => {
+      dragRef.current = null;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
+  }, [clamp]);
+
+  // The grip is a button, so it takes focus; arrow keys have to move the panel
+  // or it is a drag affordance nobody without a mouse can use.
+  const nudge = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
+    const step = event.shiftKey ? 32 : 8;
+    const delta =
+      event.key === 'ArrowLeft' ? [-step, 0]
+      : event.key === 'ArrowRight' ? [step, 0]
+      : event.key === 'ArrowUp' ? [0, -step]
+      : event.key === 'ArrowDown' ? [0, step]
+      : null;
+    if (!delta) return;
+    event.preventDefault();
+    const rect = panelRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setPos(clamp(rect.left + delta[0], rect.top + delta[1]));
+  }, [clamp]);
+
+  // A window that shrinks under a dragged panel must not strand it off-screen —
+  // and neither must expanding a collapsed panel that was dragged low.
+  const collapsed = !!dock?.collapsed;
+  const positioned = !!pos;
+  useEffect(() => {
+    if (!positioned) return;
+    const reclamp = () => setPos(current => (current ? clamp(current.x, current.y) : current));
+    reclamp();
+    window.addEventListener('resize', reclamp);
+    return () => window.removeEventListener('resize', reclamp);
+    // `pos` is deliberately absent: re-running on every drag frame would fight
+    // the pointer. Only viewport or panel-height changes need a re-clamp.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collapsed, positioned, clamp]);
 
   const session = dock?.session ?? null;
   const state = session?.state ?? null;
@@ -261,7 +333,20 @@ export function HuddleDock() {
     <>
       {/* Header: what and where, always visible even when collapsed, so a
           minimised call still says which conversation it belongs to. */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+      <div className="flex h-[52px] shrink-0 items-center gap-2 border-b border-border px-3">
+        {/* Drag handle. The dock is pinned bottom-right otherwise, and when it
+            is collapsed the header IS the whole panel — so this is the only
+            place a grip can live and still be reachable. */}
+        <button
+          type="button"
+          aria-label="Move huddle panel"
+          title="Drag to move"
+          onPointerDown={startDrag}
+          onKeyDown={nudge}
+          className="-ml-1 shrink-0 cursor-grab touch-none rounded p-0.5 text-muted-foreground/60 hover:text-foreground active:cursor-grabbing"
+        >
+          <GripVertical className="size-3.5" aria-hidden />
+        </button>
         {live ? (
           <Radio className="size-4 shrink-0 animate-pulse text-emerald-500 motion-reduce:animate-none" aria-hidden />
         ) : (
@@ -307,11 +392,11 @@ export function HuddleDock() {
           the one thing worth seeing without expanding it — and the controls
           still appear only while we hold a connection: off the call there is no
           microphone of ours to mute and no voice to silence. */}
+      {/* Fixed height, single line. This row used to wrap: one more participant,
+          or the speaker's name appearing mid-sentence, pushed it onto a second
+          line and the whole dock jumped every time someone started or stopped
+          talking. Avatars now clip instead of wrapping. */}
       {(participants.length > 0 || connection) && (
-        {/* Fixed height, single line. This row used to wrap: one more
-            participant, or the speaker's name appearing mid-sentence, pushed it
-            onto a second line and the whole dock jumped every time someone
-            started or stopped talking. Avatars now clip instead of wrapping. */}
         <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
           <div className="flex min-w-0 shrink items-center gap-1 overflow-hidden">
             {participants.map(participant => (
@@ -446,13 +531,19 @@ export function HuddleDock() {
 
   return (
     <aside
+      ref={panelRef}
       data-huddle-dock
       aria-label={`Huddle in ${dock.target.title}`}
       className={cn(
-        'agensis-glass-panel fixed bottom-4 right-4 flex flex-col overflow-hidden rounded-xl border shadow-2xl',
+        'agensis-glass-panel fixed flex flex-col overflow-hidden rounded-xl border shadow-2xl',
+        !pos && 'bottom-4 right-4',
         dock.collapsed ? 'h-auto' : 'h-[min(34rem,calc(100vh-6rem))]',
       )}
-      style={{ width: PANEL_WIDTH, zIndex: CHROME_DEPTH.huddlePanel }}
+      style={{
+        width: PANEL_WIDTH,
+        zIndex: CHROME_DEPTH.huddlePanel,
+        ...(pos ? { left: pos.x, top: pos.y } : null),
+      }}
     >
       {/* The panel reads the huddle from the DOCK's session, not from a
           channel-scoped provider it is mounted outside of — without this it
@@ -510,6 +601,8 @@ function DockTimer({ state }: { state: HuddleState }) {
     return () => window.clearInterval(id);
   }, [state.active]);
   const text = huddleDuration(state, now);
-  if (!text) return null;
-  return <span className="block truncate text-xs text-muted-foreground">{text}</span>;
+  // Always occupies its line. Returning null here collapsed the header by a
+  // row the moment a duration appeared or stopped resolving, which in the
+  // collapsed dock is the entire panel changing height under the pointer.
+  return <span className="block h-4 truncate text-xs leading-4 text-muted-foreground">{text}</span>;
 }
