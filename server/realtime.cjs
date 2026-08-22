@@ -751,7 +751,9 @@ function createRealtime(deps = {}) {
   if (typeof channel !== 'string') return null;
   const [prefix, workspaceId, ...rest] = channel.split(':');
   if (rest.length > 0 || !workspaceId) return null;
-  if (!['canvas', 'cursors', 'item-presence', 'agent-presence', 'agent-status'].includes(prefix)) return null;
+  // huddle-voice: ephemeral speakable sentences for Cartesia (session audience
+  // applied at fanout). Same one-colon grammar as agent-status / item-presence.
+  if (!['canvas', 'cursors', 'item-presence', 'agent-presence', 'agent-status', 'huddle-voice'].includes(prefix)) return null;
   return workspaceId;
  }
 
@@ -1152,6 +1154,8 @@ function createRealtime(deps = {}) {
   AGENT_STATUS_CONTENT_MAX,
   REALTIME_HEAVY_FIELDS,
   relayBroadcast,
+  // Session-audience gated broadcast (huddle voice sentences, agent-status).
+  relayBroadcastToUserIds,
   broadcastGlobal,
   attachRealtime,
   authorizeRealtimeBinding,

@@ -40,6 +40,9 @@ const stub = vi.hoisted(() => ({
   /** …or reports that it could not be established. */
   failWith: '',
   micEnabled: true,
+  participants: [] as Array<Record<string, unknown>>,
+  /** Calls into the app-level huddle hook, including its startup-fetch policy. */
+  huddleCalls: [] as Array<[string | null, string | null, number, boolean | undefined]>,
   session: null as unknown,
   /** What useHuddle returns with no session id — a record view. */
   inert: null as unknown,
@@ -83,7 +86,7 @@ vi.mock('@livekit/components-react', async () => {
       localParticipant: { setMicrophoneEnabled: async () => {} },
       isMicrophoneEnabled: stub.micEnabled,
     }),
-    useParticipants: () => [],
+    useParticipants: () => stub.participants,
     useRoomContext: () => stub.roomContext,
   };
 });
@@ -92,9 +95,15 @@ vi.mock('@/hooks/useHuddle', () => ({
   // Faithful to the real hook in the one way this file depends on: with no
   // session id there is no base path, so it can neither fetch nor hold a
   // connection. That is what makes reading an ended huddle inert.
-  useHuddle: (_workspaceId: string | null, sessionId: string | null) => (
-    sessionId ? stub.session : stub.inert
-  ),
+  useHuddle: (
+    workspaceId: string | null,
+    sessionId: string | null,
+    targetEpoch = 0,
+    loadInitialState?: boolean,
+  ) => {
+    stub.huddleCalls.push([workspaceId, sessionId, targetEpoch, loadInitialState]);
+    return sessionId ? stub.session : stub.inert;
+  },
   useHuddleHeartbeat: () => {},
   useHuddleRecord: () => ({ state: stub.record, loading: false }),
   DEFAULT_HUDDLE_HEARTBEAT_MS: 30_000,
@@ -231,6 +240,8 @@ beforeEach(() => {
   stub.autoConnect = true;
   stub.failWith = '';
   stub.micEnabled = true;
+  stub.participants = [];
+  stub.huddleCalls = [];
   stub.record = huddleState({ active: false, endedAt: '2026-07-27T10:30:00.000Z' });
   stub.inert = { ...fakeSession(false), state: null };
   // The voice-capabilities probe is the only network call this tree makes.
@@ -270,6 +281,15 @@ describe('HuddleDock mounts the call', () => {
     // `connect` and `audio` are what make it a call rather than an idle room.
     expect(stub.room.connect).toBe(true);
     expect(stub.room.audio).toBe(true);
+  });
+
+  it('does not load huddle state twice before joining the room', () => {
+    // startOrJoin already returns the complete state and token. Running the
+    // hook's initial GET beside that POST adds database work before the mic can
+    // become ready, while contributing no data the POST does not replace.
+    render(fakeSession(true));
+    const liveCall = stub.huddleCalls.find(([, sessionId]) => sessionId === 'session-1');
+    expect(liveCall?.[3]).toBe(false);
   });
 
   it('renders the audio sink, without which the call is silent', () => {
@@ -394,6 +414,50 @@ describe('leaving', () => {
 });
 
 describe('who is in the call', () => {
+  it('does not claim a live microphone is hearing until a voice worker joins', () => {
+    render(fakeSession(true));
+    const caption = container.querySelector('[data-testid="huddle-caption"]');
+    expect(caption?.textContent).toContain('Mic idle');
+    expect(caption?.textContent).toContain('Waiting for the selected agent to start listening');
+    expect(caption?.textContent).not.toContain('Hearing you');
+  });
+
+  it('claims hearing once the selected agent voice worker is in the room', () => {
+    stub.participants = [{
+      identity: 'AG_voice_a1',
+      name: 'agent-AG_voice_a1',
+      attributes: {
+        'agensis.kind': 'agent',
+        'agensis.agentId': 'a1',
+        'agensis.handle': 'boris',
+        'agensis.name': 'boris',
+        'agensis.voiceReady': 'true',
+      },
+    }];
+    render(fakeSession(true));
+    const caption = container.querySelector('[data-testid="huddle-caption"]');
+    expect(caption?.textContent).toContain('Hearing you');
+    expect(caption?.textContent).not.toContain('Waiting for the selected agent to start listening');
+  });
+
+  it('does not claim hearing while the worker is present but its STT session is still starting', () => {
+    stub.participants = [{
+      identity: 'AG_voice_a1',
+      name: 'agent-AG_voice_a1',
+      attributes: {
+        'agensis.kind': 'agent',
+        'agensis.agentId': 'a1',
+        'agensis.handle': 'boris',
+        'agensis.name': 'boris',
+        'agensis.voiceReady': 'false',
+      },
+    }];
+    render(fakeSession(true));
+    const caption = container.querySelector('[data-testid="huddle-caption"]');
+    expect(caption?.textContent).toContain('Waiting for the selected agent to start listening');
+    expect(caption?.textContent).not.toContain('Hearing you');
+  });
+
   it('shows only who is ACTUALLY in the room', () => {
     // This assertion inverted. Agents used to hold no LiveKit connection at all
     // — they heard the transcript through a browser side-channel and spoke to

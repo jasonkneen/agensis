@@ -5,17 +5,31 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { AgentSessionEventTypes, initializeLogger, llm } from '@livekit/agents';
-import * as openai from '@livekit/agents-plugin-openai';
+import { AgentSessionEventTypes, initializeLogger } from '@livekit/agents';
+import * as deepgram from '@livekit/agents-plugin-deepgram';
 
-import { availableEngines, pipelineReasoningEffortFor, resolveEngine, realtimeReasoningFor, VOICE_ENGINES, VOICE_OUTPUT_QUEUE_SIZE_MS } from '../src/providers.mjs';
+import { availableEngines, buildEngine, createDeepgramStt, DEFAULT_VOICE_ENGINE, resolveEngine, VOICE_ENGINES, VOICE_OUTPUT_QUEUE_SIZE_MS } from '../src/providers.mjs';
 import { initialsFor, parseColor, renderAvatarFrame } from '../src/avatarVideo.mjs';
 import { flattenToolResult, loadMcpTools, rpc, EXCLUDED, VOICE_LAZY_TOOL_ALLOWLIST } from '../src/mcpTools.mjs';
 import { acceptsTargetPacket, decodeVoiceTarget, encodeVoiceTarget, encodeVoiceTargetRequest, isVoiceTargetRequest, makeVoiceTarget } from '../src/voiceTarget.mjs';
 import { boundChatContext, createSerializedBoundedContextUpdater, MAX_VOICE_CONTEXT_BYTES, MAX_VOICE_RESULT_CHARS, VOICE_RESULT_TRUNCATION_MARKER } from '../src/voiceBounds.mjs';
 import { mirrorTranscript, transcriptEventId } from '../src/transcript.mjs';
+import { createVoiceReplyReceiver, decodeVoiceReply, VOICE_REPLY_TOPIC } from '../src/voiceReply.mjs';
+import { ensureRoomAudioOutputStarted, roomParticipantAudioOutput } from '../src/roomAudio.mjs';
 
-const FULL_ENV = { OPENAI_API_KEY: 'k', CARTESIA_API_KEY: 'k', DEEPGRAM_API_KEY: 'k' };
+const FULL_ENV = { CARTESIA_API_KEY: 'k', DEEPGRAM_API_KEY: 'k' };
+
+test('the voice worker has a reproducible LiveKit Cloud deployment contract', async () => {
+  const dockerfile = await readFile(new URL('../Dockerfile', import.meta.url), 'utf8');
+  const config = await readFile(new URL('../livekit.toml', import.meta.url), 'utf8');
+  assert.match(dockerfile, /COPY package\.json package-lock\.json/);
+  assert.match(dockerfile, /ONNXRUNTIME_NODE_INSTALL=skip/);
+  assert.match(dockerfile, /RUN npm ci/);
+  assert.match(dockerfile, /CMD \["npm", "start"\]/);
+  assert.doesNotMatch(dockerfile, /pnpm/);
+  assert.match(config, /\[project\][\s\S]*subdomain\s*=\s*"llmvoiceserver-lbgzvp9r"/);
+  assert.match(config, /\[agent\][\s\S]*id\s*=\s*"[^"]+"/);
+});
 
 test('the microphone-only worker never requests or publishes camera video', async () => {
   const source = await readFile(new URL('../src/index.mjs', import.meta.url), 'utf8');
@@ -23,102 +37,121 @@ test('the microphone-only worker never requests or publishes camera video', asyn
   assert.match(source, /videoEnabled:\s*false/);
 });
 
-test('an engine is only offered when this host holds its keys', () => {
-  assert.deepEqual(availableEngines({}), [], 'no keys means no voice, stated plainly');
-  assert.deepEqual(availableEngines({ OPENAI_API_KEY: 'k' }), ['openai-realtime', 'openai-pipeline']);
-  assert.ok(availableEngines(FULL_ENV).includes('cartesia-deepgram'));
+test('the worker reports voice readiness only after its media session starts', async () => {
+  const source = await readFile(new URL('../src/index.mjs', import.meta.url), 'utf8');
+  const pending = source.indexOf('await publishVoiceReady(false)');
+  const closeHandler = source.indexOf('session.on(AgentSessionEventTypes.Close');
+  const started = source.indexOf('await session.start({');
+  const audioStarted = source.indexOf('await ensureRoomAudioOutputStarted({');
+  const ready = source.indexOf('await publishVoiceReady(true)');
+  assert.ok(pending >= 0, 'the participant must explicitly begin unready');
+  assert.ok(closeHandler > pending, 'session closure must revoke voice readiness');
+  assert.ok(closeHandler < started, 'the close handler must cover startup failures');
+  assert.ok(started > pending, 'the media session starts after the pending state is visible');
+  assert.ok(audioStarted > started, 'the room audio publisher starts after RoomIO creates it');
+  assert.ok(ready > audioStarted, 'the browser may only claim hearing after the audio track is subscribed');
+  assert.match(source, /if \(ready && voiceSessionClosed\) return;/, 'a close/start race must not republish a stale ready state');
 });
 
-test('a requested engine wins, but only if its keys are present', () => {
+test('the parked target race still publishes exactly one LiveKit audio track', async () => {
+  let starts = 0;
+  let release;
+  const output = {
+    subscribed: false,
+    start: async () => {
+      starts += 1;
+      await new Promise((resolve) => { release = resolve; });
+      output.subscribed = true;
+    },
+  };
+  const session = { _roomIO: { participantAudioOutput: output } };
+
+  assert.equal(roomParticipantAudioOutput(session), output);
+  const first = ensureRoomAudioOutputStarted({ session, signal: new AbortController().signal, log: { log: () => {} } });
+  const second = ensureRoomAudioOutputStarted({ session, signal: new AbortController().signal, log: { log: () => {} } });
+  await Promise.resolve();
+  assert.equal(starts, 1, 'concurrent startup must not publish duplicate tracks');
+  release();
+  assert.equal(await first, output);
+  assert.equal(await second, output);
+  assert.equal(starts, 1);
+});
+
+test('missing LiveKit room audio output fails before claiming voice readiness', async () => {
+  await assert.rejects(
+    () => ensureRoomAudioOutputStarted({ session: {}, signal: new AbortController().signal }),
+    /audio output was not created/,
+  );
+});
+
+test('an engine is only offered when this host holds its keys', () => {
+  assert.deepEqual(availableEngines({}), [], 'no keys means no voice, stated plainly');
+  assert.deepEqual(availableEngines({ OPENAI_API_KEY: 'not-used' }), []);
+  assert.deepEqual(availableEngines(FULL_ENV), ['cartesia-deepgram']);
+});
+
+test('the baseline engine is explicit and never crosses vendors as a fallback', () => {
+  assert.equal(DEFAULT_VOICE_ENGINE, 'cartesia-deepgram');
+
+  const defaultEngine = resolveEngine('', FULL_ENV);
+  assert.equal(defaultEngine.engine, 'cartesia-deepgram');
+  assert.equal(defaultEngine.requested, 'cartesia-deepgram');
+  assert.equal(defaultEngine.usedDefault, true);
+  assert.equal(defaultEngine.fellBack, false);
+
   const ok = resolveEngine('cartesia-deepgram', FULL_ENV);
   assert.equal(ok.engine, 'cartesia-deepgram');
   assert.equal(ok.fellBack, false);
+  assert.equal(ok.usedDefault, false);
 
-  // Asking for Cartesia on a host with only an OpenAI key must not silently run
-  // a different vendor without saying which key is missing.
-  const fallback = resolveEngine('cartesia-deepgram', { OPENAI_API_KEY: 'k' });
-  assert.equal(fallback.fellBack, true);
-  assert.equal(fallback.requested, 'cartesia-deepgram');
-  assert.deepEqual(fallback.missing, ['CARTESIA_API_KEY', 'DEEPGRAM_API_KEY']);
-  assert.ok(fallback.engine, 'a working fallback beats a silent huddle');
+  // An unrelated OpenAI key cannot make the media bridge available.
+  const unavailable = resolveEngine('cartesia-deepgram', { OPENAI_API_KEY: 'k' });
+  assert.equal(unavailable.engine, '');
+  assert.equal(unavailable.fellBack, false);
+  assert.equal(unavailable.requested, 'cartesia-deepgram');
+  assert.deepEqual(unavailable.missing, ['CARTESIA_API_KEY', 'DEEPGRAM_API_KEY']);
 
   // Nothing configured at all: report it rather than pretending.
-  assert.equal(resolveEngine('openai-realtime', {}).engine, '');
+  assert.equal(resolveEngine('openai-realtime', FULL_ENV).engine, '');
+  assert.equal(resolveEngine('not-an-engine', FULL_ENV).engine, '');
 });
 
-test('realtime and pipeline are different SHAPES, not two configs of one thing', () => {
-  assert.equal(VOICE_ENGINES['openai-realtime'].kind, 'realtime');
-  assert.equal(VOICE_ENGINES['cartesia-deepgram'].kind, 'pipeline');
+test('the worker exposes one speech bridge and no local LLM engine', () => {
+  assert.deepEqual(Object.keys(VOICE_ENGINES), ['cartesia-deepgram']);
+  assert.equal(VOICE_ENGINES['cartesia-deepgram'].kind, 'media-bridge');
 });
 
-test('voice reasoning stays at the provider minimum', () => {
-  assert.deepEqual(realtimeReasoningFor('gpt-realtime-2.1-mini'), { effort: 'minimal' });
-  assert.equal(realtimeReasoningFor('GPT-REALTIME-2.1-MINI'), undefined, 'non-canonical aliases are not claimed as wired');
-  assert.equal(realtimeReasoningFor('gpt-4o-realtime-preview-2024-10-01'), undefined);
-  assert.equal(pipelineReasoningEffortFor('gpt-5.4-mini'), 'none');
-  assert.equal(pipelineReasoningEffortFor('gpt-5-mini'), 'minimal');
-  assert.equal(pipelineReasoningEffortFor('gpt-4.1'), undefined);
-  assert.equal(pipelineReasoningEffortFor('custom-voice-model'), undefined);
-  assert.equal(VOICE_OUTPUT_QUEUE_SIZE_MS, 2000);
-});
-
-test('pipeline reasoning settings reach the OpenAI wire without invalid overrides', async () => {
+test('Deepgram Flux uses its required V2 websocket while Nova stays on V1', async () => {
   initializeLogger({ pretty: false, level: 'silent' });
-  const calls = [];
-  const client = {
-    baseURL: 'https://api.openai.com/v1',
-    chat: {
-      completions: {
-        create: async (request) => {
-          calls.push(request);
-          return (async function* () {
-            yield { id: 'voice-test', choices: [], usage: { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 } };
-          }());
-        },
-      },
-    },
-  };
-  const tool = llm.tool({
-    name: 'lookup',
-    description: 'lookup',
-    parameters: { type: 'object', properties: {}, additionalProperties: false },
-    execute: async () => '',
-  });
+  const env = { DEEPGRAM_API_KEY: 'test-key' };
+  const flux = createDeepgramStt('flux-general-en', env);
+  const nova = createDeepgramStt('nova-3', env);
 
-  const cases = [
-    { model: 'gpt-5.4-mini', tools: false, expected: 'none' },
-    // The plugin strips reasoning_effort for this model when tools are present;
-    // its documented model default remains `none`, so do not send an invalid
-    // fallback or reimplement that provider-owned restriction here.
-    { model: 'gpt-5.4-mini', tools: true, expected: undefined },
-    { model: 'gpt-5-mini', tools: true, expected: 'minimal' },
-    { model: 'gpt-4.1', tools: true, expected: undefined },
-  ];
-  for (const item of cases) {
-    const reasoningEffort = pipelineReasoningEffortFor(item.model);
-    const model = new openai.LLM({
-      model: item.model,
-      client,
-      ...(reasoningEffort ? { reasoningEffort } : {}),
-    });
-    await model.chat({ chatCtx: new llm.ChatContext(), ...(item.tools ? { toolCtx: [tool] } : {}) }).collect();
-    assert.equal(calls.at(-1).reasoning_effort, item.expected, item.model);
-  }
+  assert.ok(flux instanceof deepgram.STTv2, 'Flux must connect through /v2/listen');
+  assert.equal(flux.model, 'flux-general-en');
+  assert.ok(nova instanceof deepgram.STT, 'Nova models use /v1/listen');
+  assert.equal(nova.model, 'nova-3');
+
+  const built = await buildEngine({
+    engine: 'cartesia-deepgram',
+    voice: { sttModel: 'flux-general-en' },
+    vad: {},
+    env: FULL_ENV,
+  });
+  assert.ok(built.stt instanceof deepgram.STTv2, 'the real engine builder must use the V2 provider');
+  assert.equal(built.turnDetection, 'stt', 'Flux owns semantic end-of-turn detection');
+  assert.equal('llm' in built, false, 'the selected Agensis agent owns reasoning');
 });
 
-test('spoken worker instructions never make it say its own @handle', async () => {
-  const { buildVoiceInstructions } = await import('../src/voicePrompt.mjs');
-  const prompt = buildVoiceInstructions({ name: 'Codex', handle: 'codex' }, 'openai-realtime');
-  assert.match(prompt, /never say or spell your own name, handle/i);
-  assert.match(prompt, /never begin with @codex/i);
-  assert.match(prompt, /do not narrate reasoning/i);
-  assert.match(prompt, /wake-up cue and do not repeat/i);
-  assert.match(prompt, /never let a tool lookup delay your first spoken words/i);
-  assert.ok(
-    prompt.indexOf('never let a tool lookup delay your first spoken words')
-      < prompt.indexOf('small bootstrap tools'),
-    'the immediate acknowledgement rule must precede the bootstrap-tool guidance',
-  );
+test('the worker source cannot generate an unrelated model reply', async () => {
+  const source = await readFile(new URL('../src/index.mjs', import.meta.url), 'utf8');
+  const providers = await readFile(new URL('../src/providers.mjs', import.meta.url), 'utf8');
+  const pkg = await readFile(new URL('../package.json', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /generateReply|loadMcpTools|built\.llm/);
+  assert.doesNotMatch(providers, /agents-plugin-openai|new openai\.|OPENAI_API_KEY/);
+  assert.doesNotMatch(pkg, /agents-plugin-openai/);
+  assert.match(source, /session\.say\(sentence/);
+  assert.equal(VOICE_OUTPUT_QUEUE_SIZE_MS, 2000);
 });
 
 test('the held video frame is a real image with the agent\'s initials on its colour', () => {
@@ -440,6 +473,22 @@ test('interrupted assistant items do not become durable speech', async () => {
   assert.equal(bodies.length, 0);
 });
 
+test('Cartesia playback is not mirrored as a second assistant message', async () => {
+  const handlers = new Map();
+  const bodies = [];
+  const session = { on: (event, handler) => handlers.set(event, handler), off: () => handlers.clear() };
+  mirrorTranscript({
+    session,
+    meta: { huddleId: 'h1', sessionId: 's1', transcript: { url: 'https://x/t' } },
+    mirrorAssistant: false,
+    fetchImpl: async (_url, options) => { bodies.push(JSON.parse(options.body)); return new Response('{}', { status: 200 }); },
+    log: { log: () => {}, error: () => {} },
+  });
+  handlers.get(AgentSessionEventTypes.ConversationItemAdded)({ item: { role: 'assistant', content: 'real agent reply' } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(bodies.length, 0);
+});
+
 test('repeated no-id utterances get distinct stable transcript events', async () => {
   const handlers = new Map();
   const bodies = [];
@@ -479,6 +528,44 @@ test('voice target packets are closed, revisioned, and human-sender authenticate
   assert.equal(acceptsTargetPacket({ packet: { ...packet, extra: true }, sender, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'keys');
   assert.equal(acceptsTargetPacket({ packet: { ...packet, revision: 0x80000000 }, sender, huddleId: 'h1', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'revision');
   assert.equal(acceptsTargetPacket({ packet, sender, huddleId: 'other', rosterAgentIds: ['a1', 'a2'], currentRevision: 0 }).reason, 'huddle');
+});
+
+test('only scoped server reply packets reach Cartesia, once per sentence offset', async () => {
+  const spoken = [];
+  let active = true;
+  const receiver = createVoiceReplyReceiver({
+    meta: { huddleId: 'h1', transcriptSessionId: 's1', agentId: 'a1' },
+    isActive: () => active,
+    speak: async (sentence) => spoken.push(sentence),
+    log: { error: () => {} },
+  });
+  const value = {
+    v: 1,
+    huddleId: 'h1',
+    sessionId: 's1',
+    messageId: 'm1',
+    agentId: 'a1',
+    agentName: 'Claude',
+    sentence: 'The real agent answered.',
+    offset: 0,
+    seq: 0,
+  };
+  const packet = Buffer.from(JSON.stringify(value));
+
+  assert.equal(decodeVoiceReply(packet)?.sentence, 'The real agent answered.');
+  assert.equal(await receiver.handle(packet, { identity: 'user:forged' }, VOICE_REPLY_TOPIC), false, 'room participants cannot forge server speech');
+  assert.equal(await receiver.handle(packet, undefined, VOICE_REPLY_TOPIC), true);
+  assert.equal(await receiver.handle(packet, undefined, VOICE_REPLY_TOPIC), false, 'a duplicate cannot speak twice');
+  active = false;
+  const next = Buffer.from(JSON.stringify({ ...value, messageId: 'm2', offset: 20 }));
+  assert.equal(await receiver.handle(next, undefined, VOICE_REPLY_TOPIC), false, 'an inactive worker stays silent');
+  assert.deepEqual(spoken, ['The real agent answered.']);
+});
+
+test('the backend and worker pin the same LiveKit reply topic', async () => {
+  const server = await readFile(new URL('../../server/huddles.cjs', import.meta.url), 'utf8');
+  assert.match(server, /LIVEKIT_VOICE_REPLY_TOPIC = 'agensis\.voice\.reply';/);
+  assert.equal(VOICE_REPLY_TOPIC, 'agensis.voice.reply');
 });
 
 test('voice MCP surface excludes job/control tools and caps results', () => {

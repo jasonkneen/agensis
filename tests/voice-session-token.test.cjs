@@ -72,7 +72,14 @@ test('a huddle dispatch token is scoped to that huddle transcript', async () => 
   __test.setTestDb({
     unsafe: async (sql) => /from huddles/.test(sql) ? [{
       id: 'huddle-1', workspace_id: WORKSPACE, session_id: 'host-1',
-      transcript_session_id: 'transcript-session-1', transcript_participants: [AGENT], ended_at: null,
+      transcript_session_id: 'transcript-session-1',
+      transcript_participants: [{
+        id: `agent:${AGENT}`,
+        kind: 'agent',
+        agent_id: AGENT,
+        name: 'Voice agent',
+      }],
+      ended_at: null,
     }] : [],
   });
   const token = await createVoiceSessionToken({

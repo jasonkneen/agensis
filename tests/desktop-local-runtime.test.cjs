@@ -91,6 +91,19 @@ test('pickRuntimeId accepts harness ids and pi alias', () => {
   assert.equal(supervisor.pickRuntimeId({}), 'claude');
 });
 
+test('desktop supervisor binds every child to AGENSIS_SUPERVISOR_PID', () => {
+  // Orphaned connect processes (PPID 1 after Electron force-quit) were the
+  // root of the "connection dropped mid-turn" melt: nobody read their pipes,
+  // uncaught handlers stormed at 100% CPU, and codex app-server could not
+  // handshake. The CLI watches this env var and exits when desktop dies.
+  const body = fs.readFileSync(
+    path.join(__dirname, '../electron/local-runtime/supervisor.cjs'),
+    'utf8',
+  );
+  assert.match(body, /AGENSIS_SUPERVISOR_PID:\s*String\(process\.pid\)/);
+  assert.match(body, /detached:\s*false/);
+});
+
 test('autostart store persists runtime (not harness) and migrates ACP files', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agensis-local-runtime-'));
   try {

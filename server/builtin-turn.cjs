@@ -76,6 +76,9 @@ function createBuiltinTurn(deps = {}) {
   workspaceResources,
   sendWs,
   sessionHasLiveHuddle,
+  // Ephemeral speakable-sentence fanout for live huddles (voice-publish.cjs).
+  // Optional so thin unit tests still construct this module.
+  publishHuddleVoiceText = async (_args) => String(_args?.previousSpoken || ''),
   slugHandle,
  } = deps;
 
@@ -707,12 +710,34 @@ function createBuiltinTurn(deps = {}) {
     //     sentence of a reply used to sit unwritten until the stream ended.
    let latest = '';
    let written = '';
+   // Cumulative speakable prefix already fanned out as ephemeral voice events.
+   // Independent of `written`: TTS can lead the durable message row.
+   let voiceSpoken = '';
    let lastFlush = 0;
    let flushQueued = false;
     let readMarkerAdvanced = false;
     // Set while a block is being sealed, so a queued flush cannot write into the
     // row after it has become a finished message (or into a null id).
     let sealing = false;
+    const emitVoice = (messageId, text) => {
+     if (!voiceHuddle || !messageId) return;
+     const prev = voiceSpoken;
+     // Fire-and-forget: must not stall the stream write path. Failures leave
+     // the durable message path as the fallback. Older browser clients may
+     // still consume this compatibility lane; current huddles use LiveKit's
+     // room-connected voice worker instead.
+     void publishHuddleVoiceText({
+      workspaceId: String(workspaceId || agent.workspace_id || ''),
+      sessionId,
+      messageId: String(messageId),
+      agentId: String(agent.id),
+      agentName: agent.name || '',
+      fullText: text,
+      previousSpoken: prev,
+     }).then((next) => {
+      if (typeof next === 'string' && next.length >= voiceSpoken.length) voiceSpoken = next;
+     }).catch(() => { });
+    };
     const flush = () => {
      // Past the end of the stream the final write below is authoritative; a
      // straggler here would overwrite it (and, on the error path, replace the
@@ -723,6 +748,9 @@ function createBuiltinTurn(deps = {}) {
      writing = true;
      lastFlush = Date.now();
      const target = latest;
+     // Publish speakable sentences BEFORE the DB write so Cartesia can start
+     // while the durable row is still committing (voice_optimization.md Phase 2).
+     if (currentMessageId) emitVoice(currentMessageId, target);
      const write = (async () => {
       try {
        if (currentMessageId) {
@@ -740,6 +768,8 @@ function createBuiltinTurn(deps = {}) {
          [nextId, sessionId, target || 'Thinking…', workThreadParentId, String(agent.id), agent.name],
         );
         currentMessageId = nextId;
+        // First materialisation: emit now that we have an id.
+        emitVoice(nextId, target);
         if (rows.length > 0) notifyDbSubscribers('messages', 'INSERT', rows);
        }
        // Only after the write landed: a failed one has not been written, and the
@@ -768,6 +798,10 @@ function createBuiltinTurn(deps = {}) {
      sealing = true;
      await writeChain.catch(() => { });
      try {
+      // Final speakable flush for this block (incl. any trailing clause) then
+      // reset so the next block's offsets start at zero.
+      if (currentMessageId) emitVoice(currentMessageId, text);
+      voiceSpoken = '';
       let rows;
       if (currentMessageId) {
        rows = await getDb().unsafe(
@@ -1080,6 +1114,10 @@ function createBuiltinTurn(deps = {}) {
      lastSeenMessageId,
      readScopeThreadParentId: threadParentId || null,
      mode: 'daemon',
+     // Server-derived, never client-authored. New daemons use this to lower
+     // Codex reasoning latency for spoken turns; keeping it durable also makes
+     // the exact execution context visible if a live connection drops.
+     voiceHuddle,
      ...(ampRuntime ? {
       runtime: 'amp',
       ampLaneThreadParentId,
@@ -1108,6 +1146,9 @@ function createBuiltinTurn(deps = {}) {
     permission_mode: agentPayload.permission_mode,
     permissionFlags: agentPayload.permissionFlags,
     agent: agentPayload,
+    // Older daemons ignore this additive field. New ones apply it only to the
+    // Codex runtime, leaving Claude, Amp and ordinary typed turns unchanged.
+    voiceHuddle,
     ...(ampRuntime ? { runtime: ampRuntime } : {}),
     responseMessageId,
     lastSeenMessageId,

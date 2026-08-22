@@ -264,8 +264,15 @@ async function start(options = {}) {
         PATH: pathEnv,
         ...connect.env,
         ELECTRON_RUN_AS_NODE: undefined,
+        // Daemon exits when this Electron process dies (CLI processGuard).
+        // Without it, a force-quit leaves hub-connected orphans that can
+        // storm at 100% CPU writing into pipes nobody reads.
+        AGENSIS_SUPERVISOR_PID: String(process.pid),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
+      // Keep the child in our process group so a clean desktop quit can
+      // signal the whole tree; the supervisor-pid watchdog covers the
+      // force-kill / crash case where we never get before-quit.
       detached: false,
       shell: needsShell,
       windowsHide: true,
@@ -374,11 +381,21 @@ function stopAll() {
     const session = sessions.get(id);
     if (!session?.child) continue;
     session.stopping = true;
+    const child = session.child;
     try {
-      session.child.kill('SIGTERM');
+      child.kill('SIGTERM');
     } catch {
       // ignore
     }
+    // Escalate after a short grace. before-quit is sync and must not block
+    // the app forever, so we fire-and-forget SIGKILL rather than await exit.
+    setTimeout(() => {
+      try {
+        if (child.exitCode === null && !child.killed) child.kill('SIGKILL');
+      } catch {
+        // ignore
+      }
+    }, 2500).unref?.();
   }
   sessions.clear();
 }

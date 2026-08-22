@@ -81,8 +81,13 @@ const {
  readLibraryEntry,
  unavailable: skillContentUnavailable,
 } = require('./skill-content.cjs');
-const { mountHuddleRoutes, ensureHuddlesSchema, deleteLivekitRoom } = require('./huddles.cjs');
-const { isVoiceCapableRunMode } = require('./huddle-agents.cjs');
+const {
+ mountHuddleRoutes,
+ ensureHuddlesSchema,
+ deleteLivekitRoom,
+ publishLivekitHuddleVoice,
+} = require('./huddles.cjs');
+const { isVoiceCapableRunMode, participantAgentId } = require('./huddle-agents.cjs');
 const {
  createAgentPermissions,
  ensureAgentPermissionsSchema,
@@ -116,6 +121,7 @@ const { createAgentConnections } = require('./agent-connections.cjs');
 const { createTaskDispatch } = require('./task-dispatch.cjs');
 const { createAgentJobs } = require('./agent-jobs.cjs');
 const { createBuiltinTurn } = require('./builtin-turn.cjs');
+const { createVoicePublish } = require('./voice-publish.cjs');
 const {
  installCreatedSessionMemberships,
  lockPrivateSessionRoster,
@@ -4643,8 +4649,10 @@ async function createVoiceSessionToken({ workspaceId, agentId, huddleId = '', se
   );
   const row = rows[0];
   const transcriptSession = String(row?.transcript_session_id || row?.session_id || '');
-  const participants = parseJsonArray(row?.transcript_participants);
-  if (!row || row.ended_at || transcriptSession !== session || !participants.includes(agent)) {
+  const participantAgentIds = new Set(
+   parseJsonArray(row?.transcript_participants).map(participantAgentId).filter(Boolean),
+  );
+  if (!row || row.ended_at || transcriptSession !== session || !participantAgentIds.has(agent)) {
    throw new Error('Voice huddle claims are invalid');
   }
  }
@@ -9323,6 +9331,7 @@ const builtinTurn = createBuiltinTurn({
  roleHasWorkspaceCapability,
  workspaceResources,
  sessionHasLiveHuddle: (...a) => sessionHasLiveHuddle(...a),
+ publishHuddleVoiceText: (...a) => publishHuddleVoiceText(...a),
  slugHandle,
  notifyDbSubscribers: (...a) => realtime.notifyDbSubscribers(...a),
  sendWs: (...a) => realtime.sendWs(...a),
@@ -9456,6 +9465,19 @@ const {
  enforceWorkspaceRole: (...a) => enforceWorkspaceRole(...a),
 });
 
+// Ephemeral speakable sentences for live huddles (Cartesia leads the durable
+// message fanout). See server/voice-publish.cjs and shared/voice-speakable.cjs.
+const voicePublish = createVoicePublish({
+ sessionRealtimeAudience: (...a) => sessionRealtimeAudience(...a),
+ relayBroadcastToUserIds: (...a) => realtime.relayBroadcastToUserIds(...a),
+ relayRoomSentence: (payload) => publishLivekitHuddleVoice({
+  db: getDb(),
+  sessionId: payload?.sessionId,
+  payload,
+ }),
+});
+const { publishHuddleVoiceText } = voicePublish;
+
 // Agent jobs hold no in-process state — a job's liveness is a database fact, so
 // a restart cannot lose it. See server/agent-jobs.cjs.
 const agentJobs = createAgentJobs({
@@ -9480,6 +9502,7 @@ const agentJobs = createAgentJobs({
  getConnectedAgents: () => agentConnections.connectedAgents,
  scheduleTaskQueueDrain: (...a) => taskDispatch.scheduleTaskQueueDrain(...a),
  recordAnthropicUsage: (...a) => recordAnthropicUsage(...a),
+ publishHuddleVoiceText: (...a) => publishHuddleVoiceText(...a),
 });
 const {
  insertActiveAgentJob, agentHasActiveJob, agentHasAnyActiveJob,
@@ -9892,6 +9915,10 @@ function createApp() {
   // absolute base URL and a credential scoped to the one agent it is being dispatched for.
   createVoiceSessionToken,
   verifyVoiceSessionToken,
+  // Final Deepgram turns are ordinary addressed chat turns. The route stores
+  // @handle text and resumes this exact selected agent through the same runtime
+  // dispatcher as typed huddle messages.
+  continueConversation: (...args) => continueConversation(...args),
   parseJsonArray,
   parseJsonObject,
   // Voice workers call back to the long-running Fly backend. Never point

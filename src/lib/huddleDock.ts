@@ -33,7 +33,7 @@ export const HUDDLE_NOTES_MAX_LENGTH = 20_000;
  * One participant as LiveKit reports them.
  *
  * Agents are in this list because they are genuinely in the room — the voice
- * worker joins, publishes audio and a held video tile, and stamps
+ * worker joins, publishes audio, and stamps
  * `agensis.*` attributes so a participant can be matched back to the agent it
  * is. Before that, agents had no LiveKit presence at all and the chips had to be
  * synthesised from a separate roster that no presence event ever mentioned.
@@ -48,6 +48,8 @@ export interface HuddleRoomParticipant {
   agentId: string;
   handle: string;
   accentColor: string;
+  /** True only after the worker's STT/media session has successfully started. */
+  voiceReady: boolean;
   /** The agent's held image / a human's camera is publishing. */
   hasVideo: boolean;
 }
@@ -63,6 +65,35 @@ export interface HuddleLocalState {
   failed: string;
   /** Everyone in the room, humans and agents alike, straight from LiveKit. */
   roomParticipants: HuddleRoomParticipant[];
+}
+
+export interface HuddleVoiceInputState {
+  listening: boolean;
+  unavailable: string;
+}
+
+/**
+ * What the caption may truthfully claim about speech input.
+ *
+ * A published human microphone is only transport. Each agent's voice worker
+ * owns that agent's STT and TTS, so the selected agent is not hearing anything
+ * until its own worker has joined and reported the media session ready.
+ */
+export function huddleVoiceInputState(
+  local: HuddleLocalState,
+  activeAgentId = '',
+): HuddleVoiceInputState {
+  const workerReady = local.roomParticipants.some(participant => (
+    participant.kind === 'agent'
+    && participant.voiceReady
+    && (!activeAgentId || participant.agentId === activeAgentId)
+  ));
+  const micLive = local.connected && local.micEnabled;
+  if (micLive && workerReady) return { listening: true, unavailable: '' };
+  if (micLive) {
+    return { listening: false, unavailable: 'Waiting for the selected agent to start listening…' };
+  }
+  return { listening: false, unavailable: '' };
 }
 
 /** Read the agensis identity a voice worker stamps on itself. */
@@ -85,6 +116,7 @@ export function roomParticipantFrom(participant: {
     agentId: attributes['agensis.agentId'] || '',
     handle: attributes['agensis.handle'] || '',
     accentColor: attributes['agensis.accentColor'] || '',
+    voiceReady: isAgent && attributes['agensis.voiceReady'] === 'true',
     hasVideo: Number(participant.videoTrackPublications?.size || 0) > 0,
   };
 }
@@ -159,6 +191,7 @@ export function sameRoomParticipants(
       || x.isSpeaking !== y.isSpeaking
       || x.kind !== y.kind
       || x.agentId !== y.agentId
+      || x.voiceReady !== y.voiceReady
       || x.hasVideo !== y.hasVideo) return false;
   }
   return true;

@@ -22,19 +22,25 @@ const HUDDLE = {
   transcript_session_id: 'transcript-1',
   room_name: 'agensis-hud-1',
   ended_at: null,
-  transcript_participants: ['a1'],
+  transcript_participants: [{
+    id: 'agent:a1',
+    kind: 'agent',
+    agent_id: 'a1',
+    name: 'Claude',
+  }],
 };
 
 function harness({ huddles = [HUDDLE], verify = null, historical = [], controllerAuthorized = true } = {}) {
   const inserted = [];
+  const continuations = [];
   const byEvent = new Map();
   const db = {
     unsafe: async (sql, params = []) => {
       if (/from huddles/.test(sql)) {
-        return huddles.filter((h) => h.id === params[0] && h.workspace_id === params[1]).map((h) => ({ ...h, transcript_participants: h.transcript_participants || ['a1'] }));
+        return huddles.filter((h) => h.id === params[0] && h.workspace_id === params[1]).map((h) => ({ ...h, transcript_participants: h.transcript_participants || HUDDLE.transcript_participants }));
       }
       if (/chat_sessions transcript_scope/.test(sql)) {
-        return huddles.filter((h) => h.id === params[0] && h.workspace_id === params[1]).map((h) => ({ ...h, transcript_participants: h.transcript_participants || ['a1'] }));
+        return huddles.filter((h) => h.id === params[0] && h.workspace_id === params[1]).map((h) => ({ ...h, transcript_participants: h.transcript_participants || HUDDLE.transcript_participants }));
       }
       if (/from huddle_presence/.test(sql)) return historical.filter((row) => row.identity === params[1]).map((row) => ({ identity: row.identity }));
       if (/from huddle_events/.test(sql)) return historical.filter((row) => row.identity === params[1]).map((row) => ({ display_name: row.display_name, identity: row.identity }));
@@ -72,13 +78,17 @@ function harness({ huddles = [HUDDLE], verify = null, historical = [], controlle
     lockPrivateSessionRoster: async () => {},
     jsonError: (res, status, error) => res.status(status).json({ data: null, error: { message: error.message } }),
     notifyDbSubscribers: () => {},
+    continueConversation: async (args) => {
+      continuations.push(args);
+      return { started: true };
+    },
     verifyVoiceSessionToken: verify || (async (token) => (
       token === 'agv_good'
         ? { kind: 'agent', agentId: 'a1', workspaceId: 'ws-1', name: 'Claude', handle: 'claude' }
         : null
     )),
   });
-  return { app, inserted };
+  return { app, inserted, continuations };
 }
 
 async function post(app, body, token) {
@@ -113,12 +123,24 @@ test('an agent turn lands in the huddle transcript session', async () => {
 });
 
 test('a human turn requires and keeps a verified participant speaker', async () => {
-  const { app, inserted } = harness({ historical: [{ identity: 'user:human-1', display_name: 'Jason' }] });
+  const { app, inserted, continuations } = harness({ historical: [{ identity: 'user:human-1', display_name: 'Jason' }] });
   const res = await post(app, { huddleId: 'hud-1', role: 'user', content: 'what is left?', speakerId: 'user:human-1' }, 'agv_good');
   assert.equal(res.status, 200);
+  assert.equal(inserted[0].content, '@claude what is left?', 'voice must name the selected agent exactly like typed huddle chat');
   assert.equal(inserted[0].sender_kind, 'user');
   assert.equal(inserted[0].sender_name, 'Jason');
   assert.equal(inserted[0].sender_id, 'user:human-1');
+  assert.deepEqual(continuations, [{ workspaceId: 'ws-1', sessionId: 'transcript-1', targetAgentId: 'a1' }]);
+});
+
+test('a retried user voice event cannot dispatch the selected agent twice', async () => {
+  const { app, inserted, continuations } = harness({ historical: [{ identity: 'user:human-1', display_name: 'Jason' }] });
+  const turn = { huddleId: 'hud-1', role: 'user', eventId: 'user-turn-1', content: 'status?', speakerId: 'user:human-1' };
+  assert.equal((await post(app, turn, 'agv_good')).status, 200);
+  assert.equal((await post(app, turn, 'agv_good')).status, 200);
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0].content, '@claude status?');
+  assert.deepEqual(continuations, [{ workspaceId: 'ws-1', sessionId: 'transcript-1', targetAgentId: 'a1' }]);
 });
 
 test('a user line without a speaker or with a forged speaker is refused', async () => {

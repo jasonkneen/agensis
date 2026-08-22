@@ -15,11 +15,11 @@ import {
 
 const agent = (over: Partial<HuddleRoomParticipant> = {}): HuddleRoomParticipant => ({
   identity: 'AG_abc', name: 'Claude', isLocal: false, isSpeaking: false,
-  kind: 'agent', agentId: 'a1', handle: 'claude', accentColor: '#4f46e5', hasVideo: true, ...over,
+  kind: 'agent', agentId: 'a1', handle: 'claude', accentColor: '#4f46e5', voiceReady: true, hasVideo: true, ...over,
 });
 const human = (over: Partial<HuddleRoomParticipant> = {}): HuddleRoomParticipant => ({
   identity: 'user:u1', name: 'Jason', isLocal: false, isSpeaking: false,
-  kind: 'human', agentId: '', handle: '', accentColor: '', hasVideo: false, ...over,
+  kind: 'human', agentId: '', handle: '', accentColor: '', voiceReady: false, hasVideo: false, ...over,
 });
 
 describe('reading an agensis identity off a LiveKit participant', () => {
@@ -34,6 +34,7 @@ describe('reading an agensis identity off a LiveKit participant', () => {
         'agensis.handle': 'claude',
         'agensis.name': 'Claude',
         'agensis.accentColor': '#4f46e5',
+        'agensis.voiceReady': 'true',
       },
       videoTrackPublications: { size: 1 },
     });
@@ -43,6 +44,7 @@ describe('reading an agensis identity off a LiveKit participant', () => {
     // The agensis name wins over LiveKit's generated one, or the tile reads
     // "agent-AG_xyz" to a human.
     expect(read.name).toBe('Claude');
+    expect(read.voiceReady).toBe(true);
     expect(read.hasVideo).toBe(true);
     expect(read.isSpeaking).toBe(true);
   });
@@ -51,6 +53,7 @@ describe('reading an agensis identity off a LiveKit participant', () => {
     const read = roomParticipantFrom({ identity: 'user:u1', name: 'Jason', attributes: {} });
     expect(read.kind).toBe('human');
     expect(read.agentId).toBe('');
+    expect(read.voiceReady).toBe(false);
     expect(read.hasVideo).toBe(false);
   });
 

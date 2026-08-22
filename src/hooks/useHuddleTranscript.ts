@@ -144,9 +144,9 @@ export function useHuddleTranscript(
   useTableSubscription<Message>(
     {
       enabled: !!sessionId,
-      // The same channel name useSpeechOutput uses for this session, so the
-      // realtime manager reference-counts ONE underlying subscription instead
-      // of opening a second one over identical rows.
+      // The same canonical channel name used by the ordinary session-message
+      // readers, so the realtime manager reference-counts ONE underlying
+      // subscription instead of opening another over identical rows.
       channelName: `messages:${sessionId}`,
       table: 'messages',
       event: '*',

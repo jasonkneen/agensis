@@ -13,6 +13,29 @@
     ]
   },
   {
+    "version": "huddle-voice-engine-routing",
+    "date": "2026-08-09",
+    "title": "Huddle agents use the intended speech pipeline",
+    "summary": "LiveKit voice workers now default to each agent's Deepgram speech recognition and Cartesia voice pipeline. An unavailable or unset engine can no longer silently switch the call to OpenAI Realtime, and a failed media session immediately clears the Listening state.",
+    "highlights": [
+      "Unconfigured agents use Deepgram STT and Cartesia TTS in LiveKit",
+      "Voice engines never silently fall back to a different provider",
+      "A closed speech session immediately stops claiming that the agent is listening"
+    ]
+  },
+  {
+    "version": "huddle-voice-reliability",
+    "date": "2026-08-09",
+    "title": "Huddle voice agents reliably join the call",
+    "summary": "Huddles now launch the selected voice agent from the saved channel roster, recover a missing voice worker when somebody rejoins, and wait for speech recognition to be ready before saying the microphone is being heard. Starting a call also avoids a redundant request on the microphone's critical path.",
+    "highlights": [
+      "Saved channel rosters reliably launch their LiveKit voice agents",
+      "Rejoining repairs a missing voice agent without duplicating workers already in the room",
+      "The dock says Hearing you only after the selected worker's speech session is ready",
+      "Huddle startup removes a redundant state request"
+    ]
+  },
+  {
     "version": "desktop-local-sdk-runtime",
     "date": "2026-08-02",
     "title": "Start on this Mac uses Claude Agent SDK and Codex app-server",

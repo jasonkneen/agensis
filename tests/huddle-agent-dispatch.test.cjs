@@ -19,9 +19,12 @@ const silent = { log: () => {}, error: () => {} };
 
 function fakeDb({ participants = [], agents = [] } = {}) {
   return {
-    unsafe: async (sql) => {
+    unsafe: async (sql, params = []) => {
       if (/from chat_sessions/.test(sql)) return [{ participants: JSON.stringify(participants) }];
-      if (/from workspace_agents/.test(sql)) return agents;
+      if (/from workspace_agents/.test(sql)) {
+        const requestedIds = new Set((params[1] || []).map(String));
+        return agents.filter((agent) => requestedIds.has(String(agent.id)));
+      }
       return [];
     },
   };
@@ -79,6 +82,68 @@ test('every agent in the channel roster is dispatched into the room', async () =
   assert.equal(metadata.targetControllerIdentity, 'user:starter');
   // Each agent gets its OWN credential — one leaking must not speak for another.
   assert.equal(JSON.parse(calls[1].opts.metadata).mcp.token, 'agv_token_for_a2');
+});
+
+test('the persisted object roster dispatches its agent_id into the room', async () => {
+  const calls = [];
+  const result = await dispatchVoiceAgents({
+    ...base,
+    db: fakeDb({
+      participants: [{
+        id: 'agent:a1', kind: 'agent', agent_id: 'a1', name: 'Claude', handle: 'claude', direct: true,
+      }],
+      agents: [{ id: 'a1', name: 'Claude', handle: 'claude', enabled: true }],
+    }),
+    dispatchClientFactory: {
+      createDispatch: async (_room, _agentName, opts) => calls.push(JSON.parse(opts.metadata)),
+    },
+  });
+
+  assert.deepEqual(result.dispatched, ['claude']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].agentId, 'a1');
+});
+
+test('recovery dispatches only agents missing from an existing LiveKit room dispatch', async () => {
+  const calls = [];
+  const result = await dispatchVoiceAgents({
+    ...base,
+    recoverExisting: true,
+    db: fakeDb({
+      participants: ['a1', 'a2'],
+      agents: [
+        { id: 'a1', name: 'Claude', handle: 'claude', enabled: true },
+        { id: 'a2', name: 'Grok', handle: 'grok', enabled: true },
+      ],
+    }),
+    dispatchClientFactory: {
+      listDispatch: async () => [{ metadata: JSON.stringify({ agentId: 'a1' }) }],
+      createDispatch: async (_room, _name, opts) => calls.push(JSON.parse(opts.metadata)),
+    },
+  });
+
+  assert.deepEqual(result.alreadyDispatched, ['claude']);
+  assert.deepEqual(result.dispatched, ['grok']);
+  assert.deepEqual(calls.map((call) => call.agentId), ['a2']);
+});
+
+test('recovery never guesses and duplicates workers when LiveKit dispatch state is unavailable', async () => {
+  const calls = [];
+  const result = await dispatchVoiceAgents({
+    ...base,
+    recoverExisting: true,
+    db: fakeDb({
+      participants: ['a1'],
+      agents: [{ id: 'a1', name: 'Claude', handle: 'claude', enabled: true }],
+    }),
+    dispatchClientFactory: {
+      listDispatch: async () => { throw new Error('dispatch lookup unavailable'); },
+      createDispatch: async (...args) => calls.push(args),
+    },
+  });
+
+  assert.equal(result.skipped, 'dispatch-state-unavailable');
+  assert.equal(calls.length, 0);
 });
 
 
@@ -198,8 +263,13 @@ test('per-agent voice settings survive into the dispatch metadata', () => {
     metadata: JSON.stringify({ voice_engine: 'openai-realtime' }),
   }, parseJsonObject);
 
-  assert.equal(settings.engine, 'openai-realtime');
+  assert.equal(settings.engine, 'cartesia-deepgram', 'obsolete local-LLM metadata cannot replace the media bridge');
   assert.equal(settings.cartesia_voice_id, 'v-123', 'an agent that had a voice keeps it across this migration');
   assert.equal(settings.speed, 1.1);
   assert.equal(settings.emotion, 'calm');
+});
+
+test('agents without an engine use the Cartesia and Deepgram LiveKit pipeline', () => {
+  const settings = voiceSettingsFor({ identity: '{}', metadata: '{}' }, parseJsonObject);
+  assert.equal(settings.engine, 'cartesia-deepgram');
 });

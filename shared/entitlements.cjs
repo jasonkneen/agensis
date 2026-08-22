@@ -21,10 +21,8 @@
 //   fallback that keeps a microphone alive when a server key is missing, and
 //   gating it would mean an unconfigured deployment has no voice at all.
 //
-//   `openai-realtime` is the upgrade. It is listed here BEFORE it is
-//   implemented on purpose: an engine that exists but is not available to this
-//   account has to be cleanly unavailable with a reason, not silently missing
-//   from a list. Missing looks identical to broken.
+// There is no model-provider voice engine. LiveKit carries audio; each selected
+// Agensis agent keeps its own runtime and model.
 
 /** Every plan name the app understands. `free` is what an unset column means. */
 const PLANS = ['free', 'pro'];
@@ -38,7 +36,7 @@ const PLAN_ENTITLEMENTS = Object.freeze({
     voiceEngines: Object.freeze(['cartesia-deepgram', 'browser']),
   }),
   pro: Object.freeze({
-    voiceEngines: Object.freeze(['openai-realtime', 'cartesia-deepgram', 'browser']),
+    voiceEngines: Object.freeze(['cartesia-deepgram', 'browser']),
   }),
 });
 

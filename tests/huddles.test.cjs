@@ -1085,6 +1085,28 @@ test('a second starter joins the SAME huddle instead of opening a second room', 
   });
 });
 
+test('joining an existing huddle reconciles its voice dispatch so a failed first launch can heal', async () => {
+  const db = makeDb({ roles: { [`${WS}:${MEMBER}`]: 'editor' }, huddleRows: [liveHuddleRow()] });
+  __test.setTestDb(db);
+  const dispatches = [];
+  const { app } = makeApp(db, {
+    createVoiceSessionToken: async () => 'voice-token',
+    dispatchAgents: async (args) => { dispatches.push(args); },
+  });
+  await withServer(app, async (baseUrl) => {
+    const token = await __test.issueToken(MEMBER, '1');
+    const res = await fetch(`${baseUrl}/backend/workspaces/${WS}/sessions/${SESSION}/huddle`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(res.status, 200);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(dispatches.length, 1);
+    assert.equal(dispatches[0].roomName, `agensis-${HUDDLE_ID}`);
+    assert.equal(dispatches[0].recoverExisting, true);
+  });
+});
+
 test('joining an ENDED huddle is refused rather than minting a dead credential', async () => {
   const db = makeDb({
     roles: { [`${WS}:${MEMBER}`]: 'editor' },
@@ -2057,6 +2079,25 @@ test('the voice note reaches EVERY run lane, and defaults to off', () => {
   // Off unless asked for: a caller that forgets the argument must not opt every
   // agent into voice etiquette.
   assert.match(source, /function buildDaemonPrompt\([^)]*voiceHuddle = false[^)]*\)/);
+});
+
+test('the daemon job carries the authoritative huddle flag to its runtime', () => {
+  const source = require('./helpers/fly-lane.cjs').flyLaneSource();
+  const start = source.indexOf('const daemonPrompt = buildDaemonPrompt');
+  const end = source.indexOf('if (!delivered)', start);
+  assert.ok(start >= 0 && end > start, 'daemon dispatch block was not found');
+  const dispatch = source.slice(start, end);
+
+  assert.match(
+    dispatch,
+    /mode:\s*'daemon',[\s\S]*?voiceHuddle/,
+    'the durable job metadata must remember whether this was a huddle turn',
+  );
+  assert.match(
+    dispatch,
+    /type:\s*'agent_job',[\s\S]*?job:\s*\{[\s\S]*?voiceHuddle/,
+    'the live daemon payload must receive the server-derived huddle flag',
+  );
 });
 
 // ---------------------------------------------------------------------------

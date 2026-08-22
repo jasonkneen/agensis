@@ -2,8 +2,8 @@
 //
 // THIS BRANCH IS NOT MERGED, ON PURPOSE. Nothing in main calls this module:
 // there is no `plan` column on an account, and main's voice code does not use
-// the engine vocabulary this file gates ('cartesia-deepgram', 'openai-realtime'
-// — main knows only 'browser'). Merging it would put an unreachable module and
+// the engine vocabulary this file gates ('cartesia-deepgram' and 'browser').
+// Merging it would put an unreachable module and
 // an unreachable test into the shipped tree.
 //
 // It is preserved because it is the one piece of worktree-voice-pipeline that
@@ -38,11 +38,11 @@ test('an unreadable plan value fails CLOSED to free', () => {
   assert.equal(entitlements.normalizePlan('PRO '), 'pro');
 });
 
-test('only the upgraded plan is entitled to the upgrade engine', () => {
+test('no plan exposes a model-provider voice engine', () => {
   assert.equal(entitlements.voiceEngineEntitled('free', 'openai-realtime'), false);
-  assert.equal(entitlements.voiceEngineEntitled('pro', 'openai-realtime'), true);
+  assert.equal(entitlements.voiceEngineEntitled('pro', 'openai-realtime'), false);
   assert.equal(entitlements.voiceEngineEntitled('free', 'cartesia-deepgram'), true);
-  assert.match(entitlements.voiceEngineDeniedReason('free', 'openai-realtime'), /upgraded plan/i);
+  assert.match(entitlements.voiceEngineDeniedReason('free', 'openai-realtime'), /does not exist/i);
   assert.equal(entitlements.voiceEngineDeniedReason('free', 'cartesia-deepgram'), '');
   // An engine nobody has ever heard of is a different sentence from a paid one.
   assert.match(entitlements.voiceEngineDeniedReason('pro', 'telepathy'), /does not exist/i);

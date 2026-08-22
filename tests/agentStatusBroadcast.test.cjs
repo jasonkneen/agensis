@@ -106,6 +106,8 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 
 test('agent-status channel resolves to its workspace id', () => {
  assert.equal(__test.workspaceIdFromRealtimeChannel('agent-status:ws-1'), 'ws-1');
+ // Ephemeral huddle voice sentences share the same one-colon grammar.
+ assert.equal(__test.workspaceIdFromRealtimeChannel('huddle-voice:ws-1'), 'ws-1');
  // A trailing segment (would be a table-style channel) is rejected.
  assert.equal(__test.workspaceIdFromRealtimeChannel('agent-status:ws-1:extra'), null);
  // An unknown prefix is still rejected.

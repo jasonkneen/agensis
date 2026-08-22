@@ -66,6 +66,8 @@ function createAgentJobs(deps = {}) {
   // Fail-open metering. Optional so unit tests that construct this module with a
   // thin deps bag still work; production always wires recordAnthropicUsage.
   recordAnthropicUsage = null,
+  // Ephemeral speakable-sentence fanout for live huddles. Optional for tests.
+  publishHuddleVoiceText = async (_args) => String(_args?.previousSpoken || ''),
  } = deps;
 
  function publishCommittedFanout(pendingFanout) {
@@ -1520,7 +1522,7 @@ function createAgentJobs(deps = {}) {
   if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
   const jobId = String(message.jobId || '');
   if (!jobId) throw badRequest('jobId is required');
-  const wrote = await withCurrentDaemonJob(ws, jobId, async ({ tx, job, publishAfterCommit }) => {
+  const wrote = await withCurrentDaemonJob(ws, jobId, async ({ tx, job, publishAfterCommit, afterCommit }) => {
   const metadata = parseJsonObject(job.metadata);
   const responseMessageId = metadata.responseMessageId || null;
   const deltaText = textFromValue(message.content ?? message.response ?? '').trim();
@@ -1617,6 +1619,33 @@ function createAgentJobs(deps = {}) {
    );
    if (updatedRows.length > 0) {
     publishAfterCommit('messages', 'UPDATE', updatedRows);
+    // Live huddle: push completed sentences so Cartesia can start without
+    // waiting on this fanout. Gated by metadata.voiceHuddle (set at job create).
+    if (deltaText && metadata.voiceHuddle === true) {
+     const prevVoice = String(metadata.voiceSpokenPrefix || '');
+     const voiceArgs = {
+      workspaceId: String(job.workspace_id || ''),
+      sessionId: String(job.session_id || ''),
+      messageId: String(responseMessageId),
+      agentId: String(job.agent_id || ''),
+      agentName: job.agent_name || auth.name || auth.handle || 'Agent',
+      fullText: deltaText,
+      previousSpoken: prevVoice,
+      jobId: String(jobId),
+     };
+     afterCommit(() => {
+      void publishHuddleVoiceText(voiceArgs).then((nextVoice) => {
+       if (typeof nextVoice !== 'string' || nextVoice === prevVoice) return;
+       return getDb().unsafe(
+        `update agent_jobs
+            set metadata = coalesce(metadata, '{}'::jsonb) || $2::jsonb,
+                updated_at = now()
+          where id = $1 and status = 'running'`,
+        [jobId, { voiceSpokenPrefix: nextVoice }],
+       );
+      }).catch(() => { /* durable path remains the fallback */ });
+     });
+    }
    } else if (metadata.pendingPlaceholder && deltaText) {
     // A segment handed us an id but deliberately did not create the row, so the
     // thread is not littered with empty "Thinking …" bubbles while the agent runs
