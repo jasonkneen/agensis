@@ -466,6 +466,10 @@ class RealtimeManager {
   private static readonly MAX_RECONNECT_ATTEMPTS = 5;
   private static readonly UNAVAILABLE_RETRY_DELAY_MS = 30000;
   private static readonly MAX_PENDING_MESSAGES = 50;
+  // How long the socket survives with zero channels before it is closed. Long
+  // enough to absorb a StrictMode remount or a route change, short enough that a
+  // genuinely idle app is not holding a connection open.
+  private static readonly IDLE_CLOSE_DELAY_MS = 250;
 
   private socket: WebSocket | null = null;
   private channels = new Set<LocalChannel>();
@@ -478,6 +482,37 @@ class RealtimeManager {
   private reconnectAttempts = 0;
   private unavailableUntil = 0;
   private permanentlyUnavailable = false;
+  // Set when the last channel unregisters: the socket is kept alive briefly in
+  // case another channel registers straight away. See `unregister`.
+  private idleCloseTimer: number | null = null;
+
+  /**
+   * Closing a socket that is still CONNECTING aborts the handshake and makes the
+   * browser log `WebSocket is closed before the connection is established.` —
+   * console noise for what is a completely ordinary teardown. Defer to 'open'
+   * so the close is a clean one, and swallow the case where it never opens.
+   */
+  private closeWhenPossible(socket: WebSocket) {
+    if (socket.readyState === WebSocket.CONNECTING) {
+      socket.addEventListener('open', () => {
+        // The manager registers its own 'open' handler in `ensureConnected`,
+        // which closes any socket that is no longer `this.socket` — and this
+        // one no longer is. If it already fired, the socket is CLOSING/CLOSED
+        // and must not be closed a second time.
+        if (socket.readyState !== WebSocket.OPEN) return;
+        try { socket.close(); } catch { /* already gone */ }
+      }, { once: true });
+      return;
+    }
+    if (socket.readyState !== WebSocket.OPEN) return;
+    try { socket.close(); } catch { /* already closing */ }
+  }
+
+  private cancelIdleClose() {
+    if (this.idleCloseTimer === null) return;
+    window.clearTimeout(this.idleCloseTimer);
+    this.idleCloseTimer = null;
+  }
 
   ensureConnected() {
     if (typeof WebSocket === 'undefined') return;
@@ -632,6 +667,9 @@ class RealtimeManager {
 
   register(channel: LocalChannel) {
     this.channels.add(channel);
+    // A pending idle close was scheduled on the assumption nobody wanted the
+    // socket. Somebody does.
+    this.cancelIdleClose();
     if (realtimeDisabledOnThisHost() || this.permanentlyUnavailable) {
       channel.notifyStatus('UNAVAILABLE');
       return;
@@ -657,10 +695,21 @@ class RealtimeManager {
       this.unavailableUntil = 0;
       if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
-      if (this.socket) {
-        this.socket.close();
+      // "No channels" is usually momentary: a StrictMode remount, or a route
+      // change that tears the old screen's subscriptions down a tick before the
+      // new screen's go up. Tearing the socket down synchronously means every
+      // one of those costs a full reconnect (and, mid-handshake, a console
+      // error). Hold the socket briefly and re-check; `register` cancels this.
+      this.cancelIdleClose();
+      const socket = this.socket;
+      if (!socket) return;
+      this.idleCloseTimer = window.setTimeout(() => {
+        this.idleCloseTimer = null;
+        if (this.channels.size > 0) return; // someone re-registered — keep it
+        if (this.socket !== socket) return; // superseded; its own path owns it
         this.socket = null;
-      }
+        this.closeWhenPossible(socket);
+      }, RealtimeManager.IDLE_CLOSE_DELAY_MS);
       return;
     }
     this.send({ action: 'unsubscribe', channel: channel.name });
