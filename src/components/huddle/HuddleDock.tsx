@@ -308,14 +308,18 @@ export function HuddleDock() {
           still appear only while we hold a connection: off the call there is no
           microphone of ours to mute and no voice to silence. */}
       {(participants.length > 0 || connection) && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
-          <div className="flex min-w-0 flex-wrap items-center gap-1">
+        {/* Fixed height, single line. This row used to wrap: one more
+            participant, or the speaker's name appearing mid-sentence, pushed it
+            onto a second line and the whole dock jumped every time someone
+            started or stopped talking. Avatars now clip instead of wrapping. */}
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3">
+          <div className="flex min-w-0 shrink items-center gap-1 overflow-hidden">
             {participants.map(participant => (
               <span
                 key={participant.id}
                 title={participant.name}
                 className={cn(
-                  'grid size-6 place-items-center rounded-full text-[10px] font-semibold',
+                  'grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-semibold',
                   participant.kind === 'agent'
                     ? 'bg-primary/15 text-primary'
                     : 'bg-muted text-muted-foreground',
@@ -401,7 +405,7 @@ export function HuddleDock() {
 
           {connection && captionsOn && (
             <HuddleCaption
-              className="shrink-0 border-b border-border px-3 py-1.5"
+              className="h-7 shrink-0 border-b border-border px-3"
               transcribing={!!connection}
               transcriptInHuddle={!!transcriptSessionId}
               micEnabled={local.micEnabled}

@@ -427,14 +427,15 @@ export function HuddleSpeakingNow({ className }: { className?: string }) {
           />
         ))}
       </span>
-      {name && (
-        <span
-          className="min-w-0 max-w-32 truncate text-xs font-medium text-emerald-600 dark:text-emerald-400"
-          aria-live="polite"
-        >
-          {name}
-        </span>
-      )}
+      {/* Always mounted at a fixed width. Mounting it only while someone speaks
+          changed this row's width mid-sentence, which shoved the avatars and
+          the controls sideways on every reply. */}
+      <span
+        className="w-20 shrink-0 truncate text-xs font-medium text-emerald-600 dark:text-emerald-400"
+        aria-live="polite"
+      >
+        {name}
+      </span>
     </span>
   );
 }
