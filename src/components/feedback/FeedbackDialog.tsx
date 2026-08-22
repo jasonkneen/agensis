@@ -18,7 +18,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import type { DiagnosticsSnapshot } from '@/lib/feedbackDiagnostics';
 import { elementChipLabel, type ElementDescriptor } from '@/lib/feedbackElement';
-import { describeAttachments, type FeedbackPageRef, type FeedbackSubmission } from '@/lib/feedbackReport';
+import { FEEDBACK_DESCRIPTION_MAX_CHARS, describeAttachments, type FeedbackPageRef, type FeedbackSubmission } from '@/lib/feedbackReport';
 
 interface FeedbackDialogProps {
   open: boolean;
@@ -102,6 +102,24 @@ export function FeedbackDialog({
               onChange={event => onDescriptionChange(event.target.value)}
               placeholder="The thing you expected, and the thing that happened instead."
             />
+            {/* buildFeedbackSubmission slices at FEEDBACK_DESCRIPTION_MAX_CHARS and
+                the server re-clamps to the same number — silently, on both sides.
+                Someone pasting a long stack trace would have had the tail dropped
+                with nothing on screen to say so, which is the same "it didn't keep
+                what I wrote" complaint as the invisible task body. Shown only near
+                the ceiling so the ordinary two-sentence report sees no counter. */}
+            {description.length > FEEDBACK_DESCRIPTION_MAX_CHARS - 500 && (
+              <p
+                className={cn(
+                  'text-xs',
+                  description.length >= FEEDBACK_DESCRIPTION_MAX_CHARS ? 'text-destructive' : 'text-muted-foreground',
+                )}
+              >
+                {description.length >= FEEDBACK_DESCRIPTION_MAX_CHARS
+                  ? `Only the first ${FEEDBACK_DESCRIPTION_MAX_CHARS.toLocaleString()} characters will be sent — the rest is cut.`
+                  : `${(FEEDBACK_DESCRIPTION_MAX_CHARS - description.length).toLocaleString()} characters left.`}
+              </p>
+            )}
           </Field>
 
           <Field>
