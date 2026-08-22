@@ -431,6 +431,76 @@ describe('task editor: schedule fields', () => {
   });
 });
 
+// --- The task BODY has to be reachable from the LIST view --------------------
+// Reported as "the feedback button is not storing all the message sent by the
+// user". It stores all of it: insertFeedbackReport writes the whole submission
+// to tasks.description, and the row's title is feedbackTaskTitle's first-90-
+// characters summary. The expanded row rendered Schedule / Subtasks /
+// Attachments / Comments and NOT description, and the only other renderer of it
+// — the "Edit task" aside — is opened by onSelectTask, which the list view never
+// calls. So a long report was on screen as one truncated sentence, unreachable,
+// which is indistinguishable from the data having been dropped.
+describe('task detail: the description is visible in the list view', () => {
+  const REPORT = 'I had an issue using the Codex and Claude ACP harnesses because I installed '
+    + 'Node.js with Homebrew, so the daemon could not find the binary on its PATH.\n\n'
+    + 'Page: /?workspace=ws-1';
+
+  function descriptionField() {
+    return container.querySelector<HTMLTextAreaElement>('[aria-label="Task description"]');
+  }
+
+  it('renders the whole stored description, not just the row title', () => {
+    render([makeTask({ id: 'a', title: 'I had an issue using the Codex and Claude…', description: REPORT })]);
+    expandFirstRow();
+    const field = descriptionField();
+    expect(field).toBeTruthy();
+    // The FULL text, newlines included — not the ellipsised title.
+    expect(field!.value).toBe(REPORT);
+    expect(field!.value).toContain('could not find the binary on its PATH');
+  });
+
+  it('needs no board/gantt detour to get at it', () => {
+    // The list is the default view; this asserts the field exists without ever
+    // clicking Board or Timeline, which is the whole bug.
+    render([makeTask({ id: 'a', title: 'Feedback', description: REPORT })]);
+    expandFirstRow();
+    expect(container.textContent).toContain('Description');
+    expect(descriptionField()).toBeTruthy();
+  });
+
+  it('commits an edit on blur, once, through the normal task updater', () => {
+    const updates: Update[] = [];
+    render([makeTask({ id: 'a', title: 'Feedback', description: 'before' })], updates);
+    expandFirstRow();
+    const field = descriptionField()!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(field, 'after');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // Typing must not round-trip per keystroke.
+    expect(updates).toEqual([]);
+    // React implements onBlur on the bubbling 'focusout', not 'blur'.
+    act(() => { field.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); });
+    expect(updates).toEqual([{ id: 'a', updates: { description: 'after' } }]);
+  });
+
+  it('does not write back when the text was not touched', () => {
+    const updates: Update[] = [];
+    render([makeTask({ id: 'a', title: 'Feedback', description: REPORT })], updates);
+    expandFirstRow();
+    act(() => { descriptionField()!.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); });
+    expect(updates).toEqual([]);
+  });
+
+  it('shows an empty box for a task with no description rather than hiding the section', () => {
+    render([makeTask({ id: 'a', title: 'Plain task' })]);
+    expandFirstRow();
+    expect(descriptionField()?.value).toBe('');
+    expect(container.textContent).toContain('Description');
+  });
+});
+
 describe('task editor: dependency picker', () => {
   // Rows the search list renders — CommandItem, one per selectable candidate.
   function pickerOptionLabels() {

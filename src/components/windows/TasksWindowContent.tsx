@@ -10,6 +10,7 @@ import {
   Columns3,
   CornerDownRight,
   ExternalLink,
+  FileText,
   Flag,
   GanttChart,
   Link2,
@@ -977,6 +978,16 @@ function TaskDetail({
   onUploadFiles?: (files: File[]) => Promise<UploadedFile[]>;
 }) {
   const [subInput, setSubInput] = useState('');
+  // Local draft so typing does not round-trip through the backend on every
+  // keystroke; committed on blur. Re-seeded when the row changes underneath us
+  // (id) or when the stored value changes (another client, an agent edit).
+  const [description, setDescription] = useState(task.description || '');
+  useEffect(() => {
+    setDescription(task.description || '');
+  }, [task.id, task.description]);
+  const commitDescription = () => {
+    if (description !== (task.description || '')) onChangeDates({ description });
+  };
   const [commentInput, setCommentInput] = useState('');
   const [showMentionPicker, setShowMentionPicker] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -1142,6 +1153,34 @@ function TaskDetail({
 
   return (
     <div className="task-detail ml-8 flex flex-col gap-4 border-l py-3 pr-3 pl-5">
+      {/* The task BODY, first — before scheduling furniture.
+          This section did not exist, and its absence read as data loss: the
+          feedback button stores the user's whole message in tasks.description
+          (see insertFeedbackReport in shared/backend-core.cjs), the row above
+          shows only feedbackTaskTitle's first-90-characters title, and the only
+          other renderer of `description` is the edit panel — which the LIST view
+          never opens (onSelectTask is wired from Kanban and Gantt only). So in
+          the default view a 2000-character report was on screen as one truncated
+          sentence with no way to reach the rest of it. Editable rather than
+          read-only because everything else in this panel is, and it commits on
+          blur through the same Partial<Task> updater the date fields use. */}
+      <section className="flex flex-col gap-2">
+        <Marker>
+          <MarkerIcon>
+            <FileText />
+          </MarkerIcon>
+          <MarkerContent>Description</MarkerContent>
+        </Marker>
+        <Textarea
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          onBlur={commitDescription}
+          placeholder="Add a description..."
+          aria-label="Task description"
+          className="min-h-20 resize-y whitespace-pre-wrap text-xs"
+        />
+      </section>
+
       <section className="flex flex-col gap-2">
         <Marker>
           <MarkerIcon>
