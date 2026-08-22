@@ -36,6 +36,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { __test } = require('../server/index.cjs');
+const { createBuiltinTurn } = require('../server/builtin-turn.cjs');
 const {
   createBuiltinToolset,
   BUILTIN_TOOL_EXCLUSIONS,
@@ -71,6 +72,33 @@ const AGENT_ROW = {
   tools: '[]',
   skills: '[]',
 };
+
+// ---------------------------------------------------------------------------
+// (0) Voice huddles disable Claude's hidden reasoning only on the spoken lane.
+// The request body is captured through the module seam rather than global fetch.
+// ---------------------------------------------------------------------------
+
+test('live huddle builtin requests disable Anthropic thinking, ordinary turns do not', async () => {
+  const requests = [];
+  const turn = createBuiltinTurn({
+    getAnthropicApiKey: async () => 'test-key',
+    resolveAnthropicModel: (model) => model || 'claude-test',
+    buildSystemPrompt: () => 'system',
+    createAnthropicUsageAccumulator: () => ({ event: () => {}, result: () => ({}) }),
+    recordAnthropicUsage: async () => {},
+    dbQuery: () => {},
+    anthropicFetch: async (request) => {
+      requests.push(request);
+      return new Response('', { status: 200 });
+    },
+  });
+
+  await turn.streamAnthropicTurn({ model: 'claude-test', messages: [], voiceHuddle: true });
+  await turn.streamAnthropicTurn({ model: 'claude-test', messages: [], voiceHuddle: false });
+
+  assert.deepEqual(requests[0].body.thinking, { type: 'disabled' });
+  assert.equal(Object.hasOwn(requests[1].body, 'thinking'), false);
+});
 
 // ---------------------------------------------------------------------------
 // (1) The loop itself. callModel/callTool are injected, which is the whole point

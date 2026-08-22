@@ -40,6 +40,19 @@ interface HuddlePayload {
  * misses; the server's own value always wins.
  */
 export const DEFAULT_HUDDLE_HEARTBEAT_MS = 30_000;
+const MAX_CONNECTION_EPOCH = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Give each local connection a strictly newer epoch, even when the wall clock
+ * moves backwards or two joins complete in the same millisecond. The server
+ * treats this as an ordering token, not as a trusted timestamp.
+ */
+export function nextHuddleConnectionEpoch(previous: number, now = Date.now()): number {
+  const prior = Number.isSafeInteger(previous) && previous >= 0 ? previous : 0;
+  const clock = Number.isSafeInteger(now) && now >= 0 ? now : 0;
+  if (prior >= MAX_CONNECTION_EPOCH) return MAX_CONNECTION_EPOCH;
+  return Math.min(MAX_CONNECTION_EPOCH, Math.max(clock, prior + 1));
+}
 
 /**
  * Say "still here" for as long as this browser holds a huddle connection.
@@ -68,16 +81,16 @@ export function useHuddleHeartbeat(
 ) {
   // A 409 means the huddle is over. Stop beating into it — the roster update
   // arrives over the websocket, but a browser whose socket died would otherwise
-  // beat at a dead huddle for as long as the tab stayed open.
-  const stoppedRef = useRef(false);
-
+  // beat at a dead huddle for as long as the tab stayed open. This flag belongs
+  // to one effect generation; a response from an old epoch must never stop the
+  // heartbeat for a newly joined connection.
   useEffect(() => {
-    stoppedRef.current = false;
     if (!enabled || !workspaceId || !huddleId) return;
     let cancelled = false;
+    let stopped = false;
 
     const beat = async () => {
-      if (cancelled || stoppedRef.current) return;
+      if (cancelled || stopped) return;
       const path = `/backend/workspaces/${encodeURIComponent(workspaceId)}/huddles/${encodeURIComponent(huddleId)}/heartbeat`;
       try {
         const response = await fetch(apiUrl(path), {
@@ -85,7 +98,7 @@ export function useHuddleHeartbeat(
           headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
           body: JSON.stringify({ connectionEpoch }),
         });
-        if (response.status === 409) stoppedRef.current = true;
+        if (!cancelled && response.status === 409) stopped = true;
       } catch {
         // A missed beat is not an error: the whole design tolerates several,
         // and the next one refreshes presence with no visible flicker.
@@ -102,6 +115,7 @@ export function useHuddleHeartbeat(
 
     return () => {
       cancelled = true;
+      stopped = true;
       window.clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisibility);
     };
@@ -195,7 +209,7 @@ export function useHuddleRecord(workspaceId: string | null, huddleId: string | n
  * huddle's OWN conversation, and it is where the transcript goes; see
  * lib/huddleTranscript.
  */
-export function useHuddle(workspaceId: string | null, sessionId: string | null) {
+export function useHuddle(workspaceId: string | null, sessionId: string | null, targetEpoch = 0) {
   const [huddle, setHuddle] = useState<Huddle | null>(null);
   const [events, setEvents] = useState<HuddleEvent[]>([]);
   const [configured, setConfigured] = useState(true);
@@ -207,6 +221,19 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
   const base = workspaceId && sessionId
     ? `/backend/workspaces/${encodeURIComponent(workspaceId)}/sessions/${encodeURIComponent(sessionId)}/huddle`
     : '';
+  // One hook instance serves the app-level dock. A POST for conversation A can
+  // resolve after the target has switched to B; its token/connection must never
+  // be installed into B's room. Advance this epoch during render so even a
+  // same-tick response sees the new request generation.
+  const baseRef = useRef(base);
+  const targetEpochRef = useRef(targetEpoch);
+  const baseEpochRef = useRef(0);
+  const connectionEpochRef = useRef(0);
+  if (baseRef.current !== base || targetEpochRef.current !== targetEpoch) {
+    baseRef.current = base;
+    targetEpochRef.current = targetEpoch;
+    baseEpochRef.current += 1;
+  }
 
   const applyPayload = useCallback((payload: HuddlePayload | null) => {
     setHuddle(payload?.huddle ?? null);
@@ -214,16 +241,27 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
     if (typeof payload?.configured === 'boolean') setConfigured(payload.configured);
   }, []);
 
+  useEffect(() => {
+    // Drop the old grant immediately when the dock re-keys this hook. The
+    // request epoch below handles the in-flight response that would otherwise
+    // resurrect it after this cleanup.
+    setConnection(null);
+    setHuddle(null);
+    setEvents([]);
+    setError('');
+  }, [base, targetEpoch]);
+
   const refetch = useCallback(async () => {
+    const requestEpoch = baseEpochRef.current;
     if (!base) {
-      applyPayload(null);
+      if (baseEpochRef.current === requestEpoch) applyPayload(null);
       return;
     }
     setLoading(true);
     try {
       const response = await fetch(apiUrl(base), { headers: apiAuthHeaders() });
       const payload = await response.json().catch(() => null);
-      if (response.ok) applyPayload(payload?.data ?? null);
+      if (response.ok && baseEpochRef.current === requestEpoch) applyPayload(payload?.data ?? null);
     } finally {
       setLoading(false);
     }
@@ -235,6 +273,9 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
 
   // Two subscriptions, both filtered on session_id (the RBAC gate resolves a
   // session's workspace, so this stays membership-checked server-side).
+  // Keep the epoch captured by each callback so a late frame from A cannot
+  // overwrite the dock state after it has moved to B.
+  const subscriptionEpoch = baseEpochRef.current;
   const huddleDeduper = useRealtimeDeduper();
   useTableSubscription<Huddle>(
     {
@@ -246,6 +287,7 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
       filter: `session_id=eq.${sessionId}`,
     },
     (payload) => {
+      if (baseEpochRef.current !== subscriptionEpoch) return;
       if (!huddleDeduper.shouldProcess(payload)) return;
       const row = payload.new;
       if (payload.eventType === 'DELETE') {
@@ -274,6 +316,7 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
       filter: `session_id=eq.${sessionId}`,
     },
     (payload) => {
+      if (baseEpochRef.current !== subscriptionEpoch) return;
       if (!eventDeduper.shouldProcess(payload)) return;
       const row = payload.new;
       if (!row?.id) return;
@@ -292,7 +335,7 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
     if (state && state.id === connection.huddleId && !state.active) setConnection(null);
   }, [state, connection]);
 
-  const post = useCallback(async (path: string, body?: Record<string, unknown>): Promise<HuddlePayload | null> => {
+  const post = useCallback(async (path: string, body?: Record<string, unknown>, requestEpoch = baseEpochRef.current): Promise<HuddlePayload | null> => {
     setBusy(true);
     setError('');
     try {
@@ -302,6 +345,7 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
         ...(body ? { body: JSON.stringify(body) } : {}),
       });
       const payload = await response.json().catch(() => null);
+      if (baseEpochRef.current !== requestEpoch) return null;
       if (!response.ok) {
         // jsonError() wraps the message in { message, code } — matches useInbox etc.
         setError(String(payload?.error?.message || `Huddle request failed (${response.status})`));
@@ -323,15 +367,19 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
    */
   const startOrJoin = useCallback(async () => {
     if (!base) return null;
-    const data = await post(base);
+    const requestEpoch = baseEpochRef.current;
+    const data = await post(base, undefined, requestEpoch);
+    if (baseEpochRef.current !== requestEpoch) return null;
     if (data?.token && data.url && data.roomName && data.huddle?.id) {
+      const joinedAtMs = nextHuddleConnectionEpoch(connectionEpochRef.current);
+      connectionEpochRef.current = joinedAtMs;
       const next: HuddleConnection = {
         token: data.token,
         url: data.url,
         identity: data.identity || '',
         roomName: data.roomName,
         huddleId: data.huddle.id,
-        joinedAtMs: Date.now(),
+        joinedAtMs,
         heartbeatIntervalMs: data.heartbeatIntervalMs || DEFAULT_HUDDLE_HEARTBEAT_MS,
       };
       setConnection(next);
@@ -349,12 +397,14 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
    * this client cannot see.
    */
   const confirmJoin = useCallback(async (conn: HuddleConnection) => {
-    if (!workspaceId || !conn.huddleId) return;
+    if (!workspaceId || !conn.huddleId || connection?.joinedAtMs !== conn.joinedAtMs) return;
+    const requestEpoch = baseEpochRef.current;
     await post(
       `/backend/workspaces/${encodeURIComponent(workspaceId)}/huddles/${encodeURIComponent(conn.huddleId)}/confirm`,
       { connectionEpoch: conn.joinedAtMs },
+      requestEpoch,
     );
-  }, [workspaceId, post]);
+  }, [connection?.joinedAtMs, workspaceId, post]);
 
   /** End the huddle for everyone. */
   const end = useCallback(async () => {
@@ -365,18 +415,22 @@ export function useHuddle(workspaceId: string | null, sessionId: string | null) 
 
   /** Leave without ending it for anyone else, and say so — see confirmJoin. */
   const leave = useCallback(() => {
-    setConnection(current => {
-      if (current && workspaceId && current.huddleId) {
-        // Fire-and-forget: the UI must drop the call instantly; the roster row
-        // is bookkeeping, and appendEvent dedupes if this ever double-fires.
-        void post(
-          `/backend/workspaces/${encodeURIComponent(workspaceId)}/huddles/${encodeURIComponent(current.huddleId)}/leave`,
-          { connectionEpoch: current.joinedAtMs },
-        );
-      }
-      return null;
-    });
-  }, [workspaceId, post]);
+    const current = connection;
+    const requestEpoch = baseEpochRef.current;
+    if (!current) return;
+    // Never perform network work inside a state updater: React may invoke an
+    // updater more than once under Strict Mode/concurrent rendering. Capture
+    // the connection first, drop the UI immediately, then send one best-effort
+    // epoch-checked leave.
+    setConnection(null);
+    if (workspaceId && current.huddleId) {
+      void post(
+        `/backend/workspaces/${encodeURIComponent(workspaceId)}/huddles/${encodeURIComponent(current.huddleId)}/leave`,
+        { connectionEpoch: current.joinedAtMs },
+        requestEpoch,
+      );
+    }
+  }, [connection, workspaceId, post]);
 
   /**
    * Save the Notes tab's text. Keyed on the huddle itself, not the connection —

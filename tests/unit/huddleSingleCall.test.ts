@@ -67,22 +67,26 @@ describe('the LiveKit connection has exactly one home', () => {
   });
 });
 
-describe('the voice pipeline has exactly one home', () => {
-  it('reads replies aloud from one component only', () => {
-    // useSpeechOutput is what speaks. Two components calling it for the same
-    // session is the double-reading bug; the speaker claim silences the second,
-    // but the second must not exist in the first place.
-    expect(filesContaining('useSpeechOutput(')).toEqual([
-      'components/huddle/HuddleDock.tsx',
-      'hooks/useHuddleVoice.ts',
-    ]);
+describe('the browser runs no voice pipeline of its own', () => {
+  // This used to assert the browser pipeline had exactly ONE home, because two
+  // components calling it read every reply aloud twice. The pipeline is gone:
+  // agents are LiveKit participants (voice-worker/), so STT, TTS and VAD all
+  // happen in the room. The guard inverts — the browser must own NONE of it.
+  //
+  // It matters that this stays a test rather than a deletion. Re-adding a
+  // browser-side recogniser or speaker would silently recreate the split that
+  // made barge-in impossible: LiveKit cannot cancel echo from audio it does not
+  // own, so capture would have to be muted during playback all over again.
+  it('opens exactly one microphone — the one LiveKit publishes', () => {
+    expect(filesContaining('getUserMedia(')).toEqual([]);
   });
 
-  it('opens the microphone from one component only', () => {
-    expect(filesContaining('useSpeechInput(')).toEqual([
-      'components/huddle/HuddleDock.tsx',
-      'hooks/useHuddleVoice.ts',
-    ]);
+  it('never schedules speech audio outside the room', () => {
+    // Cartesia playback used to connect an AudioContext straight to the local
+    // speakers, which is why other people on the call could not hear the agent.
+    expect(filesContaining('new AudioContext(')).toEqual([]);
+    expect(filesContaining('useSpeechOutput(')).toEqual([]);
+    expect(filesContaining('useSpeechInput(')).toEqual([]);
   });
 
   it('confirms its own join from one component only', () => {

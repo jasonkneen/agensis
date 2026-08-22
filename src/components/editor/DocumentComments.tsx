@@ -23,6 +23,13 @@ interface DocumentCommentsProps {
   onResolve: (id: string, resolved: boolean) => void;
   onDelete: (id: string) => void;
   onClose?: () => void;
+  /**
+   * Agent id -> display name, for comments an AGENT authored (through the
+   * reply_to_comment MCP tool). Optional: without it an agent comment still
+   * says "Agent" rather than claiming a human wrote it, which is the part that
+   * must never be wrong.
+   */
+  agentNames?: Record<string, string>;
 }
 
 const avatarColors = [
@@ -64,6 +71,7 @@ export function DocumentComments({
   onResolve,
   onDelete,
   onClose,
+  agentNames,
 }: DocumentCommentsProps) {
   const [newContent, setNewContent] = useState('');
   const [anchorText, setAnchorText] = useState('');
@@ -156,6 +164,7 @@ export function DocumentComments({
                 onCancelReply={() => setReplyTo(null)}
                 onResolve={onResolve}
                 onDelete={onDelete}
+                agentNames={agentNames}
               />
             ))
           )}
@@ -225,10 +234,12 @@ function CommentThread({
   onCancelReply,
   onResolve,
   onDelete,
+  agentNames,
 }: {
   comment: DocumentComment;
   replies: DocumentComment[];
   isReplyTarget: boolean;
+  agentNames?: Record<string, string>;
   onStartReply: () => void;
   onCancelReply: () => void;
   onResolve: (id: string, resolved: boolean) => void;
@@ -243,7 +254,7 @@ function CommentThread({
         comment.resolved && 'opacity-60',
       )}
     >
-      <CommentBody comment={comment} onResolve={onResolve} onDelete={onDelete} />
+      <CommentBody comment={comment} onResolve={onResolve} onDelete={onDelete} agentNames={agentNames} />
 
       {comment.anchor_text && (
         <blockquote className="mt-2 line-clamp-2 rounded border-l-2 border-l-primary bg-muted/60 px-2 py-1 text-[10px] italic text-muted-foreground">
@@ -254,7 +265,7 @@ function CommentThread({
       {replies.length > 0 && (
         <div className="mt-2 space-y-1.5 border-l border-border pl-3">
           {replies.map(r => (
-            <CommentBody key={r.id} comment={r} onResolve={onResolve} onDelete={onDelete} compact />
+            <CommentBody key={r.id} comment={r} onResolve={onResolve} onDelete={onDelete} compact agentNames={agentNames} />
           ))}
         </div>
       )}
@@ -279,18 +290,29 @@ function CommentBody({
   onResolve,
   onDelete,
   compact,
+  agentNames,
 }: {
   comment: DocumentComment;
+  agentNames?: Record<string, string>;
   onResolve: (id: string, resolved: boolean) => void;
   onDelete: (id: string) => void;
   compact?: boolean;
 }) {
   return (
     <div className="flex gap-2">
-      <UserAvatar seed={comment.user_id || comment.id} className={compact ? 'size-4' : 'size-5'} />
+      <UserAvatar seed={comment.agent_id || comment.user_id || comment.id} className={compact ? 'size-4' : 'size-5'} />
       <div className="min-w-0 flex-1">
         <div className="mb-0.5 flex items-center gap-1.5">
-          <span className={cn('font-semibold text-foreground', compact ? 'text-[10px]' : 'text-[11px]')}>Teammate</span>
+          {/* An agent-authored comment must never render as "Teammate". Where
+              the agent's name is unavailable it says "Agent" — vaguer, but
+              true, which is the half that matters when the question is whether
+              a person or a machine wrote this. */}
+          <span className={cn('font-semibold text-foreground', compact ? 'text-[10px]' : 'text-[11px]')}>
+            {comment.agent_id ? (agentNames?.[comment.agent_id] || 'Agent') : 'Teammate'}
+          </span>
+          {comment.agent_id && (
+            <span className="rounded-sm bg-muted px-1 text-[9px] leading-4 text-muted-foreground">agent</span>
+          )}
           <span className="text-[9px] text-muted-foreground">{formatTime(comment.created_at)}</span>
           <div className="flex-1" />
           {!compact && (

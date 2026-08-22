@@ -106,8 +106,8 @@ describe('canComposeInHuddle', () => {
     expect(canComposeInHuddle('chat', state({ active: false }))).toBe(false);
   });
 
-  it('withholds it in Chat mode for a legacy huddle with no transcript of its own', () => {
-    expect(canComposeInHuddle('chat', state({ transcriptSessionId: null }))).toBe(false);
+  it('keeps legacy huddles writable through their host channel', () => {
+    expect(canComposeInHuddle('chat', state({ transcriptSessionId: null }))).toBe(true);
   });
 
   it('withholds it when there is no huddle at all', () => {

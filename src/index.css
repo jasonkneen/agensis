@@ -1234,6 +1234,18 @@
    Colour comes from --accent, which every family defines for both schemes:
    classic/base sets it literally, neo + paper + normal map it to the
    per-theme --primary (see expand() in showcase/neoThemes.ts). */
+/* The macOS traffic-light band, and the only thing that can move the window.
+   `titleBarStyle: 'hiddenInset'` (electron/main.cjs) removes the system title
+   bar, so Chromium drags the window only from an element carrying this
+   property. The chrome columns already reserve the space (titlebarInset on the
+   rail and the collapsed sidebar); this is what makes the reserved space
+   draggable rather than merely empty. Height comes from the inset, inline.
+   Harmless in a browser tab, where the property has no meaning — but the
+   element is not rendered there at all. */
+.titlebar-drag-region {
+ -webkit-app-region: drag;
+}
+
 /* The @supports guard is load-bearing, not decoration: Lightning CSS compiles a
    plain-colour fallback for every color-mix() it sees, and for a gradient that
    fallback is the *opaque* accent — i.e. a solid slab of brand colour over the

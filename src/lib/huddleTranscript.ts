@@ -59,9 +59,8 @@ export function huddleTranscriptTarget(
 /**
  * Does this huddle keep its conversation out of the channel?
  *
- * False for a legacy huddle, and the two callers that ask both need to know:
- * the panel says so instead of showing an empty transcript it cannot explain,
- * and the caption row must not promise privacy it is not delivering.
+ * False for a legacy huddle. Legacy speech and typed messages still target the
+ * host channel; this only identifies whether the transcript has its own session.
  */
 export function hasOwnTranscript(
   state: Pick<HuddleState, 'transcriptSessionId'> | null | undefined,
@@ -133,16 +132,14 @@ export function shouldOpenHuddlePanel(
  *
  * Chat and Transcript are the same conversation, viewed two ways: Chat is
  * interactive (you can join in), Transcript is the read-only record — minutes,
- * not a place to type. So typing is only ever offered in Chat mode, AND only
- * while the huddle is live and has somewhere of its own to put the words (an
- * ended huddle, or one predating transcript sessions, has no live composer for
- * either mode already covered by `hasOwnTranscript`).
+ * not a place to type. Legacy huddles use their host channel as the transcript,
+ * so they remain writable while active just like they were before the split.
  */
 export function canComposeInHuddle(
   mode: 'chat' | 'transcript',
-  state: Pick<HuddleState, 'transcriptSessionId' | 'active'> | null | undefined,
+  state: Pick<HuddleState, 'transcriptSessionId' | 'sessionId' | 'active'> | null | undefined,
 ): boolean {
-  return mode === 'chat' && Boolean(state?.active) && hasOwnTranscript(state);
+  return mode === 'chat' && Boolean(state?.active) && Boolean(huddleTranscriptTarget(state, state?.sessionId));
 }
 
 /**

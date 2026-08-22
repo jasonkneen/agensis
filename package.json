@@ -31,7 +31,7 @@
     "test:unit": "vitest run",
     "smoke": "vitest run --config vitest.smoke.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
-    "ci": "npm run typecheck && npm test && npm run test:unit && npm run smoke && npm run lint",
+    "ci": "npm run typecheck && npm test && npm run voice:install && npm run test:voice && npm run test:unit && npm run smoke && npm run lint",
     "hooks:install": "git config core.hooksPath .githooks",
     "icon": "node scripts/generate-icon.cjs",
     "backend": "node --env-file=.env server/index.cjs",
@@ -54,7 +54,9 @@
     "desktop:setup-signing-secrets": "scripts/setup-signing-secrets.sh",
     "electron:dev": "node scripts/desktop-dev.mjs --local",
     "electron:build": "node scripts/desktop-build.mjs --prod",
-    "electron:dist": "node scripts/desktop-build.mjs --prod --publish never"
+    "electron:dist": "node scripts/desktop-build.mjs --prod --publish never",
+    "voice:install": "npm ci --prefix voice-worker --no-audit --no-fund",
+    "test:voice": "npm test --prefix voice-worker"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -140,6 +142,7 @@
     "appId": "io.agensis.app",
     "productName": "agensis",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "npmRebuild": false,
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -200,7 +203,11 @@
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-${version}-${os}-${arch}-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-${os}-${arch}-portable.${ext}"
     },
     "linux": {
       "category": "Office",

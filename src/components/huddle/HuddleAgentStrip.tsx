@@ -5,10 +5,10 @@ import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '@/
 import type { AgentAccentStyle } from '@/lib/agentAccent';
 import { huddleShortcutIndex, isTextEntryTarget, type HuddleAgentOption } from '@/lib/huddleAgents';
 
-// Who your voice is going to, and how to change it mid-call.
+// Who owns the shared voice floor, and how the huddle host changes it mid-call.
 //
-// One agent is active; everything you say is posted @mentioning them. The rest
-// are one click (or one ⌘1…⌘9) away. The chip borrows the accent recipe agent
+// One agent is active; everything the room says is routed to it. The rest are
+// one click (or one ⌘1…⌘9) away for the host. The chip borrows the accent recipe agent
 // avatars already wear in the transcript (.huddle-agent-chip in index.css), so
 // the active agent reads as the same person here as it does three inches below.
 //
@@ -31,12 +31,14 @@ interface HuddleAgentStripProps {
   onSelect: (id: string) => void;
   /** Bind the shortcuts. False whenever there is no live huddle. */
   enabled: boolean;
+  /** One shared floor: only the huddle host may publish target changes. */
+  selectable?: boolean;
   className?: string;
 }
 
-export function HuddleAgentStrip({ agents, activeId, onSelect, enabled, className }: HuddleAgentStripProps) {
+export function HuddleAgentStrip({ agents, activeId, onSelect, enabled, selectable = true, className }: HuddleAgentStripProps) {
   useEffect(() => {
-    if (!enabled || agents.length === 0) return;
+    if (!enabled || !selectable || agents.length === 0) return;
     const onKeyDown = (event: KeyboardEvent) => {
       // Typing "⌘1" into the composer must stay a composer keystroke.
       if (isTextEntryTarget(event.target)) return;
@@ -49,7 +51,7 @@ export function HuddleAgentStrip({ agents, activeId, onSelect, enabled, classNam
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [agents, enabled, onSelect]);
+  }, [agents, enabled, onSelect, selectable]);
 
   if (agents.length === 0) return null;
 
@@ -67,6 +69,7 @@ export function HuddleAgentStrip({ agents, activeId, onSelect, enabled, classNam
           index={index}
           active={agent.id === activeId}
           onSelect={onSelect}
+          selectable={selectable}
         />
       ))}
     </div>
@@ -78,21 +81,26 @@ function HuddleAgentChip({
   index,
   active,
   onSelect,
+  selectable,
 }: {
   agent: HuddleAgentOption;
   index: number;
   active: boolean;
   onSelect: (id: string) => void;
+  selectable: boolean;
 }) {
   const shortcut = index < MAX_SHORTCUTS ? `${MODIFIER_LABEL}${index + 1}` : '';
-  const label = active
-    ? `${agent.name} is hearing you`
-    : `Talk to ${agent.name}${shortcut ? ` (${shortcut})` : ''}`;
+  const label = !selectable
+    ? `${agent.name} is available; only the huddle host can change the floor`
+    : active
+      ? `${agent.name} is hearing you`
+      : `Talk to ${agent.name}${shortcut ? ` (${shortcut})` : ''}`;
 
   return (
     <button
       type="button"
       onClick={() => onSelect(agent.id)}
+      disabled={!selectable}
       aria-pressed={active}
       aria-label={label}
       title={`${agent.name} · @${agent.handle}${shortcut ? ` · ${shortcut}` : ''}`}

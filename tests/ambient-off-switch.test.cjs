@@ -96,8 +96,17 @@ test('both backends project ambient_replies, so the toggle does not flip on relo
  // tests/agents-projection-parity.test.cjs diffs the two column lists
  // generically; this names the field, because a toggle that reads back as
  // undefined renders as OFF and looks like the save failed.
+ // Matched as "the agents select carries ambient_replies", not as one exact
+ // substring: `sharing` now sits between it and `created_by`, and the next
+ // agent-level flag will sit somewhere too. What must not change is that all
+ // three selects name the column — the parity test next door is what keeps the
+ // rest of the list identical across the two backends.
  for (const file of ['server/workspaces-routes.cjs', 'server/index.cjs', 'netlify/functions/backend.mjs']) {
-  assert.ok(read(file).includes('enabled, ambient_replies, created_by'), `${file} select omits ambient_replies`);
+  assert.match(
+   read(file),
+   /enabled, ambient_replies[,\s][^;`]*?from workspace_agents/,
+   `${file} select omits ambient_replies`,
+  );
  }
  assert.match(read('server/index.cjs'), /ambient_replies: ambientRepliesEnabled\(agent\)/);
  assert.match(read('netlify/functions/backend.mjs'), /ambient_replies: row\.ambient_replies !== false/);

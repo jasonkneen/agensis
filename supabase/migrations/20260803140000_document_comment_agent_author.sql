@@ -1,0 +1,21 @@
+-- Agent-authored document comments.
+--
+-- `task_comments` has carried `agent_id` since agents began mirroring subthread
+-- replies onto tasks. `document_comments` never did, which meant an agent had no
+-- way to reply in a document thread that could be attributed to it — the row
+-- would have to claim `user_id = null` and render as authorless.
+--
+-- THE COLUMN IS A LOOP GUARD BEFORE IT IS ATTRIBUTION. dispatchCommentMentions
+-- (server/index.cjs) returns early for any comment row that has an agent_id,
+-- precisely so that an agent's own reply cannot wake an agent. Document
+-- comments are in COMMENT_MENTION_TABLES, so without this column an agent that
+-- replied with an @mention in a document would re-arm the dispatch that woke
+-- it. The guard was already written; this is the field it needed.
+--
+-- It is ALSO in PRIVILEGED_DB_COLUMNS_BY_TABLE (shared/backend-core.cjs), so the
+-- generic browser write path strips it. A client that could set agent_id could
+-- both put words in an agent's mouth and post a comment that evades the mention
+-- dispatch entirely. Agent-authored comments are written only through the MCP
+-- tool, which stamps the id from the verified token.
+ALTER TABLE document_comments
+  ADD COLUMN IF NOT EXISTS agent_id uuid;

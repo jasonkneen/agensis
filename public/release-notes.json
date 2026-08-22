@@ -39,6 +39,18 @@
     ]
   },
   {
+    "version": "windows-desktop-support",
+    "date": "2026-08-01",
+    "title": "Desktop now runs on Windows",
+    "summary": "The desktop app's terminal panel and local runtime daemon (Start on this PC) previously assumed macOS/Linux \u2014 the terminal spawned /bin/zsh and the supervisor couldn't launch the npm-installed agensis CLI on Windows, both hard failures. The terminal now resolves cmd.exe (or $SHELL elsewhere) and the correct home directory, and daemon spawning handles Windows .cmd/.bat shims correctly, quoting each argument because Windows shell:true does no escaping of its own. Windows installers (NSIS + portable) now build cleanly: native modules are no longer force-rebuilt from source (node-pty already ships prebuilt binaries for every target), and the two installer types no longer silently overwrite each other's output file.",
+    "highlights": [
+      "Terminal panel: cmd.exe + correct home dir on Windows, was hardcoded to /bin/zsh",
+      "Local runtime daemon spawn: .cmd/.bat shims now launch correctly instead of crashing with EINVAL",
+      "Windows installers (NSIS + portable) build without a native toolchain installed",
+      "NSIS and portable builds no longer overwrite each other's output file"
+    ]
+  },
+  {
     "version": "0.1.3",
     "date": "2026-08-01",
     "title": "Direct, Relay, Connector \u2014 and desktop ACP",

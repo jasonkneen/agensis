@@ -21,6 +21,7 @@ import {
  stripPrivilegedDbValues,
  validateUniformInsertRows,
  applyAgentPurposeInsertDefaults,
+ sanitizeAgentSharingValues,
  stampTaskWriteIdentity,
  taskDispatchRequesterSql,
  stripImmutableDbUpdateValues,
@@ -129,6 +130,7 @@ import {
  mapDbError,
 } from '../../server/lib/db-sql.cjs';
 import { normalizeAgentRunMode } from '../../shared/agentTemplates.cjs';
+import { normalizeAgentSharing } from '../../shared/agentSharing.cjs';
 import { voiceCapabilities, unavailableReason, mintCartesiaToken, scrubError } from '../../shared/voice-core.cjs';
 // Reaction flow events. This lane can write `messages.reactions` through the
 // same generic /backend/db/update route the Fly lane serves, so it queues the
@@ -544,7 +546,7 @@ function isLegacyMembershipInvitePath(pathname) {
 function isFlyOwnedControlPath(pathname) {
  return /^\/backend\/agents\/connections\/[^/]+$/.test(pathname)
   || /^\/backend\/agents\/[^/]+\/connection-command$/.test(pathname)
-  || /^\/backend\/agents\/[^/]+\/(?:disconnect|memory-refresh|capabilities-refresh)$/.test(pathname)
+  || /^\/backend\/agents\/[^/]+\/(?:disconnect|memory-refresh|documents-refresh|capabilities-refresh)$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/audit$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/(?:automations|automation-runs)(?:\/[^/]+)?$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/agent-templates(?:\/|$)/.test(pathname)
@@ -1136,6 +1138,11 @@ function publicWorkspaceAgent(row) {
   // Mirrors ambientRepliesEnabled in shared/ambientAddressing.cjs — the two
   // backends must agree or the toggle flips itself on reload.
   ambient_replies: row.ambient_replies !== false,
+  // Same rule, one column over. Normalized through the shared reader so the two
+  // backends cannot disagree about what an absent key means — a mirror that
+  // read '{}' as "shares nothing" would empty the library on every reload the
+  // Netlify function happened to serve.
+  sharing: normalizeAgentSharing(row),
  };
 }
 
@@ -1255,7 +1262,7 @@ async function handleWorkspaceAgents(workspaceId, userId) {
  // extracts and diffs both, so a column added on one side fails until it is
  // added here too.
  const rows = await query(
-  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, purpose, resource_facets, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, ambient_replies, created_by
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, purpose, resource_facets, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, ambient_replies, sharing, created_by
      from workspace_agents
      where workspace_id = $1
      order by created_at asc, name asc`,
@@ -2577,6 +2584,7 @@ async function handleDb(pathname, req, userId) {
    let next = stripPrivilegedDbValues(table, row);
    next = stampTaskWriteIdentity(table, next, userId, { insert: true });
    next = applyAgentPurposeInsertDefaults(table, next);
+   next = sanitizeAgentSharingValues(table, next);
    if (table === 'workspaces') next = { ...next, user_id: userId };
    if (table === 'messages') next = stampBrowserMessageInsert(next, messageAuthor);
    // Mirrors server/index.cjs — see the comment there for why this route
@@ -2679,9 +2687,12 @@ async function handleDb(pathname, req, userId) {
   if (table === 'workspace_agents' && isReservedAgentHandle(values.handle)) {
    return jsonError(400, new Error(reservedAgentHandleMessage(values.handle)));
   }
+  // sanitizeAgentSharingValues narrows the jsonb `sharing` column to the four
+  // known booleans, so the generic write path cannot park arbitrary data on an
+  // agent row through a column typed as free-form.
   const safeValues = stampTaskWriteIdentity(
    table,
-   stripImmutableDbUpdateValues(table, stripPrivilegedDbValues(table, values)),
+   stripImmutableDbUpdateValues(table, sanitizeAgentSharingValues(table, stripPrivilegedDbValues(table, values))),
    userId,
   );
 

@@ -1,4 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, shell, safeStorage } = require('electron');
+const os = require('os');
 const path = require('path');
 const { fileURLToPath } = require('url');
 
@@ -47,9 +48,14 @@ function createWindow() {
     backgroundColor: '#0c0c0c',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     // Nudge the macOS traffic lights left + up so they sit inside the app's top
-    // strip (the renderer reserves ELECTRON_TITLEBAR_INSET px of clear space at
-    // the top when window.electronAPI is present) instead of over the sidebar
-    // WORKSPACE header. Ignored on non-darwin platforms.
+    // strip (the renderer reserves DESKTOP_TITLEBAR_INSET px of clear space at
+    // the top when isDesktopShell()) instead of over the sidebar WORKSPACE
+    // header. Ignored on non-darwin platforms.
+    //
+    // `hiddenInset` above removes the system title bar, so that band is also the
+    // ONLY thing that can move the window: it carries -webkit-app-region: drag
+    // in the rail and the collapsed sidebar. Reserving the space without the
+    // drag region leaves the window immovable.
     trafficLightPosition: process.platform === 'darwin' ? { x: 12, y: 14 } : undefined,
     webPreferences: {
       contextIsolation: true,
@@ -134,7 +140,9 @@ ipcMain.handle('pty:spawn', async (event, options) => {
   const pty = loadPty();
   if (!pty) return { ok: false, error: 'node-pty is not installed for this build' };
 
-  const shell = process.env.SHELL || '/bin/zsh';
+  const shell = process.platform === 'win32'
+    ? (process.env.COMSPEC || 'powershell.exe')
+    : (process.env.SHELL || '/bin/zsh');
   const id = `pty-${++ptyCounter}`;
   const sender = event.sender;
 
@@ -142,7 +150,7 @@ ipcMain.handle('pty:spawn', async (event, options) => {
     name: 'xterm-256color',
     cols: Math.max(2, Number(options.cols) || 80),
     rows: Math.max(1, Number(options.rows) || 24),
-    cwd: options.cwd || process.env.HOME,
+    cwd: options.cwd || os.homedir(),
     env: { ...process.env, TERM: 'xterm-256color' },
   });
 

@@ -29,6 +29,12 @@ import { createRoot, type Root } from 'react-dom/client';
 const stub = vi.hoisted(() => ({
   /** Props the last-rendered LiveKitRoom was given. */
   room: { token: '', serverUrl: '', connect: false, audio: false, mounts: 0 },
+  roomContext: {
+    state: 'connected',
+    localParticipant: { publishData: vi.fn(async () => {}) },
+    on: vi.fn(),
+    off: vi.fn(),
+  },
   /** The stubbed room reports a live session as soon as it mounts. */
   autoConnect: true,
   /** …or reports that it could not be established. */
@@ -78,6 +84,7 @@ vi.mock('@livekit/components-react', async () => {
       isMicrophoneEnabled: stub.micEnabled,
     }),
     useParticipants: () => [],
+    useRoomContext: () => stub.roomContext,
   };
 });
 
@@ -181,6 +188,14 @@ function OpenHuddle({ agents = AGENTS }: { agents?: HuddleAgentOption[] }) {
     open?.({ workspaceId: 'ws-1', sessionId: 'session-1', title: 'design', agents });
   }, [open, agents]);
   return null;
+}
+
+function OpenButtons() {
+  const dock = useHuddleDock();
+  return createElement('div', null,
+    createElement('button', { 'data-open-one': '', onClick: () => dock?.openHuddle({ workspaceId: 'ws-1', sessionId: 'session-1', title: 'one' }) }),
+    createElement('button', { 'data-open-two': '', onClick: () => dock?.openHuddle({ workspaceId: 'ws-1', sessionId: 'session-2', title: 'two' }) }),
+  );
 }
 
 /** What a "You were in a huddle" marker row in the transcript does. */
@@ -294,6 +309,23 @@ describe('HuddleDock mounts the call', () => {
   });
 });
 
+
+describe('switching the dock target cleans up the old call', () => {
+  it('leaves before joining a different session instead of retaining the old socket', () => {
+    const session = fakeSession(true);
+    stub.session = session;
+    act(() => root.render(createElement(
+      HuddleDockProvider,
+      null,
+      createElement(OpenButtons),
+      createElement(HuddleDock),
+    )));
+    act(() => (container.querySelector('[data-open-one]') as HTMLButtonElement).click());
+    act(() => (container.querySelector('[data-open-two]') as HTMLButtonElement).click());
+    expect(session.leave).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('confirming our own join', () => {
   it('confirms once when the room reports connected', () => {
     // This is what writes participant_joined. Without it the roster is empty
@@ -362,13 +394,19 @@ describe('leaving', () => {
 });
 
 describe('who is in the call', () => {
-  it('shows agents as participants even though they hold no LiveKit connection', () => {
-    // An agent hears the transcript and speaks through it, but never joins the
-    // room. Building the chips from presence alone makes a three-agent call
-    // look empty.
+  it('shows only who is ACTUALLY in the room', () => {
+    // This assertion inverted. Agents used to hold no LiveKit connection at all
+    // — they heard the transcript through a browser side-channel and spoke to
+    // the local speakers — so the chips had to be synthesised from a separate
+    // roster, and a chip could name an agent that was not in the call.
+    //
+    // Agents now join the room as real participants (voice-worker/), so the
+    // roster comes from LiveKit and nothing else. With no agent dispatched into
+    // this fake room, no agent chip may appear: showing one would be the app
+    // claiming someone is on the call who is not.
     render(fakeSession(true));
     const chips = Array.from(container.querySelectorAll('[title="boris"], [title="Coder"]'));
-    expect(chips.map(c => c.textContent)).toEqual(['BO', 'CO']);
+    expect(chips).toEqual([]);
   });
 
   it('offers the agent switcher in a channel, where a plain sentence wakes nobody', () => {
@@ -439,9 +477,13 @@ describe('who is in the call', () => {
 
   it('picks up a roster that only finishes loading after the call started', () => {
     // The channel's participants are still loading when the Huddle button
-    // becomes clickable. A roster snapshotted at that moment is empty, and an
-    // empty roster in a CHANNEL means every spoken sentence is posted with no
-    // @mention — which wakes nobody, so the call is silent and looks broken.
+    // becomes clickable. A roster snapshotted at that moment is empty.
+    //
+    // The chips no longer come from this roster — they come from the LiveKit
+    // room, because agents actually join it now. But the roster still decides
+    // whether a channel offers the agent switcher at all, so a late-arriving one
+    // must still reach the dock. Snapshotting it once at mount is the bug this
+    // guards, and that has not changed.
     stub.session = fakeSession(true);
     act(() => {
       root.render(createElement(
@@ -451,7 +493,7 @@ describe('who is in the call', () => {
         createElement(HuddleDock),
       ));
     });
-    expect(container.querySelector('[title="boris"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Who your voice goes to"]')).toBeNull();
 
     act(() => {
       root.render(createElement(
@@ -462,6 +504,6 @@ describe('who is in the call', () => {
         createElement(HuddleDock),
       ));
     });
-    expect(container.querySelector('[title="boris"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Who your voice goes to"]')).not.toBeNull();
   });
 });

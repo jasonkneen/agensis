@@ -11,6 +11,12 @@ interface DocumentCommentsPanelProps {
   onClose?: () => void;
   onCommentCreated?: (docTitle?: string) => void;
   documentTitle?: string;
+  /**
+   * Agent id -> name, so a comment an AGENT wrote carries its byline. Agents
+   * reply through the reply_to_comment MCP tool, and a reply rendered as
+   * "Teammate" would be the panel claiming a person said it.
+   */
+  agentNames?: Record<string, string>;
 }
 
 export function DocumentCommentsPanel({
@@ -23,6 +29,7 @@ export function DocumentCommentsPanel({
   onClose,
   onCommentCreated,
   documentTitle,
+  agentNames,
 }: DocumentCommentsPanelProps) {
   const {
     comments,
@@ -49,6 +56,7 @@ export function DocumentCommentsPanel({
       onResolve={resolveComment}
       onDelete={deleteComment}
       onClose={onClose}
+      agentNames={agentNames}
     />
   );
 }

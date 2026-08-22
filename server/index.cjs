@@ -82,6 +82,7 @@ const {
  unavailable: skillContentUnavailable,
 } = require('./skill-content.cjs');
 const { mountHuddleRoutes, ensureHuddlesSchema, deleteLivekitRoom } = require('./huddles.cjs');
+const { isVoiceCapableRunMode } = require('./huddle-agents.cjs');
 const {
  createAgentPermissions,
  ensureAgentPermissionsSchema,
@@ -234,6 +235,7 @@ const {
  stripPrivilegedDbValues,
  validateUniformInsertRows,
  applyAgentPurposeInsertDefaults,
+ sanitizeAgentSharingValues,
  stampTaskWriteIdentity,
  taskDispatchRequesterSql,
  stripImmutableDbUpdateValues,
@@ -345,6 +347,7 @@ const {
  isStructurallyTrivial,
  openInterlocutor,
 } = require('../shared/ambientAddressing.cjs');
+const { normalizeAgentSharing } = require('../shared/agentSharing.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -1268,6 +1271,20 @@ async function ensureRuntimeSchema() {
     -- name would be a bug, not a setting. Read fail-open in
     -- shared/ambientAddressing.cjs so a row predating this column stays audible.
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS ambient_replies boolean NOT NULL DEFAULT true;
+    -- What this agent CONTRIBUTES to the workspace: {memory, skills, tools,
+    -- documents}, all booleans. See shared/agentSharing.cjs.
+    --
+    -- DEFAULT '{}' and read FAIL-OPEN (absent key == shared), the same shape of
+    -- decision as ambient_replies above and for the same reason: all four
+    -- channels have been mirroring for every connected agent since long before
+    -- the column existed, so a default that read as "off" would silently empty
+    -- three browse surfaces on deploy with nothing erroring.
+    --
+    -- Enforced at INGEST (server/agent-connections.cjs), not at render: a
+    -- withheld channel refuses the daemon's push and prunes what that agent
+    -- already mirrored, because leaving the bodies in the database is not what
+    -- switching sharing off means.
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS sharing jsonb NOT NULL DEFAULT '{}'::jsonb;
     ALTER TABLE workspace_agents ALTER COLUMN avatar SET DEFAULT 'AI';
     CREATE INDEX IF NOT EXISTS idx_workspace_agents_handle ON workspace_agents(workspace_id, handle);
     CREATE INDEX IF NOT EXISTS idx_workspace_agents_connect_token_hash ON workspace_agents(connect_token_hash);
@@ -1701,6 +1718,10 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_canvas_layers_workspace_id ON canvas_layers(workspace_id);
 
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_id uuid;
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS huddle_transcript_event_id text;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_huddle_transcript_event
+      ON messages(huddle_id, huddle_transcript_event_id);
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_kind text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_id text DEFAULT '';
     ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text DEFAULT '';
@@ -1815,6 +1836,14 @@ async function ensureRuntimeSchema() {
     -- by B; delayed work must return to B's agent DM, never infer from created_by.
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS dispatch_requested_by uuid;
     ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+    -- Agent-authored document comments attribute to an AGENT, not a user, the
+    -- same way task_comments.agent_id already does.
+    --
+    -- Not merely cosmetic: dispatchCommentMentions guards with
+    -- an early return on row.agent_id, so this column is what stops an agent that
+    -- replies with an @mention from waking itself in a loop. Before it existed
+    -- an agent reply on a document was indistinguishable from a human's.
+    ALTER TABLE document_comments ADD COLUMN IF NOT EXISTS agent_id uuid;
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
 
     -- Tasks <-> subthread <-> comments loop (2026-07): a task @mention runs the
@@ -1871,6 +1900,55 @@ async function ensureRuntimeSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_workspace_id ON agent_skill_documents(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_skill_documents_agent_id ON agent_skill_documents(agent_id);
+
+    -- The MARKDOWN a connected agent can see from its own locations: the repo
+    -- it works in, its docs/ tree, whatever its daemon was pointed at. Third
+    -- and last member of the daemon-mirror family (agent_memory_files,
+    -- agent_skill_documents), same shape on purpose — UPSERT by
+    -- UNIQUE(agent_id, path), prune what the daemon stopped reporting.
+    --
+    -- Why a separate table rather than rows in the documents table: that table is
+    -- WORKSPACE-AUTHORED and editable in the app, and every one of its rows is
+    -- the only copy of itself. These are read-only snapshots of a file that
+    -- lives on somebody else's disk, and the SAME document routinely arrives
+    -- from several agents at once — three checkouts of one repo is the normal
+    -- case, not the exceptional one. Merging them into documents would either
+    -- collapse those into one row (losing the disagreement the library exists
+    -- to show) or fill the sidebar with duplicates. The collation happens in
+    -- src/lib/documentLibrary.ts, over both tables, where it can show both.
+    --
+    -- The domain column is the daemon's own grouping hint (a folder, a repo
+    -- area). It is
+    -- advisory: the library falls back to deriving one from the path, so a
+    -- daemon that sends nothing still groups sensibly.
+    CREATE TABLE IF NOT EXISTS agent_documents (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      path text NOT NULL,
+      title text NOT NULL DEFAULT '',
+      domain text NOT NULL DEFAULT '',
+      summary text DEFAULT '',
+      content text DEFAULT '',
+      byte_size bigint DEFAULT 0,
+      truncated boolean NOT NULL DEFAULT false,
+      -- The daemon's hash of the FILE, not of the row. Two agents holding the
+      -- same checkout produce the same hash, which is how the library can say
+      -- "identical" without pulling both bodies down to compare them.
+      content_hash text NOT NULL DEFAULT '',
+      -- mtime on the agent's disk. The library ranks versions by this, falling
+      -- back to last_synced — "newest" must mean newest FILE, not whichever
+      -- daemon happened to reconnect most recently.
+      source_modified_at timestamptz,
+      last_synced timestamptz DEFAULT now(),
+      version integer NOT NULL DEFAULT 1,
+      created_at timestamptz DEFAULT now(),
+      updated_at timestamptz DEFAULT now(),
+      UNIQUE (agent_id, path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_documents_workspace_id ON agent_documents(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_documents_agent_id ON agent_documents(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_documents_domain ON agent_documents(workspace_id, domain);
 
     -- Agent templates ("persona packs") as DATA rather than code. The 15
     -- bundled templates live in a frontend array and can only be changed by a
@@ -4519,8 +4597,142 @@ async function verifyOauthAccessToken(token) {
  }
 }
 
+// A credential minted for ONE huddle, for ONE agent.
+//
+// The LiveKit voice worker needs this workspace's MCP tools — a voice agent that
+// cannot read a document or hand work to another agent is a talking head. Neither
+// existing credential fits:
+//
+//   - the workspace `agw_` bearer is stored only as a HASH, so the plaintext is
+//     unrecoverable, and minting a fresh one ROTATES the human's MCP client out
+//     of existence (see createWorkspaceMcpToken);
+//   - the agent's own connect token would mean rotating a RUNNING daemon's
+//     identity just to start a call.
+//
+// So: a short-lived HMAC-signed bearer scoped to exactly one agent. For ordinary
+// agent tokens it resolves to the same identity shape as verifyAgentConnectToken;
+// huddle tokens additionally carry a voice marker and transcript-session pin, so
+// the MCP chokepoint can apply the voice read-only allowlist. It is never stored;
+// current agent and huddle state are rechecked on every use instead of maintaining
+// a second bearer-revocation table.
+const VOICE_TOKEN_PREFIX = 'agv_';
+// Keep the MCP capability no longer-lived than the one-hour LiveKit join
+// grant. Huddle lifecycle checks below still revoke it earlier.
+const VOICE_TOKEN_DEFAULT_TTL_MS = 60 * 60_000;
+const VOICE_TOKEN_MIN_TTL_MS = 60_000;
+const VOICE_TOKEN_MAX_TTL_MS = 60 * 60_000;
+
+async function createVoiceSessionToken({ workspaceId, agentId, huddleId = '', sessionId = '', ttlMs = VOICE_TOKEN_DEFAULT_TTL_MS } = {}) {
+ const workspace = String(workspaceId || '').trim();
+ const agent = String(agentId || '').trim();
+ const huddle = String(huddleId || '').trim();
+ const session = String(sessionId || '').trim();
+ if (!workspace || !agent) throw new Error('workspaceId and agentId are required');
+ if (huddle || session) {
+  if (!huddle || !session) throw new Error('huddleId and sessionId are required together');
+  const rows = await getDb().unsafe(
+   `select h.id, h.session_id, h.transcript_session_id, h.ended_at,
+           transcript_scope.participants as transcript_participants
+      from huddles h
+      left join chat_sessions transcript_scope
+        on transcript_scope.id = coalesce(h.transcript_session_id, h.session_id)
+       and transcript_scope.workspace_id = h.workspace_id
+     where h.id = $1 and h.workspace_id = $2
+     limit 1`,
+   [huddle, workspace],
+  );
+  const row = rows[0];
+  const transcriptSession = String(row?.transcript_session_id || row?.session_id || '');
+  const participants = parseJsonArray(row?.transcript_participants);
+  if (!row || row.ended_at || transcriptSession !== session || !participants.includes(agent)) {
+   throw new Error('Voice huddle claims are invalid');
+  }
+ }
+ const requestedTtl = Number(ttlMs);
+ const boundedTtl = Number.isFinite(requestedTtl)
+  ? Math.min(VOICE_TOKEN_MAX_TTL_MS, Math.max(VOICE_TOKEN_MIN_TTL_MS, requestedTtl))
+  : VOICE_TOKEN_DEFAULT_TTL_MS;
+ const secret = await getAuthSecret();
+ const claims = {
+  w: workspace,
+  a: agent,
+  exp: Date.now() + boundedTtl,
+ };
+ // Huddle dispatches carry a narrower capability without breaking older callers
+ // that mint an agent-scoped token for the generic MCP verifier. The transcript
+ // session is a second, independent pin: huddle identity alone must not let a
+ // compromised voice bearer read an arbitrary channel in the workspace.
+ if (huddle) claims.h = huddle;
+ if (session) claims.s = session;
+ const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
+ const signature = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+ return `${VOICE_TOKEN_PREFIX}${payload}.${signature}`;
+}
+
+async function verifyVoiceSessionToken(token) {
+ if (typeof token !== 'string' || !token.startsWith(VOICE_TOKEN_PREFIX)) return null;
+ const [payload, signature] = token.slice(VOICE_TOKEN_PREFIX.length).split('.');
+ if (!payload || !signature) return null;
+ const secret = await getAuthSecret();
+ const expected = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+ const given = Buffer.from(signature);
+ const want = Buffer.from(expected);
+ // Length check first: timingSafeEqual throws on a mismatch.
+ if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) return null;
+ let claims;
+ try {
+  claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+ } catch {
+  return null;
+ }
+ if (!claims?.w || !claims?.a) return null;
+ if (!(Number(claims.exp) > Date.now())) return null;
+ // The signature proves the CLAIM, never the agent's current state — a disabled
+ // or deleted agent must lose its voice immediately, not when the token lapses.
+ const rows = await getDb().unsafe(
+  `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, identity, metadata, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, version, enabled, created_by
+     from workspace_agents
+     where id = $1 and workspace_id = $2
+     limit 1`,
+  [String(claims.a), String(claims.w)],
+ );
+ const agent = rows[0];
+ if (!agent || !isAgentEnabled(agent) || !isVoiceCapableRunMode(agent.run_mode)) return null;
+ if (claims.h) {
+  // A voice bearer is a call capability, not a four-hour workspace bearer.
+  // Re-check the huddle lifecycle on every MCP authentication so ending the
+  // call invalidates the worker's read surface even if LiveKit room deletion
+  // was delayed or failed.
+  let huddles;
+  try {
+   huddles = await getDb().unsafe(
+    `select id, workspace_id, session_id, transcript_session_id, started_by, ended_at
+       from huddles where id = $1 and workspace_id = $2 limit 1`,
+    [String(claims.h), String(claims.w)],
+   );
+  } catch {
+   return null;
+  }
+  const huddle = huddles[0];
+  if (!huddle || huddle.ended_at) return null;
+  if (claims.s && String(claims.s) !== String(huddle.transcript_session_id || huddle.session_id || '')) return null;
+ }
+ return {
+  kind: 'agent',
+  agentId: agent.id,
+  workspaceId: agent.workspace_id,
+  huddleId: String(claims.h || ''),
+  voiceSession: true,
+  voiceSessionId: String(claims.s || ''),
+  name: agent.name,
+  handle: agent.handle || slugHandle(agent.name),
+  agent: agentRuntimePayload(agent),
+ };
+}
+
 async function verifyMcpToken(token, req = null) {
  return (await verifyAgentConnectToken(token, req))
+  || (await verifyVoiceSessionToken(token))
   || (await verifyFlowConnectionToken(token))
   || (await verifyControllerToken(token))
   || (await verifyWorkspaceMcpToken(token))
@@ -4605,6 +4817,62 @@ function publicAgentConnection(row) {
   last_seen_at: row.last_seen_at,
   updated_at: row.updated_at,
  };
+}
+
+/**
+ * Make a sharing change take effect NOW, on the rows already in the workspace.
+ *
+ * The ingest gate in server/agent-connections.cjs already refuses and prunes a
+ * withheld channel — but only when the daemon next pushes. An agent that is
+ * offline, or one whose daemon has nothing new to report, would leave its
+ * mirrored files sitting in the workspace indefinitely after somebody switched
+ * sharing off. Nobody reads "stop sharing my memory" as "stop sharing it the
+ * next time my laptop is awake".
+ *
+ * So: prune what is now withheld, immediately, and nudge live daemons to re-push
+ * what is now allowed. Both halves are needed — the prune is what OFF means, the
+ * nudge is what ON means, and neither implies the other.
+ *
+ * Fire-and-forget by design. A failure here must never cost the user the
+ * setting change itself, which is already committed by the time this runs.
+ */
+async function applyAgentSharingChange(agentId) {
+ if (!agentId) return;
+ // Re-read rather than trusting the caller's row: the generic update route's
+ // RETURNING projection is CLIENT-CONTROLLED (`returning: 'id'` is legal), so a
+ // row handed in here may not carry `sharing` at all — and a missing key reads
+ // fail-open as "shares everything", which would silently skip the prune.
+ const rows = await getDb().unsafe(
+  'select id, workspace_id, handle, name, sharing from workspace_agents where id = $1 limit 1',
+  [agentId],
+ );
+ const agentRow = rows[0];
+ if (!agentRow) return;
+ const sharing = normalizeAgentSharing(agentRow);
+ // Unrolled rather than looped over a table list, and that is not a style
+ // choice: a notifyDbSubscribers call whose table is a VARIABLE escapes the
+ // allowlist check in tests/realtime-fanout-allowlist.test.cjs. Each fanout
+ // below names its table literally so the check can see it.
+ if (!sharing.memory) {
+  const removed = await getDb().unsafe(
+   'delete from agent_memory_files where agent_id = $1 returning *',
+   [agentRow.id],
+  );
+  if (removed.length > 0) notifyDbSubscribers('agent_memory_files', 'DELETE', removed);
+ }
+ if (!sharing.skills) {
+  // No fanout: agent_skill_documents is deliberately absent from ALLOWED_TABLES
+  // and its sync broadcasts nothing, so a DELETE event would reach no one.
+  await getDb().unsafe('delete from agent_skill_documents where agent_id = $1', [agentRow.id]);
+ }
+ if (!sharing.documents) {
+  const removed = await getDb().unsafe(
+   'delete from agent_documents where agent_id = $1 returning *',
+   [agentRow.id],
+  );
+  if (removed.length > 0) notifyDbSubscribers('agent_documents', 'DELETE', removed);
+ }
+ nudgeAgentSharingResync(agentRow.workspace_id, agentRow.id, agentRow.handle || agentRow.name || null);
 }
 
 function publicFarmEnrolledAgent(row) {
@@ -4698,6 +4966,11 @@ function agentRuntimePayload(agent) {
   // Fail-open, like the reader in shared/ambientAddressing.cjs: a row from
   // before the column existed must not read as "opted out of ambient replies".
   ambient_replies: ambientRepliesEnabled(agent),
+  // What this agent contributes to the workspace: {memory, skills, tools,
+  // documents}. Normalized rather than passed through so every reader gets all
+  // four booleans — a row predating the column holds '{}', and a UI that had to
+  // apply the fail-open rule itself is a UI that will one day forget to.
+  sharing: normalizeAgentSharing(agent),
  };
 }
 
@@ -4739,7 +5012,7 @@ async function buildWorkspaceBootstrap(workspaceId, userId) {
    [workspaceId, userId],
   ),
   db.unsafe(
-   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, purpose, resource_facets, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, ambient_replies, created_by
+   `select id, workspace_id, name, avatar, openpet_avatar_id, accent_color, description, system_prompt, soul, instructions, tools, skills, purpose, resource_facets, identity, model, handle, run_mode, sandbox_provider, sandbox_config, memory_dir, permission_mode, metadata, version, enabled, ambient_replies, sharing, created_by
        from workspace_agents
        where workspace_id = $1
        order by created_at asc, name asc
@@ -5346,6 +5619,16 @@ const COMMENT_MENTION_TABLES = {
    const title = d[0]?.title ? `"${d[0].title}"` : `#${String(row.document_id).slice(0, 8)}`;
    return { label: `document ${title}`, link: `agensis://document/${row.document_id}` };
   },
+  // A document comment is the one source an agent can answer IN PLACE. Telling
+  // it to "reply here in your DM" would send the answer to a room the person
+  // who asked is not looking at — so this names the tools instead. The comment
+  // id is included because reply_to_comment needs it and the agent has no other
+  // way to learn it: the quote above is text, not a handle on a row.
+  actionHint: (row) => [
+   `Read the whole thread first: list_comments(doc_id: "${row.document_id}") — you have been shown one line of it.`,
+   `Then answer where the conversation is: reply_to_comment(comment_id: "${row.id}", content: "…").`,
+   'Resolve it with resolve_comment only once the thing being asked for is actually done — resolving takes it out of everyone\'s inbox.',
+  ].join('\n'),
  },
  memory_file_comments: {
   anchorColumn: 'agent_id',
@@ -5676,10 +5959,17 @@ async function dispatchCommentMentions({ table, row, authorUserId, run = continu
    if (!session) continue;
 
    const linkLine = source.link ? `\n\nSource: ${source.link}` : '';
+   // What the agent should DO about being tagged. Source-specific, because the
+   // right answer genuinely differs: a document comment can be answered in its
+   // own thread, while a task or memory-file mention has no such surface and the
+   // DM is where the reply belongs.
+   const action = typeof config.actionHint === 'function'
+    ? config.actionHint(row)
+    : 'Pick this up and reply here in your DM.';
    const content =
     `@${slugHandle(agent.handle || agent.name)} — ${authorName} tagged you in a comment on ${source.label}:\n\n` +
     `> ${String(row.content || '').replace(/\n/g, '\n> ')}\n\n` +
-    `Pick this up and reply here in your DM.${linkLine}`;
+    `${action}${linkLine}`;
 
    const taskId = config.sourceTaskId ? config.sourceTaskId(row) : null;
    if (taskId) {
@@ -6045,6 +6335,8 @@ async function buildAgentActivityDigest(workspaceId, agentId, currentSessionId) 
 // must not be told to answer in half-sentences.
 const VOICE_HUDDLE_NOTE = [
  'You are in a LIVE VOICE HUDDLE. Everything you write is read aloud to the person you are talking to, and what they say is transcribed into this conversation.',
+ 'This is speech, not chat markup. Never begin with @handle, an "at <handle>" phrase, your own name, or a speaker label. If the user addresses you by name, treat it as a wake-up cue and do not repeat it aloud.',
+ 'Do not narrate hidden reasoning or say "thinking". Answer immediately in plain spoken sentences.',
  'Reply IMMEDIATELY with one short sentence — the headline or an acknowledgement — as its own message, BEFORE you go and do the work. Then keep going in short messages as you learn things.',
  // These three constraints are not style, they are the latency mechanism, and
  // each one names a specific thing that made the first word late:
@@ -6057,7 +6349,7 @@ const VOICE_HUDDLE_NOTE = [
  //     from a broken call. Answering first costs nothing: the work still happens,
  //     in the messages that follow.
  'Your FIRST sentence must be at most a dozen words and must END IN A FULL STOP. Do not open with a preamble, a restatement of the question, or a heading — the first full stop is the moment your voice is heard.',
- 'Do not reason at length before that first sentence. Say it, then think, then keep talking as you learn things.',
+ 'Do not reason at length before that first sentence. Say it, then continue only with concise spoken results; never narrate the reasoning.',
  'It may say what you are ABOUT to do. It must never say you have already done it.',
  'Speak in plain sentences. Code blocks, tables and long lists are dropped before speaking, so say what they mean instead.',
  // The base system prompt (and, for daemon agents, the daemon's own prompt
@@ -6592,11 +6884,18 @@ function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivit
  if (intentNote) lines.push(intentNote, '');
  if (voiceHuddle) lines.push(VOICE_HUDDLE_NOTE, '');
  if (coParticipants.length > 0) {
-  lines.push(
-   `You are @${selfHandle} in a multi-agent channel. Other agents present: ${coParticipants.map((p) => `@${p.handle}`).join(', ')}.`,
-   'To bring another agent in, address them by @handle. If the request is fully handled, reply without mentioning anyone.',
-   '',
-  );
+  if (voiceHuddle) {
+   lines.push(
+    'Other agents may appear in the transcript, but this is a spoken huddle. Do not mention, tag, or address an agent by handle aloud.',
+    '',
+   );
+  } else {
+   lines.push(
+    `You are @${selfHandle} in a multi-agent channel. Other agents present: ${coParticipants.map((p) => `@${p.handle}`).join(', ')}.`,
+    'To bring another agent in, address them by @handle. If the request is fully handled, reply without mentioning anyone.',
+    '',
+   );
+  }
  }
  if (recentActivity) {
   lines.push(
@@ -6607,9 +6906,13 @@ function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivit
  }
  lines.push('Conversation so far:');
  for (const message of contextMessages) {
-  lines.push(message.role === 'assistant' ? `[@${selfHandle} (you)]: ${message.content}` : message.content);
+  lines.push(message.role === 'assistant'
+   ? `${voiceHuddle ? '[you]' : `[@${selfHandle} (you)]`}: ${message.content}`
+   : message.content);
  }
- lines.push('', 'Write your next reply as @' + selfHandle + '.');
+ lines.push('', voiceHuddle
+  ? 'Write only the next spoken reply. Begin directly with the answer; never prefix it with your name, an @mention, or a speaker label.'
+  : 'Write your next reply as @' + selfHandle + '.');
  return lines.join('\n');
 }
 
@@ -8385,6 +8688,7 @@ async function inspectProjectPath(inputPath) {
 
 function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
  const sections = [];
+ const voiceHuddle = String(agentContext?.systemPrompt || '').includes('<voice_huddle>');
  if (agentContext && (agentContext.systemPrompt || agentContext.name)) {
   if (agentContext.name) {
    sections.push(`You are "${agentContext.name}", an AI agent collaborating in a shared agensis workspace.`);
@@ -8406,13 +8710,19 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
   }
   if (Array.isArray(agentContext.coParticipants) && agentContext.coParticipants.length > 0) {
    const roster = agentContext.coParticipants.map((peer) => `@${peer.handle}${peer.name ? ` (${peer.name})` : ''}`).join(', ');
-   sections.push(
-    '',
-    `This is a multi-agent channel. Other agents you can collaborate with: ${roster}.`,
-    '- In the conversation history, each message is prefixed with the speaker, e.g. "[@handle]: ...". Messages without a prefix are your own.',
-    '- To bring another agent into the conversation, address them by @handle in your reply. Only mention an agent when you genuinely need their help — do not @ them out of politeness, or the conversation will loop.',
-    '- If the request is already fully handled, answer without mentioning anyone so the conversation can end.',
-   );
+   sections.push('');
+   if (voiceHuddle) {
+    sections.push(
+     'Other agents may be present in the transcript, but this is a spoken huddle. Do not mention, tag, or address an agent by handle aloud.',
+    );
+   } else {
+    sections.push(
+     `This is a multi-agent channel. Other agents you can collaborate with: ${roster}.`,
+     '- In the conversation history, each message is prefixed with the speaker, e.g. "[@handle]: ...". Messages without a prefix are your own.',
+     '- To bring another agent into the conversation, address them by @handle in your reply. Only mention an agent when you genuinely need their help — do not @ them out of politeness, or the conversation will loop.',
+     '- If the request is already fully handled, answer without mentioning anyone so the conversation can end.',
+    );
+   }
   }
   sections.push('');
  } else {
@@ -8429,6 +8739,14 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
   '- If you do not know something from the provided context, say so rather than inventing.',
   '- You are one of potentially many people in this workspace; speak in a way that is useful to the whole team, not just a single user.',
  );
+ if (voiceHuddle) {
+  sections.push(
+   '',
+   '<voice_output_rules>',
+   'Speak directly to the human. Never output a mention, your own name, an "at <handle>" phrase, a speaker label, or hidden reasoning. Begin with the answer.',
+   '</voice_output_rules>',
+  );
+ }
 
  if (workspaceContext) {
   const wsBlocks = [];
@@ -9241,7 +9559,8 @@ const {
  disconnectAgentDaemons, disableFarmIntegrationAgents,
  markAgentConnectionOffline, isConnectionSocketLive,
  isConnectionSocketOpen, updateAgentHeartbeat, handleAgentMemorySync,
- handleAgentSkillSync, handleAgentCapabilitiesSync, capabilitiesShapeValid,
+ handleAgentSkillSync, handleAgentDocumentSync, nudgeAgentSharingResync,
+ handleAgentCapabilitiesSync, capabilitiesShapeValid,
  capabilitiesDriftNudges, ampRuntimeFromMessage, executionRuntimesFromMessage, refreshConnectedAgentConfigs, touchMcpPresence,
  hasMcpPresence, pruneOfflineConnections, reconcileAgentConnectionsAtStartup,
  applyAgentIdentity, repairCorruptedAgentIdentities, clearPendingJobFailures,
@@ -9284,6 +9603,7 @@ const realtime = createRealtime({
  handleAgentCapabilitiesSync,
  handleAgentJobDelta, handleAgentJobResult, handleAgentJobSegment,
  handleAgentJobStep, handleAgentMemorySync, handleAgentSkillSync,
+ handleAgentDocumentSync,
  handleAgentPermissionPrepared, handleAgentPermissionRequest,
  handleBridgeMessage: (...args) => channelBridges.handleBridgeMessage(...args),
  handlePeerListRequest, handlePeerTicketRequest, inferenceBroker,
@@ -9567,6 +9887,20 @@ function createApp() {
   installCreatedSessionMemberships,
   lockPrivateSessionRoster,
   webhookRateLimiter,
+  // A huddle's agents join it as real LiveKit participants (voice-worker/).
+  // The worker reaches back for tools and the transcript, so it needs an
+  // absolute base URL and a credential scoped to the one agent it is being dispatched for.
+  createVoiceSessionToken,
+  verifyVoiceSessionToken,
+  parseJsonArray,
+  parseJsonObject,
+  // Voice workers call back to the long-running Fly backend. Never point
+  // their MCP/transcript credentials at the app/Netlify origin: that host does
+  // not serve these routes. A missing backend URL disables agent dispatch while
+  // preserving the human-only huddle.
+  publicBaseUrl: normalizeAgentBackendBaseUrl(
+   process.env.AGENSIS_DAEMON_BASE_URL || '',
+  ) || '',
  });
 
  // Voice engines for huddles. The Cartesia token exchange is plain HTTP and is
@@ -9888,6 +10222,9 @@ function createApp() {
     let next = stripPrivilegedDbValues(table, row);
     next = stampTaskWriteIdentity(table, next, req.userId, { insert: true });
     next = applyAgentPurposeInsertDefaults(table, next);
+    // `sharing` is jsonb: narrow it to the four known booleans so the generic
+    // write path cannot park arbitrary data on an agent row.
+    next = sanitizeAgentSharingValues(table, next);
     if (table === 'workspaces') next = { ...next, user_id: req.userId };
     if (table === 'messages') next = stampBrowserMessageInsert(next, messageAuthor);
     // Strip agent-invented outline prefixes ("Ship UI work / 1. …") from task
@@ -10047,9 +10384,12 @@ function createApp() {
    if (table === 'workspace_agents' && isReservedAgentHandle(values.handle)) {
     return jsonError(res, 400, new Error(reservedAgentHandleMessage(values.handle)));
    }
+   // sanitizeAgentSharingValues narrows the jsonb `sharing` column to the four
+   // known booleans, so the generic write path cannot park arbitrary data on an
+   // agent row through a column typed as free-form.
    const safeValues = stampTaskWriteIdentity(
     table,
-    stripImmutableDbUpdateValues(table, stripPrivilegedDbValues(table, values)),
+    stripImmutableDbUpdateValues(table, sanitizeAgentSharingValues(table, stripPrivilegedDbValues(table, values))),
     req.userId,
    );
 
@@ -10131,6 +10471,22 @@ function createApp() {
    // Same shape and same reason again: "was this thread ALREADY discarded?" is a
    // before-image question, and the write replaces the column. Only for writes
    // that actually touch deleted_at, so an ordinary rename pays nothing.
+   // Which agents this update is about to re-scope. Read with the same filters,
+   // BEFORE the write, for the same reason the assignee read above is: the
+   // RETURNING projection is client-controlled (`returning: 'id'` is legal, and
+   // so is a projection with no id at all), so the ids cannot be recovered from
+   // the result. Skipping the prune because a client asked for a narrow
+   // returning would leave withheld files in the workspace.
+   let sharingAgentIds = [];
+   if (table === 'workspace_agents' && Object.prototype.hasOwnProperty.call(safeValues, 'sharing')) {
+    const sharingWhere = buildWhereClause(filters, []);
+    const sharingRows = await getDb().unsafe(
+     `select id from ${tableSql}${sharingWhere.clause}`,
+     sharingWhere.params,
+    ).catch(() => []);
+    sharingAgentIds = sharingRows.map(row => String(row.id)).filter(Boolean);
+   }
+
    let priorSessionRows = [];
    if (table === 'chat_sessions' && Object.prototype.hasOwnProperty.call(safeValues, 'deleted_at')) {
     const priorWhere = buildWhereClause(filters, []);
@@ -10292,6 +10648,16 @@ function createApp() {
    // the committed write while `result` preserves the requested HTTP shape.
    const realtimeResult = closesSessions ? canonicalClosedSessionRows : result;
    notifyDbSubscribers(table, 'UPDATE', realtimeResult);
+
+   // A sharing change is not just a stored flag: it decides what this agent has
+   // ALREADY contributed. Prune what is now withheld and ask live daemons to
+   // re-push what is now allowed. Fire-and-forget after the write and the
+   // broadcast, so a failure here cannot cost the user the setting.
+   for (const agentId of sharingAgentIds) {
+    void applyAgentSharingChange(agentId).catch((error) => {
+     console.error('[agents] failed to apply sharing change:', error.message || error);
+    });
+   }
    if (sessionClosureEffects) {
     await applySessionClosureRuntimeEffects(sessionClosureEffects, {
      notifyDbSubscribers,
@@ -10895,6 +11261,11 @@ module.exports = {
   verifyUserAuthMcpToken,
   verifyMcpToken,
   createWorkspaceMcpToken,
+  // Per-huddle, per-agent voice credential for the LiveKit worker.
+  createVoiceSessionToken,
+  verifyVoiceSessionToken,
+  VOICE_TOKEN_PREFIX,
+  VOICE_TOKEN_MAX_TTL_MS,
   createCursorBuddyConnectionKey,
   normalizeCursorBuddySurface,
   normalizeCursorBuddyScope,
