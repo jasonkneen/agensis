@@ -3032,6 +3032,29 @@ ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_
   console.warn('[backend] participants agent-id repair failed:', error.message || error);
  }
 
+ // Restore the channel back-link on captured tasks whose source_id a dispatch
+ // overwrote with the agent's DM id. Mirrors
+ // supabase/migrations/20260822200000_restore_captured_task_backlink.sql.
+ //
+ // Exactly recoverable rather than guessed: origin_job_id -> agent_jobs.session_id
+ // IS the conversation the work was asked in. Idempotent — rows that already
+ // agree are excluded, so after the first boot this updates nothing.
+ try {
+  const relinked = await db.unsafe(`
+      UPDATE tasks t
+         SET source_id = j.session_id::text, source_type = 'chat', updated_at = now()
+        FROM agent_jobs j
+       WHERE t.origin_job_id = j.id
+         AND j.session_id IS NOT NULL
+         AND t.source_id IS DISTINCT FROM j.session_id::text
+      RETURNING t.id`);
+  if (relinked.length > 0) {
+   console.log(`[backend] restored captured-task back-link for ${relinked.length} task(s)`);
+  }
+ } catch (error) {
+  console.warn('[backend] captured-task back-link repair failed:', error.message || error);
+ }
+
  // DM read scope — the one-time backfill that turns 'every member can read every
  // session' into 'a private session is readable by its members'.
  //
@@ -6054,7 +6077,7 @@ async function dispatchCommentMentions({ table, row, authorUserId, run = continu
     // cascading FK, so a comment cannot outlive its task — no row means the task
     // just went away and there is nothing to dispatch onto.
     const cur = await getDb().unsafe(
-     'select id, status, source_type, source_id from tasks where id = $1 limit 1',
+     'select id, status, source_type, source_id, origin_job_id from tasks where id = $1 limit 1',
      [String(taskId)],
     );
     const task = cur[0];
@@ -6087,7 +6110,9 @@ async function dispatchCommentMentions({ table, row, authorUserId, run = continu
     // Record the chat this task is now being worked in (see
     // TASK_SOURCE_LINK_OVERWRITABLE) so the task can offer "Open chat".
     const nextStatus = taskStatusOnDispatch(priorStatus);
-    const stampSource = TASK_SOURCE_LINK_OVERWRITABLE.has(String(task.source_type || ''));
+    // Same rule as task-dispatch: a CAPTURED task's source_id is the channel the
+    // human asked in, and dispatch must not replace it with this DM's id.
+    const stampSource = dispatchMayStampSourceLink(task);
     const taskRows = stampSource
      ? await getDb().unsafe(
       "update tasks set assignee_id = $1, dispatch_requested_by = $2, status = $3, source_type = 'chat', source_id = $4, updated_at = now() where id = $5 returning *",
@@ -9624,7 +9649,7 @@ const {
  dispatchTaskAssignment, drainAgentTaskQueue,
  taskStatusOnDispatch, cadenceWakes,
  TASK_QUEUE_BUSY_RUN_REASONS, TASK_ASSIGN_CLAIM_MS, TASK_QUEUE_MAX_STRIKES,
- TASK_QUEUE_SCAN_LIMIT, TASK_SOURCE_LINK_OVERWRITABLE,
+ TASK_QUEUE_SCAN_LIMIT, dispatchMayStampSourceLink,
 } = taskDispatch;
 
 // Agent daemon connections own their two maps (Wave 4); resetTestState()

@@ -108,9 +108,22 @@ function makeWorld({
         return task ? [{ title: task.title }] : [];
       }
       if (n.startsWith('select title from documents where id = $1')) return [{ title: 'Spec' }];
-      if (n.startsWith('select id, status, source_type, source_id from tasks where id = $1')) {
+      // Matched on the FROM/WHERE, not on the column list. Pinning the exact
+      // projection meant adding one column to the real query (origin_job_id, so
+      // dispatch can tell a captured task's back-link from a stale one) silently
+      // fell through this router and broke eleven unrelated assertions in a way
+      // that read as a dispatch regression.
+      if (/^select id, status, source_type, source_id.* from tasks where id = \$1/.test(n)) {
         const task = findTask(params[0]);
-        return task ? [{ id: task.id, status: task.status, source_type: task.source_type, source_id: task.source_id }] : [];
+        return task
+          ? [{
+            id: task.id,
+            status: task.status,
+            source_type: task.source_type,
+            source_id: task.source_id,
+            origin_job_id: task.origin_job_id || null,
+          }]
+          : [];
       }
       if (n.startsWith('select id, workspace_id, title, description, status, assignee_id, source_type, source_id')) {
         const task = findTask(params[0]);

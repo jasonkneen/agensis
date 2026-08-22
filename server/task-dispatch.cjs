@@ -161,6 +161,29 @@ function createTaskDispatch(deps = {}) {
  // and simply doesn't offer "Open chat".
  const TASK_SOURCE_LINK_OVERWRITABLE = new Set(['', 'manual', 'chat']);
 
+ /**
+  * Whether this dispatch may claim the task's source_type/source_id pair.
+  *
+  * 'chat' is in the overwritable set because a task dispatched twice should
+  * point at the CURRENT DM. But a task CAPTURED from a conversation
+  * (server/chat-task-capture.cjs) is also 'chat', and its source_id is the
+  * channel the human actually asked in — the only record of where the work came
+  * from. Overwriting that with the agent's DM id is a straight loss: "Open chat"
+  * then lands in a DM that never mentions the request.
+  *
+  * Observed exactly once and immediately: the capture of "Can we check queued
+  * messages…" was linked to #testtest at 18:09, dispatched at 18:19, and its
+  * back-link silently became the Coder DM.
+  *
+  * origin_job_id is the discriminator because it is server-owned (a browser
+  * cannot set it — see PRIVILEGED_DB_COLUMNS_BY_TABLE) and it means precisely
+  * "this row's provenance was written by the capture sweep, not by a dispatch".
+  */
+ function dispatchMayStampSourceLink(task) {
+  if (task && task.origin_job_id) return false;
+  return TASK_SOURCE_LINK_OVERWRITABLE.has(String((task && task.source_type) || ''));
+ }
+
  // --- the task queue ---------------------------------------------------------
  //
  // THE DB IS THE QUEUE. A task that is 'todo' AND assigned to an agent is waiting
@@ -328,7 +351,7 @@ function createTaskDispatch(deps = {}) {
   try {
    if (!taskId || !agentId) return { dispatched: false, reason: 'missing_input' };
    const taskRows = await getDb().unsafe(
-    'select id, workspace_id, title, description, status, assignee_id, source_type, source_id, dispatch_requested_by from tasks where id = $1 limit 1',
+    'select id, workspace_id, title, description, status, assignee_id, source_type, source_id, origin_job_id, dispatch_requested_by from tasks where id = $1 limit 1',
     [String(taskId)],
    );
    const task = taskRows[0];
@@ -411,7 +434,7 @@ function createTaskDispatch(deps = {}) {
    // the chat this task is being worked in, so the UI can offer "Open chat".
    const priorStatus = String(task.status || 'todo');
    const nextStatus = taskStatusOnDispatch(priorStatus);
-   const stampSource = TASK_SOURCE_LINK_OVERWRITABLE.has(String(task.source_type || ''));
+   const stampSource = dispatchMayStampSourceLink(task);
    const updated = stampSource
     ? await getDb().unsafe(
      "update tasks set status = $1, source_type = 'chat', source_id = $2, updated_at = now() where id = $3 returning *",
@@ -585,6 +608,7 @@ function createTaskDispatch(deps = {}) {
   TASK_QUEUE_SKIP_REASONS,
   TASK_QUEUE_STOP_REASONS,
   TASK_SOURCE_LINK_OVERWRITABLE,
+  dispatchMayStampSourceLink,
   cadenceWakes,
   recentTaskDispatches,
   taskQueueSelecting,
