@@ -5309,3 +5309,131 @@ select {
   transition: none;
  }
 }
+
+/* ---------------------------------------------------------------------------
+ * Activity tray — trajectory-style feed (adapted from the deepseek-harness
+ * trajectory screen's colour language, re-themed onto agensis tokens).
+ *
+ * A sticky toolbar + a segmented overview timeline + a two-panel list/detail
+ * split. The timeline is a "Chrome Network" style strip: one coloured segment
+ * per activity event, coloured by family, click-to-select.
+ * ------------------------------------------------------------------------- */
+
+/* Family tag colours. Each activity family reads as a distinct hue so a scan of
+ * the feed lands on the type of work, exactly as the trajectory screen's
+ * TOOL/ASSISTANT/USER tags do. Colors are picked from UI theme tokens where
+ * possible and hardcoded oklch only for hues the token set does not carry. */
+.activity-family-tag {
+ font-family: var(--agensis-ui-font-family);
+ font-size: 10px;
+ font-weight: 600;
+ letter-spacing: 0.04em;
+ text-transform: uppercase;
+ line-height: 1;
+ padding: 2px 5px;
+ border-radius: 4px;
+ border: 1px solid transparent;
+}
+
+.activity-family-all { background: color-mix(in oklch, var(--foreground) 8%, transparent); color: var(--foreground); }
+.activity-family-docs { background: color-mix(in oklch, var(--primary) 14%, transparent); color: var(--primary); border-color: color-mix(in oklch, var(--primary) 30%, transparent); }
+.activity-family-tasks { background: color-mix(in oklch, oklch(0.65 0.18 150) 14%, transparent); color: oklch(0.55 0.16 150); border-color: color-mix(in oklch, oklch(0.65 0.18 150) 32%, transparent); }
+.activity-family-messages { background: color-mix(in oklch, oklch(0.62 0.19 265) 14%, transparent); color: oklch(0.55 0.16 265); border-color: color-mix(in oklch, oklch(0.62 0.19 265) 32%, transparent); }
+.activity-family-comments { background: color-mix(in oklch, oklch(0.66 0.16 320) 14%, transparent); color: oklch(0.56 0.14 320); border-color: color-mix(in oklch, oklch(0.66 0.16 320) 32%, transparent); }
+.activity-family-agents { background: color-mix(in oklch, oklch(0.62 0.19 35) 14%, transparent); color: oklch(0.55 0.16 35); border-color: color-mix(in oklch, oklch(0.62 0.19 35) 32%, transparent); }
+.activity-family-memory { background: color-mix(in oklch, oklch(0.7 0.12 95) 14%, transparent); color: oklch(0.6 0.11 95); border-color: color-mix(in oklch, oklch(0.7 0.12 95) 32%, transparent); }
+.activity-family-people { background: color-mix(in oklch, oklch(0.64 0.16 20) 14%, transparent); color: oklch(0.56 0.135 20); border-color: color-mix(in oklch, oklch(0.64 0.16 20) 32%, transparent); }
+.activity-family-canvas { background: color-mix(in oklch, oklch(0.66 0.14 285) 14%, transparent); color: oklch(0.57 0.12 285); border-color: color-mix(in oklch, oklch(0.66 0.14 285) 32%, transparent); }
+
+/* Timeline overview strip. */
+.trajectory-timeline {
+ display: flex;
+ flex-direction: column;
+ gap: 2px;
+ padding: 6px 10px 4px;
+ border-bottom: 1px solid var(--border, oklch(0.92 0 0));
+ background: color-mix(in oklch, var(--card) 72%, transparent);
+}
+.trajectory-timeline-track {
+ position: relative;
+ display: flex;
+ height: 14px;
+ width: 100%;
+ min-width: 0;
+ gap: 1px;
+ border-radius: 3px;
+ overflow: hidden;
+ cursor: pointer;
+ background: color-mix(in oklch, var(--muted, oklch(0.92 0 0)) 55%, transparent);
+}
+.trajectory-timeline-labels {
+ display: flex;
+ align-items: center;
+ gap: 8px;
+ font-size: 10px;
+ font-weight: 500;
+ letter-spacing: 0.05em;
+ text-transform: uppercase;
+ color: var(--muted-foreground);
+}
+.trajectory-timeline-labels > span {
+ display: inline-flex;
+ align-items: center;
+ gap: 4px;
+}
+.trajectory-timeline-dot {
+ width: 6px;
+ height: 6px;
+ border-radius: 50%;
+ flex: none;
+}
+
+/* Toolbar — sticky, trajectory-style fold + search. */
+.activity-tray-toolbar {
+ display: flex;
+ align-items: center;
+ gap: 8px;
+ padding: 6px 10px;
+ border-bottom: 1px solid var(--border, oklch(0.92 0 0));
+ background: color-mix(in oklch, var(--card) 72%, transparent);
+}
+.activity-tray-search {
+ flex: 0 1 200px;
+ display: inline-flex;
+ align-items: center;
+ gap: 5px;
+ height: 24px;
+ min-width: 84px;
+ margin-left: auto;
+ padding: 0 7px;
+ border: 1px solid var(--border);
+ border-radius: 6px;
+ background: var(--background);
+ color: var(--muted-foreground);
+}
+.activity-tray-search:focus-within {
+ border-color: var(--primary);
+}
+.activity-tray-search > input {
+ min-width: 0;
+ width: 100%;
+ padding: 0;
+ border: 0;
+ outline: 0;
+ background: transparent;
+ color: var(--foreground);
+ font: inherit;
+ font-size: 12px;
+}
+.activity-tray-search > input::placeholder {
+ color: var(--muted-foreground);
+}
+
+/* Row metadata "trailing" summary, trajectory-style. */
+.activity-meta-summary {
+ display: inline-flex;
+ align-items: center;
+ gap: 6px;
+ font-size: 10px;
+ color: var(--muted-foreground);
+}

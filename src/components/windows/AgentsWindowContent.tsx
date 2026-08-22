@@ -213,6 +213,8 @@ interface AgentsWindowContentProps {
     metadata?: Record<string, unknown>;
     handle?: string;
     model?: string;
+    /** Per-agent inference effort; 'auto' lets the provider choose. */
+    effort?: string;
     run_mode?: 'builtin' | 'daemon' | 'sandbox' | 'external';
     sandbox_provider?: string | null;
     sandbox_config?: Record<string, unknown>;

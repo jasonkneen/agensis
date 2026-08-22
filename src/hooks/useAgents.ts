@@ -29,6 +29,8 @@ export interface CreateAgentInput {
   metadata?: Record<string, unknown>;
   handle?: string;
   model?: string;
+  /** Per-agent inference effort; 'auto' lets the provider choose. */
+  effort?: string;
   run_mode?: 'builtin' | 'daemon' | 'sandbox' | 'external';
   sandbox_provider?: string | null;
   sandbox_config?: Record<string, unknown>;
@@ -137,6 +139,7 @@ export function useAgents(workspaceId: string | null, userId?: string, seed?: Wo
       metadata: input.metadata ?? {},
       handle: input.handle ?? agentHandle(input.name),
       model: input.model ?? 'auto',
+      effort: input.effort ?? 'auto',
       run_mode: input.run_mode ?? 'builtin',
       sandbox_provider: input.sandbox_provider ?? null,
       sandbox_config: input.sandbox_config ?? {},

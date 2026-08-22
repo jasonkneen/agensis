@@ -53,7 +53,7 @@
 // ----------------------------------------------------------------------------
 
 const { MAX_REACTION_LENGTH } = require('./reaction-events.cjs');
-const { sessionReadableSql } = require('./backend-core.cjs');
+const { sessionReadableSql, sessionOpenSql } = require('./backend-core.cjs');
 
 const REACTION_OPS = Object.freeze(['add', 'remove']);
 
@@ -190,8 +190,7 @@ function agentReactionScopeSql(agentParam) {
       where reaction_session_scope.id = messages.session_id
         and reaction_session_scope.deleted_at is null
         and (
-          (coalesce(reaction_session_scope.visibility, 'workspace') <> 'private'
-           and coalesce(reaction_session_scope.folder, '') <> 'Direct messages')
+          ${sessionOpenSql('reaction_session_scope')}
           or exists (
             select 1
               from jsonb_array_elements(

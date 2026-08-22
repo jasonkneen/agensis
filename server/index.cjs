@@ -1229,6 +1229,11 @@ async function ensureRuntimeSchema() {
     -- folders, runtime placement or other authority.
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS purpose text NOT NULL DEFAULT 'collaborator'
       CHECK (purpose IN ('collaborator', 'resource'));
+    -- Per-agent reasoning effort, mirroring database/neon-schema.sql and the
+    -- agent_effort_level migration. 'auto' lets the provider choose; the others
+    -- map to provider-specific reasoning parameters.
+    ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS effort text NOT NULL DEFAULT 'auto'
+      CHECK (effort IN ('auto', 'low', 'medium', 'high', 'xhigh', 'max'));
     ALTER TABLE workspace_agents ADD COLUMN IF NOT EXISTS resource_facets jsonb NOT NULL DEFAULT '[]'::jsonb
       CHECK (
         jsonb_typeof(resource_facets) = 'array'
@@ -1295,6 +1300,7 @@ async function ensureRuntimeSchema() {
     ALTER TABLE workspace_agents ALTER COLUMN avatar SET DEFAULT 'AI';
     CREATE INDEX IF NOT EXISTS idx_workspace_agents_handle ON workspace_agents(workspace_id, handle);
     CREATE INDEX IF NOT EXISTS idx_workspace_agents_connect_token_hash ON workspace_agents(connect_token_hash);
+    CREATE INDEX IF NOT EXISTS idx_workspace_agents_effort ON workspace_agents(effort);
 
     CREATE TABLE IF NOT EXISTS agent_webhooks (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -7869,6 +7875,26 @@ async function continueConversation({
    // `ok:false, pending:true` is the one that matters to the task queue: the
    // one-active-job unique index bounced the insert, so NO job exists and nothing
    // will ever answer this turn.
+   if (result && !result.ok && result.pending) {
+    // PARK, DON'T DROP — the same rule the agent_busy and locked branches follow.
+    // The unique index uq_agent_jobs_active_per_session_agent let a CONCURRENT
+    // thread in this same DM win the one active job slot, so this turn's insert
+    // was bounced and this agent is by definition busy until that job finishes.
+    // Pinning to nextAgent.id means the winner's terminal state calls
+    // drainPendingChatTurn(sessionId, nextAgent.id) and replays this exact turn —
+    // without the pin, a second DM thread would be silently dropped precisely
+    // like the bug the parking feature was built to close (a turn that reaches
+    // this line has NOTHING queued for it anywhere).
+    parkChatTurn({
+     workspaceId,
+     sessionId,
+     threadParentId,
+     broadcastToChannel,
+     targetAgentId: nextAgent.id,
+     agentId: nextAgent.id,
+    });
+    return { started, reason: 'refused' };
+   }
    if (!result || result.pending) return { started, reason: result && result.ok ? 'dispatched' : 'refused' };
    // builtin turn finished synchronously — loop to evaluate the next turn
   }

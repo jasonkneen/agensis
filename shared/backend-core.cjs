@@ -539,10 +539,19 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
  // comment that @mentions an agent can be posted in a way that silently evades
  // the dispatch. The loop guard has to be unforgeable to be a guard.
  //
- // task_comments.agent_id is NOT listed, and that is a known gap rather than a
- // decision: it predates this rule and the same forgery is possible there.
- // Adding it needs a check that no existing browser path writes the column.
+ // task_comments.agent_id is protected the same way (see its entry below) once
+ // it was confirmed no existing browser path writes the column.
  document_comments: new Set([
+  'agent_id',
+ ]),
+ // The same two properties apply verbatim to task comments: agent authorship is
+ // always stamped by the server's verified MCP token, never sent by a client, and
+ // dispatchCommentMentions returns early on any row carrying an agent_id — so an
+ // agent's own reply cannot re-arm the dispatch that woke it. A loop guard a
+ // client can set is not a guard. The browser write path (useTaskComments.ts)
+ // builds its insert from only parent_id and content, so this strips agent_id
+ // from nothing a client legitimately sends.
+ task_comments: new Set([
   'agent_id',
  ]),
  workspace_agents: new Set([
@@ -726,7 +735,7 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
   'id', 'workspace_id', 'name', 'avatar', 'openpet_avatar_id',
   'accent_color', 'description', 'system_prompt', 'soul', 'instructions',
   'tools', 'skills', 'purpose', 'resource_facets', 'metadata', 'identity',
-  'handle', 'model', 'run_mode', 'sandbox_provider', 'sandbox_config',
+  'handle', 'model', 'effort', 'run_mode', 'sandbox_provider', 'sandbox_config',
   'memory_dir', 'enabled', 'ambient_replies', 'sharing', 'permission_mode', 'version',
   'created_by', 'created_at', 'updated_at',
  ],
@@ -1639,6 +1648,20 @@ function isPrivateSessionRow(row) {
   || String(row.folder || '') === 'Direct messages';
 }
 
+// SQL fragment for "session `<alias>` is not a private conversation". This is
+// the SINGLE spelling of the open-session privacy marker; everyone (the human
+// read lane, the agent reaction/marker lanes) must compose this helper rather
+// than re-type the `visibility`/`folder` test. A second copy elsewhere is how
+// the marker drifts and a DM is reopened. Returns (and parenthesises) the
+// fragment, ready to join with `and`.
+function sessionOpenSql(alias) {
+ if (!/^[a-z_][a-z0-9_]*$/i.test(String(alias))) throw new Error(`Invalid alias: ${alias}`);
+ return `(
+   coalesce(${alias}.visibility, 'workspace') <> 'private'
+   and coalesce(${alias}.folder, '') <> 'Direct messages'
+ )`;
+}
+
 /**
  * SQL predicate for "user $N may read session `<alias>`", for the aggregate
  * queries that span many sessions at once (the inbox, thread lists, search).
@@ -1659,10 +1682,7 @@ function sessionReadableSql(alias, userParam, { lockMembership = false } = {}) {
  return `(
     ${alias}.deleted_at is null
     and (
-      (
-        coalesce(${alias}.visibility, 'workspace') <> 'private'
-        and coalesce(${alias}.folder, '') <> 'Direct messages'
-      )
+      ${sessionOpenSql(alias)}
       or exists (
         select 1 from chat_session_members csm
          where csm.session_id = ${alias}.id
@@ -3531,6 +3551,7 @@ module.exports = {
  // Session read scope — the granularity below the workspace.
  enforceSessionReadAccess,
  isPrivateSessionRow,
+ sessionOpenSql,
  sessionReadableSql,
  addSessionParticipant,
  ALLOWED_TABLES,

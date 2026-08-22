@@ -8,12 +8,12 @@ import {
   MessageCircle,
   MessageSquare,
   Palette,
+  Search,
   Send,
   UserPlus,
   X,
 } from 'lucide-react';
 import type { ActivityEvent, ActivityEventType } from '../../types';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Empty,
@@ -25,6 +25,12 @@ import {
 import { Marker, MarkerContent } from '@/components/ui/marker';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Spinner } from '@/components/ui/spinner';
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import {
@@ -174,6 +180,44 @@ function countByFamily(events: ActivityEvent[]): Record<ActivityFilter, number> 
   return counts;
 }
 
+// Family -> CSS tag class (see the .activity-family-* block in index.css). A
+// solid-block family tag on each row is the trajectory screen's visual grammar:
+// a scan of the feed should land on the kind of work, not the clock next to it.
+function familyTagClass(family: Exclude<ActivityFilter, 'all'> | 'all' | undefined): string {
+  switch (family) {
+    case 'docs': return 'activity-family-docs';
+    case 'tasks': return 'activity-family-tasks';
+    case 'messages': return 'activity-family-messages';
+    case 'comments': return 'activity-family-comments';
+    case 'agents': return 'activity-family-agents';
+    case 'memory': return 'activity-family-memory';
+    case 'people': return 'activity-family-people';
+    case 'canvas': return 'activity-family-canvas';
+    default: return 'activity-family-all';
+  }
+}
+
+// The family a given event belongs to, or 'all' when its event_type is unmapped.
+function familyFor(event: Pick<ActivityEvent, 'event_type'>): Exclude<ActivityFilter, 'all'> | 'all' {
+  return ACTIVITY_FAMILY[event.event_type] ?? 'all';
+}
+
+// Background hue used for the timeline segment + dot so the strip and the tag
+// share one colour identity per family.
+function familyDotColor(family: Exclude<ActivityFilter, 'all'> | 'all' | undefined): string {
+  switch (family) {
+    case 'docs': return 'var(--primary)';
+    case 'tasks': return 'oklch(0.62 0.17 150)';
+    case 'messages': return 'oklch(0.6 0.18 265)';
+    case 'comments': return 'oklch(0.64 0.15 320)';
+    case 'agents': return 'oklch(0.6 0.18 35)';
+    case 'memory': return 'oklch(0.68 0.11 95)';
+    case 'people': return 'oklch(0.62 0.15 20)';
+    case 'canvas': return 'oklch(0.64 0.13 285)';
+    default: return 'var(--foreground)';
+  }
+}
+
 /**
  * A segmented control, not a row of chips: one recessed track, one raised active
  * segment, so the bar reads as "which slice of the log am I looking at" rather
@@ -315,6 +359,123 @@ function ActivityEventComments({ eventId, workspaceId, currentUserId }: { eventI
   );
 }
 
+// ---------------------------------------------------------------------------
+// Trajectory-style overview timeline.
+//
+// A single "Chrome Network"-style strip over the loaded page of events: one
+// coloured segment per row, coloured by family, click-to-select, with a tiny
+// lane-legend above. Adapted from the deepseek-harness trajectory screen, whose
+// whole point is "you can see the shape of the work at a glance" — in our case
+// that is the mix of docs vs tasks vs agent calls over the page, not raw timing.
+// ---------------------------------------------------------------------------
+function ActivityTimeline({
+  events,
+  selectedId,
+  onSelect,
+}: {
+  events: ActivityEvent[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  if (events.length === 0) return null;
+  return (
+    <div className="trajectory-timeline">
+      <div className="trajectory-timeline-labels" aria-hidden="true">
+        <span><span className="trajectory-timeline-dot" style={{ background: 'var(--primary)', width: 7, height: 7 }} /> Docs</span>
+        <span><span className="trajectory-timeline-dot" style={{ background: 'oklch(0.62 0.17 150)', width: 7, height: 7 }} /> Tasks</span>
+        <span><span className="trajectory-timeline-dot" style={{ background: 'oklch(0.6 0.18 265)', width: 7, height: 7 }} /> Messages</span>
+        <span><span className="trajectory-timeline-dot" style={{ background: 'oklch(0.6 0.18 35)', width: 7, height: 7 }} /> Agents</span>
+      </div>
+      <div className="trajectory-timeline-track" role="img" aria-label="Activity timeline">
+        {events.map((event) => {
+          const family = familyFor(event);
+          const selected = event.id === selectedId;
+          return (
+            <button
+              key={event.id}
+              type="button"
+              title={activityEntryLabel(event)}
+              aria-label={activityEntryLabel(event)}
+              onClick={() => onSelect(event.id)}
+              className="group relative h-full min-w-[2px] flex-1 rounded-[2px] transition-opacity"
+              style={{
+                background: familyDotColor(family),
+                opacity: selected ? 1 : 0.55,
+              }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// The tabbed right-hand inspector, trajectory-style. Each selected event opens a
+// Summary / Metadata / Comments triad instead of a single scrolling column —
+// the same "detail has structure" move the trajectory record inspector makes.
+function ActivityDetailTabs({
+  event,
+  workspaceId,
+  currentUserId,
+}: {
+  event: ActivityEvent;
+  workspaceId?: string | null;
+  currentUserId?: string | null;
+}) {
+  return (
+    <Tabs defaultValue="summary" className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <TabsList className="mx-1 mt-1 w-fit self-start">
+        <TabsTrigger value="summary">Summary</TabsTrigger>
+        <TabsTrigger value="metadata">Metadata</TabsTrigger>
+        <TabsTrigger value="comments">Comments</TabsTrigger>
+      </TabsList>
+      <TabsContent value="summary" className="min-h-0 min-w-0 flex-1 overflow-auto p-3 text-sm">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className={cn('activity-family-tag', familyTagClass(familyFor(event)))}>
+            {familyFor(event) === 'all' ? event.event_type.replace(/_/g, ' ') : familyFor(event)}
+          </span>
+          <span className="text-xs text-muted-foreground">{formatFullDate(event.created_at)}</span>
+        </div>
+        <p className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-foreground">
+          {activityEntryText(event)}
+        </p>
+        <dl className="mt-3 grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+          {event.entity_type && (
+            <>
+              <dt className="text-muted-foreground">Entity type</dt>
+              <dd className="min-w-0 break-all font-mono">{event.entity_type}</dd>
+            </>
+          )}
+          {event.entity_id && (
+            <>
+              <dt className="text-muted-foreground">Entity id</dt>
+              <dd className="min-w-0 break-all font-mono">{event.entity_id}</dd>
+            </>
+          )}
+          {event.user_id && (
+            <>
+              <dt className="text-muted-foreground">User id</dt>
+              <dd className="min-w-0 break-all font-mono">{event.user_id}</dd>
+            </>
+          )}
+        </dl>
+      </TabsContent>
+      <TabsContent value="metadata" className="min-h-0 min-w-0 flex-1 overflow-auto p-3 text-sm">
+        {hasActivityMetadata(event.metadata) ? (
+          <pre className="max-h-full min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/40 p-2 text-[11px] leading-relaxed">
+            {activityMetadataText(event.metadata)}
+          </pre>
+        ) : (
+          <p className="text-xs text-muted-foreground">No metadata on this event.</p>
+        )}
+      </TabsContent>
+      <TabsContent value="comments" className="min-h-0 min-w-0 flex-1 overflow-auto p-3 text-sm">
+        <ActivityEventComments eventId={event.id} workspaceId={workspaceId} currentUserId={currentUserId} />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
 export const ActivityWindowContent = React.memo(function ActivityWindowContent({ events, loading, workspaceId, currentUserId }: ActivityWindowContentProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = usePersistedPreference(
@@ -340,14 +501,33 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
     [events, activeFilter],
   );
 
+  // Live search across every row's label text, the event type, and its metadata —
+  // the trajectory screen's ledger search lifted straight onto the activity feed.
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchScoped = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return filtered;
+    return filtered.filter((event) => {
+      const haystack = [
+        activityEntryText(event),
+        String(event.event_type),
+        String(event.entity_type ?? ''),
+        String(event.entity_id ?? ''),
+        activityMetadataText(event.metadata),
+      ].join('\n').toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [filtered, searchQuery]);
+
   // Collapsed by default: the feed is a firehose, and a hundred equal-weight
   // rows made the newest one indistinguishable from the hundredth.
   const [expanded, setExpanded] = useState(false);
   // A new tab is a new list — carrying "expanded" across would dump the reader
-  // into a hundred rows of a category they just opened.
-  useEffect(() => { setExpanded(false); }, [activeFilter]);
+  // into a hundred rows of a category they just opened, and carrying a search
+  // whose terms matched nothing under the new tab would look broken.
+  useEffect(() => { setExpanded(false); setSearchQuery(''); }, [activeFilter]);
 
-  const windowed = useMemo(() => takeActivityWindow(filtered, expanded), [filtered, expanded]);
+  const windowed = useMemo(() => takeActivityWindow(searchScoped, expanded), [searchScoped, expanded]);
   const days = useMemo(() => groupByDay(windowed), [windowed]);
   // id -> position in the flat window. groupByDay preserves order but splits the
   // list, so without this the ramp would restart at full strength on every day
@@ -356,12 +536,12 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
     () => new Map(windowed.map((event, index) => [event.id, index])),
     [windowed],
   );
-  const hiddenCount = hasHiddenActivity(filtered.length, expanded) ? filtered.length - windowed.length : 0;
+  const hiddenCount = hasHiddenActivity(searchScoped.length, expanded) ? searchScoped.length - windowed.length : 0;
 
   // Which row (if any) should play the enter animation. Tracked in a ref so
   // seeing it never triggers another render, and compared against the id rather
   // than the length — a filter change alters the count without anything arriving.
-  const newestId = filtered.length > 0 ? filtered[0].id : null;
+  const newestId = searchScoped.length > 0 ? searchScoped[0].id : null;
   const previousNewestId = useRef<string | null>(null);
   const enteringId = shouldAnimateEntry(newestId ?? '', newestId, previousNewestId.current) ? newestId : null;
   useEffect(() => { previousNewestId.current = newestId; }, [newestId]);
@@ -399,11 +579,30 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {tabs.length > 1 && (
-        <div className="flex shrink-0 items-center border-b border-border/60 px-2 py-1.5">
+      {/* Trajectory-style sticky toolbar: family fold filters on the left, a
+          live ledger search pinned to the right. */}
+      <div className="activity-tray-toolbar">
+        {tabs.length > 1 && (
           <ActivityFilterTabs tabs={tabs} filter={activeFilter} counts={counts} onChange={setFilter} />
+        )}
+        <div className="activity-tray-search">
+          <Search className="size-3 shrink-0" aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="Search activity"
+            placeholder="Search…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.currentTarget.value)}
+          />
         </div>
-      )}
+      </div>
+
+      {/* The segmented overview strip — the trajectory screen's headline visual.
+          Rendered over the visible WINDOW (not the whole loaded page): the strip
+          maps one segment to one row you can actually see in the list, and a
+          workspace with ten thousand events does not create ten thousand flex
+          buttons. */}
+      <ActivityTimeline events={windowed} selectedId={selectedId} onSelect={(id) => setSelectedId(selectedId === id ? null : id)} />
 
       <div className="flex min-h-0 flex-1">
       {/* Radix wraps viewport content in a `display: table` div, which sizes to the
@@ -465,11 +664,11 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
                       <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">{formatClock(event.created_at)}</span>
                       <span className="shrink-0 text-muted-foreground [&_svg]:size-4">{iconFor(event.event_type)}</span>
                       <span className="min-w-0 flex-1 truncate">{activityEntryLabel(event)}</span>
-                      {/* Shrinkable, not fixed: the label absorbs every pixel of
-                          shrink first, so this only gives at the 320px window
-                          minimum — where the alternative is the badge hanging
-                          outside the pane. */}
-                      <Badge variant="secondary" className="min-w-0 shrink overflow-hidden text-[11px]">{event.event_type.replace(/_/g, ' ')}</Badge>
+                      {/* Trajectory-style family tag: a coloured block naming the
+                          kind of work, the same grammar the timeline strip uses. */}
+                      <span className={cn('activity-family-tag shrink-0', familyTagClass(familyFor(event)))}>
+                        {familyFor(event) === 'all' ? event.event_type.replace(/_/g, ' ') : familyFor(event)}
+                      </span>
                     </button>
                     </div>
                   );
@@ -500,53 +699,10 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
               <X />
             </Button>
           </div>
-          <ScrollArea className="min-h-0 min-w-0 flex-1 [&_[data-radix-scroll-area-viewport]>div]:!block">
-            {/* min-w-0 all the way down: every child here is a flex item, and a flex
-                item's default `min-width: auto` lets nowrap/pre content push the
-                column wider than the pane instead of wrapping inside it. */}
-            <div className="flex min-w-0 flex-col gap-3 p-3 text-sm">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <Badge variant="secondary">{selectedEvent.event_type.replace(/_/g, ' ')}</Badge>
-                <span className="text-xs text-muted-foreground">{formatFullDate(selectedEvent.created_at)}</span>
-              </div>
-              {/* Ids wrap rather than truncate: a uuid you can only see two thirds
-                  of is worth no more than one you cannot see at all. */}
-              <dl className="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-                {selectedEvent.entity_type && (
-                  <>
-                    <dt className="text-muted-foreground">Entity type</dt>
-                    <dd className="min-w-0 break-all font-mono">{selectedEvent.entity_type}</dd>
-                  </>
-                )}
-                {selectedEvent.entity_id && (
-                  <>
-                    <dt className="text-muted-foreground">Entity id</dt>
-                    <dd className="min-w-0 break-all font-mono">{selectedEvent.entity_id}</dd>
-                  </>
-                )}
-                {selectedEvent.user_id && (
-                  <>
-                    <dt className="text-muted-foreground">User id</dt>
-                    <dd className="min-w-0 break-all font-mono">{selectedEvent.user_id}</dd>
-                  </>
-                )}
-              </dl>
-              {hasActivityMetadata(selectedEvent.metadata) && (
-                <div className="min-w-0">
-                  <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Metadata</div>
-                  {/* Wrapped AND capped: pre-wrap so a long value folds into the pane,
-                      break-words so an unbroken uuid cannot widen it, max-h so a big
-                      blob scrolls itself instead of pushing the comments off screen. */}
-                  <pre className="max-h-64 min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/40 p-2 text-[11px] leading-relaxed">
-                    {activityMetadataText(selectedEvent.metadata)}
-                  </pre>
-                </div>
-              )}
-              <div className="min-w-0 border-t pt-3">
-                <ActivityEventComments key={selectedEvent.id} eventId={selectedEvent.id} workspaceId={workspaceId} currentUserId={currentUserId} />
-              </div>
-            </div>
-          </ScrollArea>
+          {/* Tabbed inspector, trajectory-style: the selected event is shown as
+              a structured set of panes (Summary / Metadata / Comments) instead of
+              one long scrolling column. */}
+          <ActivityDetailTabs event={selectedEvent} workspaceId={workspaceId} currentUserId={currentUserId} />
         </div>
       )}
       </div>
