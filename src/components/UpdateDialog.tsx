@@ -1,4 +1,4 @@
-import { SparklesIcon, RocketIcon, ChevronRight } from 'lucide-react';
+import { SparklesIcon, RocketIcon, ChevronRight, X } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -57,12 +57,18 @@ export function UpdateDialog({ open, onOpenChange, notes, mode, onReload }: Upda
               <SparklesIcon className="size-4 text-primary" />
             )}
             <DialogTitle>{available ? 'A new version is available' : "What's new"}</DialogTitle>
-            {/* pr-6 clears the Dialog's own close button, which is absolutely
-                positioned in this corner — without it the build stamp runs
-                underneath the x and both become unreadable. */}
-            <span className="ml-auto pr-6 text-xs font-normal text-muted-foreground/70">
+            {/* pr-10 clears space for the close button and build stamp */}
+            <span className="ml-auto pr-10 text-xs font-normal text-muted-foreground/70">
               v{APP_VERSION} · {BUILD_ID.slice(0, 7)}
             </span>
+            <button
+              onClick={() => onOpenChange(false)}
+              className="absolute right-3 top-3 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none"
+              aria-label="Close"
+              type="button"
+            >
+              <X className="size-4" />
+            </button>
           </div>
           <DialogDescription>
             {available

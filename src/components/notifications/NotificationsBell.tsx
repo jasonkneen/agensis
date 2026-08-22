@@ -14,10 +14,12 @@ import { useActivity } from '../../hooks/useActivity';
 //  - connection: an agent connect/disconnect event
 //  - activity: any other important workspace event (new chat/doc/task, task done,
 //    memory added, comment, agent message) sourced from the activity feed.
+//  - update: app update available (shows in the bell with "Reload now" action)
 type NotificationItem =
   | { kind: 'approval'; id: string; handle: string; label: string; isNew: boolean; at: string }
   | { kind: 'connection'; id: string; handle: string; connected: boolean; at: string }
-  | { kind: 'activity'; id: string; title: string; tone: NotificationTone; at: string };
+  | { kind: 'activity'; id: string; title: string; tone: NotificationTone; at: string }
+  | { kind: 'update'; id: string; mode: 'available' | 'updated'; hasUnseenNotes: boolean; at: string; onReload?: () => void };
 
 type NotificationTone = 'online' | 'offline' | 'pending' | 'info';
 
@@ -64,7 +66,14 @@ function StatusDot({ tone }: { tone: NotificationTone }) {
   );
 }
 
-export function NotificationsBell({ workspaceId, variant = 'floating' }: { workspaceId: string | null; variant?: 'floating' | 'inline' }) {
+export interface UpdateNotification {
+  open: boolean;
+  mode: 'available' | 'updated';
+  hasUnseenNotes: boolean;
+  onReload: () => void;
+}
+
+export function NotificationsBell({ workspaceId, variant = 'floating', updateNotif }: { workspaceId: string | null; variant?: 'floating' | 'inline'; updateNotif?: UpdateNotification | null }) {
   const { pending } = useAgentRegistrations(workspaceId);
   const { events } = useActivity(workspaceId);
 
@@ -109,12 +118,24 @@ export function NotificationsBell({ workspaceId, variant = 'floating' }: { works
         at: e.created_at,
       }));
 
-    // Approvals first (they need a decision), then everything else newest-first.
+    // App update notification (if available).
+    const updates: NotificationItem[] = updateNotif && updateNotif.open
+      ? [{
+        kind: 'update' as const,
+        id: 'update:pending',
+        mode: updateNotif.mode,
+        hasUnseenNotes: updateNotif.hasUnseenNotes,
+        at: new Date().toISOString(),
+        onReload: updateNotif.onReload,
+      }]
+      : [];
+
+    // Updates and approvals first (they need a decision), then everything else newest-first.
     const feed = [...connections, ...activity].sort(
       (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime(),
     );
-    return [...approvals, ...feed.slice(0, 40)];
-  }, [pending, events]);
+    return [...updates, ...approvals, ...feed.slice(0, 40)];
+  }, [pending, events, updateNotif]);
 
   // The badge counts only things that need attention — pending approvals.
   // Connection events are informational, so they never light the red badge;
@@ -200,18 +221,18 @@ export function NotificationsBell({ workspaceId, variant = 'floating' }: { works
   };
 
   const visibleItems = useMemo(
-    () => items.filter((item) => item.kind === 'approval' || !dismissed.has(item.id)),
+    () => items.filter((item) => item.kind === 'approval' || item.kind === 'update' || !dismissed.has(item.id)),
     [items, dismissed],
   );
 
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
   const filteredItems = showUnreadOnly
     ? visibleItems.filter(
-        (item) => item.kind === 'approval' || new Date(item.at).getTime() > unreadBaselineRef.current,
+        (item) => item.kind === 'approval' || item.kind === 'update' || new Date(item.at).getTime() > unreadBaselineRef.current,
       )
     : visibleItems;
 
-  const clearableIds = visibleItems.filter((item) => item.kind !== 'approval').map((item) => item.id);
+  const clearableIds = visibleItems.filter((item) => item.kind !== 'approval' && item.kind !== 'update').map((item) => item.id);
   const clearAll = () => {
     if (clearableIds.length === 0) return;
     persistDismissed(new Set([...dismissed, ...clearableIds]));
@@ -318,7 +339,9 @@ export function NotificationsBell({ workspaceId, variant = 'floating' }: { works
                       ? 'pending'
                       : item.kind === 'connection'
                         ? (item.connected ? 'online' : 'offline')
-                        : item.tone
+                        : item.kind === 'update'
+                          ? 'pending'
+                          : item.tone
                   }
                 />
                 <div className="min-w-0 flex-1">
@@ -336,6 +359,29 @@ export function NotificationsBell({ workspaceId, variant = 'floating' }: { works
                       <span className="font-medium">@{item.handle}</span>{' '}
                       <span className="text-muted-foreground">{item.connected ? 'connected' : 'disconnected'}</span>
                     </p>
+                  ) : item.kind === 'update' ? (
+                    <div className="flex flex-col gap-1">
+                      <p className="leading-snug">
+                        <span className="font-medium">
+                          {item.mode === 'available' ? 'A new version is available' : "What's new"}
+                        </span>
+                        {item.mode === 'available' && (
+                          <span className="ml-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                            Update available
+                          </span>
+                        )}
+                      </p>
+                      {item.mode === 'available' && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="w-fit text-[11px]"
+                          onClick={() => item.onReload?.()}
+                        >
+                          Reload now
+                        </Button>
+                      )}
+                    </div>
                   ) : (
                     <p className="leading-snug">{item.title}</p>
                   )}

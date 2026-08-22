@@ -669,6 +669,8 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
   handle text DEFAULT '',
   connect_token_hash text DEFAULT '',
   model text NOT NULL DEFAULT 'auto',
+  effort text NOT NULL DEFAULT 'auto'
+    CHECK (effort IN ('auto', 'low', 'medium', 'high', 'xhigh', 'max')),
   run_mode text NOT NULL DEFAULT 'builtin',
   sandbox_provider text,
   sandbox_config jsonb NOT NULL DEFAULT '{}'::jsonb,

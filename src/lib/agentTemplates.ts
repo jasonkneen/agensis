@@ -646,6 +646,7 @@ export interface StoredAgentTemplate {
   purpose: AgentPurpose;
   resourceFacets: ResourceFacet[];
   model: string;
+  effort?: string;
   runMode: AgentTemplate['runMode'];
   runtime: string;
   avatar: string;

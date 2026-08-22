@@ -41,6 +41,7 @@ import {
 import { AI_MODELS, type AgentConnection, type AgentPermissionMode, type AgentWebhook, type ChatSession, type Task, type WorkspaceAgent } from '../../types';
 import { apiAuthHeaders, apiBaseUrl, apiUrl, getSystemCapabilities, type SystemCapabilities } from '../../lib/backendClient';
 import { CODEX_MODEL_LIST_ID, modelOptionsForRuntime, modelSurvivesRuntimeChange } from '../../lib/runtimeModels';
+import { EFFORT_LEVELS } from '../../lib/effortLevels';
 import {
   SHARING_CHANNELS,
   SHARING_CHANNEL_DESCRIPTIONS,
@@ -254,6 +255,7 @@ interface AgentEditForm {
   purpose: AgentPurpose;
   resourceFacets: ResourceFacet[];
   model: string;
+  effort: string;
   runMode: 'builtin' | 'daemon' | 'sandbox' | 'external';
   /** Form select value: classic pin (`claude`|`codex`|`amp`) or unpinned `desktop`. */
   runtime: AgentFormRuntimeValue;
@@ -282,6 +284,7 @@ function agentFormUpdates(form: AgentEditForm): Partial<WorkspaceAgent> {
     purpose: normalizeAgentPurpose(form.purpose),
     resource_facets: form.purpose === 'resource' ? normalizeResourceFacets(form.resourceFacets) : [],
     model: form.model,
+    effort: form.effort,
     run_mode: form.runMode,
     metadata: agentMetadataWithRuntime(form.metadata, runtime, form.runMode, acpHarness),
     ...(form.runMode === 'sandbox' ? { sandbox_provider: form.sandboxProvider, sandbox_config: safeParseSandboxConfig(form.sandboxConfig) } : {}),
@@ -423,6 +426,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [newPurpose, setNewPurpose] = useState<AgentPurpose>('collaborator');
   const [newResourceFacets, setNewResourceFacets] = useState<ResourceFacet[]>([]);
   const [newModel, setNewModel] = useState('auto');
+  const [newEffort, setNewEffort] = useState('auto');
   const [newRunMode, setNewRunMode] = useState<'builtin' | 'daemon' | 'sandbox' | 'external'>('builtin');
   const hasDesktopLocalRuntime = typeof window !== 'undefined' && Boolean(window.electronAPI?.localRuntime);
   const [localRuntimeCatalog, setLocalRuntimeCatalog] = useState<Array<{
@@ -644,6 +648,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     setNewPurpose('collaborator');
     setNewResourceFacets([]);
     setNewModel('auto');
+    setNewEffort('auto');
     setNewRunMode('builtin');
     const preferredHarness = localRuntimeCatalog.find(h => h.available) || localRuntimeCatalog[0];
     setNewRuntime(
@@ -681,6 +686,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         // ambient behaviour.
         ambient_replies: defaultAmbientRepliesForPurpose(newPurpose),
         model: newModel,
+        effort: newEffort,
         run_mode: newRunMode,
         metadata: (() => {
           const { runtime, acpHarness } = resolveFormRuntimeSelection(newRuntime);
@@ -724,6 +730,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
     );
     const stored = 'stored' in tpl ? tpl.stored : undefined;
     setNewModel(stored?.model || 'auto');
+    setNewEffort(stored?.effort || 'auto');
     setNewRunMode(tpl.runMode);
     if (tpl.runtime && tpl.runtime !== 'desktop') {
       setNewRuntime(tpl.runtime);
@@ -1050,6 +1057,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 purpose={newPurpose}
                 resourceFacets={newResourceFacets}
                 model={newModel}
+                effort={newEffort}
                 runMode={newRunMode}
                 runtime={newRuntime}
                 runtimeChoices={runtimeChoices}
@@ -1076,6 +1084,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 onPurposeChange={setNewPurpose}
                 onResourceFacetsChange={setNewResourceFacets}
                 onModelChange={setNewModel}
+                onEffortChange={setNewEffort}
                 onRunModeChange={(value) => {
                   setNewRunMode(value);
                   // Desktop app: Relay defaults to a local ACP harness, not a Claude pin.
@@ -1447,6 +1456,7 @@ function AgentFormActionBar({
   runtimeChoices,
   model,
   modelChoices,
+  effort,
   canSubmit,
   submitting,
   submitLabel,
@@ -1454,6 +1464,7 @@ function AgentFormActionBar({
   onRunModeChange,
   onRuntimeChange,
   onModelChange,
+  onEffortChange,
   onCancel,
   onSubmit,
 }: {
@@ -1466,6 +1477,7 @@ function AgentFormActionBar({
   runtimeChoices: AgentRuntimeChoice[];
   model: string;
   modelChoices: { id: string; label: string }[];
+  effort: string;
   canSubmit: boolean;
   submitting: boolean;
   submitLabel: string;
@@ -1473,6 +1485,7 @@ function AgentFormActionBar({
   onRunModeChange: (value: 'builtin' | 'daemon' | 'sandbox' | 'external') => void;
   onRuntimeChange: (value: AgentFormRuntimeValue) => void;
   onModelChange: (value: string) => void;
+  onEffortChange: (value: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
 }) {
@@ -1586,6 +1599,20 @@ function AgentFormActionBar({
           ))}
         </NativeSelect>
       )}
+      <NativeSelect
+        value={effort}
+        onChange={e => onEffortChange(e.target.value)}
+        size="sm"
+        className="max-w-48"
+        aria-label="Reasoning effort level"
+        title="How much reasoning effort to apply (when supported by the model)"
+      >
+        {EFFORT_LEVELS.map(level => (
+          <NativeSelectOption key={level.id} value={level.id}>
+            {level.label} — {level.description}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
       <div className="flex-1" />
       <Button type="button" variant="outline" size="sm" onClick={onCancel}>
         <X data-icon="inline-start" />
@@ -1614,6 +1641,7 @@ function AgentForm({
   purpose,
   resourceFacets,
   model,
+  effort,
   runMode,
   runtime,
   runtimeChoices,
@@ -1634,6 +1662,7 @@ function AgentForm({
   onPurposeChange,
   onResourceFacetsChange,
   onModelChange,
+  onEffortChange,
   onRunModeChange,
   onRuntimeChange,
   sandboxProvider,
@@ -1661,6 +1690,7 @@ function AgentForm({
   purpose: AgentPurpose;
   resourceFacets: ResourceFacet[];
   model: string;
+  effort: string;
   runMode: 'builtin' | 'daemon' | 'sandbox' | 'external';
   runtime: AgentFormRuntimeValue;
   runtimeChoices: AgentRuntimeChoice[];
@@ -1685,6 +1715,7 @@ function AgentForm({
   onPurposeChange: (value: AgentPurpose) => void;
   onResourceFacetsChange: (value: ResourceFacet[]) => void;
   onModelChange: (value: string) => void;
+  onEffortChange: (value: string) => void;
   onRunModeChange: (value: 'builtin' | 'daemon' | 'sandbox' | 'external') => void;
   onRuntimeChange: (value: AgentFormRuntimeValue) => void;
   onSandboxProviderChange: (value: string) => void;
@@ -1761,6 +1792,7 @@ function AgentForm({
     runtimeChoices,
     model,
     modelChoices: options,
+    effort,
     canSubmit,
     submitting,
     submitLabel,
@@ -1777,6 +1809,7 @@ function AgentForm({
       if (!modelSurvivesRuntimeChange(model, nextRuntime)) onModelChange('auto');
     },
     onModelChange,
+    onEffortChange,
     onCancel,
     onSubmit,
   };
@@ -2153,6 +2186,7 @@ function AgentDetailPane({
   const [editPurpose, setEditPurpose] = useState<AgentPurpose>('collaborator');
   const [editResourceFacets, setEditResourceFacets] = useState<ResourceFacet[]>([]);
   const [editModel, setEditModel] = useState('auto');
+  const [editEffort, setEditEffort] = useState('auto');
   const [editRunMode, setEditRunMode] = useState<'builtin' | 'daemon' | 'sandbox' | 'external'>('builtin');
   const [editRuntime, setEditRuntime] = useState<AgentFormRuntimeValue>('claude');
   const [editRuntimeSelectionDirty, setEditRuntimeSelectionDirty] = useState(false);
@@ -2216,6 +2250,7 @@ function AgentDetailPane({
         ? normalizeResourceFacets(agent.resource_facets)
         : [],
       model: agent.model || 'auto',
+      effort: agent.effort || 'auto',
       runMode: (agent.run_mode === 'daemon'
         ? 'daemon'
         : agent.run_mode === 'sandbox'
@@ -2242,6 +2277,7 @@ function AgentDetailPane({
     setEditPurpose(seed.purpose);
     setEditResourceFacets(seed.resourceFacets);
     setEditModel(seed.model);
+    setEditEffort(seed.effort);
     setEditRunMode(seed.runMode);
     setEditRuntime(seed.runtime);
     setEditRuntimeSelectionDirty(false);
@@ -2308,6 +2344,7 @@ function AgentDetailPane({
       purpose: editPurpose,
       resourceFacets: editResourceFacets,
       model: editModel,
+      effort: editEffort,
       runMode: editRunMode,
       runtime: editRuntime,
       metadata: { ...(agent.metadata || {}) },
@@ -2370,6 +2407,7 @@ function AgentDetailPane({
             purpose={editPurpose}
             resourceFacets={editResourceFacets}
             model={editModel}
+            effort={editEffort}
             runMode={editRunMode}
             runtime={editRuntime}
             runtimeChoices={runtimeChoices}
@@ -2396,6 +2434,7 @@ function AgentDetailPane({
             onPurposeChange={setEditPurpose}
             onResourceFacetsChange={setEditResourceFacets}
             onModelChange={setEditModel}
+            onEffortChange={setEditEffort}
             onRunModeChange={(value) => {
               setEditRunMode(value);
               setEditRuntimeSelectionDirty(true);
@@ -2481,6 +2520,9 @@ function AgentDetailPane({
                 acpRunning={isConnected || localRuntimeRunning}
                 onChangeModel={async (modelId) => {
                   onUpdateAgent(agent.id, { model: modelId });
+                }}
+                onChangeEffort={async (effort) => {
+                  onUpdateAgent(agent.id, { effort });
                 }}
                 onRestartAcp={hasDesktopLocalRuntimeApi && localRuntimeRunning
                   ? async (modelId) => {
@@ -3236,6 +3278,9 @@ function AgentConnectDialog({
                       disabled={localBusy}
                       onChangeModel={async (modelId) => {
                         onUpdateAgent(agent.id, { model: modelId });
+                      }}
+                      onChangeEffort={async (effort) => {
+                        onUpdateAgent(agent.id, { effort });
                       }}
                       onRestartAcp={localRunning
                         ? async (modelId) => {

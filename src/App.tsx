@@ -709,6 +709,7 @@ function AppContent() {
   const [drawingActive, setDrawingActive] = useState(false);
   const [showCanvasGrid, setShowCanvasGrid] = useState(false);
   const [canvasGridBackground] = useState(() => CANVAS_BACKGROUNDS[Math.floor(Math.random() * CANVAS_BACKGROUNDS.length)]);
+  const [updateNotification, setUpdateNotification] = useState<{ open: boolean; mode: 'available' | 'updated'; hasUnseenNotes: boolean; onReload: () => void } | null>(null);
   const activeSceneRef = useRef<HTMLDivElement>(null);
   const setupCallbackInFlightRef = useRef(false);
 
@@ -2504,7 +2505,7 @@ function AppContent() {
                 onInvite={handleOpenUsers}
               />
             )}
-            notificationsSlot={<NotificationsBell workspaceId={activeWorkspaceId || null} variant="inline" />}
+            notificationsSlot={<NotificationsBell workspaceId={activeWorkspaceId || null} variant="inline" updateNotif={updateNotification} />}
             presenceSlot={(
               <PresenceRoster
                 users={workspacePresenceUsers}
@@ -2939,7 +2940,7 @@ function AppContent() {
         contextLabel={viewedLayer.name || activeWorkspace?.name || ''}
       />
       <HuddleDock />
-      <AppUpdateManager />
+      <AppUpdateManager onNotificationChange={setUpdateNotification} />
       {/* Renders nothing unless an owner broadcast for the 'dialog' surface is
           waiting; closing it is the server-side dismissal. */}
       <OwnerMessageDialog />

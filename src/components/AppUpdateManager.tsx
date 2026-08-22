@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { onDeployPublished, type DeployPublishedPayload } from '@/lib/backendClient';
 import { UpdateDialog } from '@/components/UpdateDialog';
 import { fetchReleaseNotes, type ReleaseNote } from '@/lib/releaseNotes';
+import { type UpdateNotification } from '@/components/notifications/NotificationsBell';
 import {
   BUILD_ID,
   decideUpdateState,
@@ -12,6 +13,7 @@ import {
   readLastSeenRelease,
   writeLastSeenRelease,
 } from '@/lib/appVersion';
+
 
 // Owns the whole "what's new" update surface. Mount once, near the app root.
 //
@@ -36,10 +38,15 @@ import {
  * agensis, here's what changed" was appearing on the sign-in page, to someone who
  * has not signed in and has no idea what the product is.
  */
-export function AppUpdateManager({ swOnly = false }: { swOnly?: boolean } = {}) {
+export interface AppUpdateManagerRef {
+  getUpdateNotification: () => UpdateNotification | null;
+}
+
+export function AppUpdateManager({ swOnly = false, onRef, onNotificationChange }: { swOnly?: boolean; onRef?: (ref: AppUpdateManagerRef) => void; onNotificationChange?: (notif: UpdateNotification | null) => void } = {}) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<'available' | 'updated'>('available');
   const [notes, setNotes] = useState<ReleaseNote[]>([]);
+  const [hasUnseenNotes, setHasUnseenNotes] = useState(false);
   const notesLoaded = useRef(false);
   const notesRef = useRef<ReleaseNote[]>([]);
   const lastCommit = useRef<string | null>(null);
@@ -74,6 +81,26 @@ export function AppUpdateManager({ swOnly = false }: { swOnly?: boolean } = {}) 
     url.searchParams.set('agensisUpdate', BUILD_ID || String(Date.now()));
     window.location.replace(url.href);
   }, [updateServiceWorker]);
+
+  // Expose update notification state for the notifications bell
+  useEffect(() => {
+    const notif = open ? {
+      open: true,
+      mode,
+      hasUnseenNotes,
+      onReload: reload,
+    } : null;
+
+    if (onRef) {
+      onRef({
+        getUpdateNotification: () => notif,
+      });
+    }
+
+    if (onNotificationChange) {
+      onNotificationChange(notif);
+    }
+  }, [open, mode, hasUnseenNotes, reload, onRef, onNotificationChange]);
 
   // A new build is live. Whether there is anything to READ about it is a
   // separate question, and conflating the two is what made this nag.
@@ -117,7 +144,9 @@ export function AppUpdateManager({ swOnly = false }: { swOnly?: boolean } = {}) 
       swRegistration.current?.update().catch(() => {});
       const loaded = await ensureNotes();
       const latest = latestReleaseId(loaded);
-      showAvailableToast(Boolean(latest) && readLastSeenRelease() !== latest);
+      const unseen = Boolean(latest) && readLastSeenRelease() !== latest;
+      setHasUnseenNotes(unseen);
+      showAvailableToast(unseen);
     });
     return unsubscribe;
   }, [ensureNotes, showAvailableToast, swOnly]);
@@ -125,6 +154,10 @@ export function AppUpdateManager({ swOnly = false }: { swOnly?: boolean } = {}) 
   // Triggers 2 & 3: version check on cold load.
   useEffect(() => {
     if (swOnly) return;
+    // In dev mode (BUILD_ID starts with 'dev'), skip the entire update check.
+    // fetchRemoteVersion() already returns null for dev builds, but that doesn't
+    // prevent the release-note logic from firing. Fail fast here instead.
+    if (BUILD_ID.startsWith('dev')) return;
     let cancelled = false;
     (async () => {
       // Notes first: the "what's new" recap is keyed on the newest note, so the
@@ -140,7 +173,9 @@ export function AppUpdateManager({ swOnly = false }: { swOnly?: boolean } = {}) 
         lastSeenRelease: readLastSeenRelease(),
       });
       if (state === 'available') {
-        showAvailableToast(Boolean(latestRelease) && readLastSeenRelease() !== latestRelease);
+        const unseen = Boolean(latestRelease) && readLastSeenRelease() !== latestRelease;
+        setHasUnseenNotes(unseen);
+        showAvailableToast(unseen);
       } else if (state === 'updated') {
         setMode('updated');
         setOpen(true);
@@ -156,6 +191,20 @@ export function AppUpdateManager({ swOnly = false }: { swOnly?: boolean } = {}) 
       cancelled = true;
     };
   }, [ensureNotes, showAvailableToast, swOnly]);
+
+  // Expose the notification state to parent via callback and ref
+  useEffect(() => {
+    if (open) {
+      onNotificationChange?.({
+        open: true,
+        mode,
+        hasUnseenNotes,
+        onReload: reload,
+      });
+    } else {
+      onNotificationChange?.(null);
+    }
+  }, [open, mode, hasUnseenNotes, reload, onNotificationChange]);
 
   // Nothing to render: the SW registration above is the whole job here.
   if (swOnly) return null;

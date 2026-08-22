@@ -1,9 +1,9 @@
 /**
- * Compact per-agent model control (same role as desktop hosts that put model
+ * Compact per-agent model and effort level control (same role as desktop hosts that put model
  * on the agent, not in the human chat composer).
  *
- * - Lists models for the agent's run mode + execution runtime.
- * - Persists `agent.model` via the parent update callback.
+ * - Lists models and effort levels for the agent's run mode + execution runtime.
+ * - Persists `agent.model` and `agent.effort` via parent update callbacks.
  * - If a local ACP session is running, shows "restart to apply" — we do not
  *   have a mid-turn switch_model wire yet; restart re-mints and restarts ACP.
  */
@@ -11,6 +11,7 @@ import { useMemo, useState } from 'react';
 import { ChevronDown, Sparkles, Zap } from 'lucide-react';
 import type { WorkspaceAgent } from '../../types';
 import { modelOptionsForRuntime } from '../../lib/runtimeModels';
+import { EFFORT_LEVELS } from '../../lib/effortLevels';
 import {
   agentModelPickerCanSwitch,
   agentAcpHarnessFromMetadata,
@@ -39,6 +40,7 @@ function runModeOf(agent: WorkspaceAgent) {
 export function AgentModelPicker({
   agent,
   onChangeModel,
+  onChangeEffort,
   acpRunning = false,
   onRestartAcp,
   className,
@@ -47,6 +49,8 @@ export function AgentModelPicker({
   agent: WorkspaceAgent;
   /** Persist the new model on the agent row. */
   onChangeModel: (modelId: string) => void | Promise<unknown>;
+  /** Persist the new effort level on the agent row. */
+  onChangeEffort?: (effort: string) => void | Promise<unknown>;
   /** True when desktop ACP (or a live daemon connection) is active for this agent. */
   acpRunning?: boolean;
   /** Optional: re-Start ACP so the new model is picked up. Receives the model id to apply. */
@@ -57,6 +61,7 @@ export function AgentModelPicker({
   const [saving, setSaving] = useState(false);
   const [needsRestart, setNeedsRestart] = useState(false);
   const [pendingModel, setPendingModel] = useState<string | null>(null);
+  const [pendingEffort, setPendingEffort] = useState<string | null>(null);
   const [error, setError] = useState('');
 
   const runtime = executionRuntime(agent);
@@ -96,6 +101,22 @@ export function AgentModelPicker({
     }
   };
 
+  const handleEffortChange = async (effort: string) => {
+    if (!onChangeEffort || effort === (agent.effort || 'auto') || disabled) return;
+    setSaving(true);
+    setError('');
+    setPendingEffort(effort);
+    try {
+      await onChangeEffort(effort);
+      setPendingEffort(null);
+    } catch (err) {
+      setPendingEffort(null);
+      setError(err instanceof Error ? err.message : 'Could not update effort');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleRestart = async () => {
     if (!onRestartAcp) return;
     setSaving(true);
@@ -111,6 +132,8 @@ export function AgentModelPicker({
     }
   };
 
+  const currentEffort = pendingEffort ?? (agent.effort || "auto");
+
   return (
     <span className={cn('inline-flex max-w-full flex-wrap items-center gap-1.5', className)}>
       <DropdownMenu modal={false}>
@@ -122,7 +145,7 @@ export function AgentModelPicker({
             disabled={saving || disabled || !canSwitch}
             className="h-7 max-w-full justify-start gap-1.5 rounded-full border border-border/50 bg-muted/45 px-2.5 text-xs font-medium shadow-none hover:bg-muted/70"
             aria-label={`Model for ${agent.name}`}
-            title={canSwitch ? 'Change this agent’s model' : 'This runtime chooses its own model'}
+            title={canSwitch ? "Change this agent's model" : "This runtime chooses its own model"}
           >
             {current === 'auto' ? (
               <Sparkles className="size-3.5 shrink-0 opacity-70" />
@@ -150,6 +173,37 @@ export function AgentModelPicker({
           </DropdownMenuContent>
         )}
       </DropdownMenu>
+      {onChangeEffort && (
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={saving || disabled}
+              className="h-7 max-w-full justify-start gap-1.5 rounded-full border border-border/50 bg-muted/45 px-2.5 text-xs font-medium shadow-none hover:bg-muted/70"
+              aria-label={`Effort level for ${agent.name}`}
+              title="Change this agent's reasoning effort"
+            >
+              <Sparkles className="size-3.5 shrink-0 opacity-70" />
+              <span className="min-w-0 truncate">{EFFORT_LEVELS.find(e => e.id === currentEffort)?.label || currentEffort}</span>
+              <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-48">
+            <DropdownMenuRadioGroup value={currentEffort} onValueChange={(v) => { void handleEffortChange(v); }}>
+              {EFFORT_LEVELS.map(level => (
+                <DropdownMenuRadioItem key={level.id} value={level.id} className="text-xs">
+                  <span className="flex min-w-0 flex-col gap-0.5">
+                    <span className="font-medium">{level.label}</span>
+                    <span className="text-[11px] text-muted-foreground">{level.description}</span>
+                  </span>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
       {needsRestart && acpRunning && (
         onRestartAcp ? (
           <Button

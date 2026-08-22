@@ -795,6 +795,12 @@ export interface WorkspaceAgent {
  handle?: string | null;
  model: string;
  /**
+  * Reasoning effort level for inference (when supported by the provider/model).
+  * 'auto' lets the provider choose; others map to provider-specific parameters
+  * (e.g. Claude's extended thinking budget/mode).
+  */
+ effort?: string;
+ /**
   * How this agent's turns are served (wire values). Product labels:
   * Direct (`builtin`) | Relay (`daemon`) | Connector (`external`).
   * `external` = MCP client acts as this agent via claim_job — no Relay connect flow.
