@@ -81,6 +81,8 @@ export function decideUpdateState(opts: {
   const { current, remote, latestRelease, lastSeenRelease } = opts;
   // A different build is live than the one we're running → we're stale. This one
   // IS correctly build-keyed: it's about the bundle in this tab, not the notes.
+  // Dev builds (buildId starting with 'dev-') never reach here; fetchRemoteVersion
+  // filters them out to avoid false "update available" prompts from changing timestamps.
   if (remote && remote !== current) return 'available';
   // We're on the latest bundle, and a note exists that we've never shown.
   // (lastSeenRelease === null is a first-ever visitor — record silently.)
@@ -93,6 +95,8 @@ export function decideUpdateState(opts: {
 // Fetches /version.json with cache bypassed so we always see the true latest.
 // Returns null on any failure (dev has no version.json; offline; malformed) —
 // callers treat null as "no newer version known", never as an error.
+// Also returns null in dev mode (buildId starts with 'dev-') to avoid false
+// "update available" prompts when every build gets a new timestamp.
 export async function fetchRemoteVersion(
   fetchImpl: typeof fetch = fetch,
 ): Promise<RemoteVersion | null> {
@@ -104,6 +108,9 @@ export async function fetchRemoteVersion(
     if (!res.ok) return null;
     const body = (await res.json()) as Partial<RemoteVersion> | null;
     if (!body || typeof body.buildId !== 'string' || !body.buildId) return null;
+    // In dev mode, buildId is 'dev-{timestamp}', which changes on every build.
+    // Treat dev builds as "no update available" to avoid constant nagging.
+    if (body.buildId.startsWith('dev-')) return null;
     return {
       buildId: body.buildId,
       commit: typeof body.commit === 'string' ? body.commit : null,

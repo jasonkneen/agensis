@@ -2,6 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Captions, CaptionsOff, ChevronDown, Headphones, Radio, Volume2, VolumeX, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { CHROME_DEPTH } from '@/lib/chromeDepth';
 import {
   buildDockParticipants,
@@ -78,6 +88,7 @@ export function HuddleDock() {
   // Which agent hears you. Pure UI state for THIS call: nothing is persisted,
   // because "who am I talking to right now" is not a property of the channel.
   const [activeAgentId, setActiveAgentId] = useState('');
+  const [showLeaveDialog, setShowLeaveDialog] = useState(false);
 
   const session = dock?.session ?? null;
   const state = session?.state ?? null;
@@ -246,6 +257,11 @@ export function HuddleDock() {
   dockRef.current = dock;
 
   const handleLeave = useCallback(() => {
+    setShowLeaveDialog(true);
+  }, []);
+
+  const confirmLeave = useCallback(() => {
+    setShowLeaveDialog(false);
     // Posts /leave for this connection epoch, so presence is cleaned up now
     // rather than by the 150s reaper. Dropping the connection unmounts
     // HuddleRoom, and unmounting it is what disconnects LiveKit.
@@ -475,6 +491,23 @@ export function HuddleDock() {
           </HuddleRoom>
         ) : body}
       </HuddleSessionContext.Provider>
+
+      <AlertDialog open={showLeaveDialog} onOpenChange={setShowLeaveDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Leave huddle?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You're about to leave the huddle in {dock.target.title}. You'll stop hearing the conversation and your microphone will disconnect.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmLeave} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Leave Huddle
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </aside>
   );
 }

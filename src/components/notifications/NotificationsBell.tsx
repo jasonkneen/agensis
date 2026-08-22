@@ -243,7 +243,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating' }: { works
             <>
               <span
                 aria-hidden
-                className="pointer-events-none absolute inset-0 rounded-full ring-2 ring-emerald-400/60 animate-ping"
+                className="pointer-events-none absolute inset-0 rounded-full ring-2 ring-emerald-400/60"
               />
               {badgeCount === 0 && (
                 <span
