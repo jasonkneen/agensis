@@ -46,13 +46,22 @@ const SESSION_ID = 'sess-1';
 const AGENT_ID = 'agent-1';
 const HUMAN_ID = 'user-1';
 
+// THE FIXTURES ARE THE PRODUCTION SHAPE, MEASURED, NOT AN IDEALISED ONE.
+//
+// The first version of this file set `created_by: HUMAN_ID` on the job, which
+// looked reasonable and was wrong: on the daemon lane agent_jobs.created_by is
+// ALWAYS null (runAgentTurn's createdBy defaults to null and the chat dispatch
+// path never passes it — 12 of 12 most recent live jobs, zero with a value).
+// The scan required the column, so it matched nothing in production while every
+// test here passed. The default below is null on purpose so no test can drift
+// back into asserting against data that does not occur.
 function jobRow(over = {}) {
   return {
     id: JOB_ID,
     workspace_id: WS,
     agent_id: AGENT_ID,
     session_id: SESSION_ID,
-    created_by: HUMAN_ID,
+    created_by: null,
     metadata: { lastSeenMessageId: 'msg-1', mode: 'daemon' },
     session_title: 'testtest',
     session_folder: '',
@@ -61,11 +70,15 @@ function jobRow(over = {}) {
   };
 }
 
+// Likewise measured: a human message from the browser carries sender_kind
+// 'user' (not '') and sender_id = an app_users id, which loadSeedMessage
+// resolves to author_id via the join.
 function seedRow(over = {}) {
   return {
     id: 'msg-1',
     content: '@claude please migrate the billing tables and backfill the old rows',
-    sender_kind: '',
+    sender_kind: 'user',
+    author_id: HUMAN_ID,
     deleted_at: null,
     thread_task_id: null,
     ...over,
@@ -116,7 +129,8 @@ test('a job still running past the threshold becomes an in-progress task', async
   assert.equal(calls.inserts.length, 1);
   const [workspaceId, createdBy, assigneeId, title, description, sourceId, originJobId] = calls.inserts[0];
   assert.equal(workspaceId, WS);
-  // Attributed to the human who asked, assigned to the agent that is answering.
+  // Attributed to the human who asked — resolved from the SEED MESSAGE, since
+  // the job row's own created_by is null on the daemon lane (see jobRow).
   assert.equal(createdBy, HUMAN_ID);
   assert.equal(assigneeId, AGENT_ID);
   // The back-link that makes the existing "Open chat" button work on this row.
@@ -147,6 +161,55 @@ test('a duplicate insert (another machine won the race) yields no task and no fa
   assert.equal(created.length, 0);
   assert.equal(calls.inserts.length, 1);
   assert.equal(published.length, 0);
+});
+
+// --- 1b. attribution, the bug that shipped ----------------------------------
+
+test('a job with created_by NULL is still captured — the real daemon shape', async () => {
+  // This is the exact row production produces, and the version that shipped
+  // matched none of them. Asserted explicitly rather than relying on the
+  // fixture default, so making jobRow "nicer" later cannot hide it again.
+  const { capture, calls } = makeCapture({ jobs: [jobRow({ created_by: null })] });
+  const created = await capture.captureLongRunningChatTasks();
+  assert.equal(created.length, 1, 'a null created_by job was skipped');
+  assert.equal(calls.inserts[0][1], HUMAN_ID, 'created_by did not come from the seed message');
+});
+
+test('the seed author wins over the job row, and the job row is the fallback', async () => {
+  // Preferring job.created_by would put null in every captured row.
+  const a = makeCapture({ jobs: [jobRow({ created_by: 'stale-user' })] });
+  await a.capture.captureLongRunningChatTasks();
+  assert.equal(a.calls.inserts[0][1], HUMAN_ID);
+
+  // A sender we cannot resolve to an app_users row (a bridge's Telegram id)
+  // falls back rather than dropping the capture.
+  const b = makeCapture({
+    jobs: [jobRow({ created_by: 'job-user' })],
+    seed: seedRow({ author_id: null }),
+  });
+  await b.capture.captureLongRunningChatTasks();
+  assert.equal(b.calls.inserts[0][1], 'job-user');
+});
+
+test('an unresolvable author does not block the capture', async () => {
+  const { capture, calls } = makeCapture({
+    jobs: [jobRow({ created_by: null })],
+    seed: seedRow({ author_id: null, sender_kind: 'bridge' }),
+  });
+  const created = await capture.captureLongRunningChatTasks();
+  assert.equal(created.length, 1);
+  assert.equal(calls.inserts[0][1], null);
+});
+
+test('the seed lookup resolves the author through app_users, uuid-safely', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'chat-task-capture.cjs'), 'utf8');
+  const select = source.slice(source.indexOf('select m.id, m.content'), source.indexOf('limit 1'));
+  assert.match(select, /author\.id as author_id/);
+  // messages.sender_id is TEXT and a bridge fills it with a Telegram id;
+  // tasks.created_by is uuid. Without the shape guard this cast throws 22P02
+  // and the whole sweep logs a failure for every bridge message.
+  assert.match(select, /m\.sender_id ~ '\^\[0-9a-fA-F-\]\{36\}\$'/);
+  assert.match(select, /author\.id = m\.sender_id::uuid/);
 });
 
 // --- 2. the title ----------------------------------------------------------
@@ -247,12 +310,15 @@ test('a spoken huddle turn is conversation however long it runs', async () => {
   assert.equal(calls.inserts.length, 0);
 });
 
-test('the candidate scan excludes farm jobs and jobs with no human', () => {
+test('the candidate scan excludes farm jobs but does NOT require job.created_by', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'chat-task-capture.cjs'), 'utf8');
   const select = source.slice(source.indexOf('select j.id'), source.indexOf('order by j.started_at'));
   assert.match(select, /coalesce\(j\.metadata->>'mode', ''\) <> 'farm'/);
-  assert.match(select, /j\.created_by is not null/);
   assert.match(select, /j\.status = 'running'/);
+  // The regression this whole file exists to prevent a second time. Requiring
+  // agent_jobs.created_by matched 0 of 12 live jobs; the human comes from the
+  // seed message instead.
+  assert.doesNotMatch(select, /j\.created_by is not null/);
   // The threshold is what makes this "not conversational" — measured from
   // started_at, so a job that merely ticks cannot age into a task.
   assert.match(select, /j\.started_at < now\(\) - make_interval\(secs => \$1::int\)/);

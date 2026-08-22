@@ -103,10 +103,19 @@ function createChatTaskCapture(deps = {}) {
   * Candidate jobs: running long enough to count, in a real conversation, and
   * not already captured.
   *
-  * `created_by is not null` matters more than it looks. It is the human the job
-  * is attributed to, and it becomes the task's `created_by` — a task with no
-  * creator cannot be filtered by "mine", so a capture with nothing to put there
-  * is not worth making.
+  * THERE IS DELIBERATELY NO `j.created_by is not null` HERE, and that is worth a
+  * paragraph because the first version of this file had one and it made the
+  * whole feature a no-op in production.
+  *
+  * agent_jobs.created_by is null on every daemon-lane job — runAgentTurn's
+  * `createdBy` parameter defaults to null (server/builtin-turn.cjs:450) and the
+  * chat dispatch path does not pass it. Measured against the live database:
+  * 12 of the 12 most recent jobs, 0 with a value. Requiring it excluded 100% of
+  * real traffic while every mocked test (which set the field) passed.
+  *
+  * The human is taken from the SEED MESSAGE instead — see loadSeedMessage. That
+  * is the better source regardless: it is the person who actually asked, not
+  * whoever happened to be attributed to the job row.
   */
  async function selectCaptureCandidates(db) {
   return db.unsafe(
@@ -118,7 +127,6 @@ function createChatTaskCapture(deps = {}) {
         left join workspace_agents a on a.id = j.agent_id
        where j.status = 'running'
          and j.agent_id is not null
-         and j.created_by is not null
          and j.started_at is not null
          and j.started_at < now() - make_interval(secs => $1::int)
          and coalesce(j.metadata->>'mode', '') <> 'farm'
@@ -140,15 +148,25 @@ function createChatTaskCapture(deps = {}) {
   * also be assigned to the same agent — the assignment would dispatch again.
   * That is the loop this join exists to prevent, so it checks the seed message
   * AND the thread root it hangs under.
+  *
+  * `author_id` is the OTHER thing this row is for, and the one the first version
+  * got wrong by not asking for it. messages.sender_id holds the app_users id for
+  * a human-authored message; the join to app_users is what makes it safe to
+  * write into tasks.created_by, because sender_id is a plain text column that a
+  * bridge fills with a Telegram user id, and tasks.created_by is a uuid. An
+  * unmatched sender therefore yields NULL rather than a cast error.
   */
  async function loadSeedMessage(db, messageId, threadParentId) {
   if (!messageId) return null;
   const rows = await db.unsafe(
    `select m.id, m.content, m.sender_kind, m.deleted_at,
+             author.id as author_id,
              coalesce(m.source_task_id, root.source_task_id, parent.source_task_id) as thread_task_id
         from messages m
         left join messages parent on parent.id = $2
         left join messages root on root.id = m.thread_parent_id
+        left join app_users author
+               on m.sender_id ~ '^[0-9a-fA-F-]{36}$' and author.id = m.sender_id::uuid
        where m.id = $1
        limit 1`,
    [String(messageId), threadParentId ? String(threadParentId) : null],
@@ -201,7 +219,11 @@ function createChatTaskCapture(deps = {}) {
       returning *`,
    [
     job.workspace_id,
-    job.created_by,
+    // The person who ASKED, resolved from the seed message, with the job row's
+    // own attribution only as a fallback. Never the other way round: on the
+    // daemon lane job.created_by is always null, so preferring it would put null
+    // in every captured row and take "mine" filtering with it.
+    seed.author_id || job.created_by || null,
     job.agent_id,
     chatTaskTitle(content),
     chatTaskDescription({
