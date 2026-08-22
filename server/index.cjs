@@ -116,6 +116,7 @@ const { createRealtime } = require('./realtime.cjs');
 const { createAgentConnections } = require('./agent-connections.cjs');
 const { createTaskDispatch } = require('./task-dispatch.cjs');
 const { createAgentJobs } = require('./agent-jobs.cjs');
+const { createChatTaskCapture } = require('./chat-task-capture.cjs');
 const { createBuiltinTurn } = require('./builtin-turn.cjs');
 const { createVoicePublish } = require('./voice-publish.cjs');
 const {
@@ -2857,6 +2858,24 @@ ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_
     `);
  } catch (error) {
   console.warn('[backend] agent_jobs active-job unique index migration failed:', error.message || error);
+ }
+
+ // tasks.origin_job_id — the runtime mirror of the block in
+ // database/neon-schema.sql beside uq_agent_jobs_active_per_session_agent, and
+ // it has to run HERE rather than with the other `tasks` ALTERs because the FK
+ // needs agent_jobs to exist first.
+ //
+ // Its own try/catch, like the index above: chat-task capture is an enhancement,
+ // and a workspace whose column failed to appear should keep dispatching agents
+ // rather than fail to boot. captureLongRunningChatTasks degrades to a no-op
+ // when the column is missing (the insert throws, the sweep swallows).
+ try {
+  await db.unsafe(`
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS origin_job_id uuid REFERENCES agent_jobs(id) ON DELETE SET NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_origin_job ON tasks (origin_job_id) WHERE origin_job_id IS NOT NULL;
+    `);
+ } catch (error) {
+  console.warn('[backend] tasks.origin_job_id migration failed:', error.message || error);
  }
 
  // DM read scope — the one-time backfill that turns 'every member can read every
@@ -9342,9 +9361,19 @@ const voicePublish = createVoicePublish({
 });
 const { publishHuddleVoiceText } = voicePublish;
 
+// Turning long-running chat work into a task. Constructed BEFORE agentJobs
+// because agentJobs takes settleCapturedChatTask as a dep; it holds no state and
+// reaches nothing else in here, so a plain reference is safe where the other
+// cross-module deps have to be thunks.
+const chatTaskCapture = createChatTaskCapture({
+ getDb,
+ notifyDbSubscribers: (...a) => realtime.notifyDbSubscribers(...a),
+});
+
 // Agent jobs hold no in-process state — a job's liveness is a database fact, so
 // a restart cannot lose it. See server/agent-jobs.cjs.
 const agentJobs = createAgentJobs({
+ settleCapturedChatTask: (...a) => chatTaskCapture.settleCapturedChatTask(...a),
  PLACEHOLDER_CONTENT_RE,
  agentLiveMessageContent: (...a) => agentLiveMessageContent(...a),
  agentPermissionFlags, agentRuntimePayload, badRequest,
@@ -10789,6 +10818,11 @@ function startBackendServer(port = DEFAULT_PORT, { handleSignals = false } = {})
  const jobReaper = setInterval(() => {
   guardedSweep('reapStuckAgentJobs', reapStuckAgentJobs);
   guardedSweep('reapStuckMcpJobs', reapStuckMcpJobs);
+  // Same tick as the reapers because it asks the same question of the same rows
+  // — "which jobs have been running a long time?" — and differs only in what it
+  // concludes. guardedSweep's in-flight set keeps a slow scan from overlapping
+  // itself on a busy workspace.
+  guardedSweep('captureLongRunningChatTasks', chatTaskCapture.captureLongRunningChatTasks);
   guardedSweep('expireStalePermissionRequests', expireStalePermissionRequests);
   guardedSweep('pruneOfflineConnections', pruneOfflineConnections);
   guardedSweep('runDueSchedules', runDueSchedules);

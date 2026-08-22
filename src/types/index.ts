@@ -353,6 +353,13 @@ export interface Task {
  depends_on?: string[];
  source_type: TaskSourceType | null;
  source_id: string | null;
+ /**
+  * Set only on tasks the server CAPTURED from a long-running agent turn
+  * (server/chat-task-capture.cjs). Read-only here — it is in the tasks entry of
+  * SERVER_OWNED_COLUMNS, so a write from the browser is stripped rather than
+  * stored.
+  */
+ origin_job_id?: string | null;
  completed_at: string | null;
  // Same shape and same rules as Message.attachments — references to
  // uploaded_files rows, never file bytes. Parse through parseMessageAttachments

@@ -473,6 +473,12 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
  tasks: new Set([
   'created_by',
   'dispatch_requested_by',
+  // Proof that the SERVER captured this task from an agent turn. Auto-completion
+  // keys on it alone, so a browser that could set it could make an unrelated
+  // agent's next turn close someone else's task — and could point two tasks at
+  // one job, which the unique index would then reject as a write failure on a
+  // perfectly ordinary task save.
+  'origin_job_id',
  ]),
  // Agent authorship on a document comment is stamped from a verified MCP token,
  // never sent by a client. Two things break if a browser can set it: a comment

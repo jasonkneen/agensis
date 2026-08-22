@@ -50,6 +50,12 @@ function createAgentJobs(deps = {}) {
   // same question — "the one active-job slot just freed, what was waiting on
   // it?" — for the two kinds of waiting work, tasks and chat.
   drainPendingChatTurn = () => {},
+  // Closes the task server/chat-task-capture.cjs minted for this turn, if the
+  // turn ran long enough to have been captured at all. Defaulted to a no-op for
+  // the same reason as drainPendingChatTurn: the unit tests construct this
+  // module with a partial dep set, and capture is an enhancement rather than
+  // something a job transition may depend on.
+  settleCapturedChatTask = () => {},
   forbidden,
   ensureTable = (table) => table,
   getDb,
@@ -834,6 +840,12 @@ function createAgentJobs(deps = {}) {
   // waiting on this exact slot. Inside afterDurableWrite so the replay cannot see
   // the job still 'running' and immediately re-park itself.
   afterDurableWrite(() => drainPendingChatTurn(job.session_id, job.agent_id, `job_${status}`));
+  // And the third thing this moment settles: if the turn ran long enough to have
+  // been captured as a task, that task is still sitting in progress. Same
+  // afterDurableWrite queue so it cannot commit ahead of the terminal row.
+  // Only 'done' closes it — settleCapturedChatTask leaves an errored turn's task
+  // open on purpose, so the failure stays visible in the list.
+  afterDurableWrite(() => { void settleCapturedChatTask(job.id, status); });
 
   // Farm-originated coding jobs are control-plane work, not chat turns. They
   // deliberately have no session and are polled through the integration API;

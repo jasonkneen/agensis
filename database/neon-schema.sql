@@ -1911,6 +1911,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_jobs_active_per_session_agent
   ON agent_jobs(session_id, agent_id)
   WHERE status IN ('queued', 'running');
 
+-- The job a task was AUTO-CAPTURED from (server/chat-task-capture.cjs).
+--
+-- Declared here rather than beside the other `tasks` columns because it points
+-- at agent_jobs, which is created 500 lines further down; a forward REFERENCES
+-- in the CREATE TABLE would not resolve on a fresh neon-push.
+--
+-- Two things depend on it and neither has a safe substitute:
+--   * The unique index is the ONLY thing preventing a second task for the same
+--     turn. The capture sweep runs every 30s against jobs that stay running for
+--     minutes, so it WILL see the same job repeatedly, and two Fly machines see
+--     it simultaneously. An application-level "does one exist" check loses that
+--     race; a unique violation cannot.
+--   * It is the proof that the server created this row. Auto-completion only
+--     ever touches tasks matched by origin_job_id, so a task a human typed can
+--     never be closed by an agent turn finishing.
+-- ON DELETE SET NULL, not CASCADE: job rows are operational and prunable, the
+-- task is the durable artifact and must outlive the job it came from.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS origin_job_id uuid REFERENCES agent_jobs(id) ON DELETE SET NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_origin_job ON tasks(origin_job_id) WHERE origin_job_id IS NOT NULL;
+
 -- Scheduled agent runs. A schedule posts a prompt into a session on a cadence
 -- (interval_seconds) and lets the orchestrator dispatch. Mirrors the runtime
 -- bootstrap DDL in server/index.cjs so a fresh neon-push has the tables too.
