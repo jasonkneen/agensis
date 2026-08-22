@@ -2022,6 +2022,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_jobs_active_per_session_agent
   ON agent_jobs(session_id, agent_id)
   WHERE status IN ('queued', 'running');
 
+-- A human turn refused because the agent was busy (or an election was already in
+-- flight), kept so it can be replayed rather than dropped.
+--
+-- The in-process Map in server/index.cjs is still the live structure; this is its
+-- durable shadow. It exists because "losing a parked turn on restart is only the
+-- pre-fix behaviour" stopped being true the day a deploy ate a request that was
+-- parked at 18:10 and still owed an answer at 18:17.
+--
+-- park_key is `<session>::<agent>` — text rather than a composite PK because the
+-- agent half is EMPTY for a turn parked by the conversation-lock branch, which
+-- runs before any agent has been elected, and a NULL cannot carry a primary key.
+CREATE TABLE IF NOT EXISTS pending_chat_turns (
+  park_key text PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  -- NULL for a lock-parked turn: replay re-elects. ON DELETE CASCADE because a
+  -- deleted agent's parked turn can never be replayed as that agent.
+  agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
+  thread_parent_id uuid,
+  broadcast_to_channel boolean,
+  target_agent_id uuid,
+  attempts integer NOT NULL DEFAULT 0,
+  parked_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_pending_chat_turns_parked_at ON pending_chat_turns(parked_at);
+
 -- The job a task was AUTO-CAPTURED from (server/chat-task-capture.cjs).
 --
 -- Declared here rather than beside the other `tasks` columns because it points

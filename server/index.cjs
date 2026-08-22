@@ -1599,6 +1599,20 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_cursorbuddy_guides_owner ON cursorbuddy_guides(owner_user_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_cursorbuddy_guides_public_match ON cursorbuddy_guides(host, review_status, published_at DESC);
 
+    -- Durable shadow of the in-process parked-turn Map. See the block beside
+    -- pendingChatTurns, and neon-schema.sql for the same DDL.
+    CREATE TABLE IF NOT EXISTS pending_chat_turns (
+      park_key text PRIMARY KEY,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      agent_id uuid,
+      thread_parent_id uuid,
+      broadcast_to_channel boolean,
+      target_agent_id uuid,
+      attempts integer NOT NULL DEFAULT 0,
+      parked_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_chat_turns_parked_at ON pending_chat_turns(parked_at);
     CREATE TABLE IF NOT EXISTS agent_jobs (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -5544,10 +5558,31 @@ const conversationLocks = new Set();
 // scheduleTaskQueueDrain; the replay hooks the same sites). Keyed by
 // (session, agent) because that is exactly the scope of the slot blocking it.
 //
-// In-process, like conversationLocks: a parked turn is a best-effort retry, not
-// a durable promise. Losing one on restart is the pre-fix behaviour, so the
-// existing single-machine assumption (reconcileAgentConnectionsAtStartup) is not
-// made any weaker by this.
+// In-process for the live path, MIRRORED to pending_chat_turns for restarts.
+//
+// This used to say a parked turn was "a best-effort retry, not a durable
+// promise", and that losing one on restart was merely the pre-fix behaviour.
+// That reasoning held right up until it cost a real message: on 2026-08-22 a
+// request parked at 18:10 while the agent was busy, a deploy restarted the
+// backend at 18:17, and the turn was gone — inside the 15-minute window where it
+// was still owed an answer. The human had to notice the silence himself.
+//
+// So the Map stays the live structure (every existing read/write is unchanged,
+// and the replay path is delicate enough that rewriting it wholesale is the
+// bigger risk) and every mutation is written through to a table. On boot
+// restorePendingChatTurns reloads it, and replayOrphanedChatTurns re-drives
+// anything whose waker died with the old process.
+//
+// A blind "find unanswered messages and re-drive them" sweep was rejected for
+// the reason recorded on cadenceWakes: it would re-run an un-addressed social
+// post every tick forever, paying for a relevance call each time. A parked row
+// is an explicit decision to retry, which is exactly what may be replayed.
+//
+// KNOWN GAP, stated rather than papered over: the write-through is
+// fire-and-forget, so a restart in the few milliseconds between the Map write
+// and the row landing still loses that turn, and on N Fly machines a park on one
+// machine is only drained by that machine (the sweep on any machine will pick it
+// up within 30s). Today the fleet is one machine.
 const pendingChatTurns = new Map();
 // Long enough to outlive the 30-minute hard ceiling would be wrong: replaying a
 // turn a human has given up on is its own bug. 15 minutes covers an idle_timeout
@@ -7271,24 +7306,147 @@ function pendingChatTurnKey(sessionId, agentId) {
  return `${String(sessionId || '')}::${String(agentId || '')}`;
 }
 
+// --- the durable shadow -----------------------------------------------------
+//
+// Write-through, never read on the hot path: the Map answers every live
+// question. These exist so a restart does not silently drop a turn that is still
+// owed an answer. All three swallow their errors — a parked turn is a retry, and
+// failing to persist one must never break the dispatch that parked it.
+
+function writeThroughParkedTurn(key, entry) {
+ void (async () => {
+  try {
+   await getDb().unsafe(
+    `insert into pending_chat_turns
+        (park_key, workspace_id, session_id, agent_id, thread_parent_id, broadcast_to_channel, target_agent_id, attempts, parked_at)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9 / 1000.0))
+      on conflict (park_key) do update set
+        thread_parent_id = excluded.thread_parent_id,
+        broadcast_to_channel = excluded.broadcast_to_channel,
+        target_agent_id = excluded.target_agent_id,
+        attempts = excluded.attempts,
+        parked_at = excluded.parked_at`,
+    [
+     key, entry.workspaceId, entry.sessionId, entry.agentId || null,
+     entry.threadParentId || null, entry.broadcastToChannel, entry.targetAgentId || null,
+     entry.attempts, entry.parkedAt,
+    ],
+   );
+  } catch (error) {
+   console.warn('[chat-retry] could not persist parked turn:', error?.message || error);
+  }
+ })();
+}
+
+function forgetParkedTurn(key) {
+ // getDb() THROWS SYNCHRONOUSLY when DATABASE_URL is unset, so it has to be
+ // inside the try — not merely have its promise caught. With the call outside,
+ // that throw escaped into drainPendingChatTurn and took the replay down with
+ // it: the shadow write breaking the very path it exists to protect.
+ void (async () => {
+  try {
+   await getDb().unsafe('delete from pending_chat_turns where park_key = $1', [key]);
+  } catch (error) {
+   console.warn('[chat-retry] could not clear parked turn:', error?.message || error);
+  }
+ })();
+}
+
+/**
+ * Reload parked turns after a restart, dropping anything already too old to be
+ * worth answering. Called once at startup, before the reaper's first tick.
+ *
+ * Rows are restored into the Map rather than replayed directly, so they go
+ * through exactly the same age/attempt gates as a turn parked by this process.
+ */
+async function restorePendingChatTurns() {
+ try {
+  const rows = await getDb().unsafe(
+   `delete from pending_chat_turns
+      where parked_at < now() - make_interval(secs => $1::int)
+      returning park_key`,
+   [Math.round(PENDING_CHAT_TURN_MAX_AGE_MS / 1000)],
+  );
+  if (rows.length > 0) console.log(`[chat-retry] discarded ${rows.length} parked turn(s) older than the age limit`);
+  const live = await getDb().unsafe('select * from pending_chat_turns');
+  for (const row of live) {
+   pendingChatTurns.set(row.park_key, {
+    workspaceId: String(row.workspace_id),
+    sessionId: String(row.session_id),
+    agentId: row.agent_id ? String(row.agent_id) : '',
+    threadParentId: row.thread_parent_id || null,
+    broadcastToChannel: row.broadcast_to_channel,
+    targetAgentId: row.target_agent_id ? String(row.target_agent_id) : null,
+    attempts: Number(row.attempts) || 0,
+    parkedAt: new Date(row.parked_at).getTime(),
+   });
+  }
+  if (live.length > 0) console.log(`[chat-retry] restored ${live.length} parked turn(s) across the restart`);
+ } catch (error) {
+  console.warn('[chat-retry] could not restore parked turns:', error?.message || error);
+ }
+}
+
+/**
+ * Replay parked turns nothing else is going to wake.
+ *
+ * Two populations, and neither has a terminal job transition coming for it:
+ *   * turns restored from the table, whose triggering job died with the old
+ *     process — this is the case that lost a message on 2026-08-22;
+ *   * turns parked by the `locked` branch, which have no agent id at all
+ *     because the election never got far enough to pick one.
+ *
+ * An entry whose agent is still genuinely busy is left alone: drainPendingChatTurn
+ * fires on that job's terminal transition and doing it here too would race it.
+ *
+ * `run` and `isAgentBusy` are test seams, the same convention
+ * drainPendingChatTurn already uses; production passes neither.
+ */
+async function replayOrphanedChatTurns({
+ run = continueConversation,
+ isAgentBusy = hasActiveBurstJob,
+} = {}) {
+ for (const [key, parked] of [...pendingChatTurns.entries()]) {
+  try {
+   if (Date.now() - (parked?.parkedAt || 0) > PENDING_CHAT_TURN_MAX_AGE_MS) {
+    pendingChatTurns.delete(key);
+    forgetParkedTurn(key);
+    continue;
+   }
+   // No agent id: a `locked` park. Nobody holds a job slot for it, so it is
+   // always this sweep's to re-drive.
+   if (parked.agentId && await isAgentBusy(parked.sessionId, parked.agentId)) continue;
+   await drainPendingChatTurn(parked.sessionId, parked.agentId, 'orphan_sweep', run);
+  } catch (error) {
+   console.warn('[chat-retry] orphan replay failed:', error?.message || error);
+  }
+ }
+}
+
 // Remember a turn that was refused only because the agent was already working.
 // Last write wins per (session, agent): if a human sends three messages while an
 // agent is busy, one replay answers all three — continueConversation re-reads the
 // conversation from the database, so the parked entry is a WAKE-UP, not a copy of
 // the message. Storing the newest keeps the thread/broadcast context current.
 function parkChatTurn({ workspaceId, sessionId, threadParentId, broadcastToChannel, targetAgentId, agentId }) {
- if (!workspaceId || !sessionId || !agentId) return;
+ // agentId is optional now: the `locked` branch parks before any agent has been
+ // elected, and a session-level wake is still a wake. Everything else about the
+ // entry is identical, and replayOrphanedChatTurns is what re-drives it.
+ if (!workspaceId || !sessionId) return;
  const key = pendingChatTurnKey(sessionId, agentId);
  const attempts = pendingChatTurns.get(key)?.attempts || 0;
- pendingChatTurns.set(key, {
+ const entry = {
   workspaceId: String(workspaceId),
   sessionId: String(sessionId),
+  agentId: agentId ? String(agentId) : '',
   threadParentId: threadParentId || null,
   broadcastToChannel: broadcastToChannel ?? null,
   targetAgentId: targetAgentId || null,
   attempts,
   parkedAt: Date.now(),
- });
+ };
+ pendingChatTurns.set(key, entry);
+ writeThroughParkedTurn(key, entry);
 }
 
 /**
@@ -7309,6 +7467,10 @@ function drainPendingChatTurn(sessionId, agentId, cause = 'job_finished', run = 
  const parked = pendingChatTurns.get(key);
  if (!parked) return;
  pendingChatTurns.delete(key);
+ // The durable copy goes with it. If the replay below re-parks, the write-through
+ // in parkChatTurn puts a fresh row back — so a crash mid-replay loses at most
+ // the retry, never leaves a row that would be replayed forever.
+ forgetParkedTurn(key);
  // A human who has been waiting a quarter of an hour has moved on; answering now
  // is noise, not service.
  if (Date.now() - parked.parkedAt > PENDING_CHAT_TURN_MAX_AGE_MS) {
@@ -7339,7 +7501,11 @@ function drainPendingChatTurn(sessionId, agentId, cause = 'job_finished', run = 
    // same thread and deserves the same treatment.
    if (out && (out.reason === 'agent_busy' || out.reason === 'locked')) {
     const reparked = pendingChatTurns.get(key) || { ...parked, parkedAt: parked.parkedAt };
-    pendingChatTurns.set(key, { ...reparked, attempts, parkedAt: parked.parkedAt });
+    const next = { ...reparked, attempts, parkedAt: parked.parkedAt };
+    pendingChatTurns.set(key, next);
+    // Carry the incremented attempt count into the durable copy too, or a
+    // restart would reset the counter and the attempt cap would never bite.
+    writeThroughParkedTurn(key, next);
    }
   } catch (error) {
    console.error('drainPendingChatTurn failed', error);
@@ -7356,7 +7522,24 @@ async function continueConversation({
 }) {
  if (!workspaceId || !sessionId) return { started: false, reason: 'missing_input' };
  const lockKey = `${sessionId}::${threadParentId || ''}`;
- if (conversationLocks.has(lockKey)) return { started: false, reason: 'locked' };
+ if (conversationLocks.has(lockKey)) {
+  // PARK, DON'T DROP — the same rule the agent_busy branch 200 lines below has
+  // always followed, and the one this branch quietly did not.
+  //
+  // Returning bare 'locked' was a silent loss: a second message arriving while
+  // an election for this session/thread is in flight had nothing recorded for
+  // it and nothing that would ever retry it. drainPendingChatTurn already treats
+  // 'locked' as retryable when it sees it — but only for a turn that was ALREADY
+  // parked, so a message that hit the lock on its first attempt fell straight
+  // through.
+  //
+  // No agent id, deliberately: the lock is checked before any election, so there
+  // is no elected agent to pin to and a fresh election on replay is the correct
+  // behaviour anyway. That makes it invisible to the job-terminal drain, which
+  // keys on (session, agent) — replayOrphanedChatTurns is what picks it up.
+  parkChatTurn({ workspaceId, sessionId, threadParentId, broadcastToChannel, targetAgentId, agentId: null });
+  return { started: false, reason: 'locked' };
+ }
  conversationLocks.add(lockKey);
  let started = false;
  try {
@@ -10994,6 +11177,12 @@ function startBackendServer(port = DEFAULT_PORT, { handleSignals = false } = {})
  });
  void reconcileAgentConnectionsAtStartup();
  void reconcileSchedulesAtStartup();
+ // Turns that were owed an answer when the last process died. Chained on the
+ // schema promise because it reads a table the runtime bootstrap creates, and
+ // the very first boot after this ships would otherwise race it.
+ void Promise.resolve(app.locals.runtimeSchemaReady)
+  .then(() => restorePendingChatTurns())
+  .catch(error => console.warn('[chat-retry] startup restore failed:', error?.message || error));
  void Promise.resolve(app.locals.runtimeSchemaReady)
   .then(() => nostrCommunities.startAll())
   .catch(error => console.error('[nostr] connection startup failed:', error?.message || error));
@@ -11036,6 +11225,9 @@ function startBackendServer(port = DEFAULT_PORT, { handleSignals = false } = {})
   // concludes. guardedSweep's in-flight set keeps a slow scan from overlapping
   // itself on a busy workspace.
   guardedSweep('captureLongRunningChatTasks', chatTaskCapture.captureLongRunningChatTasks);
+  // Parked turns nothing else will wake: restored across a restart, or parked by
+  // the conversation-lock branch with no agent to key a terminal drain on.
+  guardedSweep('replayOrphanedChatTurns', replayOrphanedChatTurns);
   guardedSweep('expireStalePermissionRequests', expireStalePermissionRequests);
   guardedSweep('pruneOfflineConnections', pruneOfflineConnections);
   guardedSweep('runDueSchedules', runDueSchedules);
@@ -11523,6 +11715,8 @@ module.exports = {
   parkChatTurn,
   drainPendingChatTurn,
   pendingChatTurns,
+  restorePendingChatTurns,
+  replayOrphanedChatTurns,
   verifyNetlifyDeploySignature,
   buildSystemPrompt,
   normalizeAiChatMessages,
