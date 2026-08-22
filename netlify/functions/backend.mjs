@@ -18,6 +18,7 @@ import {
  createTokenVersionCache,
  VERSIONED_TABLES,
  toPgArrayLiteral,
+ normalizeSessionParticipants,
  stripPrivilegedDbValues,
  validateUniformInsertRows,
  applyAgentPurposeInsertDefaults,
@@ -798,15 +799,23 @@ async function requireUserId(req) {
 // Do not "unify" with server/lib/db-sql.cjs normalizeJsonParam — the drivers disagree.
 function normalizeJsonParam(table, column, value) {
  if (value == null) return null;
+ // chat_sessions.participants carries the browser's `agent:<uuid>` composite key
+ // and every server-side comparison expects the bare uuid — an agent whose
+ // roster row keeps the prefix cannot be dispatched at all (see
+ // normalizeSessionParticipants in shared/backend-core.cjs). The rule is shared
+ // with server/lib/db-sql.cjs; only the stringify below differs, because this
+ // driver wants text params where porsager wants objects.
+ const isParticipants = table === 'chat_sessions' && column === 'participants';
  if (typeof value === 'string') {
+  let parsed;
   try {
-   JSON.parse(value);
-   return value;
+   parsed = JSON.parse(value);
   } catch {
    throw invalidJsonValue(table, column);
   }
+  return isParticipants ? JSON.stringify(normalizeSessionParticipants(parsed)) : value;
  }
- return JSON.stringify(value);
+ return JSON.stringify(isParticipants ? normalizeSessionParticipants(value) : value);
 }
 
 const bindDbParam = createBindDbParam(normalizeJsonParam);

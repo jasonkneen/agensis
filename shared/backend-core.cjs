@@ -420,6 +420,58 @@ const DB_TABLE_ACCESS = {
 
 // Columns that must never be set via generic /backend/db/* write by non-dedicated
 // routes (editors could otherwise approve MCP agents, rewrite storage paths, etc.).
+/**
+ * Strip the UI's `agent:` composite-key prefix off a participant's agent id.
+ *
+ * THIS IS A DISPATCH BUG, NOT A TIDINESS ONE, and it silently muted an agent
+ * for good. The browser keys agent rows as `agent:<uuid>` (src/App.tsx:1924,
+ * useSubThreads.ts:278, ChannelMemberStep.tsx:63 — a composite id so agents and
+ * humans can share one option list) and that shape reached
+ * chat_sessions.participants[].agent_id. The server then compares it BARE:
+ *
+ *   where participant->>'agent_id' = a.id::text     -- agent-jobs.cjs:160
+ *
+ * `'agent:0870…' <> '0870…'`, so insertActiveAgentJob's final reservation found
+ * no roster row, returned null, deleted the "Thinking …" placeholder and the
+ * human's message vanished — no job, no parked turn, no error anywhere. Observed
+ * live: @codex in #testtest could not answer a single message, and every
+ * "@codex are you there?" was swallowed.
+ *
+ * The frontend already defends against both shapes (participantAgentKey in
+ * src/lib/sessionParticipants.ts) and two server files strip it ad hoc
+ * (huddle-agents.cjs:63, agents-routes.cjs:356) — but ELEVEN other SQL
+ * comparisons do not. Rather than patch eleven queries and miss the twelfth,
+ * the prefix is normalized away at the one place every generic write passes
+ * through, and healed once in the existing rows. Then every reader is correct
+ * without knowing this rule exists.
+ */
+function bareAgentParticipantId(value) {
+ return String(value ?? '').trim().replace(/^agent:/, '');
+}
+
+/**
+ * Normalize a chat_sessions.participants value on the way IN.
+ *
+ * Deliberately conservative: it rewrites `agent_id`/`id` on rows whose kind is
+ * 'agent' and touches nothing else, so a human participant, an unknown row
+ * shape or an extra field passes through byte-identical. A non-array value is
+ * returned untouched for the JSON validator to reject on its own terms.
+ */
+function normalizeSessionParticipants(value) {
+ if (!Array.isArray(value)) return value;
+ return value.map((participant) => {
+  if (!participant || typeof participant !== 'object' || Array.isArray(participant)) return participant;
+  if (participant.kind !== 'agent') return participant;
+  const next = { ...participant };
+  // `id` too: the add-people dialog writes the composite into BOTH fields, and
+  // a reader that falls back to `id` (huddle-agents.cjs does) would otherwise
+  // still see the prefixed form.
+  if (next.agent_id != null) next.agent_id = bareAgentParticipantId(next.agent_id);
+  if (next.id != null) next.id = bareAgentParticipantId(next.id);
+  return next;
+ });
+}
+
 const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
  chat_sessions: new Set([
   // Written only by the atomic split command. Letting a browser forge these
@@ -3484,6 +3536,8 @@ module.exports = {
  ALLOWED_TABLES,
  VERSIONED_TABLES,
  JSON_COLUMNS_BY_TABLE,
+ bareAgentParticipantId,
+ normalizeSessionParticipants,
  ARRAY_COLUMNS_BY_TABLE,
  arrayColumnElemType,
  toPgArrayLiteral,

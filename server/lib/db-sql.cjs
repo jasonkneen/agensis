@@ -22,6 +22,7 @@ const {
  ALLOWED_TABLES,
  JSON_COLUMNS_BY_TABLE,
  arrayColumnElemType,
+ normalizeSessionParticipants,
  toPgArrayLiteral,
 } = require('../../shared/backend-core.cjs');
 
@@ -149,6 +150,15 @@ function invalidJsonValue(table, column) {
 // deliberately opposite; do not "sync" them.
 function normalizeJsonParam(table, column, value) {
  if (value == null) return null;
+ // chat_sessions.participants: strip the browser's `agent:<uuid>` composite key
+ // down to the bare uuid every server-side comparison expects. Done HERE because
+ // this is the one function every generic write of the column passes through —
+ // see normalizeSessionParticipants in shared/backend-core.cjs for why an agent
+ // whose roster row carried the prefix could never be dispatched at all.
+ // Applied after the string-parse below too, so both input shapes normalize.
+ if (table === 'chat_sessions' && column === 'participants' && typeof value !== 'string') {
+  return normalizeSessionParticipants(value);
+ }
  // Return the PARSED OBJECT, never a JSON string. On this server's porsager
  // driver a stringified bind — even under an explicit ::jsonb cast — arrives as
  // a jsonb STRING SCALAR. Proved against the live database:
@@ -165,11 +175,17 @@ function normalizeJsonParam(table, column, value) {
  // correct for @netlify/database, whose driver is the exact opposite. Do not
  // "unify" them; the drivers disagree and each side matches its own.
  if (typeof value === 'string') {
+  let parsed;
   try {
-   return JSON.parse(value);
+   parsed = JSON.parse(value);
   } catch {
    throw invalidJsonValue(table, column);
   }
+  // Same normalization for the string input shape, so a client that sends
+  // participants pre-stringified cannot smuggle the prefix past the guard above.
+  return table === 'chat_sessions' && column === 'participants'
+   ? normalizeSessionParticipants(parsed)
+   : parsed;
  }
  return value;
 }

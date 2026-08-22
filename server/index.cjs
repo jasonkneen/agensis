@@ -2991,6 +2991,47 @@ ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_
   console.warn('[backend] tasks.origin_job_id migration failed:', error.message || error);
  }
 
+ // One-time data repair, mirrored from
+ // supabase/migrations/20260822193000_participant_agent_id_prefix.sql.
+ //
+ // Runs on boot rather than by hand because the rows it fixes make an agent
+ // completely undispatchable: with `agent:<uuid>` stored in participants,
+ // insertActiveAgentJob's roster proof never matches and every message to that
+ // agent is silently swallowed. A deploy is the moment that stops being true.
+ //
+ // Idempotent and self-limiting — the WHERE matches only rows that still carry
+ // the prefix, so after the first boot it updates nothing and costs one index
+ // -less scan of a small table. Reports the row count, because "0 rows" and
+ // "the statement failed" must not look the same in a log.
+ try {
+  const healed = await db.unsafe(`
+      UPDATE chat_sessions s
+         SET participants = (
+               SELECT jsonb_agg(
+                        CASE WHEN participant->>'kind' = 'agent' THEN
+                          participant
+                            || CASE WHEN participant ? 'agent_id'
+                                    THEN jsonb_build_object('agent_id', regexp_replace(participant->>'agent_id', '^agent:', ''))
+                                    ELSE '{}'::jsonb END
+                            || CASE WHEN participant ? 'id'
+                                    THEN jsonb_build_object('id', regexp_replace(participant->>'id', '^agent:', ''))
+                                    ELSE '{}'::jsonb END
+                        ELSE participant END
+                        ORDER BY ordinality)
+                 FROM jsonb_array_elements(s.participants) WITH ORDINALITY AS t(participant, ordinality)),
+             updated_at = now()
+       WHERE jsonb_typeof(s.participants) = 'array'
+         AND EXISTS (SELECT 1 FROM jsonb_array_elements(s.participants) AS p
+                      WHERE p->>'kind' = 'agent'
+                        AND (p->>'agent_id' LIKE 'agent:%' OR p->>'id' LIKE 'agent:%'))
+      RETURNING s.id`);
+  if (healed.length > 0) {
+   console.log(`[backend] repaired agent: prefix in participants for ${healed.length} session(s)`);
+  }
+ } catch (error) {
+  console.warn('[backend] participants agent-id repair failed:', error.message || error);
+ }
+
  // DM read scope — the one-time backfill that turns 'every member can read every
  // session' into 'a private session is readable by its members'.
  //
