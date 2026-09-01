@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, type Plugin, defaultClientConditions } from 'vite';
 import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -164,6 +164,14 @@ export default defineConfig({
     },
   },
   resolve: {
+    // `source` first: @agensis/ui is a workspace package whose exports map
+    // points this condition at its TS source. Resolving library source (not a
+    // built dist) keeps HMR/fast-refresh working on component edits and keeps
+    // library module ids under /packages/ui/src, so they land in the `index`
+    // chunk exactly as src/components/ui/* did — which is what keeps the
+    // workbox globPatterns below (hard-coded chunk names) valid. Moving the
+    // app to dist-resolution would need that precache list re-examined.
+    conditions: ['source', ...defaultClientConditions],
     alias: {
       '@': path.resolve(__dirname, './src'),
     },

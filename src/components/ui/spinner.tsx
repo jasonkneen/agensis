@@ -1,10 +1,4 @@
-import { cn } from "@/lib/utils"
-import { Loader2Icon } from "lucide-react"
-
-function Spinner({ className, ...props }: React.ComponentProps<"svg">) {
-  return (
-    <Loader2Icon data-slot="spinner" role="status" aria-label="Loading" className={cn("size-4 animate-spin", className)} {...props} />
-  )
-}
-
-export { Spinner }
+// Moved to @agensis/ui (packages/ui/src/components/ui/spinner.tsx).
+// Temporary re-export shim so existing '@/components/ui/spinner' imports keep
+// working during the extraction; removed once call sites are rewritten.
+export * from '@agensis/ui/components/spinner';

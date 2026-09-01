@@ -1,6 +1,10 @@
 {
   "name": "agensis",
   "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "version": "0.1.3",
   "description": "Realtime collaborative workspace for chat, documents, memory, files, and shared canvas.",
   "author": {
@@ -30,8 +34,8 @@
     "test": "node --require ./tests/helpers/test-env.cjs --experimental-test-module-mocks --test tests/*.test.cjs",
     "test:unit": "vitest run",
     "smoke": "vitest run --config vitest.smoke.config.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
-    "ci": "npm run typecheck && npm test && npm run voice:install && npm run test:voice && npm run test:unit && npm run smoke && npm run lint",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p packages/ui/tsconfig.json",
+    "ci": "npm run typecheck && npm test && npm run voice:install && npm run test:voice && npm run test:unit && npm run test:ui && npm run smoke && npm run lint",
     "hooks:install": "git config core.hooksPath .githooks",
     "icon": "node scripts/generate-icon.cjs",
     "backend": "node --env-file=.env server/index.cjs",
@@ -56,7 +60,9 @@
     "electron:build": "node scripts/desktop-build.mjs --prod",
     "electron:dist": "node scripts/desktop-build.mjs --prod --publish never",
     "voice:install": "npm ci --prefix voice-worker --no-audit --no-fund",
-    "test:voice": "npm test --prefix voice-worker"
+    "test:voice": "npm test --prefix voice-worker",
+    "test:ui": "vitest run --config vitest.ui.config.ts",
+    "ui:build": "npm run build -w @agensis/ui"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -116,6 +122,7 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
+    "@agensis/ui": "*",
     "@eslint/js": "^9.39.5",
     "@tailwindcss/vite": "^4.3.1",
     "@types/node": "^26.0.1",

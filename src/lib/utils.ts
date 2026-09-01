@@ -1,9 +1,8 @@
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
-}
+// cn() now lives in @agensis/ui (packages/ui/src/lib/utils.ts) alongside the
+// components that use it. Re-exported here so the ~117 files importing
+// '@/lib/utils' keep working, and because this module remains the app's own
+// util home for the text helpers below.
+export { cn } from '@agensis/ui'
 
 /**
  * Strip HTML tags from a string, preserving text content.

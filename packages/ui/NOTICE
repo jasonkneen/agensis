@@ -1,0 +1,28 @@
+@agensis/ui
+Copyright (c) 2026 Jason Kneen
+Licensed under the MIT License (see LICENSE).
+
+This package was extracted from the Agensis application (https://github.com/jasonkneen/agensis),
+which is licensed AGPL-3.0-only. The extraction and MIT relicensing of this package's contents
+is a deliberate act by Jason Kneen, the sole author and copyright holder of that code. No other
+code may be copied from the AGPL portions of that repository into this package.
+
+The component primitives under src/components/ui/ derive from shadcn/ui, which is MIT licensed.
+
+--------------------------------------------------------------------------------
+FONTS (optional — only loaded if you import @agensis/ui/fonts.css)
+--------------------------------------------------------------------------------
+
+styles/fonts.css imports font packages that are NOT bundled in this tarball; they are
+resolved from the consumer's node_modules and each carries its own license text:
+
+  @fontsource/space-grotesk     SIL Open Font License 1.1
+  @fontsource/inter             SIL Open Font License 1.1
+  @fontsource/ibm-plex-mono     SIL Open Font License 1.1
+  @fontsource/space-mono        SIL Open Font License 1.1
+  @fontsource/press-start-2p    SIL Open Font License 1.1
+  @fontsource-variable/geist    SIL Open Font License 1.1
+
+"Press Start 2P" is subject to a Reserved Font Name under OFL-1.1: a modified version
+must not use the reserved name. Applications that bundle and redistribute these fonts
+inherit the OFL notice obligations.

@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { defaultServerConditions } from 'vite';
 
 // Minimal unit-test harness. Scoped to tests/unit/** ONLY so it never picks up
 // the node:test cjs backend suite under tests/*.test.cjs (run via `npm test`).
@@ -13,8 +14,14 @@ export default defineConfig({
     setupFiles: ['./tests/helpers/test-env.cjs'],
   },
   resolve: {
+    // Match vite.config.ts: resolve @agensis/ui to its TS source, not a dist
+    // build that does not exist during development.
+    conditions: ['source', ...defaultServerConditions],
     alias: {
       '@': new URL('./src', import.meta.url).pathname,
     },
+  },
+  ssr: {
+    resolve: { conditions: ['source', ...defaultServerConditions] },
   },
 });
