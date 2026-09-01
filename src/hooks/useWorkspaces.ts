@@ -122,8 +122,12 @@ export function useWorkspaces(userId: string | undefined) {
       repairing: seeding,
       repairFailure: seedFailure,
       fetchConfirmedEmpty,
+      // Without this, the boot window where the session is still being restored
+      // reads as a failed fetch: the effect below early-returns for an
+      // undefined userId, flipping loading off without requesting anything.
+      identityKnown: Boolean(userId),
     }),
-    [loading, workspaces.length, seeding, seedFailure, fetchConfirmedEmpty],
+    [loading, workspaces.length, seeding, seedFailure, fetchConfirmedEmpty, userId],
   );
 
   useEffect(() => {

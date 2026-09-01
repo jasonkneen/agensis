@@ -23,6 +23,8 @@ export type WorkspaceReadinessStatus =
   | 'loading'
   /** The list settled and the user has none — one has to be created. */
   | 'missing'
+  /** No signed-in user yet, so no fetch has been attempted. */
+  | 'pending'
   /** Creating the missing workspace right now. */
   | 'preparing'
   /** At least one workspace is known; writes can go ahead. */
@@ -39,6 +41,14 @@ export interface WorkspaceReadinessInput {
   fetchConfirmedEmpty?: boolean;
   /** True while the workspace list request is in flight. */
   loading: boolean;
+  /**
+   * True once the signed-in user's id is known, i.e. once a fetch was actually
+   * possible. False during the boot window where the session is still being
+   * restored: useWorkspaces early-returns without requesting anything, so an
+   * empty list at that moment means "not asked yet", not "asked and failed".
+   * Defaults to true so existing callers keep their current behaviour.
+   */
+  identityKnown?: boolean;
   /** How many workspaces the client currently knows about. */
   workspaceCount: number;
   /** True while a create-the-missing-workspace attempt is running. */
@@ -84,6 +94,15 @@ export function describeWorkspaceReadiness(input: WorkspaceReadinessInput): Work
   }
   if (input.loading) {
     return { status: 'loading', ready: false, reason: WORKSPACE_LOADING_REASON, shouldRepair: false, canRetry: false };
+  }
+  // No user id yet means useWorkspaces' effect early-returned without issuing a
+  // request — it flips `loading` off and leaves the list empty, which is
+  // otherwise indistinguishable from a fetch that failed. Reporting a
+  // connection problem there accused the network of a fault while the session
+  // was merely still being restored, and it rendered on essentially every cold
+  // load. Boot is a wait, not an error.
+  if (input.identityKnown === false) {
+    return { status: 'pending', ready: false, reason: WORKSPACE_LOADING_REASON, shouldRepair: false, canRetry: false };
   }
   if (input.repairing) {
     return { status: 'preparing', ready: false, reason: WORKSPACE_PREPARING_REASON, shouldRepair: false, canRetry: false };

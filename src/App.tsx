@@ -2405,7 +2405,7 @@ function AppContent() {
             onRenameWorkspace={handleRenameWorkspace}
             onOpenTenants={isSystemOwner ? handleOpenTenants : undefined}
             onCreateWorkspace={handleCreateWorkspace}
-            loading={wsLoading || workspaceReadiness.status === 'missing' || workspaceReadiness.status === 'preparing'}
+            loading={wsLoading || workspaceReadiness.status === 'pending' || workspaceReadiness.status === 'missing' || workspaceReadiness.status === 'preparing'}
             loadError={workspaceReadiness.status === 'unavailable' ? workspaceReadiness.reason : null}
             onRetry={workspaceReadiness.canRetry ? retryWorkspaceSetup : undefined}
             titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
