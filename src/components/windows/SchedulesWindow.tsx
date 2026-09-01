@@ -2,11 +2,11 @@ import { useMemo, useState } from 'react';
 import { Clock, Plus, Play, Trash2, Pause, ArrowLeft, CircleCheck, CircleX } from 'lucide-react';
 import { useSchedules, type AgentSchedule } from '../../hooks/useSchedules';
 import type { ChatSession, WorkspaceAgent } from '../../types';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
+import { Button } from '@agensis/ui/components/button';
+import { Input } from '@agensis/ui/components/input';
+import { Textarea } from '@agensis/ui/components/textarea';
+import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@agensis/ui/components/empty';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 

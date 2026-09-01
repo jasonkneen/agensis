@@ -1232,19 +1232,20 @@ Pinned by `tests/desktop-local-runtime.test.cjs`.
 - Match the surrounding file's style: 2-space indent, its semicolon convention,
   `cn()` for class merging, shadcn/ui primitives already imported in the file.
 - **The shadcn primitives live in `packages/ui`, not in the app.** `@agensis/ui`
-  is an npm workspace holding all 57 of them; `src/components/ui/*.tsx` are
-  4-line `export *` shims kept so existing `@/components/ui/*` imports resolve,
-  and they are deleted once call sites are rewritten. Edit the component in
-  `packages/ui/src/components/ui/`; editing a shim is editing nothing. New code
-  should import `@agensis/ui/components/<name>` directly. The app resolves the
-  package through the `source` export condition (set in `vite.config.ts`, both
-  vitest configs and `tsconfig.app.json`), so there is no build step in the loop
-  — but it also means a broken export map fails at import time, which is what
+  is an npm workspace holding all 57 of them, imported directly:
+  `import { Button } from '@agensis/ui/components/button'`. `src/components/ui/`
+  holds exactly one file — `sonner.tsx`, which stayed because it imports
+  `@/hooks/useTheme` and would otherwise drag an app dependency into a package
+  that has to stay liftable. The app resolves the package through the `source`
+  export condition (set in `vite.config.ts`, both vitest configs and
+  `tsconfig.app.json`), so there is no build step in the loop — but it also
+  means a broken export map fails at import time, which is what
   `tests/unit/agensisUiPackage.test.ts` guards. That package is **MIT** inside
-  an AGPL repository: no code from the rest of this tree may be copied into it.
+  an AGPL repository: no code from the rest of this tree may be copied into it,
+  and it is `"private": true` — not published anywhere.
   `npx shadcn add` still writes into the app (`components.json` aliases point
-  there) and will overwrite a shim — move the file into the package by hand
-  afterwards.
+  there), so move the new file into the package by hand and import it from
+  there. Do not leave a re-export shim behind: the contract test fails on one.
 - No new npm dependencies without a strong reason. Drag-and-drop is native HTML5
   (`draggable` + `onDragStart/onDragOver/onDrop`) or pointer events — see
   `src/components/windows/ThreadWidgetRail.tsx` and `TasksWindowContent.tsx`.

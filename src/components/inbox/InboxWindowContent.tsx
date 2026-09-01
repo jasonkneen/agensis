@@ -1,16 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, RotateCw } from 'lucide-react';
 import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Skeleton } from '@/components/ui/skeleton';
+} from '@agensis/ui/components/dropdown-menu';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Skeleton } from '@agensis/ui/components/skeleton';
 import { cn } from '@/lib/utils';
 import { useInbox } from '../../hooks/useInbox';
 import { InboxDetail } from './InboxDetailPane';

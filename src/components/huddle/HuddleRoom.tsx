@@ -4,7 +4,7 @@ import { RoomEvent } from 'livekit-client';
 import { MAX_TARGET_REVISION, MAX_TARGET_REVISION_SYNC_LEAD, VOICE_TARGET_TOPIC, decodeVoiceTarget, decodeVoiceTargetRequest, makeVoiceTarget, makeVoiceTargetRequest } from '@/lib/voiceTarget';
 import { Loader2, Mic, MicOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import { roomParticipantFrom, type HuddleLocalState } from '@/lib/huddleDock';
 import type { HuddleConnection } from '@/hooks/useHuddle';
 

@@ -23,7 +23,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Sidebar } from '../../src/components/layout/Sidebar';
 import { WorkspaceRail } from '../../src/components/layout/WorkspaceRail';
-import { TooltipProvider } from '../../src/components/ui/tooltip';
+import { TooltipProvider } from '@agensis/ui/components/tooltip';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

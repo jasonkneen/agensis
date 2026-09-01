@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { FieldDescription, FieldGroup } from '@/components/ui/field';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import { Spinner } from '@/components/ui/spinner';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { FieldDescription, FieldGroup } from '@agensis/ui/components/field';
+import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
+import { Spinner } from '@agensis/ui/components/spinner';
 import { useAuditLog } from '../../hooks/useAuditLog';
 import {
   AUDIT_EMPTY_STATE,

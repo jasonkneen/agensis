@@ -11,7 +11,7 @@ import {
   CardAction,
   CardContent,
   CardFooter,
-} from '@/components/ui/card';
+} from '@agensis/ui/components/card';
 import {
   Avatar,
   AvatarImage,
@@ -19,9 +19,9 @@ import {
   AvatarGroup,
   AvatarGroupCount,
   AvatarBadge,
-} from '@/components/ui/avatar';
-import { Separator } from '@/components/ui/separator';
-import { AspectRatio } from '@/components/ui/aspect-ratio';
+} from '@agensis/ui/components/avatar';
+import { Separator } from '@agensis/ui/components/separator';
+import { AspectRatio } from '@agensis/ui/components/aspect-ratio';
 import {
   Item,
   ItemMedia,
@@ -31,7 +31,7 @@ import {
   ItemActions,
   ItemGroup,
   ItemSeparator,
-} from '@/components/ui/item';
+} from '@agensis/ui/components/item';
 import {
   Empty,
   EmptyHeader,
@@ -39,9 +39,9 @@ import {
   EmptyDescription,
   EmptyContent,
   EmptyMedia,
-} from '@/components/ui/empty';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Button } from '@/components/ui/button';
+} from '@agensis/ui/components/empty';
+import { Skeleton } from '@agensis/ui/components/skeleton';
+import { Button } from '@agensis/ui/components/button';
 
 const people = [
   { id: 'ada', name: 'Ada Lovelace', role: 'Engineering', src: 'https://i.pravatar.cc/80?img=5' },

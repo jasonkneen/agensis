@@ -3,7 +3,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { ReactionBar } from '../../src/components/chat/ReactionBar';
 import { QueuedPill, SeenPill } from '../../src/components/chat/SeenPill';
-import { TooltipProvider } from '../../src/components/ui/tooltip';
+import { TooltipProvider } from '@agensis/ui/components/tooltip';
 
 // The claims a pure test cannot settle: this component MOUNTS, and the thing it
 // must never become is a button.

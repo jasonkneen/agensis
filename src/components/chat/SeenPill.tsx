@@ -1,4 +1,4 @@
-import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@agensis/ui/components/tooltip';
 import { cn } from '../../lib/utils';
 import { SEEN_GLYPH, describeSeenBy, seenPillLabel } from '../../lib/seenPill';
 import { queuedLabel, type QueuedState } from '../../lib/queuedPill';

@@ -2,13 +2,13 @@ import React, { useMemo, useState } from 'react';
 import { Check, CornerDownRight, MessageCircle, Send, Trash2, X } from 'lucide-react';
 import type { DocumentComment } from '../../types';
 import type { CreateCommentInput } from '../../hooks/useDocumentComments';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty';
-import { Item, ItemContent } from '@/components/ui/item';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Textarea } from '@/components/ui/textarea';
+import { Avatar, AvatarFallback } from '@agensis/ui/components/avatar';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@agensis/ui/components/empty';
+import { Item, ItemContent } from '@agensis/ui/components/item';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
 
 interface DocumentCommentsProps {

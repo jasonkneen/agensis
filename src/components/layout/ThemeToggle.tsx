@@ -1,6 +1,6 @@
 import { Monitor, Moon, Sun } from 'lucide-react';
 import type { ThemeMode } from '../../hooks/useTheme';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 
 interface ThemeToggleProps {
   mode: ThemeMode;

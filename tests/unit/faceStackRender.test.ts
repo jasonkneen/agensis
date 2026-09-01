@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { FaceStack } from '../../src/components/chat/FaceStack';
 import { ReactionBar } from '../../src/components/chat/ReactionBar';
 import { SeenPill, QueuedPill } from '../../src/components/chat/SeenPill';
-import { TooltipProvider } from '../../src/components/ui/tooltip';
+import { TooltipProvider } from '@agensis/ui/components/tooltip';
 import { buildReaderFaces } from '../../src/lib/readerFaces';
 import type { WorkspaceAgent } from '../../src/types';
 

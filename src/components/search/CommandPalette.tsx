@@ -11,7 +11,7 @@ import {
 import type { ActiveView, ChatSession, Document, MemoryFact, Task } from '../../types';
 import { stripHtml } from '../../lib/utils';
 import { backendClient } from '../../lib/backendClient';
-import { Badge } from '@/components/ui/badge';
+import { Badge } from '@agensis/ui/components/badge';
 import {
   Command,
   CommandDialog,
@@ -20,7 +20,7 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-} from '@/components/ui/command';
+} from '@agensis/ui/components/command';
 
 interface CommandPaletteProps {
   open: boolean;

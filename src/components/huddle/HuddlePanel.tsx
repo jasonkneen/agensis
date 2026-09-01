@@ -5,21 +5,21 @@ import {
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
-} from '@/components/ui/empty';
+} from '@agensis/ui/components/empty';
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
   InputGroupTextarea,
-} from '@/components/ui/input-group';
+} from '@agensis/ui/components/input-group';
 import {
   MessageScroller,
   MessageScrollerContent,
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
-} from '@/components/ui/message-scroller';
-import { Spinner } from '@/components/ui/spinner';
+} from '@agensis/ui/components/message-scroller';
+import { Spinner } from '@agensis/ui/components/spinner';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { AgentAvatar } from '@/components/agents/AgentAvatar';
 import { ToolStepGroup } from '../chat/ToolStepGroup';

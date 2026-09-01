@@ -22,8 +22,8 @@ import { resolvePermissionRequest } from './permissionRequests';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { validAgentAccentColor } from '../../lib/agentAccent';
 import type { Document, Message as ChatMessage, WorkspaceAgent } from '../../types';
-import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
+import { Button } from '@agensis/ui/components/button';
+import { Checkbox } from '@agensis/ui/components/checkbox';
 import { clipToBlockBoundary } from '../../lib/threadParentPreview';
 
 /** Roughly how much of the thread parent to show before offering "Show more". */
@@ -34,12 +34,12 @@ import {
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
-} from '@/components/ui/empty';
+} from '@agensis/ui/components/empty';
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupTextarea,
-} from '@/components/ui/input-group';
+} from '@agensis/ui/components/input-group';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -47,8 +47,8 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
-} from '@/components/ui/message-scroller';
-import { Spinner } from '@/components/ui/spinner';
+} from '@agensis/ui/components/message-scroller';
+import { Spinner } from '@agensis/ui/components/spinner';
 import { useComposerMentions } from '../../hooks/useComposerMentions';
 import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI';
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';

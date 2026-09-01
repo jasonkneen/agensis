@@ -6,9 +6,9 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+} from '@agensis/ui/components/dialog';
+import { Button } from '@agensis/ui/components/button';
+import { Input } from '@agensis/ui/components/input';
 import { cn } from '@/lib/utils';
 import {
   CHANNEL_TEMPLATES,

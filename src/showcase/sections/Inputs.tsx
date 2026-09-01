@@ -1,18 +1,18 @@
 import { useState } from 'react';
 import { SectionShell, Example } from '@/showcase/SectionShell';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { Label } from '@/components/ui/label';
-import { Checkbox } from '@/components/ui/checkbox';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Switch } from '@/components/ui/switch';
-import { Slider } from '@/components/ui/slider';
+import { Input } from '@agensis/ui/components/input';
+import { Textarea } from '@agensis/ui/components/textarea';
+import { Label } from '@agensis/ui/components/label';
+import { Checkbox } from '@agensis/ui/components/checkbox';
+import { RadioGroup, RadioGroupItem } from '@agensis/ui/components/radio-group';
+import { Switch } from '@agensis/ui/components/switch';
+import { Slider } from '@agensis/ui/components/slider';
 import {
   InputOTP,
   InputOTPGroup,
   InputOTPSlot,
   InputOTPSeparator,
-} from '@/components/ui/input-otp';
+} from '@agensis/ui/components/input-otp';
 import {
   Field,
   FieldLabel,
@@ -21,7 +21,7 @@ import {
   FieldGroup,
   FieldLegend,
   FieldSet,
-} from '@/components/ui/field';
+} from '@agensis/ui/components/field';
 import {
   InputGroup,
   InputGroupAddon,
@@ -29,7 +29,7 @@ import {
   InputGroupText,
   InputGroupInput,
   InputGroupTextarea,
-} from '@/components/ui/input-group';
+} from '@agensis/ui/components/input-group';
 import { Search, Mail, Send, Copy } from 'lucide-react';
 
 export default function InputsSection() {

@@ -17,17 +17,17 @@ import { usePaneSplit } from '../../hooks/usePaneSplit';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { AgentAvatar } from '../agents/AgentAvatar';
 import { viewPreferenceKey } from '../../lib/viewPreferences';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Input } from '@agensis/ui/components/input';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from '@/components/ui/empty';
+} from '@agensis/ui/components/empty';
 
 // ---------------------------------------------------------------------------
 // THE LIBRARY — every document the workspace can reach, in one place.

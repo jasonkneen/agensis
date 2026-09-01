@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown, MousePointerSquareDashed, Send, X } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
 import {
   Dialog,
   DialogContent,
@@ -9,12 +9,12 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Spinner } from '@/components/ui/spinner';
-import { Switch } from '@/components/ui/switch';
-import { Textarea } from '@/components/ui/textarea';
+} from '@agensis/ui/components/dialog';
+import { Field, FieldGroup, FieldLabel } from '@agensis/ui/components/field';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Spinner } from '@agensis/ui/components/spinner';
+import { Switch } from '@agensis/ui/components/switch';
+import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
 import type { DiagnosticsSnapshot } from '@/lib/feedbackDiagnostics';
 import { elementChipLabel, type ElementDescriptor } from '@/lib/feedbackElement';

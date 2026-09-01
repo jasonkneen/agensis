@@ -51,30 +51,30 @@ import { AuditLogPanel } from './AuditLogPanel';
 import { useGateways } from '../../hooks/useGateways';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
+} from '@agensis/ui/components/dialog';
 import {
   Field,
   FieldDescription,
   FieldGroup,
   FieldLabel,
-} from '@/components/ui/field';
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group';
-import { Input } from '@/components/ui/input';
-import { Item, ItemContent, ItemDescription, ItemTitle } from '@/components/ui/item';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Slider } from '@/components/ui/slider';
-import { Spinner } from '@/components/ui/spinner';
-import { Switch } from '@/components/ui/switch';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+} from '@agensis/ui/components/field';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@agensis/ui/components/input-group';
+import { Input } from '@agensis/ui/components/input';
+import { Item, ItemContent, ItemDescription, ItemTitle } from '@agensis/ui/components/item';
+import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Slider } from '@agensis/ui/components/slider';
+import { Spinner } from '@agensis/ui/components/spinner';
+import { Switch } from '@agensis/ui/components/switch';
+import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 import { cn } from '@/lib/utils';
 
 interface SettingsDialogProps {

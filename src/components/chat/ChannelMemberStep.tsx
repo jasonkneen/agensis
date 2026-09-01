@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, Search, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Button } from '@agensis/ui/components/button';
+import { Input } from '@agensis/ui/components/input';
 import { cn } from '@/lib/utils';
 import { apiAuthHeaders, apiUrl } from '@/lib/backendClient';
 import { agentAccentColor, agentHandle } from '@/lib/agentAccent';

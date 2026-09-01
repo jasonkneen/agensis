@@ -12,13 +12,13 @@ import {
   Trash2,
   Wrench,
 } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
-import { Spinner } from '@/components/ui/spinner';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Input } from '@agensis/ui/components/input';
+import { Textarea } from '@agensis/ui/components/textarea';
+import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@agensis/ui/components/empty';
+import { Spinner } from '@agensis/ui/components/spinner';
 import { cn } from '@/lib/utils';
 import type { WorkspaceAgent } from '@/types';
 import { usePaneSplit } from '../../hooks/usePaneSplit';

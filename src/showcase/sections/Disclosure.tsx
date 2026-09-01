@@ -6,20 +6,20 @@ import {
   AccordionItem,
   AccordionTrigger,
   AccordionContent,
-} from '@/components/ui/accordion';
+} from '@agensis/ui/components/accordion';
 import {
   Collapsible,
   CollapsibleTrigger,
   CollapsibleContent,
-} from '@/components/ui/collapsible';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { ScrollArea } from '@/components/ui/scroll-area';
+} from '@agensis/ui/components/collapsible';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@agensis/ui/components/tabs';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import {
   ResizablePanelGroup,
   ResizablePanel,
   ResizableHandle,
-} from '@/components/ui/resizable';
-import { Button } from '@/components/ui/button';
+} from '@agensis/ui/components/resizable';
+import { Button } from '@agensis/ui/components/button';
 
 const faqs = [
   {

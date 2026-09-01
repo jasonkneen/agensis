@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Captions, CaptionsOff, ChevronDown, GripVertical, Headphones, Radio, Volume2, VolumeX, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,7 +11,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
+} from '@agensis/ui/components/alert-dialog';
 import { CHROME_DEPTH } from '@/lib/chromeDepth';
 import {
   buildRoomDockParticipants,

@@ -13,11 +13,11 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Progress } from '@/components/ui/progress';
-import { Spinner } from '@/components/ui/spinner';
+import { Button } from '@agensis/ui/components/button';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@agensis/ui/components/dialog';
+import { Input } from '@agensis/ui/components/input';
+import { Progress } from '@agensis/ui/components/progress';
+import { Spinner } from '@agensis/ui/components/spinner';
 import { cn } from '@/lib/utils';
 import { apiAuthHeaders, apiBaseUrl, apiUrl } from '@/lib/backendClient';
 import {

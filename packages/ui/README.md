@@ -32,9 +32,11 @@ import { cn } from '@agensis/ui/lib/utils'
 import { Button } from '@agensis/ui'                    // barrel; pulls all 57
 ```
 
-`src/components/ui/*.tsx` in the app are temporary re-export shims so existing
-`@/components/ui/*` imports keep working. New code should deep-import from
-`@agensis/ui/components/*`. The shims go away once call sites are rewritten.
+The app deep-imports every primitive from this package; there are no re-export
+shims left in `src/components/ui/`, which now holds only `sonner.tsx` (it
+imports `@/hooks/useTheme`, so it cannot move here). Prefer the deep import
+over the barrel — the barrel pulls all 57 components, which production
+tree-shakes but vite dev and vitest do not.
 
 ## Rules
 
@@ -42,6 +44,7 @@ import { Button } from '@agensis/ui'                    // barrel; pulls all 57
   Leaves import their relative siblings only. `tests/unit/agensisUiPackage.test.ts`
   enforces both, plus the barrel's completeness.
 - `npx shadcn add` at the repo root writes into the **app** (`components.json`
-  aliases still point there) and would overwrite a shim. Add the component
-  there, then move it here by hand and leave a shim behind.
+  aliases still point there). Move the new file here by hand and import it from
+  `@agensis/ui/components/*`; do not leave a re-export shim behind in
+  `src/components/ui/` — `tests/unit/agensisUiPackage.test.ts` fails on one.
 - No AGPL code from the rest of the repository may be copied into this package.

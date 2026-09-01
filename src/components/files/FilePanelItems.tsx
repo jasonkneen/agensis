@@ -56,10 +56,10 @@ import {
   type SelectedPanelFile,
 } from '../../lib/uploadedFiles';
 import { formatBytes, type ProjectFileEntry, type ProjectFileSource } from '../chat/ComposerAddContent';
-import { Button } from '@/components/ui/button';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import { Spinner } from '@/components/ui/spinner';
-import { Textarea } from '@/components/ui/textarea';
+import { Button } from '@agensis/ui/components/button';
+import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
+import { Spinner } from '@agensis/ui/components/spinner';
+import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import type { UploadedFile, WorkspaceAgent } from '../../types';

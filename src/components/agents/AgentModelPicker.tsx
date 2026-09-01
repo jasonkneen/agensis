@@ -19,14 +19,14 @@ import {
   normalizeAgentRunMode,
   type AgentExecutionRuntime,
 } from '../../lib/agentTemplates';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@agensis/ui/components/dropdown-menu';
 import { cn } from '@/lib/utils';
 
 function executionRuntime(agent: WorkspaceAgent): AgentExecutionRuntime {

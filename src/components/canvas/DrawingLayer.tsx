@@ -4,9 +4,9 @@ import { CanvasObjectRenderer } from './CanvasObjectRenderer';
 import { Trash2, Group, Ungroup, Link2, Unlink, ListTodo } from 'lucide-react';
 import type { CanvasObject, CanvasTool, CanvasObjectType, CanvasGroup, Task, WorkspaceAgent, PresenceVisibilityMode, Document } from '../../types';
 import type { CreateTaskInput } from '../../hooks/useTasks';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
 
 interface DrawingLayerProps {

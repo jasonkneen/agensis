@@ -57,9 +57,9 @@ import {
   type TaskAssignmentFilter,
   type TaskSpan,
 } from './taskSchedule';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback } from '@agensis/ui/components/avatar';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
 import {
   Command,
   CommandEmpty,
@@ -67,41 +67,41 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-} from '@/components/ui/command';
+} from '@agensis/ui/components/command';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from '@/components/ui/empty';
-import { Input } from '@/components/ui/input';
+} from '@agensis/ui/components/empty';
+import { Input } from '@agensis/ui/components/input';
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
   InputGroupInput,
-} from '@/components/ui/input-group';
+} from '@agensis/ui/components/input-group';
 import {
   Item,
   ItemActions,
   ItemContent,
   ItemGroup,
   ItemTitle,
-} from '@/components/ui/item';
+} from '@agensis/ui/components/item';
 import {
   Marker,
   MarkerContent,
   MarkerIcon,
-} from '@/components/ui/marker';
+} from '@agensis/ui/components/marker';
 import {
   NativeSelect,
   NativeSelectOptGroup,
   NativeSelectOption,
-} from '@/components/ui/native-select';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Textarea } from '@/components/ui/textarea';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+} from '@agensis/ui/components/native-select';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Textarea } from '@agensis/ui/components/textarea';
+import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 import { cn } from '@/lib/utils';
 
 interface TasksWindowContentProps {

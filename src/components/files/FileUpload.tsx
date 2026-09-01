@@ -12,15 +12,15 @@ import {
   Upload,
 } from 'lucide-react';
 import type { UploadedFile } from '../../types';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
-import { Input } from '@/components/ui/input';
-import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
-import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@/components/ui/item';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Alert, AlertDescription } from '@agensis/ui/components/alert';
+import { Button } from '@agensis/ui/components/button';
+import { Card, CardContent } from '@agensis/ui/components/card';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@agensis/ui/components/empty';
+import { Input } from '@agensis/ui/components/input';
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@agensis/ui/components/input-group';
+import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@agensis/ui/components/item';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 import { cn } from '@/lib/utils';
 
 interface FileUploadProps {

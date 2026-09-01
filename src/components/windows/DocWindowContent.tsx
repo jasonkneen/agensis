@@ -7,10 +7,10 @@ import { DocumentVersionHistoryPanel } from '../editor/DocumentVersionHistoryPan
 import { useDocumentVersions } from '../../hooks/useDocumentVersions';
 import { apiAuthHeaders, apiUrl } from '../../lib/backendClient';
 import { extractSseDataLines, parseAiStreamPayload } from '../../lib/chatStream';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
+import { Button } from '@agensis/ui/components/button';
+import { Input } from '@agensis/ui/components/input';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Separator } from '@agensis/ui/components/separator';
 import { sanitizeHtml, sanitizeClipboardHtml } from '@/lib/sanitize';
 
 interface DocWindowContentProps {

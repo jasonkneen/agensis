@@ -13,16 +13,16 @@ import {
   type SuggestionKind,
   type SuggestionSet,
 } from '../../lib/suggestions';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from '@/components/ui/empty';
-import { ScrollArea } from '@/components/ui/scroll-area';
+} from '@agensis/ui/components/empty';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
 
 // Reviewing what this workspace's conversations suggested keeping.
 //

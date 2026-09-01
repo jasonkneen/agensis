@@ -2,12 +2,12 @@ import { History, RotateCcw, X } from 'lucide-react';
 import type { DocumentVersion } from '../../types';
 import { stripHtml } from '../../lib/utils';
 import { sanitizeHtml } from '@/lib/sanitize';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty';
-import { Item, ItemActions, ItemContent, ItemDescription, ItemHeader, ItemTitle } from '@/components/ui/item';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Spinner } from '@/components/ui/spinner';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@agensis/ui/components/empty';
+import { Item, ItemActions, ItemContent, ItemDescription, ItemHeader, ItemTitle } from '@agensis/ui/components/item';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Spinner } from '@agensis/ui/components/spinner';
 
 interface DocumentVersionHistoryProps {
   versions: DocumentVersion[];

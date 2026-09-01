@@ -38,19 +38,19 @@ import {
   isLiveActivityPlaceholder,
 } from '../../lib/activityStatus';
 import type { CanvasGroup, ChatSession, Document, Message as ChatMessage, MessageAttachment, UploadedFile, WorkspaceAgent } from '../../types';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
-} from '@/components/ui/empty';
+} from '@agensis/ui/components/empty';
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
   InputGroupTextarea,
-} from '@/components/ui/input-group';
+} from '@agensis/ui/components/input-group';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -58,13 +58,13 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
-} from '@/components/ui/message-scroller';
+} from '@agensis/ui/components/message-scroller';
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from '@/components/ui/popover';
-import { Spinner } from '@/components/ui/spinner';
+} from '@agensis/ui/components/popover';
+import { Spinner } from '@agensis/ui/components/spinner';
 import { useComposerMentions } from '../../hooks/useComposerMentions';
 import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI';
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';

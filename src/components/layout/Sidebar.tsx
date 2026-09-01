@@ -52,9 +52,9 @@ import {
 import { ThemeToggle } from './ThemeToggle';
 import type { ThemeMode } from '../../hooks/useTheme';
 import type { AgentConnection, ChatSession, Document, FloatingWindow, ItemPresenceUser, Workspace, WorkspaceAgent } from '../../types';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Button } from '@/components/ui/button';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Avatar, AvatarFallback } from '@agensis/ui/components/avatar';
+import { Button } from '@agensis/ui/components/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@agensis/ui/components/collapsible';
 import {
  ContextMenu,
  ContextMenuContent,
@@ -65,16 +65,16 @@ import {
  ContextMenuSubContent,
  ContextMenuSubTrigger,
  ContextMenuTrigger,
-} from '@/components/ui/context-menu';
+} from '@agensis/ui/components/context-menu';
 import {
  DropdownMenu,
  DropdownMenuContent,
  DropdownMenuItem,
  DropdownMenuSeparator,
  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
+} from '@agensis/ui/components/dropdown-menu';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Separator } from '@agensis/ui/components/separator';
 import { AccountDialog } from '../account/AccountDialog';
 import { AgentAvatar } from '../agents/AgentAvatar';
 import { AgentStatusFeed } from './AgentStatusFeed';

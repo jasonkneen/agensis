@@ -42,7 +42,7 @@ import {
   type AttachmentPreviewState,
   type MessageAttachment,
 } from '../../lib/messageAttachments';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   Dialog,
   DialogContent,
@@ -51,7 +51,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '@/components/ui/dialog';
+} from '@agensis/ui/components/dialog';
 import { cn } from '@/lib/utils';
 
 const CHIP_CLASS = 'inline-flex max-w-[260px] items-center gap-2 rounded-md border border-border bg-muted/50 px-2 py-1.5 text-left text-xs';

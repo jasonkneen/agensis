@@ -4,16 +4,16 @@ import type { WorkspaceMember } from '../../hooks/useSharing';
 import {
   Avatar,
   AvatarFallback,
-} from '@/components/ui/avatar';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+} from '@agensis/ui/components/avatar';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
+} from '@agensis/ui/components/dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,14 +21,14 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@agensis/ui/components/dropdown-menu';
 import {
   Field,
   FieldDescription,
   FieldGroup,
   FieldLabel,
-} from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
+} from '@agensis/ui/components/field';
+import { Input } from '@agensis/ui/components/input';
 import {
   Item,
   ItemActions,
@@ -36,9 +36,9 @@ import {
   ItemDescription,
   ItemGroup,
   ItemTitle,
-} from '@/components/ui/item';
-import { Switch } from '@/components/ui/switch';
-import { Spinner } from '@/components/ui/spinner';
+} from '@agensis/ui/components/item';
+import { Switch } from '@agensis/ui/components/switch';
+import { Spinner } from '@agensis/ui/components/spinner';
 
 const ROLE_LABELS: Record<string, string> = {
   owner: 'Owner',

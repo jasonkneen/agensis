@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
+import { Spinner } from '@agensis/ui/components/spinner';
 import { HUDDLE_NOTES_MAX_LENGTH } from '@/lib/huddleDock';
 import { useHuddleRecord } from '@/hooks/useHuddle';
 import { useHuddleSession } from './HuddleSessionContext';

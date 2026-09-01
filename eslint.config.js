@@ -75,18 +75,5 @@ export default tseslint.config(
     languageOptions: {
       sourceType: 'module',
     },
-  },
-  {
-    // The 57 files in src/components/ui/ are temporary re-export shims for
-    // @agensis/ui (`export * from '@agensis/ui/components/<x>'`). react-refresh
-    // cannot see through a star re-export, so each one raised
-    // "can't verify that `export *` only exports components" — 57 warnings that
-    // took the repo from 30 to 87 and buried the 18 real ones. The shims are
-    // deleted once call sites are rewritten to import the package directly;
-    // this block goes with them.
-    files: ['src/components/ui/*.tsx'],
-    rules: {
-      'react-refresh/only-export-components': 'off',
-    },
   }
 );

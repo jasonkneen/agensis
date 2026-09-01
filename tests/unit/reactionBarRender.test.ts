@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { ReactionBar } from '../../src/components/chat/ReactionBar';
-import { TooltipProvider } from '../../src/components/ui/tooltip';
+import { TooltipProvider } from '@agensis/ui/components/tooltip';
 
 // The claims a pure test cannot settle: these components MOUNT, and what they
 // put in the accessibility tree is what a screen reader needs.

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, CornerLeftUp } from 'lucide-react';
 import type { AgentConnection, ChatSession, Task, WorkspaceAgent } from '../../types';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import { KIND_META, STATUS_META, type ConnKind, type NodeStatus } from './agentNetworkModel';
 import {
   bezierPoint,

@@ -1,11 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { ArrowRight, GitBranch, Loader2, Lock, Mail, Sparkles } from 'lucide-react';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Field, FieldGroup } from '@/components/ui/field';
-import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
-import { Spinner } from '@/components/ui/spinner';
+import { Alert, AlertDescription } from '@agensis/ui/components/alert';
+import { Button } from '@agensis/ui/components/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@agensis/ui/components/card';
+import { Field, FieldGroup } from '@agensis/ui/components/field';
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@agensis/ui/components/input-group';
+import { Spinner } from '@agensis/ui/components/spinner';
 import { evaluatePassword, PASSWORD_MIN_CLASSES, PASSWORD_MIN_LENGTH } from '../../lib/passwordPolicy';
 import type { SocialAuthProvider } from '../../lib/socialAuth';
 

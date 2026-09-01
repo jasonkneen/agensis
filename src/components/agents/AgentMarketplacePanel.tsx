@@ -1,19 +1,19 @@
 import { useMemo, useState } from 'react';
 import { BriefcaseBusiness, Check, Copy, Search, Store } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
+} from '@agensis/ui/components/dialog';
+import { Input } from '@agensis/ui/components/input';
 import {
   NativeSelect,
   NativeSelectOption,
-} from '@/components/ui/native-select';
-import { Textarea } from '@/components/ui/textarea';
+} from '@agensis/ui/components/native-select';
+import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
 import { useMarketplace } from '../../hooks/useMarketplace';
 import {

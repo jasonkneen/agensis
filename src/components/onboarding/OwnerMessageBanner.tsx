@@ -1,5 +1,5 @@
 import { Megaphone, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import { useOwnerMessage } from '@/lib/ownerMessageContext';
 
 /**

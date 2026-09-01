@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { Button } from '@/components/ui/button';
-import { Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger } from '@/components/ui/popover';
-import { Separator } from '@/components/ui/separator';
+import { Button } from '@agensis/ui/components/button';
+import { Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger } from '@agensis/ui/components/popover';
+import { Separator } from '@agensis/ui/components/separator';
 import { cn } from '@/lib/utils';
 import { useAgentRegistrations } from '../../hooks/useAgentRegistrations';
 import { useActivity } from '../../hooks/useActivity';

@@ -12,17 +12,17 @@ import {
 } from 'lucide-react';
 
 import { SectionShell, Example } from '@/showcase/SectionShell';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   ButtonGroup,
   ButtonGroupSeparator,
   ButtonGroupText,
-} from '@/components/ui/button-group';
-import { Toggle } from '@/components/ui/toggle';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { Badge } from '@/components/ui/badge';
-import { Kbd, KbdGroup } from '@/components/ui/kbd';
-import { Spinner } from '@/components/ui/spinner';
+} from '@agensis/ui/components/button-group';
+import { Toggle } from '@agensis/ui/components/toggle';
+import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
+import { Badge } from '@agensis/ui/components/badge';
+import { Kbd, KbdGroup } from '@agensis/ui/components/kbd';
+import { Spinner } from '@agensis/ui/components/spinner';
 
 export default function ActionsSection() {
   const [bold, setBold] = useState(false);

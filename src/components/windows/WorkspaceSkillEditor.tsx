@@ -13,9 +13,9 @@ import {
   type WorkspaceSkill,
   type WorkspaceSkillDraft,
 } from '../../lib/workspaceSkills';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
+import { Button } from '@agensis/ui/components/button';
+import { Input } from '@agensis/ui/components/input';
+import { Textarea } from '@agensis/ui/components/textarea';
 
 // ---------------------------------------------------------------------------
 // Write a workspace skill.

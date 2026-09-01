@@ -1,6 +1,6 @@
 import { AlertCircle, Check, RefreshCw, WifiOff } from 'lucide-react';
 import { useState } from 'react';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Alert, AlertDescription } from '@agensis/ui/components/alert';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -10,8 +10,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import { Button } from '@/components/ui/button';
+} from '@agensis/ui/components/alert-dialog';
+import { Button } from '@agensis/ui/components/button';
 import { cn } from '@/lib/utils';
 
 interface NetworkStatusBarProps {

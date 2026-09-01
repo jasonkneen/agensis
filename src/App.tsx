@@ -40,9 +40,9 @@ import { RegistrationApprovalPopup } from './components/agents/RegistrationAppro
 import { WebMcpBridge } from './components/webmcp/WebMcpBridge';
 import { FeedbackButton } from './components/feedback/FeedbackButton';
 import { NotificationsBell } from './components/notifications/NotificationsBell';
-import { Separator } from './components/ui/separator';
+import { Separator } from '@agensis/ui/components/separator';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
-import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@agensis/ui/components/avatar';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from './lib/openpets';
 import {
   AlertDialog,
@@ -54,10 +54,10 @@ import {
   AlertDialogHeader,
   AlertDialogMedia,
   AlertDialogTitle,
-} from './components/ui/alert-dialog';
-import { Badge } from './components/ui/badge';
-import { Button } from './components/ui/button';
-import { Card, CardContent } from './components/ui/card';
+} from '@agensis/ui/components/alert-dialog';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Card, CardContent } from '@agensis/ui/components/card';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -65,7 +65,7 @@ import {
   ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from './components/ui/context-menu';
+} from '@agensis/ui/components/context-menu';
 import {
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -73,11 +73,11 @@ import {
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
-} from './components/ui/dropdown-menu';
-import { Switch } from './components/ui/switch';
-import { ScrollArea } from './components/ui/scroll-area';
-import { Spinner } from './components/ui/spinner';
-import { TooltipProvider } from './components/ui/tooltip';
+} from '@agensis/ui/components/dropdown-menu';
+import { Switch } from '@agensis/ui/components/switch';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Spinner } from '@agensis/ui/components/spinner';
+import { TooltipProvider } from '@agensis/ui/components/tooltip';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
 import { AppUpdateManager } from './components/AppUpdateManager';

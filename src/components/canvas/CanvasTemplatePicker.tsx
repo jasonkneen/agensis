@@ -4,10 +4,10 @@ import type { CanvasAppDefinition } from '../../lib/canvasApps';
 import { CANVAS_APPS, APPLETS_FOLDER, extractHtmlFromDocContent } from '../../lib/canvasApps';
 import type { Document } from '../../types';
 import { backendClient } from '../../lib/backendClient';
-import { Badge } from '@/components/ui/badge';
-import { Card, CardContent } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { Badge } from '@agensis/ui/components/badge';
+import { Card, CardContent } from '@agensis/ui/components/card';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@agensis/ui/components/dialog';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
 
 interface CanvasTemplatePickerProps {
   open: boolean;

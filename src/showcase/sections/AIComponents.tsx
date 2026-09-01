@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 
 import { SectionShell, Example } from '@/showcase/SectionShell';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   Attachment,
   AttachmentAction,
@@ -24,13 +24,13 @@ import {
   AttachmentGroup,
   AttachmentMedia,
   AttachmentTitle,
-} from '@/components/ui/attachment';
+} from '@agensis/ui/components/attachment';
 import {
   Bubble,
   BubbleContent,
   BubbleGroup,
   BubbleReactions,
-} from '@/components/ui/bubble';
+} from '@agensis/ui/components/bubble';
 import {
   Message,
   MessageAvatar,
@@ -38,7 +38,7 @@ import {
   MessageFooter,
   MessageGroup,
   MessageHeader,
-} from '@/components/ui/message';
+} from '@agensis/ui/components/message';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -46,8 +46,8 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
-} from '@/components/ui/message-scroller';
-import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker';
+} from '@agensis/ui/components/message-scroller';
+import { Marker, MarkerContent, MarkerIcon } from '@agensis/ui/components/marker';
 
 const bubbleVariantOptions = [
   'default',

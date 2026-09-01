@@ -4,8 +4,8 @@ import type { Document } from '../../types';
 import { extractHtmlFromDocContent } from '../../lib/canvasApps';
 import { usePaneSplit } from '../../hooks/usePaneSplit';
 import { viewPreferenceKey } from '../../lib/viewPreferences';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Button } from '@agensis/ui/components/button';
+import { Input } from '@agensis/ui/components/input';
 
 // Lazy: CodeMirror and its grammars stay out of the main bundle. The
 // service-worker precache size is a known sore point, and most sessions never

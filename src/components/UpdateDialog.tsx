@@ -6,9 +6,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+} from '@agensis/ui/components/dialog';
+import { Button } from '@agensis/ui/components/button';
+import { Badge } from '@agensis/ui/components/badge';
 import type { ReleaseNote } from '@/lib/releaseNotes';
 import { APP_VERSION, BUILD_ID } from '@/lib/appVersion';
 import { FeatureGallery } from '@/components/wireframe/FeatureGallery';

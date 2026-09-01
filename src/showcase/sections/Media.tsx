@@ -6,8 +6,8 @@ import {
   CarouselItem,
   CarouselPrevious,
   CarouselNext,
-} from '@/components/ui/carousel';
-import { Calendar } from '@/components/ui/calendar';
+} from '@agensis/ui/components/carousel';
+import { Calendar } from '@agensis/ui/components/calendar';
 
 const slides = ['One', 'Two', 'Three', 'Four', 'Five'];
 

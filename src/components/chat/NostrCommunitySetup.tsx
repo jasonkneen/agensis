@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Globe2, Link2, Plus, Trash2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
+import { Button } from '@agensis/ui/components/button';
+import { Checkbox } from '@agensis/ui/components/checkbox';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,9 +11,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import { DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
+} from '@agensis/ui/components/alert-dialog';
+import { DialogDescription, DialogHeader, DialogTitle } from '@agensis/ui/components/dialog';
+import { Input } from '@agensis/ui/components/input';
 import {
   connectNostrCommunity,
   getNostrChannels,

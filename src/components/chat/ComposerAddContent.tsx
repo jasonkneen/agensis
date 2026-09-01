@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Bot, Command as CommandIcon, FileText, FolderOpen, HardDrive, Layers, Paperclip, Sparkles, Upload, Wrench, X } from 'lucide-react';
 import type { CanvasGroup, Document, UploadedFile, WorkspaceAgent } from '../../types';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import { AgentAvatar } from '@/components/agents/AgentAvatar';
 import { agentHandle } from '../../lib/agentAccent';
 import { safeAttachmentSize } from '../../lib/messageAttachments';

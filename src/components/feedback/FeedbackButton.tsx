@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { MessageSquareWarning } from 'lucide-react';
 import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import { apiAuthHeaders, apiUrl } from '@/lib/backendClient';
 import { BUILD_ID } from '@/lib/appVersion';
 import { CHROME_DEPTH } from '@/lib/chromeDepth';

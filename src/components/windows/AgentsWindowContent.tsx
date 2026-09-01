@@ -55,8 +55,8 @@ import {
   sharePolicyFromCapabilities,
 } from '../../lib/agentSharePolicy';
 import { AgentModelPicker } from '@/components/agents/AgentModelPicker';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
 import { AgentNetworkDiagram } from './AgentNetworkDiagram';
 import {
   Dialog,
@@ -64,28 +64,28 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
+} from '@agensis/ui/components/dialog';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from '@/components/ui/empty';
+} from '@agensis/ui/components/empty';
 import {
   Field,
   FieldDescription,
   FieldGroup,
   FieldLabel,
-} from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
+} from '@agensis/ui/components/field';
+import { Input } from '@agensis/ui/components/input';
 import {
   NativeSelect,
   NativeSelectOption,
-} from '@/components/ui/native-select';
-import { Slider } from '@/components/ui/slider';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Textarea } from '@/components/ui/textarea';
+} from '@agensis/ui/components/native-select';
+import { Slider } from '@agensis/ui/components/slider';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@agensis/ui/components/tabs';
+import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
 import {
   MAX_SPEED,

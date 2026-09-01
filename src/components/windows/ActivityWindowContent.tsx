@@ -14,24 +14,24 @@ import {
   X,
 } from 'lucide-react';
 import type { ActivityEvent, ActivityEventType } from '../../types';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from '@/components/ui/empty';
-import { Marker, MarkerContent } from '@/components/ui/marker';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Spinner } from '@/components/ui/spinner';
+} from '@agensis/ui/components/empty';
+import { Marker, MarkerContent } from '@agensis/ui/components/marker';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Spinner } from '@agensis/ui/components/spinner';
 import {
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-} from '@/components/ui/tabs';
-import { Textarea } from '@/components/ui/textarea';
+} from '@agensis/ui/components/tabs';
+import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
 import {
   activityEntryLabel,

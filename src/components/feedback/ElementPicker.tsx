@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { MousePointerSquareDashed, X } from 'lucide-react';
 import { describeElement, elementChipLabel, type ElementDescriptor } from '@/lib/feedbackElement';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------

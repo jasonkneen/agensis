@@ -1,8 +1,8 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { BookOpenCheck, Megaphone, RotateCw, Search, Users, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Skeleton } from '@/components/ui/skeleton';
+import { Button } from '@agensis/ui/components/button';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Skeleton } from '@agensis/ui/components/skeleton';
 import { cn } from '@/lib/utils';
 import {
   FOCUS_RING,

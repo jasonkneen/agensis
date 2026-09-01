@@ -6,7 +6,7 @@ import { CANVAS_APPS, parseAppletState, extractHtmlFromDocContent, makeAppletSta
 import { apiAuthHeaders, backendClient } from '../../lib/backendClient';
 import { filterAppletTaskUpdates } from '../../lib/appletBridge';
 import { shouldFetchWithApiAuth, useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 
 interface CanvasObjectRendererProps {
   obj: CanvasObject;

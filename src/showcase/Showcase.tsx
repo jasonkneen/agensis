@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Monitor, Moon, Sun } from 'lucide-react';
-import { TooltipProvider } from '@/components/ui/tooltip';
+import { TooltipProvider } from '@agensis/ui/components/tooltip';
 import { Toaster } from '@/components/ui/sonner';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import { useTheme, type ThemeMode } from '@/hooks/useTheme';
 import { THEME_PRESETS, applyThemePreset, getStoredPreset } from './themePresets';
 import { NEO_THEMES, NEO_GROUPS, applyNeoTheme, getStoredNeoTheme } from './neoThemes';

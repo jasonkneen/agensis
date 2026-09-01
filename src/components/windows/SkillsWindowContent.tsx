@@ -34,17 +34,17 @@ import { viewPreferenceKey } from '../../lib/viewPreferences';
 import { WorkspaceSkillEditor } from './WorkspaceSkillEditor';
 import { AgentAvatar } from '../agents/AgentAvatar';
 import { MarkdownContent } from '../chat/MarkdownContent';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Input } from '@agensis/ui/components/input';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from '@/components/ui/empty';
+} from '@agensis/ui/components/empty';
 
 // One agent on a skill row. The selected avatar (automatic Blobatar by
 // default) carries identity; initials remain only as a fallback for old or

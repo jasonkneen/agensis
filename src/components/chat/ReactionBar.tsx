@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
 import { Smile } from 'lucide-react';
-import { Button } from '../ui/button';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import { Button } from '@agensis/ui/components/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@agensis/ui/components/popover';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@agensis/ui/components/tooltip';
 import { cn } from '../../lib/utils';
 import {
   REACTION_PICKER_GROUPS,

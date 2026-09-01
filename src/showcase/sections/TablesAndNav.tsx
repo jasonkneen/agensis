@@ -9,7 +9,7 @@ import {
   TableRow,
   TableCell,
   TableCaption,
-} from '@/components/ui/table';
+} from '@agensis/ui/components/table';
 import {
   Pagination,
   PaginationContent,
@@ -18,7 +18,7 @@ import {
   PaginationLink,
   PaginationNext,
   PaginationPrevious,
-} from '@/components/ui/pagination';
+} from '@agensis/ui/components/pagination';
 import {
   Breadcrumb,
   BreadcrumbList,
@@ -27,7 +27,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
   BreadcrumbEllipsis,
-} from '@/components/ui/breadcrumb';
+} from '@agensis/ui/components/breadcrumb';
 
 type Invoice = {
   invoice: string;

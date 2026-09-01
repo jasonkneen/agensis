@@ -156,20 +156,28 @@ describe('@agensis/ui isolation', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('backs every app shim with a real package module', () => {
-    // src/components/ui/*.tsx are temporary `export *` shims. A shim pointing
-    // at a module that does not exist fails at import time, not at build time.
-    const shimDir = path.join(repoRoot, 'src/components/ui');
-    const broken: string[] = [];
-    for (const file of fs.readdirSync(shimDir).filter(f => f.endsWith('.tsx'))) {
-      const source = read(path.join(shimDir, file));
-      const match = source.match(/export \* from '@agensis\/ui\/components\/([^']+)'/);
-      if (!match) continue; // sonner.tsx is a real component, not a shim
-      if (!fs.existsSync(path.join(componentDir, `${match[1]}.tsx`))) {
-        broken.push(`${file} -> ${match[1]}`);
-      }
-    }
-    expect(broken).toEqual([]);
+  it('keeps the app free of re-export shims', () => {
+    // The 57 `export * from '@agensis/ui/components/<x>'` files are gone; call
+    // sites import the package directly. A new one would reintroduce the layer
+    // that made "edit the component" mean editing a file that forwards
+    // elsewhere — and `npx shadcn add` writes exactly such a file into this
+    // directory without asking.
+    const appUiDir = path.join(repoRoot, 'src/components/ui');
+    const shims = fs
+      .readdirSync(appUiDir)
+      .filter(f => f.endsWith('.tsx'))
+      .filter(f => /export \* from '@agensis\/ui\/components\//.test(read(path.join(appUiDir, f))));
+
+    expect(shims).toEqual([]);
+  });
+
+  it('leaves sonner in the app, where its useTheme dependency lives', () => {
+    // The one component that did NOT move: it imports @/hooks/useTheme, which
+    // would drag an app dependency into a package that must stay liftable.
+    const sonner = path.join(repoRoot, 'src/components/ui/sonner.tsx');
+    expect(fs.existsSync(sonner)).toBe(true);
+    expect(read(sonner)).toContain('@/hooks/useTheme');
+    expect(fs.existsSync(path.join(componentDir, 'sonner.tsx'))).toBe(false);
   });
 });
 

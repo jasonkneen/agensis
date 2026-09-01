@@ -1,11 +1,11 @@
 import { Minus, MoreHorizontal, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@agensis/ui/components/dropdown-menu';
 import { cn } from '@/lib/utils';
 import type { FloatingWindow } from '../../types';
 import { GROUP_FRAME_PADDING, GROUP_HEADER_HEIGHT, type GroupBounds } from '../../lib/windowGroups';

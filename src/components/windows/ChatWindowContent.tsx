@@ -134,40 +134,40 @@ import type {
   UploadedFile,
   WorkspaceAgent,
 } from '../../types';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Badge } from '@agensis/ui/components/badge';
 import {
   Command,
   CommandEmpty,
   CommandGroup,
   CommandItem,
   CommandList,
-} from '@/components/ui/command';
+} from '@agensis/ui/components/command';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from '@/components/ui/empty';
+} from '@agensis/ui/components/empty';
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
   InputGroupTextarea,
-} from '@/components/ui/input-group';
+} from '@agensis/ui/components/input-group';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@agensis/ui/components/dropdown-menu';
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from '@/components/ui/popover';
+} from '@agensis/ui/components/popover';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -175,8 +175,8 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
-} from '@/components/ui/message-scroller';
-import { Spinner } from '@/components/ui/spinner';
+} from '@agensis/ui/components/message-scroller';
+import { Spinner } from '@agensis/ui/components/spinner';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -186,16 +186,16 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
+} from '@agensis/ui/components/alert-dialog';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Textarea } from '@/components/ui/textarea';
+} from '@agensis/ui/components/dialog';
+import { Checkbox } from '@agensis/ui/components/checkbox';
+import { Textarea } from '@agensis/ui/components/textarea';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { useMyThreads } from '../../hooks/useMyThreads';
 import { agentAccentColor, agentAccentStyle, agentHandle, validAgentAccentColor } from '../../lib/agentAccent';

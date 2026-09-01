@@ -1,18 +1,18 @@
 import { useEffect, useState } from 'react';
 import { CreditCard, Sparkles } from 'lucide-react';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback } from '@agensis/ui/components/avatar';
+import { Button } from '@agensis/ui/components/button';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+} from '@agensis/ui/components/dialog';
+import { Checkbox } from '@agensis/ui/components/checkbox';
+import { Field, FieldDescription, FieldLabel } from '@agensis/ui/components/field';
+import { Input } from '@agensis/ui/components/input';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@agensis/ui/components/tabs';
 import { cn } from '@/lib/utils';
 import { useUserProfile } from '../../hooks/useUserProfile';
 import { evaluatePassword, PASSWORD_MIN_CLASSES, PASSWORD_MIN_LENGTH } from '../../lib/passwordPolicy';

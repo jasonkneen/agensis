@@ -5,9 +5,9 @@ import { windowLabel, type WorkspacePresenceUser } from '../../hooks/useWorkspac
 import { CHROME_DEPTH } from '../../lib/chromeDepth';
 import { cn } from '../../lib/utils';
 import { AgentAvatar } from '../agents/AgentAvatar';
-import { Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount } from '../ui/avatar';
-import { Badge } from '../ui/badge';
-import { Button } from '../ui/button';
+import { Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount } from '@agensis/ui/components/avatar';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,9 +17,9 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '../ui/dropdown-menu';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
-import { Separator } from '../ui/separator';
+} from '@agensis/ui/components/dropdown-menu';
+import { Popover, PopoverContent, PopoverTrigger } from '@agensis/ui/components/popover';
+import { Separator } from '@agensis/ui/components/separator';
 
 /**
  * The workspace presence roster — the panel behind the avatar pill in the
