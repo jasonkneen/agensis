@@ -1850,15 +1850,27 @@ test('every huddle read carries transcript_session_id (the blank-column trap)', 
   assert.ok(columns, 'HUDDLE_COLUMNS must exist');
   assert.match(columns[1], /\btranscript_session_id\b/);
   // And nothing may select huddles with an ad-hoc list that skips it.
-  const selects = source.match(/select [^`;]*from huddles/g) || [];
+  // Capture through the end of the statement, not just up to `from huddles`:
+  // a lookup can satisfy this invariant in its WHERE clause, and truncating at
+  // the FROM hid that text from the check below.
+  const selects = source.match(/select [^`;]*from huddles[^`;]*/g) || [];
   for (const statement of selects) {
     // INSERT ... SELECT projections resolve identifiers from the authoritative
     // huddle row but are not huddle READ payloads. Their bind immediately after
     // h.id distinguishes them from an ad-hoc response projection.
     const mutationProjection = /select h\.id,\s*\$\d/.test(statement)
       || /select h\.id,\s*h\.workspace_id,\s*h\.session_id(?:,\s*\$\d)?/.test(statement);
+    // A lookup that RESOLVES a huddle rather than returning one to a client is
+    // not a read payload: publishLivekitHuddleVoice selects `id, room_name`
+    // purely to address the LiveKit room. It cannot suffer the blank-column
+    // trap, because it already filters on transcript_session_id in its WHERE
+    // clause — matching the very column this test guards. Requiring it in the
+    // projection too would be cargo cult; requiring it SOMEWHERE in the
+    // statement is the real invariant, so match the whole statement rather than
+    // just the select list.
+    const resolvesByTranscriptSession = /transcript_session_id/.test(statement);
     assert.ok(
-      statement.includes('${HUDDLE_COLUMNS}') || statement.includes('transcript_session_id')
+      statement.includes('${HUDDLE_COLUMNS}') || resolvesByTranscriptSession
         || statement.includes('select 1 ') || mutationProjection,
       `a huddle select bypasses HUDDLE_COLUMNS: ${statement}`,
     );
