@@ -64,9 +64,17 @@ describe('HuddleAgentStrip', () => {
     render();
     const rendered = chips();
     expect(rendered).toHaveLength(3);
-    // Initials, so a strip of avatar-less agents is still tellable apart, plus
-    // the shortcut digit — the binding has to be visible, not hidden in a menu.
-    expect(rendered.map(chip => chip.textContent)).toEqual(['CO1', 'AL2', 'CR3']);
+    // An agent with no avatar of its own resolves to an automatic blobatar
+    // marker (src/lib/agentAvatars.ts), which renders as an image — so the
+    // chip's text is the shortcut digit alone. This asserted 'CO1'/'AL2'/'CR3'
+    // until "voice and hangouts" (730d5082, 31 Aug) introduced those markers;
+    // the digits are the part that has to stay visible, since the binding must
+    // not be hidden in a menu.
+    expect(rendered.map(chip => chip.textContent)).toEqual(['1', '2', '3']);
+    // Identity is still carried, just as an image rather than initials.
+    expect(rendered.every(chip => chip.querySelector('img, .animated-pet-avatar, span'))).toBe(true);
+    // The house rule the original assertion was really guarding: never an emoji.
+    expect(rendered.some(chip => /\p{Extended_Pictographic}/u.test(chip.textContent || ''))).toBe(false);
     expect(rendered.map(chip => chip.dataset.active)).toEqual(['true', 'false', 'false']);
     expect(rendered[0].getAttribute('aria-pressed')).toBe('true');
     // The handle is on the chip, so "who am I about to talk to" is hoverable.

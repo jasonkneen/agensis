@@ -100,15 +100,17 @@ describe('SkillsWindowContent shows the body', () => {
     expect(container.textContent).toMatch(/nothing is missing on your side/i);
   });
 
-  it('shows an agent chip with initials, never an emoji or an icon', () => {
+  it('shows an agent chip with a generated avatar, never an emoji', () => {
     render();
     const chip = [...container.querySelectorAll('[role="button"]')]
       .find(el => el.textContent?.includes('Coder'));
     expect(chip, 'expected a chip for Coder on the deploy-targets row').toBeTruthy();
-    // Initials on the agent's own accent colour, the house identity pattern.
+    // An agent with no avatar resolves to an automatic blobatar marker
+    // (src/lib/agentAvatars.ts), so the disc carries an image rather than the
+    // 'CO' initials this asserted before "voice and hangouts" (730d5082).
     const disc = chip!.querySelector('span[style*="background"]');
-    expect(disc?.textContent).toBe('CO');
-    // No emoji anywhere in the chip — absolute house rule.
+    expect(disc, 'expected the agent disc on its own accent colour').toBeTruthy();
+    // The rule this test exists for, unchanged: no emoji anywhere in the chip.
     expect(chip!.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
   });
 
