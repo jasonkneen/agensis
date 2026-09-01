@@ -5,7 +5,10 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', '.netlify/**', '.claude/**', '.worktrees/**', 'build/**', 'release/**', 'landing/**'] },
+  // 'dist' is root-relative in flat config, so a built library needs naming
+  // separately — without 'packages/*/dist' the 91 TS rules get applied to
+  // packages/ui/dist/*.d.ts the moment anyone runs `npm run ui:build`.
+  { ignores: ['dist', 'packages/*/dist/**', '.netlify/**', '.claude/**', '.worktrees/**', 'build/**', 'release/**', 'landing/**'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
@@ -71,6 +74,19 @@ export default tseslint.config(
     files: ['shared/**/*.mjs', 'scripts/**/*.mjs', 'netlify/functions/**/*.mjs', 'cli/**/*.mjs'],
     languageOptions: {
       sourceType: 'module',
+    },
+  },
+  {
+    // The 57 files in src/components/ui/ are temporary re-export shims for
+    // @agensis/ui (`export * from '@agensis/ui/components/<x>'`). react-refresh
+    // cannot see through a star re-export, so each one raised
+    // "can't verify that `export *` only exports components" — 57 warnings that
+    // took the repo from 30 to 87 and buried the 18 real ones. The shims are
+    // deleted once call sites are rewritten to import the package directly;
+    // this block goes with them.
+    files: ['src/components/ui/*.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
     },
   }
 );

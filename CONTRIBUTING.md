@@ -87,6 +87,12 @@ UI is broken.
 - **Match the surrounding file.** 2-space indent, the file's existing semicolon
   convention, `cn()` for class merging, and the shadcn/ui primitives already
   imported there.
+- **UI primitives live in `packages/ui` (`@agensis/ui`), not in `src`.** The 57
+  files in `src/components/ui/` are temporary re-export shims; the real
+  components are in `packages/ui/src/components/ui/`. Editing a shim changes
+  nothing. See [packages/ui/README.md](./packages/ui/README.md) — including why
+  the package is MIT-licensed inside an AGPL repository, and why it is not
+  published yet.
 - **No new npm dependencies without a strong reason.** Drag-and-drop is native
   HTML5 or pointer events; there is no DnD library and there should not be one.
 - **Schema changes land in three places at once.** See the schema-sync rule in

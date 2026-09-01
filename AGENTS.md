@@ -1231,10 +1231,28 @@ Pinned by `tests/desktop-local-runtime.test.cjs`.
 
 - Match the surrounding file's style: 2-space indent, its semicolon convention,
   `cn()` for class merging, shadcn/ui primitives already imported in the file.
+- **The shadcn primitives live in `packages/ui`, not in the app.** `@agensis/ui`
+  is an npm workspace holding all 57 of them; `src/components/ui/*.tsx` are
+  4-line `export *` shims kept so existing `@/components/ui/*` imports resolve,
+  and they are deleted once call sites are rewritten. Edit the component in
+  `packages/ui/src/components/ui/`; editing a shim is editing nothing. New code
+  should import `@agensis/ui/components/<name>` directly. The app resolves the
+  package through the `source` export condition (set in `vite.config.ts`, both
+  vitest configs and `tsconfig.app.json`), so there is no build step in the loop
+  — but it also means a broken export map fails at import time, which is what
+  `tests/unit/agensisUiPackage.test.ts` guards. That package is **MIT** inside
+  an AGPL repository: no code from the rest of this tree may be copied into it.
+  `npx shadcn add` still writes into the app (`components.json` aliases point
+  there) and will overwrite a shim — move the file into the package by hand
+  afterwards.
 - No new npm dependencies without a strong reason. Drag-and-drop is native HTML5
   (`draggable` + `onDragStart/onDragOver/onDrop`) or pointer events — see
   `src/components/windows/ThreadWidgetRail.tsx` and `TasksWindowContent.tsx`.
-- The root package is the agensis app. Keep app, backend, database and
+- The root package is the agensis app, and since the UI extraction it is also
+  an npm workspace root (`packages/*`). Adding or removing a workspace means
+  regenerating `package-lock.json` in the same commit — `npm ci` refuses a lock
+  that does not list the workspace, which takes every GitHub Actions job and the
+  Docker build down with it. Keep app, backend, database and
   deployment code out of the daemon repository — not because either repo is
   private, but because the daemon is a small, separately released client of the
   wire contract and copying server code into it duplicates the thing the
