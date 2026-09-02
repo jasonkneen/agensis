@@ -64,6 +64,27 @@ describe('the default UI face', () => {
   });
 });
 
+describe('the --text-* namespace', () => {
+  it('holds only font SIZES, never colours', () => {
+    // Tailwind v4 generates utilities from `--text-*` in the theme block, so
+    // that prefix means font-size. Four text COLOURS used to live one keystroke
+    // away as --text-primary/-secondary/-muted/-inverse, safe only because they
+    // sat at :root rather than in @theme — one accidental move and
+    // `.text-primary` would set font-size to a hex string. They are `--ink*`
+    // now, which collides with no Tailwind namespace.
+    const declarations = [...css.matchAll(/^\s*(--text-[a-z0-9-]+):\s*([^;]+);/gm)];
+    expect(declarations.length).toBeGreaterThan(0);
+    for (const [, name, value] of declarations) {
+      expect(value.trim(), `${name} looks like a colour, not a size`).toMatch(/^[0-9.]+(rem|em|px)$/);
+    }
+  });
+
+  it('keeps the ink colours off that prefix', () => {
+    expect(css).toMatch(/--ink:/);
+    expect(css).not.toMatch(/--text-(primary|secondary|muted|inverse)\b/);
+  });
+});
+
 describe('mono typography', () => {
   it('defines a single --font-mono token', () => {
     expect(cssWithoutComments()).toMatch(/--font-mono:\s*'IBM Plex Mono'/);

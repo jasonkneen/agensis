@@ -28,9 +28,9 @@ export interface TwSeed {
   border: string;       // --border / --sh-border / --input
   borderSubtle: string; // --border-subtle
   borderStrong: string; // --border-strong
-  ink: string;          // --text-primary / --foreground (+ *-foreground mirrors)
-  inkSecondary: string; // --text-secondary
-  inkMuted: string;     // --text-muted
+  ink: string;          // --ink / --foreground (+ *-foreground mirrors)
+  inkSecondary: string; // --ink-secondary
+  inkMuted: string;     // --ink-muted
   mutedFg: string;      // --muted-foreground (distinct from inkSecondary in dark)
   success: string;
   warning: string;
@@ -60,7 +60,7 @@ export const TW_MANAGED_KEYS = [
   '--secondary', '--secondary-foreground',
   '--muted', '--muted-foreground',
   '--border', '--border-subtle', '--border-strong', '--sh-border', '--input',
-  '--text-primary', '--text-secondary', '--text-muted',
+  '--ink', '--ink-secondary', '--ink-muted',
   '--success', '--warning', '--error',
   '--tw-gold-outline', '--tw-gold-fill', '--tw-control-outline',
 ] as const;
@@ -95,9 +95,9 @@ export function expandTw(seed: TwSeed): Record<string, string> {
     '--border-strong': seed.borderStrong,
     '--sh-border': seed.border,
     '--input': seed.border,
-    '--text-primary': seed.ink,
-    '--text-secondary': seed.inkSecondary,
-    '--text-muted': seed.inkMuted,
+    '--ink': seed.ink,
+    '--ink-secondary': seed.inkSecondary,
+    '--ink-muted': seed.inkMuted,
     '--success': seed.success,
     '--warning': seed.warning,
     '--error': seed.error,

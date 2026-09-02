@@ -1387,7 +1387,7 @@ function CanvasItemWrapper({
             <line
               x1={myCenter.x} y1={myCenter.y}
               x2={parentCenter.x} y2={parentCenter.y}
-              stroke="var(--text-muted)"
+              stroke="var(--ink-muted)"
               strokeWidth="1"
               strokeDasharray="4 3"
               opacity={0.5}
@@ -1471,7 +1471,7 @@ function CanvasItemWrapper({
           <line
             x1={myCenter.x} y1={myCenter.y}
             x2={parentCenter.x} y2={parentCenter.y}
-            stroke="var(--text-muted)"
+            stroke="var(--ink-muted)"
             strokeWidth="1"
             strokeDasharray="4 3"
             opacity={0.5}

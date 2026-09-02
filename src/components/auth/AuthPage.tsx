@@ -287,7 +287,7 @@ export function AuthPage({
                         background: 'var(--canvas-elevated)',
                         border: '1px solid var(--border)',
                         borderRadius: 'var(--radius-md)',
-                        color: 'var(--text-primary)',
+                        color: 'var(--ink)',
                         fontSize: '14px',
                         fontWeight: 600,
                         cursor: submitting || oauthProvider !== null ? 'not-allowed' : 'pointer',
@@ -317,7 +317,7 @@ export function AuthPage({
                         background: 'var(--canvas-elevated)',
                         border: '1px solid var(--border)',
                         borderRadius: 'var(--radius-md)',
-                        color: 'var(--text-primary)',
+                        color: 'var(--ink)',
                         fontSize: '14px',
                         fontWeight: 600,
                         cursor: submitting || oauthProvider !== null ? 'not-allowed' : 'pointer',
@@ -340,7 +340,7 @@ export function AuthPage({
                     gridTemplateColumns: '1fr auto 1fr',
                     alignItems: 'center',
                     gap: '12px',
-                    color: 'var(--text-muted)',
+                    color: 'var(--ink-muted)',
                     fontSize: '12px',
                   }}
                 >

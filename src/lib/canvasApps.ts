@@ -408,7 +408,7 @@ ${AGENSIS_APPLET_BASE_CSS}
     --surface2: var(--app-soft);
     --accent: var(--app-accent);
     --text: var(--app-ink);
-    --text-muted: var(--app-muted);
+    --ink-muted: var(--app-muted);
     --btn-num: var(--app-panel);
     --btn-num-hover: var(--app-soft);
     --btn-op: var(--app-soft);
@@ -457,7 +457,7 @@ ${AGENSIS_APPLET_BASE_CSS}
 
   .display-expr {
     font-size: 14px;
-    color: var(--text-muted);
+    color: var(--ink-muted);
     min-height: 20px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -523,7 +523,7 @@ ${AGENSIS_APPLET_BASE_CSS}
   .kbd-hint {
     text-align: center;
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--ink-muted);
     padding: 8px;
     background: var(--surface);
   }

@@ -160,20 +160,22 @@
  --border-subtle: #1f1f1f;
  --border-strong: #3a3a3a;
 
- /* WARNING — these four are COLOURS, and `--text-*` is Tailwind v4's font-SIZE
-    namespace. They are safe only because they are declared here at :root and
-    never inside `@theme`: Tailwind generates utilities from the theme block
-    alone, so `--text-2xs` there is a size step while `--text-primary` here is
-    just a variable this file's own rules var() by hand. Move any of these into
-    `@theme` and you get a `.text-primary` that sets font-size to a hex string.
-    They also duplicate --foreground / --muted-foreground (identical in the
-    default, paper and neo themes; NOT in classic). Renaming them off the
-    `--text-` prefix is the real fix — 34 CSS sites, 5 tsx, plus the showcase —
-    and is deliberately not this pass's job. */
- --text-primary: #f2f2f2;
- --text-secondary: #9a9a9a;
- --text-muted: #565656;
- --text-inverse: #0c0c0c;
+ /* Text COLOURS. Named `--ink*` and not `--text-*` on purpose: `--text-` is
+    Tailwind v4's font-SIZE namespace, which this file now also uses for real
+    size steps (--text-2xs / --text-3xs in the @theme block). Under the old
+    names the two lived one keystroke apart and were only safe because the
+    colours sat at :root while the sizes sat in @theme — move a colour into
+    @theme by mistake and you get a `.text-primary` utility setting font-size to
+    a hex string. `--ink` cannot collide with any Tailwind namespace, and it is
+    the vocabulary the showcase already used internally (twThemes.ts).
+    NOT merged into --foreground / --muted-foreground even though they are
+    identical in the default, paper and neo families: the classic themes give
+    them genuinely different values (oklch foreground vs hex ink), so aliasing
+    would have silently restyled classic. */
+ --ink: #f2f2f2;
+ --ink-secondary: #9a9a9a;
+ --ink-muted: #565656;
+ --ink-inverse: #0c0c0c;
 
  --accent: #4f9cf9;
  --accent-hover: #3b87e8;
@@ -229,10 +231,10 @@
  --border-subtle: #eaeaea;
  --border-strong: #cccccc;
 
- --text-primary: #1a1a1a;
- --text-secondary: #5a5a5a;
- --text-muted: #9a9a9a;
- --text-inverse: #ffffff;
+ --ink: #1a1a1a;
+ --ink-secondary: #5a5a5a;
+ --ink-muted: #9a9a9a;
+ --ink-inverse: #ffffff;
 
  --accent: #2563eb;
  --accent-hover: #1d4ed8;
@@ -272,9 +274,9 @@
  --border: #e2d5bb;
  --border-subtle: #ede2ce;
  --border-strong: #c7bca4;
- --text-primary: #2a2722;
- --text-secondary: #6f695f;
- --text-muted: #918979;
+ --ink: #2a2722;
+ --ink-secondary: #6f695f;
+ --ink-muted: #918979;
  /* Accent tokens derive from --primary so a picked accent preset (which sets
      --primary) flows through TW; with the default (neutral) preset --primary is
      TW's gold, so this is visually identical to the old hardcoded values. */
@@ -318,9 +320,9 @@
  --border: #4d4230;
  --border-subtle: #37301f;
  --border-strong: #756550;
- --text-primary: #f5ecdc;
- --text-secondary: #c8bba7;
- --text-muted: #8d806e;
+ --ink: #f5ecdc;
+ --ink-secondary: #c8bba7;
+ --ink-muted: #8d806e;
  /* Derived from --primary — see the light block. Dark-mode hover lightens
      toward white (the light block darkens toward ink). */
  --accent: var(--primary);
@@ -345,7 +347,7 @@
  --secondary: #2c2518;
  --secondary-foreground: #f5ecdc;
  --muted: #2c2518;
- /* Sits between --text-secondary (#c8bba7) and --text-muted (#8d806e) so the
+ /* Sits between --ink-secondary (#c8bba7) and --ink-muted (#8d806e) so the
      secondary/muted/low ramp keeps three distinct steps (was == secondary). */
  --muted-foreground: #a89c88;
  --sh-accent: #372d1c;
@@ -450,9 +452,9 @@
  --border-subtle: color-mix(in srgb, var(--neo-ink) 14%, transparent);
  --border-strong: var(--neo-ink);
 
- --text-primary: #0a0a0a;
- --text-secondary: #2d2d2d;
- --text-muted: #595959;
+ --ink: #0a0a0a;
+ --ink-secondary: #2d2d2d;
+ --ink-muted: #595959;
 
  --accent: var(--primary);
  --accent-hover: color-mix(in srgb, var(--primary) 86%, var(--foreground) 14%);
@@ -506,9 +508,9 @@
  --border-subtle: color-mix(in srgb, var(--neo-ink) 16%, transparent);
  --border-strong: var(--neo-edge);
 
- --text-primary: #f7f1ec;
- --text-secondary: #cfc7bd;
- --text-muted: #968d82;
+ --ink: #f7f1ec;
+ --ink-secondary: #cfc7bd;
+ --ink-muted: #968d82;
 
  --accent: var(--primary);
  --accent-hover: color-mix(in srgb, var(--primary) 84%, var(--foreground) 16%);
@@ -696,7 +698,7 @@
  border-width: 1px !important;
  border-style: solid !important;
  border-color: var(--tw-control-outline) !important;
- color: var(--text-secondary) !important;
+ color: var(--ink-secondary) !important;
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),
   var(--tw-control-fill) !important;
@@ -722,7 +724,7 @@
  border-width: 1px !important;
  border-style: solid !important;
  border-color: transparent !important;
- color: var(--text-secondary) !important;
+ color: var(--ink-secondary) !important;
  background: transparent !important;
  box-shadow: none !important;
 }
@@ -1037,7 +1039,7 @@
 :root[data-ui-theme="neo"] .sidebar-action-row[data-active="true"] {
  border-color: var(--border) !important;
  background: var(--card) !important;
- color: var(--text-primary) !important;
+ color: var(--ink) !important;
 }
 
 :root[data-ui-theme="neo"] .sidebar-action-row[data-active="true"]:hover {
@@ -1120,7 +1122,7 @@
  box-shadow: none !important;
  outline: 0 !important;
  border-radius: 10px !important;
- color: var(--text-secondary) !important;
+ color: var(--ink-secondary) !important;
  /* Height comes from --sidebar-item-row-h + --sidebar-row-frame, not a literal. */
  justify-content: flex-start;
  padding-inline: 10px;
@@ -2017,7 +2019,7 @@
  background: var(--muted) !important;
  border-color: transparent !important;
  box-shadow: none !important;
- color: var(--text-primary) !important;
+ color: var(--ink) !important;
 }
 
 /* THE SELECTED ROW — ONE RULE, every row type.
@@ -2037,7 +2039,7 @@
  border-color: var(--border) !important;
  background: var(--card) !important;
  box-shadow: var(--neo-shadow-sm) !important;
- color: var(--text-primary) !important;
+ color: var(--ink) !important;
 }
 
 /* ONE frame, not two. The DM row is the only selected row with a nested button
@@ -3420,7 +3422,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
 .chat-markdown blockquote {
  border-left: 3px solid var(--border);
  padding-left: 0.75rem;
- color: var(--text-secondary);
+ color: var(--ink-secondary);
 }
 
 .chat-markdown code {
@@ -3452,7 +3454,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
  position: absolute;
  top: 0.35rem;
  right: 0.55rem;
- color: var(--text-muted);
+ color: var(--ink-muted);
  font-size: 0.7rem;
  text-transform: uppercase;
 }
@@ -3480,7 +3482,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
 }
 
 .chat-mermaid-error code {
- color: var(--text-muted);
+ color: var(--ink-muted);
 }
 
 .chat-markdown table {
@@ -3520,7 +3522,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
 
 .chat-markdown-frontmatter-desc {
  margin: 0;
- color: var(--text-secondary);
+ color: var(--ink-secondary);
  font-size: 0.92em;
  line-height: 1.4;
 }
@@ -3543,7 +3545,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
  font-weight: 600;
  text-transform: uppercase;
  letter-spacing: 0.02em;
- color: var(--text-muted);
+ color: var(--ink-muted);
 }
 
 * {
@@ -3562,7 +3564,7 @@ body {
 
 body {
  background-color: var(--canvas-base);
- color: var(--text-primary);
+ color: var(--ink);
  font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif);
  /* 1rem, NOT a hard px: `html` is set to var(--agensis-ui-font-size) (see the
     html rule near the end of this file), which the user's `ui_base_font_size`
@@ -3691,7 +3693,7 @@ body {
  font-size: 2rem;
  font-weight: 700;
  line-height: 1.2;
- color: var(--text-primary);
+ color: var(--ink);
  margin-bottom: 0.75rem;
  letter-spacing: -0.02em;
 }
@@ -3700,7 +3702,7 @@ body {
  font-size: 1.4rem;
  font-weight: 600;
  line-height: 1.3;
- color: var(--text-primary);
+ color: var(--ink);
  margin-bottom: 0.5rem;
  margin-top: 1.5rem;
  letter-spacing: -0.01em;
@@ -3709,13 +3711,13 @@ body {
 .doc-editor h3 {
  font-size: 1.1rem;
  font-weight: 600;
- color: var(--text-primary);
+ color: var(--ink);
  margin-bottom: 0.4rem;
  margin-top: 1.25rem;
 }
 
 .doc-editor p {
- color: var(--text-primary);
+ color: var(--ink);
  margin-bottom: 0.6rem;
  line-height: 1.7;
 }
@@ -3724,7 +3726,7 @@ body {
 .doc-editor ol {
  padding-left: 1.5rem;
  margin-bottom: 0.6rem;
- color: var(--text-primary);
+ color: var(--ink);
 }
 
 .doc-editor li {
@@ -3735,7 +3737,7 @@ body {
 .doc-editor strong,
 .doc-editor b {
  font-weight: 600;
- color: var(--text-primary);
+ color: var(--ink);
 }
 
 .doc-editor em,
@@ -3756,14 +3758,14 @@ body {
 .doc-editor blockquote {
  border-left: 3px solid var(--accent-border);
  padding-left: 1rem;
- color: var(--text-secondary);
+ color: var(--ink-secondary);
  font-style: italic;
  margin: 0.75rem 0;
 }
 
 .doc-editor [contenteditable]:empty:before {
  content: attr(data-placeholder);
- color: var(--text-muted);
+ color: var(--ink-muted);
  pointer-events: none;
 }
 
@@ -3818,7 +3820,7 @@ body {
  border: 1px solid var(--border);
  border-radius: var(--radius-sm);
  background: rgba(255, 255, 255, 0.9);
- color: var(--text-secondary);
+ color: var(--ink-secondary);
  font: inherit;
  font-size: 11px;
  appearance: none;
@@ -3883,13 +3885,13 @@ body {
 
 .doc-block-header strong {
  font-size: 13px;
- color: var(--text-primary);
+ color: var(--ink);
 }
 
 .doc-block-header span,
 .doc-block-muted {
  font-size: 12px;
- color: var(--text-muted);
+ color: var(--ink-muted);
 }
 
 .doc-ai-prompt {
@@ -3900,7 +3902,7 @@ body {
  border: 1px solid var(--border);
  border-radius: var(--radius-sm);
  background: var(--canvas-base);
- color: var(--text-primary);
+ color: var(--ink);
  padding: 8px 10px;
  font: inherit;
  user-select: text;
@@ -3929,7 +3931,7 @@ body {
  background: var(--canvas-base);
  padding: 10px;
  white-space: pre-wrap;
- color: var(--text-secondary);
+ color: var(--ink-secondary);
  user-select: text;
 }
 
@@ -3947,7 +3949,7 @@ body {
  border-radius: var(--radius-sm);
  background: var(--canvas-base);
  padding: 7px 9px;
- color: var(--text-primary);
+ color: var(--ink);
 }
 
 .doc-task-row span {
@@ -3956,7 +3958,7 @@ body {
 }
 
 .doc-task-row small {
- color: var(--text-muted);
+ color: var(--ink-muted);
 }
 
 .doc-gen-panel,
@@ -3976,7 +3978,7 @@ body {
 }
 
 .doc-gen-heading span {
- color: var(--text-muted);
+ color: var(--ink-muted);
  font-size: 12px;
 }
 
@@ -3994,7 +3996,7 @@ body {
 }
 
 .doc-gen-item small {
- color: var(--text-muted);
+ color: var(--ink-muted);
 }
 
 .doc-gen-metrics {
@@ -4016,7 +4018,7 @@ body {
 }
 
 .doc-gen-metric span {
- color: var(--text-muted);
+ color: var(--ink-muted);
  font-size: 12px;
 }
 
@@ -4026,7 +4028,7 @@ body {
 
 .doc-gen-callout p {
  margin: 4px 0 0;
- color: var(--text-secondary);
+ color: var(--ink-secondary);
 }
 
 /* Tour highlight overlay */
@@ -4162,7 +4164,7 @@ body {
  border-radius: var(--radius-sm);
  padding: 4px 8px;
  font-size: 12px;
- color: var(--text-secondary);
+ color: var(--ink-secondary);
  box-shadow: var(--shadow-md);
 }
 
@@ -4309,10 +4311,10 @@ body {
  --border: #e0e0e0;
  --border-subtle: #eaeaea;
  --border-strong: #cccccc;
- --text-primary: #1a1a1a;
- --text-secondary: #5a5a5a;
- --text-muted: #9a9a9a;
- --text-inverse: #ffffff;
+ --ink: #1a1a1a;
+ --ink-secondary: #5a5a5a;
+ --ink-muted: #9a9a9a;
+ --ink-inverse: #ffffff;
  --accent: var(--primary);
  --accent-hover: color-mix(in srgb, var(--primary) 82%, var(--foreground) 18%);
  --accent-subtle: color-mix(in srgb, var(--primary) 12%, transparent);
@@ -4368,10 +4370,10 @@ body {
  --border: #2a2a2a;
  --border-subtle: #1f1f1f;
  --border-strong: #3a3a3a;
- --text-primary: #f2f2f2;
- --text-secondary: #9a9a9a;
- --text-muted: #565656;
- --text-inverse: #0c0c0c;
+ --ink: #f2f2f2;
+ --ink-secondary: #9a9a9a;
+ --ink-muted: #565656;
+ --ink-inverse: #0c0c0c;
  --accent: var(--primary);
  --accent-hover: color-mix(in srgb, var(--primary) 82%, white 18%);
  --accent-subtle: color-mix(in srgb, var(--primary) 16%, transparent);
@@ -5179,7 +5181,7 @@ select {
  /* No min-height, for the same reason as neo above: `border-width: 0` took the
     control frame off this heading, and a heading does not need the height that
     frame was sized for. */
- color: var(--text-secondary) !important;
+ color: var(--ink-secondary) !important;
  background: transparent !important;
  box-shadow: none !important;
  padding-inline: 0.3rem 0.2rem !important;
@@ -5235,7 +5237,7 @@ select {
  border-width: 1px !important;
  border-style: solid !important;
  border-color: var(--tw-control-outline) !important;
- color: var(--text-secondary) !important;
+ color: var(--ink-secondary) !important;
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),
   var(--tw-control-fill) !important;
