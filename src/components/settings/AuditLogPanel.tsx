@@ -56,6 +56,13 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
   const [filter, setFilter] = useState<'' | AuditAction>('');
   const { entries, loading, loadingMore, error, hasMore, loadMore, refresh } = useAuditLog(workspaceId, filter);
 
+  // Consecutive identical actions collapse into one row with a count and a time
+  // range. Fifteen "Connect token issued · claude · yolo (unchanged)" rows in a
+  // column say exactly what one row and a "x15" says, except they also bury
+  // every other event on the page — and the events you actually want out of an
+  // audit log are the unusual ones. Only ADJACENT rows group, and only when
+  // actor, action, target and change all match, so nothing is ever aggregated
+  // across an intervening event that would change the reading.
   const rows = useMemo(() => entries.map(entry => ({
     entry,
     time: formatAuditTime(entry.created_at),
@@ -67,6 +74,28 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
     escalation: isEscalation(entry),
     unrestricted: isUnrestrictedShellGrant(entry),
   })), [entries]);
+
+  const groups = useMemo(() => {
+    const out: Array<{ row: typeof rows[number]; count: number; oldestTime: string }> = [];
+    for (const row of rows) {
+      const previous = out[out.length - 1];
+      const same = previous
+        && previous.row.actor === row.actor
+        && previous.row.action === row.action
+        && previous.row.target === row.target
+        && previous.row.change === row.change
+        && previous.row.detail === row.detail;
+      if (same) {
+        previous.count += 1;
+        // Entries arrive newest-first, so each later match is the older end of
+        // the range.
+        previous.oldestTime = row.time;
+        continue;
+      }
+      out.push({ row, count: 1, oldestTime: row.time });
+    }
+    return out;
+  }, [rows]);
 
   if (!workspaceId) {
     return (
@@ -115,33 +144,55 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
         <p className="text-2xs text-muted-foreground">{AUDIT_EMPTY_STATE}</p>
       )}
 
-      {rows.length > 0 && (
+      {groups.length > 0 && (
         <div className="overflow-x-auto rounded-md border border-border/60">
-          <table className="w-full min-w-[34rem] border-collapse text-3xs leading-tight">
+          {/* Fixed layout so the columns hold their widths instead of being
+              re-negotiated by whichever row happens to have the longest target:
+              a table that reflows as you page through it is unreadable. */}
+          <table className="w-full min-w-[36rem] table-fixed border-collapse text-3xs leading-tight">
+            <colgroup>
+              <col className="w-[7.5rem]" />
+              <col className="w-[7rem]" />
+              <col />
+              <col className="w-[8rem]" />
+              <col className="w-[9rem]" />
+            </colgroup>
             <thead>
               <tr className="border-b border-border bg-muted/30 text-left text-[9px] uppercase tracking-wide text-muted-foreground">
-                <th className="px-2 py-1 font-medium">Time</th>
-                <th className="px-2 py-1 font-medium">Actor</th>
-                <th className="px-2 py-1 font-medium">Action</th>
-                <th className="px-2 py-1 font-medium">Target</th>
-                <th className="px-2 py-1 font-medium">Change</th>
+                <th className="px-2 py-1.5 font-medium">Time</th>
+                <th className="px-2 py-1.5 font-medium">Actor</th>
+                <th className="px-2 py-1.5 font-medium">Action</th>
+                <th className="px-2 py-1.5 font-medium">Target</th>
+                <th className="px-2 py-1.5 font-medium">Change</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map(row => (
-                <tr key={row.entry.id} className="border-b border-border/50 align-top last:border-0">
+              {groups.map(({ row, count, oldestTime }) => (
+                <tr key={row.entry.id} className="border-b border-border/50 align-top last:border-0 odd:bg-muted/15">
                   <td
-                    className="whitespace-nowrap px-2 py-0.5 text-3xs text-muted-foreground tabular-nums"
+                    className="whitespace-nowrap px-2 py-1.5 text-3xs text-muted-foreground tabular-nums"
                     title={row.entry.created_at}
                   >
                     {row.time}
+                    {count > 1 && (
+                      <div className="text-[9px] opacity-70">to {oldestTime}</div>
+                    )}
                   </td>
-                  <td className="max-w-[7rem] truncate px-2 py-0.5 text-3xs" title={row.actor}>
+                  <td className="truncate px-2 py-1.5 text-3xs" title={row.actor}>
                     {row.actor}
                   </td>
-                  <td className="px-2 py-0.5">
+                  <td className="px-2 py-1.5">
                     <div className="flex flex-wrap items-center gap-1">
                       <span className="text-3xs">{row.action}</span>
+                      {count > 1 && (
+                        <Badge
+                          variant="secondary"
+                          className="h-3.5 px-1 text-[8px] font-normal leading-none tabular-nums"
+                          title={`${count} identical entries between ${oldestTime} and ${row.time}`}
+                        >
+                          x{count}
+                        </Badge>
+                      )}
                       {row.unrestricted && (
                         <Badge variant="destructive" className="h-3.5 gap-0.5 px-1 text-[8px] font-normal leading-none" title="Unrestricted shell on the daemon host">
                           <ShieldAlert className="size-2" />
@@ -154,14 +205,21 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
                         </Badge>
                       )}
                     </div>
+                    {/* The detail line is the row's own sub-text, so it is
+                        indented under the action rather than starting at the
+                        cell edge, and truncates instead of wrapping into a
+                        second line that breaks the table's vertical rhythm.
+                        The full value stays reachable on hover. */}
                     {row.detail && (
-                      <div className="mt-0.5 text-[9px] text-muted-foreground">{row.detail}</div>
+                      <div className="mt-0.5 truncate border-l border-border/60 pl-1.5 text-[9px] text-muted-foreground" title={row.detail}>
+                        {row.detail}
+                      </div>
                     )}
                   </td>
-                  <td className="max-w-[8rem] truncate px-2 py-0.5 text-3xs" title={row.target}>
+                  <td className="truncate px-2 py-1.5 text-3xs" title={row.target}>
                     {row.target}
                   </td>
-                  <td className="max-w-[9rem] truncate px-2 py-0.5 text-3xs text-muted-foreground" title={row.change}>
+                  <td className="truncate px-2 py-1.5 text-3xs text-muted-foreground" title={row.change}>
                     {row.change}
                   </td>
                 </tr>

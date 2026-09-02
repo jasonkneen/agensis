@@ -106,7 +106,12 @@ export function formatChange(
 ): string {
   const before = entry.before_value?.trim() ?? '';
   const after = entry.after_value?.trim() ?? '';
-  if (before && after) return `${before} to ${after}`;
+  // "yolo to yolo" — a transition that did not transition. The server records
+  // before and after unconditionally, so re-asserting a value writes a row where
+  // both sides match, and rendering it as an arrow claimed a change that never
+  // happened. Say what it was instead; the row still exists, because the fact
+  // that someone re-asserted it IS the audit-worthy event.
+  if (before && after) return before === after ? `${after} (unchanged)` : `${before} to ${after}`;
   if (after) return after;
   if (before) return before;
   return '';
