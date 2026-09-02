@@ -37,7 +37,7 @@
  --header-height: 52px;
  --chat-panel-width: 380px;
  --agensis-ui-font-family: 'Bricolage Grotesque', 'Geist Variable', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
- --agensis-ui-font-size: 16px;
+ --agensis-ui-font-size: 17px;
  /* First-paint values only: applyUiAppearanceSettings() overwrites both as an
     INLINE style on :root as soon as it runs. Kept in step with DEFAULTS in
     src/lib/settings.ts so the panels do not visibly change opacity a frame
@@ -4544,7 +4544,7 @@ code {
 }
 
 html {
- font-size: var(--agensis-ui-font-size, 16px);
+ font-size: var(--agensis-ui-font-size, 17px);
 }
 
 body,
