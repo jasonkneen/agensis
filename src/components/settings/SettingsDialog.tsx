@@ -1669,6 +1669,11 @@ function ConnectionsPanel({
                 copied={copied === 'cmd'}
                 onCopy={() => copy('cmd', info?.claudeMcpAdd || mcpFallback.claudeMcpAdd)}
               />
+              {/* 7.5rem = the w-28 (7rem) label column plus the gap-2 (0.5rem)
+                  beside it, so this sits under the VALUE column rather than
+                  under the label. Kept as a literal because it is a one-off
+                  continuation line, but if the label column ever changes width
+                  this has to move with it. */}
               <p className="pl-[7.5rem] text-xs text-muted-foreground">
                 Replace <code className="rounded bg-muted px-1">aga_YOUR_AGENT_TOKEN</code> with the bearer token
                 (or paste the token into your client&apos;s Authorization header).
@@ -1685,19 +1690,13 @@ function ConnectionsPanel({
                   onCopy={() => copy('tok', liveToken)}
                 />
               ) : info?.configured ? (
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="w-28 shrink-0 text-xs text-muted-foreground">Bearer token</span>
-                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-                    Issued earlier and not re-displayed. Rotate to mint a new token (invalidates the old one).
-                  </p>
-                </div>
+                <ConnectionNote label="Bearer token">
+                  Issued earlier and not re-displayed. Rotate to mint a new token (invalidates the old one).
+                </ConnectionNote>
               ) : (
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="w-28 shrink-0 text-xs text-muted-foreground">Bearer token</span>
-                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-                    Issue a credential to get a token you can paste into any MCP client.
-                  </p>
-                </div>
+                <ConnectionNote label="Bearer token">
+                  Issue a credential to get a token you can paste into any MCP client.
+                </ConnectionNote>
               )}
 
               <div className="flex items-center justify-between rounded-md border bg-card/50 px-3 py-2">
@@ -1710,8 +1709,12 @@ function ConnectionsPanel({
                 <Switch checked={auto} onCheckedChange={toggleAuto} aria-label="Auto-approve new agents" />
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" onClick={() => void mintOrRotate()} disabled={busy}>
+              {/* Both actions are the same size and both have a border. They
+                  were a default-size primary beside a ghost `sm`, so they
+                  differed in height AND in whether they looked like buttons at
+                  all — two mismatches in a two-button row. */}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" size="sm" onClick={() => void mintOrRotate()} disabled={busy}>
                   {busy ? (
                     <>
                       <Spinner data-icon="inline-start" />
@@ -1724,7 +1727,7 @@ function ConnectionsPanel({
                     </>
                   )}
                 </Button>
-                <Button type="button" variant="ghost" size="sm" onClick={() => void loadStatus()} disabled={loading || busy}>
+                <Button type="button" variant="outline" size="sm" onClick={() => void loadStatus()} disabled={loading || busy}>
                   Refresh status
                 </Button>
               </div>
@@ -1971,6 +1974,23 @@ function ConnectedClientRow({ connection }: { connection: AgentConnection }) {
         {connectionStatusLabel(status)}
       </Badge>
     </li>
+  );
+}
+
+/**
+ * A labelled row that carries prose instead of a copyable value.
+ *
+ * It exists so the label column cannot drift: these were hand-rolled divs
+ * repeating ConnectionRow's `w-28` and text classes inline, which is fine until
+ * one of them is updated and the labels stop lining up. Same geometry, one
+ * definition.
+ */
+function ConnectionNote({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-start gap-2">
+      <span className="w-28 shrink-0 pt-px text-xs text-muted-foreground">{label}</span>
+      <p className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">{children}</p>
+    </div>
   );
 }
 
