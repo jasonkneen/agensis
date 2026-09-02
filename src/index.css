@@ -3408,7 +3408,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
  border-radius: var(--radius-sm);
  background: color-mix(in srgb, var(--canvas-base) 70%, transparent);
  padding: 0.08rem 0.3rem;
- font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, monospace;
+ font-family: var(--font-mono);
  font-size: 0.88em;
 }
 
@@ -3709,7 +3709,7 @@ body {
  border: 1px solid var(--border);
  border-radius: var(--radius-sm);
  padding: 0.15em 0.4em;
- font-family: 'JetBrains Mono', 'Fira Code', monospace;
+ font-family: var(--font-mono);
  font-size: 0.85em;
  color: var(--accent);
 }
@@ -4130,6 +4130,19 @@ body {
 @theme inline {
  --font-heading: var(--agensis-ui-font-family, 'Bricolage Grotesque', sans-serif);
  --font-sans: var(--agensis-ui-font-family, 'Bricolage Grotesque', sans-serif);
+ /* ONE mono face for the whole app, and it must be one that is actually LOADED.
+    Before this token there were four competing stacks and the two most visible
+    named a font nobody ships: .chat-markdown code and the code block both asked
+    for 'JetBrains Mono', which is not a dependency and is not imported, so
+    inline code silently rendered in SFMono / Menlo / Fira / Courier depending on
+    the OS while the neo theme rendered IBM Plex and every Tailwind `font-mono`
+    utility (51 of them) fell through to the framework's own system stack. Three
+    different monospace faces could appear on one screen.
+    IBM Plex Mono is the face already bundled and imported at 400/500/600 above,
+    so pointing everything here costs no new dependency and no new network
+    request. 'Press Start 2P' is deliberately NOT part of this: it is the retro
+    pixel display face, not a code face. */
+ --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
  --color-sidebar-ring: var(--sidebar-ring);
  --color-sidebar-border: var(--sidebar-border);
  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -5282,7 +5295,7 @@ select {
    ============================================================================ */
 
 :root[data-ui-theme="neo"] {
- --neo-mono: 'IBM Plex Mono', 'Space Mono', ui-monospace, monospace;
+ --neo-mono: var(--font-mono);
 }
 
 /* ---- stamped badges: mono uppercase micro-labels with a hard shadow --------

@@ -1,0 +1,72 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+
+// One monospace face, and it must be one the app actually ships.
+//
+// Before --font-mono existed there were four competing stacks. The two most
+// visible named a font nobody installs: `.chat-markdown code` and the code
+// block both asked for 'JetBrains Mono', which is not a dependency and is not
+// imported, so inline code rendered in whatever the OS fell back to — SFMono on
+// a Mac, Consolas on Windows, Fira if the user happened to have it — while the
+// neo theme rendered IBM Plex and Tailwind's own `font-mono` utility resolved to
+// the framework's system stack. Three different monospace faces could appear on
+// one screen, and nothing failed, so nobody saw it.
+//
+// The trap is that a font-family naming an absent face is SILENT. Only a test
+// that cross-checks the names against what is imported can catch it.
+
+const css = fs.readFileSync(path.resolve(process.cwd(), 'src/index.css'), 'utf8');
+const settings = fs.readFileSync(path.resolve(process.cwd(), 'src/lib/settings.ts'), 'utf8');
+
+/** Font families @import-ed from a bundled @fontsource package. */
+function bundledFamilies(): string[] {
+  return [...css.matchAll(/@import ["']@fontsource(?:-variable)?\/([a-z0-9-]+)/g)]
+    .map(m => m[1])
+    .filter((v, i, a) => a.indexOf(v) === i);
+}
+
+/** Strip comments so prose about a font is never mistaken for a declaration. */
+function cssWithoutComments(): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+describe('mono typography', () => {
+  it('defines a single --font-mono token', () => {
+    expect(cssWithoutComments()).toMatch(/--font-mono:\s*'IBM Plex Mono'/);
+  });
+
+  it('routes every mono surface through that token, not a literal stack', () => {
+    const live = cssWithoutComments();
+    // Inline code, code blocks and the neo theme each used to carry their own
+    // stack. Each must now defer.
+    const monoDeclarations = [...live.matchAll(/font-family:\s*([^;]+);/g)]
+      .map(m => m[1].trim())
+      .filter(value => /mono/i.test(value));
+
+    const literalStacks = monoDeclarations.filter(
+      value => !value.includes('var(--font-mono)') && !value.includes('var(--neo-mono)'),
+    );
+    // 'Press Start 2P' is the retro pixel DISPLAY face, not a code face, and is
+    // deliberately exempt.
+    const unexpected = literalStacks.filter(value => !value.includes('Press Start 2P'));
+    expect(unexpected).toEqual([]);
+  });
+
+  it('never names a font that is not bundled or fetched on demand', () => {
+    const bundled = bundledFamilies();
+    // JetBrains Mono is fetched ONLY when the user picks the 'jetbrains-mono'
+    // UI font (UI_FONT_GOOGLE_FAMILY loads it then). Any OTHER reference to it —
+    // in a stylesheet rule, or in a font stack that is not that choice — names a
+    // face the browser does not have.
+    expect(bundled).toContain('ibm-plex-mono');
+    expect(cssWithoutComments()).not.toContain('JetBrains Mono');
+
+    // The 'mono' settings choice must not promise JetBrains either: it does not
+    // trigger the on-demand load, so the name was decorative.
+    const monoCase = /case 'mono':[\s\S]*?return "([^"]+)"/.exec(settings);
+    expect(monoCase, 'settings.ts must still have a mono font choice').toBeTruthy();
+    expect(monoCase![1]).not.toContain('JetBrains Mono');
+    expect(monoCase![1]).toContain('IBM Plex Mono');
+  });
+});

@@ -89,7 +89,13 @@ export function fontFamilyCss(value: UiFontFamily): string {
     case 'system':
       return "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
     case 'mono':
-      return "'SFMono-Regular', 'JetBrains Mono', Consolas, monospace";
+      // Names only faces that are actually available: IBM Plex Mono is bundled
+      // (@fontsource/ibm-plex-mono, imported in index.css), and the rest are
+      // system. This used to name 'JetBrains Mono', which is NOT bundled and is
+      // only fetched when the separate 'jetbrains-mono' choice below is picked —
+      // so choosing "Mono" silently rendered SFMono/Consolas and the setting did
+      // not do what its own value said.
+      return "'IBM Plex Mono', 'SFMono-Regular', Consolas, ui-monospace, monospace";
     case 'manrope':
       return "'Manrope', 'Geist Variable', system-ui, sans-serif";
     case 'dm-sans':

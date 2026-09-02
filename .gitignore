@@ -55,3 +55,6 @@ SCRATCHPAD.md
 # names the products being removed and describes the scrub itself.
 /.pi-subagents
 /.grok
+
+# Cascade pipeline artifacts (analysis scratch, not source of truth).
+cascade/
