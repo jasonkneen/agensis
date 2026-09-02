@@ -2674,7 +2674,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           side="top"
                           align="start"
                           sideOffset={8}
-                          className="z-[var(--z-nested-modal)] w-[min(460px,calc(100vw-32px))] max-h-[min(560px,calc(100vh-96px))] gap-0 overflow-hidden p-0"
+                          className="w-[min(460px,calc(100vw-32px))] max-h-[min(560px,calc(100vh-96px))] gap-0 overflow-hidden p-0"
                         >
                           <ComposerAddContent
                             documents={documents}

@@ -275,7 +275,7 @@ export function HomeCanvas({
           regardless of the user's background-opacity setting. */}
       <div
         className="pointer-events-none absolute inset-0"
-        style={{ background: 'var(--home-bg-vignette, radial-gradient(135% 105% at 50% 42%, transparent 40%, rgba(0,0,0,0.20) 74%, rgba(0,0,0,DEFAULT_BACKGROUND_OPACITY) 100%))' }}
+        style={{ background: 'var(--home-bg-vignette)' }}
       />
 
 

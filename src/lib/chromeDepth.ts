@@ -25,13 +25,15 @@
 //                   frame of the app, so it reads as sitting on top of the
 //                   sidebar and casting onto it (`--chrome-cast` in index.css).
 //
-// Above the columns sit the things that are supposed to cover them. The gap
-// between `workspaceRail` and `overlay` is deliberate headroom: every Radix
-// portal (tooltip, popover, dropdown, select, hover card) lands at the body at
-// z-50, so no chrome rung may ever reach it or menus start opening behind
-// panels.
+// Above the columns sit the things that are supposed to cover them, and the
+// portal band sits above ALL of them. Radix portals to the body, so a Select,
+// popover or tooltip opened from inside a dialog (12000), the huddle panel
+// (11600) or the dock (11500) is competing with those numbers, not with the
+// three columns — at Tailwind's default z-50 it lost, and opened behind the
+// surface that raised it. `overlay` is therefore the top of the ladder bar the
+// feedback picker, and the gap between `workspaceRail` and it is now enormous
+// rather than merely deliberate.
 //
-//   overlay         Radix portals: tooltip / popover / select / hover card
 //   agentFeed       the sidebar's agent status feed, portalled to the body
 //   presencePanel   the presence roster, likewise portalled out of the sidebar
 //   cursors         live collaborator cursors
@@ -42,6 +44,7 @@
 //   contextMenu     right-click menus, which must beat an open modal
 //   menu            dropdown menus, which must beat a context menu
 //   nestedModal     a dialog opened FROM a menu that is already at `menu`
+//   overlay         Radix portals: tooltip / popover / select / hover card
 //   picker          the feedback element picker, which targets the whole app
 //
 // `modal` and `drawer` intentionally share a value: on a phone the nav drawer
@@ -66,16 +69,16 @@ export const CHROME_DEPTH = {
    */
   sidebarFlyout: 30,
   workspaceRail: 40,
-  overlay: 50,
   agentFeed: 9500,
   /**
    * The presence roster popover.
    *
-   * It is a Radix popover, which would land at `overlay` (50) on its own — but
-   * the two chrome portals just below it (`agentFeed`) and just above it
-   * (`cursors`) both sit near 10k, so a roster on the Radix default would open
-   * *behind* the status-feed bubble it shares a corner with. It carried a bare
-   * `z-[9600]` for exactly that reason; this is the same number, named.
+   * The popover base now lands ABOVE the dock, and the inline
+   * `zIndex: CHROME_DEPTH.presencePanel` at PresenceRoster.tsx:332 is what
+   * holds the roster DOWN to 9600 — an inline style beats the class, which is
+   * why the roster is unaffected by this change and still sits under
+   * `appDock`. It carried a bare `z-[9600]` for exactly that reason; this is
+   * the same number, named.
    *
    * Note what it does NOT clear: `appDock` (11500) is the feedback launcher,
    * so a launcher parked over the roster still paints on top of it. That is
@@ -102,6 +105,7 @@ export const CHROME_DEPTH = {
   contextMenu: 12010,
   menu: 12050,
   nestedModal: 12060,
+  overlay: 12070,
   picker: 12080,
   pickerHud: 12090,
 } as const;
@@ -120,7 +124,6 @@ export const CHROME_DEPTH_ORDER: readonly ChromeDepthLevel[] = [
   'content',
   'sidebarFlyout',
   'workspaceRail',
-  'overlay',
   'agentFeed',
   'presencePanel',
   'cursors',
@@ -133,6 +136,7 @@ export const CHROME_DEPTH_ORDER: readonly ChromeDepthLevel[] = [
   'contextMenu',
   'menu',
   'nestedModal',
+  'overlay',
   'picker',
   'pickerHud',
 ];

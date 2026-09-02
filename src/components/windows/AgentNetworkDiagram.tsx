@@ -48,7 +48,7 @@ const REDUCED =
   typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 // Instrument-label typeface: matches the app's mono usage, falls back cleanly.
-const MONO = "'JetBrains Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace";
+const MONO = "'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace";
 
 /** How long a departed node lingers while it fades and retreats. */
 const EXIT_MS = 420;

@@ -85,14 +85,14 @@
     is for and why the three shell columns stack the way they do. The two are
     asserted equal by tests/unit/chromeDepth.test.ts; edit both or neither.
     Short version: the sidebar is the recess, the canvas column and the
-    workspace rail are raised out of it, and nothing here may reach --z-overlay
-    (50) or Radix portals start opening behind panels. */
+    workspace rail are raised out of it, and the Radix portal band
+    (--z-overlay) sits above every other rung but the feedback picker, so a
+    select or tooltip raised from inside a dialog paints over it. */
  --z-backdrop: 0;
  --z-sidebar: 10;
  --z-content: 20;
  --z-sidebar-flyout: 30;
  --z-workspace-rail: 40;
- --z-overlay: 50;
  --z-agent-feed: 9500;
  --z-presence-panel: 9600;
  --z-cursors: 9999;
@@ -105,6 +105,7 @@
  --z-context-menu: 12010;
  --z-menu: 12050;
  --z-nested-modal: 12060;
+ --z-overlay: 12070;
  --z-picker: 12080;
  --z-picker-hud: 12090;
  --background: oklch(1 0 0);
@@ -150,6 +151,16 @@
  --border-subtle: #1f1f1f;
  --border-strong: #3a3a3a;
 
+ /* WARNING — these four are COLOURS, and `--text-*` is Tailwind v4's font-SIZE
+    namespace. They are safe only because they are declared here at :root and
+    never inside `@theme`: Tailwind generates utilities from the theme block
+    alone, so `--text-2xs` there is a size step while `--text-primary` here is
+    just a variable this file's own rules var() by hand. Move any of these into
+    `@theme` and you get a `.text-primary` that sets font-size to a hex string.
+    They also duplicate --foreground / --muted-foreground (identical in the
+    default, paper and neo themes; NOT in classic). Renaming them off the
+    `--text-` prefix is the real fix — 34 CSS sites, 5 tsx, plus the showcase —
+    and is deliberately not this pass's job. */
  --text-primary: #f2f2f2;
  --text-secondary: #9a9a9a;
  --text-muted: #565656;
@@ -3534,6 +3545,10 @@ html,
 body {
  height: 100%;
  overflow: hidden;
+ /* The shell never scrolls, so any wheel that reaches the document is a
+    chained scroll from a menu or panel that ran out of content, or a PWA
+    rubber-band on touch. Neither should move the app. */
+ overscroll-behavior: none;
 }
 
 body {
@@ -3640,6 +3655,21 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
  background: var(--border-strong);
+}
+
+/* Firefox has no ::-webkit-scrollbar, so without this it draws the default
+   ~15px system bar while every Chromium user sees the 4px one above.
+   The @supports guard is NOT decoration: Chrome 121+ drops ALL
+   ::-webkit-scrollbar styling for any element that declares scrollbar-width
+   or scrollbar-color, so applying these unconditionally would widen the bars
+   this file spent four rules narrowing. `html` is enough — both properties
+   inherit, and the two opt-outs above (.context-count-chips,
+   .workspace-window-dock) still win locally. */
+@supports not selector(::-webkit-scrollbar) {
+ html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+ }
 }
 
 /* Document Editor Styles */
@@ -4143,6 +4173,16 @@ body {
     request. 'Press Start 2P' is deliberately NOT part of this: it is the retro
     pixel display face, not a code face. */
  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+ /* Sub-xs rem steps. Tailwind's stock scale stops at text-xs (0.75rem/12px),
+    so 11px and 10px chrome was written as text-[11px]/text-[10px] — a hard
+    pixel, which is the one thing the Settings -> Font size slider (12-18px on
+    `html`, see settings.ts applyUiAppearanceSettings) cannot scale. These are
+    the same sizes at the 16px default, expressed so they move with it.
+    Deliberately WITHOUT a paired --text-*--line-height: the arbitrary px
+    classes they replace set font-size only, and adding one would silently
+    reflow every call site. */
+ --text-2xs: 0.6875rem;
+ --text-3xs: 0.625rem;
  --color-sidebar-ring: var(--sidebar-ring);
  --color-sidebar-border: var(--sidebar-border);
  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);

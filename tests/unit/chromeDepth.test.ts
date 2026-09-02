@@ -73,19 +73,31 @@ describe('the three shell columns', () => {
 });
 
 describe('headroom above the chrome', () => {
-  // Radix portals to the body at Tailwind's z-50 — tooltips, popovers, selects,
-  // hover cards. Nothing painted in the chrome may reach that number, or menus
-  // start opening behind the panels that triggered them. This is the assertion
-  // that makes raising a chrome rung a test failure instead of a bug report.
-  const TAILWIND_Z_50 = 50;
+  // Radix portals to the body — tooltips, popovers, selects, hover cards. They
+  // used to sit at Tailwind's default z-50, which lost to every chrome rung
+  // above 50 and to the modal band entirely: a Select opened inside a dialog
+  // rendered behind it. The band now sits above them all, and these assertions
+  // are what stop it drifting back down.
 
-  it('reserves z-50 for Radix portals', () => {
-    expect(CHROME_DEPTH.overlay).toBe(TAILWIND_Z_50);
+  it('keeps the Radix portal band above the modal band', () => {
+    for (const level of ['modal', 'modalScrim', 'contextMenu', 'menu', 'nestedModal'] as const) {
+      expect(CHROME_DEPTH.overlay, `a portal would open behind ${level}`).toBeGreaterThan(CHROME_DEPTH[level]);
+    }
+  });
+
+  it('keeps the portal band above the floating chrome it can be raised from', () => {
+    for (const level of ['agentFeed', 'presencePanel', 'cursors', 'appDock', 'huddlePanel'] as const) {
+      expect(CHROME_DEPTH.overlay, `a portal would open behind ${level}`).toBeGreaterThan(CHROME_DEPTH[level]);
+    }
+  });
+
+  it('leaves the feedback element picker on top of everything', () => {
+    expect(CHROME_DEPTH.picker).toBeGreaterThan(CHROME_DEPTH.overlay);
   });
 
   it('keeps every shell column below it', () => {
     for (const level of ['backdrop', 'sidebar', 'content', 'sidebarFlyout', 'workspaceRail'] as const) {
-      expect(CHROME_DEPTH[level], `${level} would cover a tooltip`).toBeLessThan(TAILWIND_Z_50);
+      expect(CHROME_DEPTH[level], `${level} would cover a tooltip`).toBeLessThan(CHROME_DEPTH.overlay);
     }
   });
 
