@@ -474,7 +474,7 @@ const CONTEXT_COUNT_ITEMS: Array<{
     { key: 'agents', label: 'AI agents', icon: <Bot /> },
     { key: 'skills', label: 'Skills', icon: <Sparkles /> },
     { key: 'commands', label: 'Commands', icon: <Command /> },
-    { key: 'tools', label: 'Tools', icon: <Wrench /> },
+    { key: 'tools', label: 'Agent CLIs', icon: <Wrench /> },
     { key: 'webhooks', label: 'Webhooks', icon: <Activity /> },
   ];
 

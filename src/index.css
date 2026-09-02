@@ -205,14 +205,14 @@
      short soft falloff. Deliberately short — a long one just muddies the first
      40px of sidebar content. */
  --chrome-cast: 1px 0 0 rgba(0, 0, 0, 0.45), 8px 0 18px -8px rgba(0, 0, 0, 0.75);
- /* The same cast, thrown LEFT. The canvas column sits above the sidebar too, so
-    it has to land on the sidebar's right edge exactly as the rail lands on its
-    left — otherwise the sidebar reads as recessed on one side and flush on the
-    other, which is not a shape any light source makes. */
- /* NO contact hairline on this one, unlike --chrome-cast. The sidebar already
-    draws its own right border, so a 1px line here lands directly beside it and
-    reads as a double rule down the seam. Falloff only. */
- --chrome-cast-left: -8px 0 18px -8px rgba(0, 0, 0, 0.75);
+ /* --chrome-cast-left used to live here: the same cast thrown LEFT, so the
+    canvas column landed on the sidebar's right edge as the rail landed on its
+    left. It is gone. Its only consumer was the canvas column, which IS the
+    wallpaper — so on any desktop with a background image it painted a
+    hard-edged grey band down the photo instead of depth on chrome. See
+    [data-workspace-viewport] further down. Do not reintroduce it without
+    solving that: the shadow needs a chrome surface to fall onto, and there
+    isn't one on that side. */
  --home-bg-image-opacity: 0.42;
  --home-bg-overlay: linear-gradient(to bottom, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.04) 72%, var(--canvas-base) 100%);
  /* Always-on radial vignette that darkens the edges and lifts the focal
@@ -256,7 +256,6 @@
  /* Sideways chrome elevation — see the dark-scheme note. Lighter and one step
      tighter here: on a pale sidebar the same falloff reads as a smudge. */
  --chrome-cast: 1px 0 0 rgba(0, 0, 0, 0.10), 7px 0 14px -8px rgba(0, 0, 0, 0.22);
- --chrome-cast-left: -7px 0 14px -8px rgba(0, 0, 0, 0.22);
  --home-bg-image-opacity: 0.34;
  --home-bg-overlay: linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 0%, rgba(0, 0, 0, 0.08) 72%, var(--canvas-base) 100%);
  --home-bg-vignette: radial-gradient(135% 105% at 50% 42%, transparent 44%, rgba(30, 24, 12, 0.10) 76%, rgba(20, 16, 8, 0.20) 100%);
@@ -1269,7 +1268,13 @@
 [data-workspace-viewport] {
  position: relative;
  z-index: var(--z-content);
- box-shadow: var(--chrome-cast-left);
+ /* No cast shadow. This threw 18px of darkness leftward to make the sidebar
+    read as recessed between two raised columns — but the canvas column is the
+    wallpaper, so on any desktop with a background image the shadow landed on
+    the photo as a hard-edged grey band down its left edge rather than as depth
+    on chrome. The rail's own cast was removed earlier for the same reason (it
+    read as "a smudge"); this is the last one. The z-index stays: the column is
+    still above the sidebar for stacking, it just does not advertise it. */
 }
 
 /* Accent wash — a soft bleed of the active theme's accent in from the sidebar's
@@ -4354,7 +4359,6 @@ body {
  --shadow-2xl: 6px 6px 0 color-mix(in srgb, var(--foreground) 32%, transparent);
  --shadow-window: 4px 4px 0 color-mix(in srgb, var(--foreground) 24%, transparent);
  --chrome-cast: 1px 0 0 color-mix(in srgb, var(--foreground) 10%, transparent), 6px 0 0 color-mix(in srgb, var(--foreground) 18%, transparent);
- --chrome-cast-left: -6px 0 0 color-mix(in srgb, var(--foreground) 18%, transparent);
  --home-bg-image-opacity: 0.28;
  --home-bg-overlay: linear-gradient(to bottom, rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0.08) 72%, var(--canvas-base));
  --home-bg-vignette: radial-gradient(135% 105% at 50% 42%, transparent 44%, rgba(0, 0, 0, 0.1) 76%, rgba(0, 0, 0, 0.2) 100%);
@@ -4406,19 +4410,27 @@ body {
  --sidebar-accent-foreground: #f2f2f2;
  --sidebar-border: #2a2a2a;
  --sidebar-ring: var(--primary);
- --shadow-sm: 2px 2px 0 color-mix(in srgb, var(--foreground) 20%, transparent);
- --shadow-md: 3px 3px 0 color-mix(in srgb, var(--foreground) 24%, transparent);
- --shadow-lg: 4px 4px 0 color-mix(in srgb, var(--foreground) 28%, transparent);
- --shadow-xl: 5px 5px 0 color-mix(in srgb, var(--foreground) 32%, transparent);
- --shadow-2xl: 6px 6px 0 color-mix(in srgb, var(--foreground) 36%, transparent);
- --shadow-window: 4px 4px 0 color-mix(in srgb, var(--foreground) 26%, transparent);
- --chrome-cast: 1px 0 0 color-mix(in srgb, var(--foreground) 18%, transparent), 6px 0 0 color-mix(in srgb, var(--foreground) 26%, transparent);
- --chrome-cast-left: -6px 0 0 color-mix(in srgb, var(--foreground) 26%, transparent);
+ /* Shadows mix toward BLACK here, not toward --foreground.
+    The light theme mixes toward --foreground and that is correct there, because
+    in light mode --foreground IS near-black. Reusing the same expression in dark
+    mode inverted it: --foreground is #f2f2f2, so every "shadow" was a pale
+    offset smudge sitting LIGHTER than the surface it fell on — a highlight
+    wearing a shadow's name. Offsets and the 0 blur radius are unchanged: these
+    stay hard-edged, which is the Default theme's whole look. Only the colour and
+    the strength move, and they go up, because a dark surface needs more contrast
+    to read the same as a light one. */
+ --shadow-sm: 2px 2px 0 rgba(0, 0, 0, 0.55);
+ --shadow-md: 3px 3px 0 rgba(0, 0, 0, 0.6);
+ --shadow-lg: 4px 4px 0 rgba(0, 0, 0, 0.65);
+ --shadow-xl: 5px 5px 0 rgba(0, 0, 0, 0.7);
+ --shadow-2xl: 6px 6px 0 rgba(0, 0, 0, 0.75);
+ --shadow-window: 4px 4px 0 rgba(0, 0, 0, 0.62);
+ --chrome-cast: 1px 0 0 rgba(0, 0, 0, 0.5), 6px 0 0 rgba(0, 0, 0, 0.6);
  --home-bg-image-opacity: 0.16;
  --home-bg-overlay: linear-gradient(to bottom, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0.52) 72%, var(--canvas-base));
  --home-bg-vignette: radial-gradient(135% 105% at 50% 42%, transparent 40%, rgba(0, 0, 0, 0.2) 74%, rgba(0, 0, 0, 0.42) 100%);
- --default-hard-shadow: 2px 2px 0 color-mix(in srgb, var(--foreground) 24%, transparent);
- --default-hard-shadow-hover: 3px 3px 0 color-mix(in srgb, var(--foreground) 30%, transparent);
+ --default-hard-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
+ --default-hard-shadow-hover: 3px 3px 0 rgba(0, 0, 0, 0.7);
 }
 
 :root[data-ui-theme="default"] {

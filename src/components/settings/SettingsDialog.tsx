@@ -105,7 +105,11 @@ const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: 'notifications', label: 'Notifications', icon: <Bell /> },
   { id: 'appearance', label: 'Appearance', icon: <Palette /> },
   { id: 'ai', label: 'AI', icon: <Sparkles /> },
-  { id: 'tools', label: 'Tools', icon: <Wrench /> },
+  // Labelled for what the panel actually lists: locally installed agent CLIs
+  // (Claude Code, Codex, Goose, Cursor…), not "tools" in the MCP/tool-call
+  // sense, which is what "Tools" reads as everywhere else in this app.
+  // The id stays 'tools' — it is persisted and deep-linked.
+  { id: 'tools', label: 'Agent CLIs', icon: <Wrench /> },
   { id: 'connections', label: 'Connections', icon: <Plug /> },
   { id: 'secrets', label: 'Vault', icon: <KeyRound /> },
   // Next to the Vault: same manage gate, same sensitivity. The route behind it
@@ -1180,27 +1184,15 @@ function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
 }
 
 function AIPanel({ workspaceId }: { workspaceId: string | null }) {
-  const [useCtx, setUseCtx] = useState(getSettings().ai_use_workspace_context);
 
   return (
     <FieldGroup>
-      <Field orientation="horizontal">
-        <Switch
-          checked={useCtx}
-          onCheckedChange={checked => {
-            const next = Boolean(checked);
-            setUseCtx(next);
-            setSetting('ai_use_workspace_context', next);
-          }}
-        />
-        <div>
-          <FieldLabel>Workspace knowledge</FieldLabel>
-          <FieldDescription>
-            New chats can see your documents, tasks, memory, and canvas notes by default.
-          </FieldDescription>
-        </div>
-      </Field>
-
+      {/* No "Workspace knowledge" switch here any more. It defaulted to on, and
+          the real control is per conversation — the context chip in the
+          composer (App.tsx, `enabled={useWorkspaceCtx}`) toggles the same
+          setting where the decision actually gets made. A global mirror of a
+          per-chat control is a second place to look and a second thing to get
+          out of sync; the setting itself stays and stays defaulted to true. */}
       <GatewaysManager workspaceId={workspaceId} />
     </FieldGroup>
   );
