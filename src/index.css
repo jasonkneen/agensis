@@ -1514,6 +1514,18 @@
  font-variant-numeric: tabular-nums;
 }
 
+/* Depth on the count pills, in the Default theme only.
+   They were flat fills sitting on a flat sidebar — the one element on the row
+   that is supposed to read as a raised token, rendered with less presence than
+   the row behind it. --default-hard-shadow is the same offset, blur-free shadow
+   the theme's buttons and cards already use, so this is the existing vocabulary
+   rather than a new effect; scoped to [data-ui-theme="default"] because paper
+   and neo have their own shadow languages and classic deliberately has none. */
+:root[data-ui-theme="default"] .sidebar-section-count,
+:root[data-ui-theme="default"] .sidebar-action-count {
+ box-shadow: var(--default-hard-shadow);
+}
+
 /* Two reserved right-hand columns per row: a count column, then a far-right
    gutter for a future per-row menu icon. Labels clear both. A shared min-height
    keeps section, folder, and action rows on one tight vertical rhythm. */

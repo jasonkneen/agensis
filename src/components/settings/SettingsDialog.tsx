@@ -1,4 +1,5 @@
 import { DEFAULT_BACKGROUND_OPACITY } from '../../lib/wallpaperDefaults';
+import { GATEWAY_PRESETS, gatewayPresetById } from '../../lib/gatewayPresets';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
@@ -1160,13 +1161,15 @@ function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
   const [apiKey, setApiKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [presetId, setPresetId] = useState('');
+  const presetNote = presetId ? gatewayPresetById(presetId)?.note : undefined;
 
   const add = async () => {
     if (!name.trim() || !baseUrl.trim() || busy) return;
     setBusy(true);
     try {
       const created = await createGateway({ name: name.trim(), base_url: baseUrl.trim(), model: gwModel.trim(), api_key: apiKey });
-      if (created) { setName(''); setBaseUrl(''); setGwModel(''); setApiKey(''); }
+      if (created) { setName(''); setBaseUrl(''); setGwModel(''); setApiKey(''); setPresetId(''); }
     } finally {
       setBusy(false);
     }
@@ -1220,6 +1223,33 @@ function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
             </div>
           ))}
         </div>
+      )}
+      {/* Start from a known provider rather than typing three fields from
+          memory. A base URL is the worst of them: identical for everyone on
+          that provider, and a missing /v1 returns 404s that read as auth
+          failures. Everything stays editable afterwards, so a custom endpoint
+          — or a second account with the same provider — is still one form. */}
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {GATEWAY_PRESETS.map(preset => (
+          <Button
+            key={preset.id}
+            type="button"
+            size="xs"
+            variant={presetId === preset.id ? 'secondary' : 'outline'}
+            aria-pressed={presetId === preset.id}
+            onClick={() => {
+              setPresetId(preset.id);
+              setName(preset.label);
+              setBaseUrl(preset.baseUrl);
+              setGwModel(preset.model);
+            }}
+          >
+            {preset.label}
+          </Button>
+        ))}
+      </div>
+      {presetNote && (
+        <FieldDescription className="mt-1.5">{presetNote}</FieldDescription>
       )}
       <div className="mt-2 grid gap-2">
         <Input value={name} onChange={e => setName(e.target.value)} placeholder="Name (e.g. OpenRouter)" className="h-8" />

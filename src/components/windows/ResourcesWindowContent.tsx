@@ -305,11 +305,17 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
             agent tools remain the execution surface while the resource stays protected.
           </p>
         </div>
+        {/* Secondary header actions are `outline`, not `ghost`. A ghost button
+            has no border until you hover it, so beside the filled primary these
+            two read as loose text rather than as controls — the affordance
+            arrives only once you have already guessed there is one. Outline
+            keeps the hierarchy (one filled primary, two quieter siblings) while
+            making all three legible as buttons at rest. */}
         <div className="flex shrink-0 items-center gap-2">
-          <Button type="button" variant="ghost" size="sm" onClick={() => setShowDeleted(value => !value)}>
+          <Button type="button" variant="outline" size="sm" onClick={() => setShowDeleted(value => !value)}>
             {showDeleted ? 'Hide deleted' : 'Show deleted'}
           </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => { void refresh(); }} disabled={loading}>
+          <Button type="button" variant="outline" size="sm" onClick={() => { void refresh(); }} disabled={loading}>
             <RefreshCw data-icon="inline-start" />
             Refresh
           </Button>

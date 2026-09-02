@@ -214,8 +214,11 @@ export function AutomationsWindowContent({ workspaceId, sessions }: AutomationsW
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{AUTOMATION_SAFETY_NOTE}</p>
           <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{AUTOMATION_PERMISSION_NOTE}</p>
         </div>
+        {/* outline, not ghost — same reason as ResourcesWindowContent: a
+            borderless button beside a filled primary reads as text, not as a
+            control, until you hover it. */}
         <div className="flex shrink-0 items-center gap-2">
-          <Button type="button" variant="ghost" size="sm" onClick={() => { void refresh(); }} disabled={loading}>
+          <Button type="button" variant="outline" size="sm" onClick={() => { void refresh(); }} disabled={loading}>
             <RefreshCw data-icon="inline-start" />
             Refresh
           </Button>
