@@ -71,7 +71,7 @@ function AgentChip({ agent, onOpen }: { agent: SkillAgentRef; onOpen: () => void
       title={advertised
         ? `${agent.name} advertises this skill from a connected machine`
         : `${agent.name} has this skill configured — nothing is connected to confirm it`}
-      className={`inline-flex max-w-[11rem] items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2 text-[11px] transition-colors ${
+      className={`inline-flex max-w-[11rem] items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2 text-2xs transition-colors ${
         advertised
           ? 'bg-muted text-foreground hover:bg-muted/70'
           : 'border border-dashed border-border text-muted-foreground hover:bg-muted/40'
@@ -358,14 +358,14 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                             agensis, readable by every agent, rather than the
                             name merely being claimed by one. */}
                         {skill.stored && (
-                          <Badge variant="outline" className="ml-auto shrink-0 text-[10px]">written here</Badge>
+                          <Badge variant="outline" className="ml-auto shrink-0 text-3xs">written here</Badge>
                         )}
                         {skill.agents.length > 0 && (
                           <Badge variant="secondary" className={`shrink-0 ${skill.stored ? '' : 'ml-auto'}`}>{skill.agents.length}</Badge>
                         )}
                       </div>
                       {skill.summary && (
-                        <p className="mt-1 line-clamp-2 pl-5.5 text-[11px] leading-snug text-muted-foreground">{skill.summary}</p>
+                        <p className="mt-1 line-clamp-2 pl-5.5 text-2xs leading-snug text-muted-foreground">{skill.summary}</p>
                       )}
                       {/* The chips ARE the answer to "which agents can do this",
                           so they stay in the narrow column too — the earlier
@@ -376,7 +376,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                           <AgentChip key={`${agent.id}:${agent.source}`} agent={agent} onOpen={() => setQuery(agent.name)} />
                         ))}
                         {skill.agents.length === 0 && (
-                          <span className="text-[11px] text-muted-foreground">
+                          <span className="text-2xs text-muted-foreground">
                             {skill.stored
                               ? 'Readable by any agent · no agent lists it yet'
                               : 'Available in agensis · no agent has it yet'}
@@ -411,7 +411,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                       <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-medium text-foreground">{lib.label}</div>
-                        {lib.path && <div className="truncate text-[11px] text-muted-foreground">{lib.path}</div>}
+                        {lib.path && <div className="truncate text-2xs text-muted-foreground">{lib.path}</div>}
                       </div>
                       <Badge variant="secondary" className="shrink-0">{lib.count}</Badge>
                     </button>
@@ -461,7 +461,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
           {describeSkillSource(content)}
           {content.byteSize > 0 && ` · ${formatSkillBytes(content.byteSize)}`}
         </p>
-        {content.path && <p className="break-all font-mono text-[11px] text-muted-foreground">{content.path}</p>}
+        {content.path && <p className="break-all font-mono text-2xs text-muted-foreground">{content.path}</p>}
         <div className="skills-content-markdown rounded-lg border border-border bg-card/40 p-3">
           <MarkdownContent content={content.markdown} compact />
         </div>
@@ -532,7 +532,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
 
                 {selectedStored && (
                   <div className="flex items-center gap-2">
-                    <span className="text-[11px] text-muted-foreground">
+                    <span className="text-2xs text-muted-foreground">
                       {describeSkillProvenance(selectedStored.source)}
                       {selectedStored.revision > 1 && ` · revision ${selectedStored.revision}`}
                     </span>
@@ -629,12 +629,12 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                           </span>
                           <div className="min-w-0 flex-1">
                             <div className="truncate text-sm text-foreground">{agent.name}</div>
-                            {agent.handle && <div className="truncate text-[11px] text-muted-foreground">@{agent.handle}</div>}
+                            {agent.handle && <div className="truncate text-2xs text-muted-foreground">@{agent.handle}</div>}
                           </div>
-                          <Badge variant={agent.source === 'advertised' ? 'secondary' : 'outline'} className="shrink-0 text-[11px]">
+                          <Badge variant={agent.source === 'advertised' ? 'secondary' : 'outline'} className="shrink-0 text-2xs">
                             {agent.source === 'advertised' ? 'advertised' : 'configured'}
                           </Badge>
-                          <Badge variant="outline" className="shrink-0 text-[11px]">{agent.runMode}</Badge>
+                          <Badge variant="outline" className="shrink-0 text-2xs">{agent.runMode}</Badge>
                           {agent.connected && (
                             <span className="size-2 shrink-0 rounded-full bg-emerald-500" title="Connected" aria-label="Connected" />
                           )}

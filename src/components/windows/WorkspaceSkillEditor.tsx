@@ -99,14 +99,14 @@ export function WorkspaceSkillEditor({ skill, existingNames, onCancel, onSave }:
             placeholder="Security review"
             aria-invalid={show('title') ? true : undefined}
           />
-          <p className="mt-1 text-[11px] text-muted-foreground">
+          <p className="mt-1 text-2xs text-muted-foreground">
             {skill
               ? <>Stored as <code className="font-mono">{previewName}</code>. The name is fixed — renaming would break every reference to it.</>
               : previewName
                 ? <>Agents will call it <code className="font-mono">{previewName}</code>.</>
                 : 'The name agents use is derived from the title.'}
           </p>
-          {show('title') && <p className="mt-1 text-[11px] text-destructive">{show('title')}</p>}
+          {show('title') && <p className="mt-1 text-2xs text-destructive">{show('title')}</p>}
         </div>
 
         <div>
@@ -120,10 +120,10 @@ export function WorkspaceSkillEditor({ skill, existingNames, onCancel, onSave }:
             onChange={e => setDraft(prev => ({ ...prev, summary: e.target.value }))}
             placeholder="When to reach for this, in one line."
           />
-          <p className="mt-1 text-[11px] text-muted-foreground">
+          <p className="mt-1 text-2xs text-muted-foreground">
             One line. This is what an agent sees when it lists skills, so it decides whether the skill gets read at all.
           </p>
-          {show('summary') && <p className="mt-1 text-[11px] text-destructive">{show('summary')}</p>}
+          {show('summary') && <p className="mt-1 text-2xs text-destructive">{show('summary')}</p>}
         </div>
 
         <div className="flex min-h-0 flex-col">
@@ -143,14 +143,14 @@ export function WorkspaceSkillEditor({ skill, existingNames, onCancel, onSave }:
             {/* Stated plainly rather than implied by a fence icon: this text is
                 handed to agents as untrusted reference data, and a person
                 writing it should know it will not be obeyed as an order. */}
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               Markdown. Agents read this as reference material, not as instructions they must obey.
             </p>
-            <p className={`shrink-0 text-[11px] ${bodyBytes > SKILL_BODY_MAX_BYTES ? 'text-destructive' : 'text-muted-foreground'}`}>
+            <p className={`shrink-0 text-2xs ${bodyBytes > SKILL_BODY_MAX_BYTES ? 'text-destructive' : 'text-muted-foreground'}`}>
               {(bodyBytes / 1024).toFixed(1)} / 64 KB
             </p>
           </div>
-          {show('body') && <p className="mt-1 text-[11px] text-destructive">{show('body')}</p>}
+          {show('body') && <p className="mt-1 text-2xs text-destructive">{show('body')}</p>}
         </div>
 
         {serverError && (

@@ -382,7 +382,7 @@ export function AutomationsWindowContent({ workspaceId, sessions }: AutomationsW
                   <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
                     {ruleSummary(automation.definition)}
                   </p>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs text-muted-foreground">
                     <span>{runCountLabel(automation)}</span>
                     <span>Last run {formatRunTime(automation.last_run_at)}</span>
                   </div>
@@ -436,9 +436,9 @@ export function AutomationsWindowContent({ workspaceId, sessions }: AutomationsW
                   does to a two-word line inside a wide window. */}
               {automationRuns.length > 0 && (
                 <div className="mt-3 flex flex-col gap-1">
-                  <span className="text-[11px] font-medium text-muted-foreground">Recent runs</span>
+                  <span className="text-2xs font-medium text-muted-foreground">Recent runs</span>
                   {automationRuns.slice(0, 3).map(run => (
-                    <div key={run.id} className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                    <div key={run.id} className="flex items-center gap-2 text-2xs text-muted-foreground">
                       <span className={cn('min-w-16', runFailed(run) && 'text-destructive')}>{runStatusLabel(run.status)}</span>
                       <span className="opacity-70">{formatRunTime(run.created_at)}</span>
                       {run.error && <span className="truncate opacity-70">— {run.error}</span>}
@@ -454,7 +454,7 @@ export function AutomationsWindowContent({ workspaceId, sessions }: AutomationsW
       {/* Every create, edit, delete and on/off here is written to the audit log.
           Saying where it went is the difference between a record that exists and
           one anybody knows to look for. */}
-      <div className="flex shrink-0 items-center gap-2 border-t border-border px-4 py-3 text-[11px] text-muted-foreground">
+      <div className="flex shrink-0 items-center gap-2 border-t border-border px-4 py-3 text-2xs text-muted-foreground">
         <ScrollText className="size-3.5 shrink-0" />
         <span>
           Creating, changing, deleting or switching a rule on or off is recorded in the

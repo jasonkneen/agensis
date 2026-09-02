@@ -164,7 +164,7 @@ export function AgentModelPicker({
                   <span className="flex min-w-0 flex-col gap-0.5">
                     <span className="font-medium">{model.label}</span>
                     {model.description && (
-                      <span className="text-[11px] text-muted-foreground">{model.description}</span>
+                      <span className="text-2xs text-muted-foreground">{model.description}</span>
                     )}
                   </span>
                 </DropdownMenuRadioItem>
@@ -196,7 +196,7 @@ export function AgentModelPicker({
                 <DropdownMenuRadioItem key={level.id} value={level.id} className="text-xs">
                   <span className="flex min-w-0 flex-col gap-0.5">
                     <span className="font-medium">{level.label}</span>
-                    <span className="text-[11px] text-muted-foreground">{level.description}</span>
+                    <span className="text-2xs text-muted-foreground">{level.description}</span>
                   </span>
                 </DropdownMenuRadioItem>
               ))}
@@ -210,17 +210,17 @@ export function AgentModelPicker({
             type="button"
             size="sm"
             variant="outline"
-            className="h-7 text-[11px]"
+            className="h-7 text-2xs"
             disabled={saving}
             onClick={() => { void handleRestart(); }}
           >
             Restart to apply
           </Button>
         ) : (
-          <span className="text-[11px] text-amber-600 dark:text-amber-400">restart to apply</span>
+          <span className="text-2xs text-amber-600 dark:text-amber-400">restart to apply</span>
         )
       )}
-      {error && <span className="text-[11px] text-destructive">{error}</span>}
+      {error && <span className="text-2xs text-destructive">{error}</span>}
     </span>
   );
 }

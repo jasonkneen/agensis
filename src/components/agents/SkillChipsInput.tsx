@@ -173,7 +173,7 @@ export function SkillChipsInput({
                   {option.kind === 'custom' ? `Add "${option.label}"` : option.label}
                 </span>
                 {option.detail && (
-                  <span className="shrink-0 text-[11px] text-muted-foreground">{option.detail}</span>
+                  <span className="shrink-0 text-2xs text-muted-foreground">{option.detail}</span>
                 )}
               </button>
             </li>

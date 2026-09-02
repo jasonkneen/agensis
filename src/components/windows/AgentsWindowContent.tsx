@@ -1072,7 +1072,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   has nowhere to keep authority); the second half is the actual
                   warning and the one that matters, because unread prose becomes
                   an agent's instructions. */}
-              <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground">{TEMPLATE_IMPORT_NOTE}</p>
+              <p className="mb-2 text-2xs leading-relaxed text-muted-foreground">{TEMPLATE_IMPORT_NOTE}</p>
               {templateTransferMessage && (
                 <div className={cn(
                   'mb-2 rounded-lg border px-2.5 py-1.5 text-xs',
@@ -1211,7 +1211,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                             <span className="grid size-9 place-items-center rounded-lg bg-muted"><TplIcon className="size-5" /></span>
                             <span className="text-sm font-semibold">{tpl.name}</span>
                             <span className="line-clamp-2 text-xs text-muted-foreground">{tpl.description}</span>
-                            <span className="mt-auto text-[11px] text-muted-foreground opacity-70">
+                            <span className="mt-auto text-2xs text-muted-foreground opacity-70">
                               {tpl.purpose === 'resource'
                                 ? `Shared resource · ${resourceFacetSummary(tpl.resourceFacets)}`
                                 : 'Collaborator'}
@@ -1518,10 +1518,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                             <span className="agent-accent-dot" style={{ backgroundColor: accent }} aria-hidden />
                             <span className="truncate text-sm font-semibold">{agent.name}</span>
                           </div>
-                          <span className="block truncate text-[11px] text-muted-foreground opacity-70">@{agent.handle || agentHandle(agent.name)}</span>
-                          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground opacity-80">{displayModel(agent.model)}</span>
+                          <span className="block truncate text-2xs text-muted-foreground opacity-70">@{agent.handle || agentHandle(agent.name)}</span>
+                          <span className="mt-0.5 block truncate text-2xs text-muted-foreground opacity-80">{displayModel(agent.model)}</span>
                           {normalizeAgentPurpose(agent.purpose) === 'resource' && (
-                            <span className="mt-0.5 block w-full max-w-full line-clamp-2 break-words text-[11px] font-medium leading-tight text-primary">
+                            <span className="mt-0.5 block w-full max-w-full line-clamp-2 break-words text-2xs font-medium leading-tight text-primary">
                               Shared resource · {resourceFacetSummary(agent.resource_facets)}
                             </span>
                           )}
@@ -2941,7 +2941,7 @@ function AgentDetailPane({
                             <div className="flex flex-wrap gap-1">
                               <span className="shrink-0 text-muted-foreground/60">Skills:</span>
                               {capSkills.slice(0, 8).map(s => (
-                                <span key={s} className="rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary">{s}</span>
+                                <span key={s} className="rounded bg-primary/10 px-1 py-0.5 text-3xs text-primary">{s}</span>
                               ))}
                               {capSkills.length > 8 && <span className="text-muted-foreground/60">+{capSkills.length - 8}</span>}
                             </div>
@@ -2950,7 +2950,7 @@ function AgentDetailPane({
                             <div className="flex flex-wrap gap-1">
                               <span className="shrink-0 text-muted-foreground/60">CLIs:</span>
                               {capClis.map(c => (
-                                <span key={c} className="rounded bg-muted px-1 py-0.5 text-[10px] font-mono text-muted-foreground">{c}</span>
+                                <span key={c} className="rounded bg-muted px-1 py-0.5 text-3xs font-mono text-muted-foreground">{c}</span>
                               ))}
                             </div>
                           )}
@@ -2958,7 +2958,7 @@ function AgentDetailPane({
                             <div className="flex flex-wrap gap-1">
                               <span className="shrink-0 text-muted-foreground/60">MCP:</span>
                               {capMcpServers.slice(0, 6).map(m => (
-                                <span key={m} className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">{m}</span>
+                                <span key={m} className="rounded bg-muted px-1 py-0.5 text-3xs text-muted-foreground">{m}</span>
                               ))}
                               {capMcpServers.length > 6 && <span className="text-muted-foreground/60">+{capMcpServers.length - 6}</span>}
                             </div>
@@ -2967,7 +2967,7 @@ function AgentDetailPane({
                             <div className="flex flex-wrap gap-1">
                               <span className="shrink-0 text-muted-foreground/60">Shared models:</span>
                               {capSharedModels.slice(0, 6).map(model => (
-                                <span key={model.id} className="rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary">{model.name || model.id}</span>
+                                <span key={model.id} className="rounded bg-primary/10 px-1 py-0.5 text-3xs text-primary">{model.name || model.id}</span>
                               ))}
                               {capSharedModels.length > 6 && <span className="text-muted-foreground/60">+{capSharedModels.length - 6}</span>}
                             </div>
@@ -3509,7 +3509,7 @@ function AgentConnectDialog({
                       ))}
                     </select>
                     {localRuntimes.find(r => r.id === localRuntimeId)?.detail && (
-                      <span className="text-[11px] text-muted-foreground max-w-xs truncate" title={localRuntimes.find(r => r.id === localRuntimeId)?.detail}>
+                      <span className="text-2xs text-muted-foreground max-w-xs truncate" title={localRuntimes.find(r => r.id === localRuntimeId)?.detail}>
                         {localRuntimes.find(r => r.id === localRuntimeId)?.detail}
                       </span>
                     )}
@@ -3605,7 +3605,7 @@ function AgentConnectDialog({
                       Optional: keep that CLI profile running at login (not the same as desktop autostart):
                     </p>
                     <CopyBlock value={`agensis service install --profile ${handle}`} />
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-2xs text-muted-foreground">
                       macOS LaunchAgent / Linux systemd user service. Profile name only — no token in the unit file.
                     </p>
                   </div>
@@ -3737,7 +3737,7 @@ function AgentConnectDialog({
                             </Button>
                           </div>
                           {!url && (
-                            <p className="text-[11px] text-muted-foreground">
+                            <p className="text-2xs text-muted-foreground">
                               Secret URL hidden after creation. Create a replacement to receive a new URL.
                             </p>
                           )}
@@ -4370,7 +4370,7 @@ function AccessSection({
           Add
         </Button>
       </div>
-      <p className="mt-1.5 text-[10px] text-muted-foreground/60">
+      <p className="mt-1.5 text-3xs text-muted-foreground/60">
         Common rules: <code className="rounded bg-muted/40 px-1">Edit</code>,{' '}
         <code className="rounded bg-muted/40 px-1">Write</code>,{' '}
         <code className="rounded bg-muted/40 px-1">Bash(git:*)</code>,{' '}
@@ -4496,7 +4496,7 @@ function SharingSection({ agent, connection, onUpdateAgent }: {
           );
         })}
       </div>
-      <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground/80">
+      <p className="mt-2 text-2xs leading-relaxed text-muted-foreground/80">
         Switching one off removes what {agent.name} has already contributed and stops the next
         sync. Switching it back on asks the agent to send it again.
       </p>
@@ -4504,7 +4504,7 @@ function SharingSection({ agent, connection, onUpdateAgent }: {
           wants. The two decide together and neither can overrule the other, so
           collapsing them into one line would make an unfixable "off" look like
           a fixable one. */}
-      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/80">
+      <p className="mt-1 text-2xs leading-relaxed text-muted-foreground/80">
         {describeSharePolicy(policy)}
         {policy.rules.length > 0 && ' — some paths on that machine are excluded.'}
       </p>

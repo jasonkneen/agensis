@@ -416,7 +416,7 @@ export function HuddleDock() {
                 key={participant.id}
                 title={participant.name}
                 className={cn(
-                  'grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-semibold',
+                  'grid size-6 shrink-0 place-items-center rounded-full text-3xs font-semibold',
                   participant.kind === 'agent'
                     ? 'bg-primary/15 text-primary'
                     : 'bg-muted text-muted-foreground',
@@ -430,7 +430,7 @@ export function HuddleDock() {
                     name={participant.name}
                     initials={participantInitials(participant.name)}
                     className="size-6 rounded-full"
-                    fallbackClassName="bg-transparent text-[10px] text-primary"
+                    fallbackClassName="bg-transparent text-3xs text-primary"
                   />
                 ) : participantInitials(participant.name)}
               </span>

@@ -523,7 +523,7 @@ function KnowledgeContextControl({
       >
         <CheckCircle2 className={enabled ? 'text-pink-500' : 'text-muted-foreground'} />
         <span>Knowledge</span>
-        <Badge variant="secondary" className="ml-auto h-5 rounded-md border-0 px-1.5 text-[10px] shadow-none">
+        <Badge variant="secondary" className="ml-auto h-5 rounded-md border-0 px-1.5 text-3xs shadow-none">
           {activeTotal}
         </Badge>
       </DropdownMenuSubTrigger>
@@ -531,7 +531,7 @@ function KnowledgeContextControl({
         <div className="flex items-center justify-between gap-3 px-3 py-2.5">
           <div className="flex min-w-0 flex-col gap-0.5">
             <span className="text-sm font-semibold leading-none">Knowledge</span>
-            <span className="text-[11px] leading-none text-muted-foreground">{summary}</span>
+            <span className="text-2xs leading-none text-muted-foreground">{summary}</span>
           </div>
           <Switch
             checked={enabled}
@@ -542,7 +542,7 @@ function KnowledgeContextControl({
           />
         </div>
         <DropdownMenuSeparator className="my-0" />
-        <DropdownMenuLabel className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        <DropdownMenuLabel className="px-3 pb-1 pt-2 text-3xs font-medium uppercase tracking-wider text-muted-foreground">
           Sources
         </DropdownMenuLabel>
         <div className="px-1 pb-1">
@@ -575,7 +575,7 @@ function KnowledgeContextControl({
                 <span className="min-w-0 flex-1 truncate">{item.label}</span>
                 <span
                   className={cn(
-                    'ml-auto inline-flex min-w-[1.75rem] justify-center rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums transition-colors',
+                    'ml-auto inline-flex min-w-[1.75rem] justify-center rounded-md px-1.5 py-0.5 text-2xs font-medium tabular-nums transition-colors',
                     contributing
                       ? 'bg-pink-500/10 text-pink-600 dark:text-pink-400'
                       : 'text-muted-foreground/60',

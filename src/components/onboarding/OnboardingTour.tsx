@@ -392,7 +392,7 @@ export function OnboardingTour({
             <Icon className="size-7" />
           </div>
 
-          <span className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <span className="mb-2 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
             {current.eyebrow}
           </span>
           <DialogTitle className="text-balance text-xl font-semibold leading-snug text-foreground">
@@ -418,7 +418,7 @@ export function OnboardingTour({
                       )}
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-semibold text-foreground">{tpl.name}</div>
-                        <div className="line-clamp-2 text-[11px] leading-snug text-muted-foreground">{tpl.description}</div>
+                        <div className="line-clamp-2 text-2xs leading-snug text-muted-foreground">{tpl.description}</div>
                       </div>
                       <Button
                         type="button"
@@ -445,7 +445,7 @@ export function OnboardingTour({
                     <KeyRound className="size-3.5 text-muted-foreground" />
                     Direct agents need an Anthropic API key
                   </div>
-                  <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+                  <p className="mt-1 text-2xs leading-snug text-muted-foreground">
                     No key is configured for this workspace yet. Paste one now, or skip and add it later in Settings → Secret keys.
                   </p>
                   <div className="mt-2 flex gap-2">
@@ -461,7 +461,7 @@ export function OnboardingTour({
                       {keyBusy ? 'Saving…' : 'Save'}
                     </Button>
                   </div>
-                  {keyMessage && <div className="mt-1.5 text-[11px] text-destructive">{keyMessage}</div>}
+                  {keyMessage && <div className="mt-1.5 text-2xs text-destructive">{keyMessage}</div>}
                 </div>
               )}
             </div>
@@ -477,7 +477,7 @@ export function OnboardingTour({
                         <Terminal className="size-3.5 shrink-0 text-muted-foreground" />
                         <span className="truncate text-sm font-semibold text-foreground">{cli.name}</span>
                       </div>
-                      <span className="text-[11px] text-muted-foreground">{cli.note}</span>
+                      <span className="text-2xs text-muted-foreground">{cli.note}</span>
                       <Button
                         type="button"
                         size="sm"
@@ -496,12 +496,12 @@ export function OnboardingTour({
                   <div className="text-sm font-semibold text-foreground">
                     @{connectAgent?.handle} is ready to connect
                   </div>
-                  <ol className="mt-2 list-decimal space-y-1 pl-4 text-[11px] leading-snug text-muted-foreground">
+                  <ol className="mt-2 list-decimal space-y-1 pl-4 text-2xs leading-snug text-muted-foreground">
                     <li>Install the daemon: <code className="rounded bg-muted px-1 py-0.5">npm i -g @agensis/agensis-agent</code></li>
                     <li>Run this command where your CLI is logged in:</li>
                   </ol>
                   <div className="relative mt-2">
-                    <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-2 pr-9 text-[11px] leading-snug text-foreground">{connectCommand}</pre>
+                    <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-2 pr-9 text-2xs leading-snug text-foreground">{connectCommand}</pre>
                     <Button
                       type="button"
                       variant="ghost"
@@ -513,14 +513,14 @@ export function OnboardingTour({
                       {commandCopied ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
                     </Button>
                   </div>
-                  <div className="mt-2 rounded-md border border-border bg-muted/30 p-2 text-[11px] leading-snug text-muted-foreground">
+                  <div className="mt-2 rounded-md border border-border bg-muted/30 p-2 text-2xs leading-snug text-muted-foreground">
                     Once connected, keep it alive after this shell or the desktop app closes with{' '}
                     <code className="rounded bg-muted px-1 py-0.5">
                       agensis service install --profile {connectAgent?.handle}
                     </code>
                     . The service stores only the profile name, never the token.
                   </div>
-                  <div className={cn('mt-2 text-[11px] font-medium', connected ? 'text-emerald-500' : 'text-muted-foreground')}>
+                  <div className={cn('mt-2 text-2xs font-medium', connected ? 'text-emerald-500' : 'text-muted-foreground')}>
                     {connected
                       ? `Connected — @${connectAgent?.handle} is online.`
                       : 'Waiting for the daemon to come online… you can also finish setup and connect later.'}

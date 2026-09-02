@@ -381,7 +381,7 @@ function BridgeSetup({
           blank fields rather than a masked value that cannot be edited. */}
       {spec?.fields.map(field => (
         <div key={field.key}>
-          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <label className="mb-1 block text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
             {field.label}
           </label>
           <Input
@@ -397,7 +397,7 @@ function BridgeSetup({
 
       {spec?.externalIdLabel && (
         <div>
-          <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <label className="mb-1 block text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
             {spec.externalIdLabel}
           </label>
           <Input
@@ -412,7 +412,7 @@ function BridgeSetup({
 
       {spec && spec.steps.length > 0 && (
         <div className="rounded-lg border border-border bg-muted/30 p-3">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
             Then, in {template.name}
           </div>
           <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-muted-foreground">
@@ -423,7 +423,7 @@ function BridgeSetup({
 
       {created?.eventUrl && (
         <div className="rounded-lg border border-border bg-background p-3">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Event URL</div>
+          <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Event URL</div>
           <code className="mt-1 block break-all text-xs text-foreground">{created.eventUrl}</code>
           <Button
             type="button"

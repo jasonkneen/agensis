@@ -297,7 +297,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                     <span className="block truncate text-sm text-foreground">{item.label}</span>
                     {item.detail && <span className="block truncate text-xs text-muted-foreground">{item.detail}</span>}
                   </span>
-                  <Badge variant="outline" className="shrink-0 text-[11px]">
+                  <Badge variant="outline" className="shrink-0 text-2xs">
                     {item.badge}
                   </Badge>
                 </CommandItem>

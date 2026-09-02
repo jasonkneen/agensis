@@ -97,7 +97,7 @@ function UnavailableChip({ attachment, onRemove }: { attachment: MessageAttachme
       <TriangleAlert className="size-3.5 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1">
         <span className="block truncate">{attachment.name}</span>
-        <span className="block truncate text-[11px]">{ATTACHMENT_UNAVAILABLE_LABEL}</span>
+        <span className="block truncate text-2xs">{ATTACHMENT_UNAVAILABLE_LABEL}</span>
       </span>
       {onRemove && <RemoveButton attachment={attachment} onRemove={onRemove} />}
     </span>
@@ -219,7 +219,7 @@ function MessageAttachmentItem({
               className="size-full object-contain"
             />
           ) : (
-            <span className="flex size-full items-center justify-center px-2 text-center text-[11px] text-muted-foreground">
+            <span className="flex size-full items-center justify-center px-2 text-center text-2xs text-muted-foreground">
               {state === 'loading' ? 'Loading…' : ATTACHMENT_UNAVAILABLE_LABEL}
             </span>
           )}
@@ -271,7 +271,7 @@ function MessageAttachmentItem({
         <Paperclip className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         <span className="min-w-0">
           <span className="block truncate">{attachment.name}</span>
-          {sizeLabel && <span className="block truncate text-[11px] text-muted-foreground">{sizeLabel}</span>}
+          {sizeLabel && <span className="block truncate text-2xs text-muted-foreground">{sizeLabel}</span>}
         </span>
       </button>
     );
@@ -289,7 +289,7 @@ function MessageAttachmentItem({
         <Paperclip className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         <span className="min-w-0">
           <span className="block truncate">{attachment.name}</span>
-          {sizeLabel && <span className="block truncate text-[11px] text-muted-foreground">{sizeLabel}</span>}
+          {sizeLabel && <span className="block truncate text-2xs text-muted-foreground">{sizeLabel}</span>}
         </span>
       </button>
       <RemoveButton attachment={attachment} onRemove={onRemove} />

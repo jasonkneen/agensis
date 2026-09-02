@@ -18,7 +18,7 @@ type ReviewFilter = 'pending' | 'all';
 function ReviewStatus({ status }: { status: CursorBuddyGuideSubmission['review_status'] }) {
   return (
     <span className={cn(
-      'rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]',
+      'rounded-full border px-2 py-0.5 text-3xs font-semibold uppercase tracking-[0.08em]',
       status === 'approved' && 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
       status === 'rejected' && 'border-destructive/30 bg-destructive/10 text-destructive',
       status === 'pending' && 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300',

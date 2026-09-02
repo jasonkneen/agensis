@@ -707,7 +707,7 @@ function TaskRow({
                   <User />
                 )}
                 {assigneeLabel}
-                {assigneeActive && <span className="text-[10px] font-medium">· working</span>}
+                {assigneeActive && <span className="text-3xs font-medium">· working</span>}
               </Badge>
             )}
             {subtasks.length > 0 && (
@@ -1189,7 +1189,7 @@ function TaskDetail({
           <MarkerContent>Schedule</MarkerContent>
         </Marker>
         <div className="flex flex-wrap gap-2">
-          <label className="flex min-w-32 flex-1 flex-col gap-1 text-[11px] font-medium text-muted-foreground">
+          <label className="flex min-w-32 flex-1 flex-col gap-1 text-2xs font-medium text-muted-foreground">
             Start date
             <Input
               type="date"
@@ -1198,7 +1198,7 @@ function TaskDetail({
               onChange={e => onChangeDates({ start_date: fromDateInputValue(e.target.value) })}
             />
           </label>
-          <label className="flex min-w-32 flex-1 flex-col gap-1 text-[11px] font-medium text-muted-foreground">
+          <label className="flex min-w-32 flex-1 flex-col gap-1 text-2xs font-medium text-muted-foreground">
             Due date
             <Input
               type="date"
@@ -1378,7 +1378,7 @@ function TaskDetail({
                             name={agent.name}
                             initials={agent.name.slice(0, 2).toUpperCase()}
                             className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"
-                            fallbackClassName="bg-transparent text-[10px] text-muted-foreground"
+                            fallbackClassName="bg-transparent text-3xs text-muted-foreground"
                           />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate font-medium">{agent.name}</span>
@@ -1758,11 +1758,11 @@ function TaskCommentItem({
       )}
       <ItemContent className="min-w-0 gap-1">
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className="min-w-0 truncate text-[11px] font-semibold text-foreground">{author.label}</span>
+          <span className="min-w-0 truncate text-2xs font-semibold text-foreground">{author.label}</span>
           {isAgent && (
             <Badge variant="secondary" className="h-3.5 px-1 py-0 text-[9px] leading-none">agent</Badge>
           )}
-          <span className="shrink-0 text-[10px] text-muted-foreground">{formatRelativeTime(comment.created_at)}</span>
+          <span className="shrink-0 text-3xs text-muted-foreground">{formatRelativeTime(comment.created_at)}</span>
         </div>
         <ItemTitle className="max-w-full whitespace-normal text-xs font-normal leading-snug">{comment.content}</ItemTitle>
       </ItemContent>
@@ -1898,7 +1898,7 @@ function TaskKanban({
             >
               <div className="flex items-center justify-between px-1 pt-0.5">
                 <span className="text-xs font-semibold tracking-tight">{STATUS_LABELS[status]}</span>
-                <span className="rounded-full bg-muted px-1.5 text-[10px] font-medium leading-4 text-muted-foreground">
+                <span className="rounded-full bg-muted px-1.5 text-3xs font-medium leading-4 text-muted-foreground">
                   {items.length}
                 </span>
               </div>

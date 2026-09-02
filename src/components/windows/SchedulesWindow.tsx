@@ -194,13 +194,13 @@ export function SchedulesWindow({ workspaceId, agents, sessions }: SchedulesWind
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate text-sm font-medium">{schedule.name || 'Untitled schedule'}</span>
-                    {schedule.running && <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500">running</span>}
-                    {!schedule.enabled && <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">paused</span>}
+                    {schedule.running && <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-3xs font-medium text-amber-500">running</span>}
+                    {!schedule.enabled && <span className="rounded-full bg-muted px-1.5 py-0.5 text-3xs text-muted-foreground">paused</span>}
                   </div>
                   <div className="truncate text-xs text-muted-foreground">
                     {agentName(schedule.agent_id)} · {intervalLabel(schedule.interval_seconds)} · into {sessionTitle(schedule.session_id)}
                   </div>
-                  <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <div className="mt-0.5 flex items-center gap-2 text-2xs text-muted-foreground">
                     <span>next {relativeTime(schedule.next_run_at)}</span>
                     {schedule.last_status === 'ok' && <span className="inline-flex items-center gap-0.5 text-emerald-500"><CircleCheck className="size-3" />ok</span>}
                     {schedule.last_status === 'error' && <span className="inline-flex items-center gap-0.5 text-destructive"><CircleX className="size-3" />failed</span>}

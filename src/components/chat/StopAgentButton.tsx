@@ -64,7 +64,7 @@ function StopControl({
         title={title}
         className={cn(
           'control-outer-ring inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-border',
-          'bg-muted/60 px-1.5 text-[11px] font-medium text-muted-foreground',
+          'bg-muted/60 px-1.5 text-2xs font-medium text-muted-foreground',
           'hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive',
           'disabled:cursor-default disabled:opacity-60 disabled:hover:bg-muted/60 disabled:hover:text-muted-foreground',
           className,
@@ -78,7 +78,7 @@ function StopControl({
           clearest confirmation available. role=status so it is announced
           without stealing focus. */}
       {message ? (
-        <span role="status" className="truncate text-[11px] text-destructive">{message}</span>
+        <span role="status" className="truncate text-2xs text-destructive">{message}</span>
       ) : null}
     </span>
   );

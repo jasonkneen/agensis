@@ -114,7 +114,7 @@ function HuddleAgentChip({
     >
       <HuddleAgentFace agent={agent} />
       {shortcut && (
-        <span className="text-[10px] font-semibold leading-none tabular-nums">{index + 1}</span>
+        <span className="text-3xs font-semibold leading-none tabular-nums">{index + 1}</span>
       )}
     </button>
   );

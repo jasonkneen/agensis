@@ -135,7 +135,7 @@ export function HuddleNotes({ workspaceId, huddleId = null }: HuddleNotesProps) 
           'placeholder:text-muted-foreground focus-visible:outline-none',
         )}
       />
-      <div className="flex shrink-0 items-center justify-end gap-1.5 border-t border-border px-3 py-1 text-[11px] text-muted-foreground">
+      <div className="flex shrink-0 items-center justify-end gap-1.5 border-t border-border px-3 py-1 text-2xs text-muted-foreground">
         {saving ? (
           <>
             <Spinner className="size-3" />

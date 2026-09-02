@@ -1695,18 +1695,18 @@ function SelectionActionBar({
       className="fixed left-1/2 z-[9999] flex -translate-x-1/2 items-center gap-1 rounded-lg border bg-popover px-1.5 py-1 shadow-lg"
       style={{ bottom: `${bottomOffset}px` }}
     >
-      <Badge variant="outline" className="text-[11px]">
+      <Badge variant="outline" className="text-2xs">
         {count} selected
       </Badge>
 
       {attachMode && (
-        <Badge variant="secondary" className="text-[10px]">
+        <Badge variant="secondary" className="text-3xs">
           Click an item to attach
         </Badge>
       )}
 
       {!canMutateSelection && (
-        <Badge variant="secondary" className="text-[10px]">
+        <Badge variant="secondary" className="text-3xs">
           Read only
         </Badge>
       )}
@@ -1750,7 +1750,7 @@ function ActionButton({
       size="xs"
       onClick={onClick}
       title={label}
-      className={cn('text-[11px]', danger && 'border-destructive/30')}
+      className={cn('text-2xs', danger && 'border-destructive/30')}
     >
       {icon}
       {label}

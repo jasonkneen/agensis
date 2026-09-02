@@ -264,12 +264,12 @@ export function PresenceRoster({
                     className={cn(modeClass(getMode(person.id)))}
                     style={presenceAvatarStyle(person)}
                   >
-                    <PresenceAvatarContent person={person} textClass="text-[10px]" />
+                    <PresenceAvatarContent person={person} textClass="text-3xs" />
                     <AvatarBadge className={statusDotClass(person)} />
                   </Avatar>
                 ))}
                 {overflow > 0 && (
-                  <AvatarGroupCount title={`${overflow} more users`} className="presence-avatar-overflow size-6 text-[10px]">
+                  <AvatarGroupCount title={`${overflow} more users`} className="presence-avatar-overflow size-6 text-3xs">
                     +{overflow}
                   </AvatarGroupCount>
                 )}
@@ -425,7 +425,7 @@ function PresenceRow({
       )}
     >
       <Avatar className={cn('size-8', modeClass(mode))} style={presenceAvatarStyle(person)}>
-        <PresenceAvatarContent person={person} textClass="text-[11px]" />
+        <PresenceAvatarContent person={person} textClass="text-2xs" />
         <AvatarBadge className={statusDotClass(person)} title={statusLabel(person)} />
       </Avatar>
 
@@ -435,9 +435,9 @@ function PresenceRow({
             next to a perfectly legible "@sandbox". It reads better below. */}
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="truncate text-sm font-medium leading-tight" title={person.name}>{person.name}</span>
-          {person.isCurrentUser && <span className="shrink-0 text-[11px] text-muted-foreground">You</span>}
+          {person.isCurrentUser && <span className="shrink-0 text-2xs text-muted-foreground">You</span>}
         </div>
-        <div className="flex min-w-0 items-baseline gap-1 text-[11px] leading-tight text-muted-foreground">
+        <div className="flex min-w-0 items-baseline gap-1 text-2xs leading-tight text-muted-foreground">
           {isAgent && person.handle && <span className="shrink-0">@{person.handle} ·</span>}
           <span className="truncate" title={secondaryLine(person)}>{secondaryLine(person)}</span>
           {/* Outside the truncating run: a state marker that itself truncates
@@ -492,14 +492,14 @@ function PresenceRow({
           {isAgent && (person.host || person.cwd) && (
             <>
               <DropdownMenuLabel className="font-normal">
-                <div className="text-[11px] font-medium text-foreground">{statusLabel(person)} daemon</div>
+                <div className="text-2xs font-medium text-foreground">{statusLabel(person)} daemon</div>
                 {person.host && (
-                  <div className="mt-1 text-[11px] text-muted-foreground">
+                  <div className="mt-1 text-2xs text-muted-foreground">
                     Host <span className="font-mono text-foreground/80">{person.host}</span>
                   </div>
                 )}
                 {person.cwd && (
-                  <div className="mt-1 break-all font-mono text-[11px] leading-snug text-muted-foreground">
+                  <div className="mt-1 break-all font-mono text-2xs leading-snug text-muted-foreground">
                     {person.cwd}
                   </div>
                 )}
@@ -522,7 +522,7 @@ function PresenceRow({
               <DropdownMenuSeparator />
               {/* One control with a state, rather than three buttons of equal
                   weight sitting on the row. */}
-              <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
+              <DropdownMenuLabel className="text-2xs font-normal text-muted-foreground">
                 Their activity on your canvas
               </DropdownMenuLabel>
               <DropdownMenuRadioGroup
@@ -544,7 +544,7 @@ function PresenceRow({
               {/* The header used to explain this in two lines of prose above
                   the whole list. It only ever described these items, so it
                   lives with them now. */}
-              <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
+              <DropdownMenuLabel className="text-2xs font-normal text-muted-foreground">
                 Open a local copy — yours, not theirs
               </DropdownMenuLabel>
               {windows.slice(0, 6).map(win => (

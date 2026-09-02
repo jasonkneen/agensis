@@ -66,7 +66,7 @@ export function SeenPill({ readerIds, resolveName, resolveFace, className }: See
           ) : (
             /* Always shown, including at 1: "+1" and a hidden count both make
                you hover to learn something the row could just say. */
-            <span className="text-[11px] font-medium tabular-nums">{readerIds.length}</span>
+            <span className="text-2xs font-medium tabular-nums">{readerIds.length}</span>
           )}
         </span>
       </TooltipTrigger>
@@ -105,7 +105,7 @@ export function QueuedPill({
           className={cn(
             'chat-reaction-chip inline-flex h-6 cursor-default select-none items-center gap-1',
             'rounded-md border border-dashed border-primary/30 bg-primary/5 px-2',
-            'text-[11px] font-medium text-primary/80',
+            'text-2xs font-medium text-primary/80',
             className,
           )}
         >

@@ -345,7 +345,7 @@ export function SubThreadPanel({
             <button
               key={p.id}
               type="button"
-              className="inline-flex h-5 items-center gap-1 rounded-md bg-muted px-2 text-[11px] text-muted-foreground hover:text-foreground"
+              className="inline-flex h-5 items-center gap-1 rounded-md bg-muted px-2 text-2xs text-muted-foreground hover:text-foreground"
               onClick={() => onAgentProfile?.(p.agent_id || p.handle || p.name || '')}
             >
               <AgentAvatar
@@ -700,7 +700,7 @@ export function SubThreadBubble({
             name={senderName}
             initials={senderName.slice(0, 2).toUpperCase()}
             className="size-7 rounded-md"
-            fallbackClassName="bg-transparent text-[10px] text-muted-foreground"
+            fallbackClassName="bg-transparent text-3xs text-muted-foreground"
           />
         ) : <Bot className="size-3.5" />}
       </div>
@@ -723,7 +723,7 @@ export function SubThreadBubble({
               {senderName}
             </span>
           )}
-          {timeLabel && <span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel}</span>}
+          {timeLabel && <span className="shrink-0 text-2xs text-muted-foreground">{timeLabel}</span>}
           {ownMutation.mutable && (
             <span className="ml-auto flex shrink-0 items-center gap-0.5">
               <Button

@@ -122,7 +122,7 @@ export function AgentMarketplaceSection({
           in. A template is prose you will read in the form before creating
           anything; a hired agent brings NO prose at all — and answers with
           whatever its host runs, so hire from publishers you trust. */}
-      <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground">
+      <p className="mb-2 text-2xs leading-relaxed text-muted-foreground">
         Templates shared by other workspaces — “Use” shows the full definition in the create form before anything is saved.
         Agents offered for hire keep their definition with their host; you get a roster entry with the capabilities listed,
         served by the publisher’s own runtime.
@@ -163,7 +163,7 @@ export function AgentMarketplaceSection({
                     {isHire ? <BriefcaseBusiness className="size-5" /> : <Store className="size-5" />}
                   </span>
                   <span className={cn(
-                    'rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide',
+                    'rounded-full border px-2 py-0.5 text-3xs font-medium uppercase tracking-wide',
                     isHire
                       ? 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400'
                       : 'border-primary/40 bg-primary/10 text-primary',
@@ -178,17 +178,17 @@ export function AgentMarketplaceSection({
                 {listing.capabilities.length > 0 && (
                   <div className="flex flex-wrap gap-1">
                     {listing.capabilities.slice(0, 4).map(capability => (
-                      <span key={capability} className="rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      <span key={capability} className="rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-3xs text-muted-foreground">
                         {capability}
                       </span>
                     ))}
                     {listing.capabilities.length > 4 && (
-                      <span className="px-1 text-[10px] text-muted-foreground">+{listing.capabilities.length - 4}</span>
+                      <span className="px-1 text-3xs text-muted-foreground">+{listing.capabilities.length - 4}</span>
                     )}
                   </div>
                 )}
                 <div className="mt-auto flex w-full items-center justify-between gap-2 pt-1">
-                  <span className="text-[11px] text-muted-foreground opacity-70">
+                  <span className="text-2xs text-muted-foreground opacity-70">
                     {listing.category}
                     {isHire
                       ? (listing.hireCount > 0 ? ` · hired ${listing.hireCount}×` : '')

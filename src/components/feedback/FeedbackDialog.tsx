@@ -46,7 +46,7 @@ function ContextRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline gap-2 text-xs">
       <span className="w-20 shrink-0 text-muted-foreground">{label}</span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground/80" title={value}>
+      <span className="min-w-0 flex-1 truncate font-mono text-2xs text-foreground/80" title={value}>
         {value || '—'}
       </span>
     </div>
@@ -153,7 +153,7 @@ export function FeedbackDialog({
               <div className="flex flex-wrap gap-1.5">
                 {selections.map((selection, index) => (
                   <Badge key={`${selection.selector}-${index}`} variant="secondary" className="max-w-full gap-1 pr-1">
-                    <span className="truncate font-mono text-[10px]">{elementChipLabel(selection)}</span>
+                    <span className="truncate font-mono text-3xs">{elementChipLabel(selection)}</span>
                     <button
                       type="button"
                       onClick={() => onRemoveSelection(index)}
@@ -194,12 +194,12 @@ export function FeedbackDialog({
                 </button>
                 {showDiagnostics && (
                   <div className="border-t px-2.5 py-2">
-                    <p className="mb-1.5 text-[11px] text-muted-foreground">
+                    <p className="mb-1.5 text-2xs text-muted-foreground">
                       Tokens, keys and passwords are stripped before this leaves your browser. Stored values,
                       cookies and anything you typed into a field are never read.
                     </p>
                     <ScrollArea className="max-h-48">
-                      <pre className="font-mono text-[10px] leading-4 whitespace-pre-wrap text-muted-foreground">
+                      <pre className="font-mono text-3xs leading-4 whitespace-pre-wrap text-muted-foreground">
                         {[
                           `build   ${diagnostics.buildId}`,
                           `screen  ${diagnostics.viewport.width}x${diagnostics.viewport.height}`,

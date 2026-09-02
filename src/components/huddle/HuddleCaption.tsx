@@ -101,7 +101,7 @@ export function HuddleCaption({
 
   return (
     <div
-      className={cn('flex w-full min-w-0 items-center gap-2 text-[11px] leading-tight', className)}
+      className={cn('flex w-full min-w-0 items-center gap-2 text-2xs leading-tight', className)}
       data-testid="huddle-caption"
     >
       <span

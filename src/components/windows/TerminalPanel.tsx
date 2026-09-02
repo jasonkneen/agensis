@@ -174,7 +174,7 @@ export function TerminalPanel() {
       )}
 
       {status === 'ready' && detail && (
-        <div className="shrink-0 border-t border-border/60 px-2 py-1 text-[10px] text-muted-foreground">
+        <div className="shrink-0 border-t border-border/60 px-2 py-1 text-3xs text-muted-foreground">
           {detail}
         </div>
       )}

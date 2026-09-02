@@ -1975,7 +1975,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
               <GitBranch data-icon="inline-start" />
               Threads
               {subThreadCount > 0 && (
-                <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
+                <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium leading-none text-muted-foreground">
                   {subThreadCount}
                 </span>
               )}
@@ -2012,14 +2012,14 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                     // the menu. A plain row leaves the real button in the
                     // normal tab order while preserving the popover surface.
                     <div key={participant.id} className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm">
-                      <span className="relative flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-semibold">
+                      <span className="relative flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-3xs font-semibold">
                         {participant.kind === 'agent' ? (
                           <AgentAvatar
                             avatar={agents.find(agent => agent.id === participant.agent_id || agent.handle === participant.handle)?.avatar}
                             name={participant.name}
                             initials={participant.name.slice(0, 2).toUpperCase()}
                             className="size-7 rounded-md"
-                            fallbackClassName="bg-transparent text-[10px] text-muted-foreground"
+                            fallbackClassName="bg-transparent text-3xs text-muted-foreground"
                           />
                         ) : participant.name.slice(0, 2).toUpperCase()}
                         {participant.connected && <span className="absolute right-0 bottom-0 size-2 rounded-full border border-card bg-emerald-500" />}
@@ -2498,7 +2498,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                                 name={agent.name}
                                 initials={agent.name.slice(0, 2).toUpperCase()}
                                 className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"
-                                fallbackClassName="bg-transparent text-[10px] text-muted-foreground"
+                                fallbackClassName="bg-transparent text-3xs text-muted-foreground"
                               />
                               <span className="min-w-0 flex-1">
                                 <span className="block truncate font-medium">{agent.name}</span>
@@ -3007,7 +3007,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                   name={agent.name}
                   initials={agent.name.slice(0, 2).toUpperCase()}
                   className="size-7 rounded-full bg-muted text-muted-foreground"
-                  fallbackClassName="bg-transparent text-[10px] text-muted-foreground"
+                  fallbackClassName="bg-transparent text-3xs text-muted-foreground"
                 />
                 <div className="min-w-0">
                   <div className="truncate text-sm font-medium">{agent.name}</div>
@@ -3040,7 +3040,7 @@ function MessageAvatar({ avatar, name, initials, isAgent }: { avatar?: string | 
         name={name}
         initials={initials}
         className="size-full"
-        fallbackClassName="bg-transparent text-[10px] text-muted-foreground"
+        fallbackClassName="bg-transparent text-3xs text-muted-foreground"
       />
     );
   }
@@ -3297,7 +3297,7 @@ function ChatMessageBubble({
       data-agent-message={isAgentMessage ? 'true' : undefined}
       style={accentStyle}
     >
-      <div className="chat-message-avatar mt-0.5 flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-[10px] font-semibold text-muted-foreground">
+      <div className="chat-message-avatar mt-0.5 flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-3xs font-semibold text-muted-foreground">
         <MessageAvatar avatar={avatar} name={senderName} initials={initials} isAgent={msg.sender_kind === 'agent' || msg.role === 'assistant'} />
       </div>
       <div className="min-w-0 flex-1">
@@ -3420,7 +3420,7 @@ function ChatMessageBubble({
                 <button
                   key={session.id}
                   type="button"
-                  className="control-outer-ring inline-flex h-5 items-center gap-1 rounded-md border border-border bg-muted/60 px-2 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="control-outer-ring inline-flex h-5 items-center gap-1 rounded-md border border-border bg-muted/60 px-2 text-2xs text-muted-foreground hover:bg-muted hover:text-foreground"
                   onClick={() => onOpenSubThread?.(session)}
                 >
                   <MessageSquare className="size-2.5" />
@@ -3543,15 +3543,15 @@ function SubThreadRow({ session, onOpen, showChannel }: { session: ChatSession; 
     >
       <div className="flex items-start justify-between gap-2">
         <span className="min-w-0 truncate text-sm font-medium">{session.title || 'Sub-thread'}</span>
-        <span className="shrink-0 text-[10px] text-muted-foreground">{timeLabel}</span>
+        <span className="shrink-0 text-3xs text-muted-foreground">{timeLabel}</span>
       </div>
       {showChannel && session.folder && (
-        <div className="mt-0.5 truncate text-[10px] text-muted-foreground/80">{session.folder}</div>
+        <div className="mt-0.5 truncate text-3xs text-muted-foreground/80">{session.folder}</div>
       )}
       {agents.length > 0 && (
         <div className="mt-0.5 flex flex-wrap gap-1">
           {agents.map(a => (
-            <span key={a.id} className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
+            <span key={a.id} className="rounded bg-muted px-1.5 py-0.5 text-3xs font-medium leading-none text-muted-foreground">
               @{a.handle ?? a.name}
             </span>
           ))}
@@ -3595,7 +3595,7 @@ function SubThreadListPanel({
           <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />
           Sub-threads
           {allThreads.length > 0 && (
-            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground">
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium leading-none text-muted-foreground">
               {allThreads.length}
             </span>
           )}
@@ -3622,7 +3622,7 @@ function SubThreadListPanel({
             )}
             {otherMyThreads.length > 0 && (
               <div>
-                <div className="sticky top-0 z-10 border-y border-border bg-card/85 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-md">
+                <div className="sticky top-0 z-10 border-y border-border bg-card/85 px-3 py-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-md">
                   Involving you · other channels
                 </div>
                 <div className="divide-y divide-border">
@@ -4113,7 +4113,7 @@ function GitChangesView({ workspaceId }: { workspaceId?: string | null }) {
                   <Badge variant="outline" className={cn('shrink-0', GIT_STATUS_CLASS[entry.status])}>{GIT_STATUS_LABEL[entry.status]}</Badge>
                   <span className="min-w-0 flex-1 truncate font-mono text-xs">{entry.path}</span>
                   {entry.agentLabel && (
-                    <Badge variant="secondary" className="shrink-0 text-[10px]">{entry.agentLabel}</Badge>
+                    <Badge variant="secondary" className="shrink-0 text-3xs">{entry.agentLabel}</Badge>
                   )}
                 </button>
               </div>
@@ -4399,7 +4399,7 @@ function AgentProfileChipSection({ title, empty, items }: { title: string; empty
 function AgentProfileStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="agent-profile-stat min-w-0 rounded-lg border bg-muted/30 p-2">
-      <div className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-3xs font-bold uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-1 truncate text-sm font-semibold" title={value}>{value}</div>
     </div>
   );
@@ -4969,7 +4969,7 @@ function SlashRow({
         <span className="block truncate font-medium">/{item.name}</span>
         {item.detail && <span className="block truncate text-xs text-muted-foreground">{item.detail}</span>}
       </span>
-      <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{badge}</span>
+      <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-2xs text-muted-foreground">{badge}</span>
     </CommandItem>
   );
 }

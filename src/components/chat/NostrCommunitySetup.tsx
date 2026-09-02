@@ -417,8 +417,8 @@ export function NostrCommunitySetup({
                         <span className="min-w-0 flex-1 truncate text-sm font-medium">#{channel.name}</span>
                         {channel.subscription && (
                           <span className={subscribed
-                            ? 'shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-700 dark:text-emerald-300'
-                            : 'shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300'}
+                            ? 'shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-3xs font-semibold uppercase text-emerald-700 dark:text-emerald-300'
+                            : 'shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-3xs font-semibold uppercase text-amber-700 dark:text-amber-300'}
                           >
                             {subscribed ? 'Live' : 'Paused'}
                           </span>

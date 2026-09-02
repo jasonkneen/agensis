@@ -400,7 +400,7 @@ export function AgentNetworkDiagram({
       className="relative flex h-full flex-col outline-none"
     >
       {/* Breadcrumb — the path, and the way back out of it. */}
-      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5 text-[10px]"
+      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5 text-3xs"
         style={{ fontFamily: MONO }}>
         {path.length > 0 && (
           <Button type="button" size="icon-sm" variant="ghost" onClick={() => goTo(drillOut(path))}
@@ -425,7 +425,7 @@ export function AgentNetworkDiagram({
         </nav>
         <span className="shrink-0 tracking-widest text-muted-foreground/50">{LEVEL_HINT[view.level]}</span>
         {centerAgentId && onSelectAgent && (
-          <Button type="button" size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-[10px]"
+          <Button type="button" size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-3xs"
             onClick={() => onSelectAgent(centerAgentId)}>
             Open agent
           </Button>
@@ -542,7 +542,7 @@ export function AgentNetworkDiagram({
           more. It stays always-visible because the colours it decodes are the
           only thing carrying status and link type on the nodes themselves; an
           unexplained colour code costs more than 22px. */}
-      <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-0.5 border-t border-border px-3 py-1 text-[10px] leading-[14px]"
+      <div className="flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-0.5 border-t border-border px-3 py-1 text-3xs leading-[14px]"
         style={{ fontFamily: MONO }}>
         <span className="tracking-widest text-muted-foreground/60">STATUS</span>
         {(Object.keys(STATUS_META) as NodeStatus[]).map(s => (

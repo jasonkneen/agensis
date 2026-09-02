@@ -285,7 +285,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
           {badgeCount > 0 && (
             <span
               aria-hidden
-              className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold leading-none text-white"
+              className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-red-500 px-1 text-3xs font-semibold leading-none text-white"
             >
               {badgeCount > 9 ? '9+' : badgeCount}
             </span>
@@ -296,7 +296,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
         <PopoverHeader className="flex flex-row items-center justify-between gap-2 px-3 py-2.5">
           <PopoverTitle className="text-sm">Notifications</PopoverTitle>
           <div className="flex items-center gap-1.5">
-            <div className="flex items-center rounded-md bg-muted p-0.5 text-[11px] leading-none">
+            <div className="flex items-center rounded-md bg-muted p-0.5 text-2xs leading-none">
               <button
                 type="button"
                 onClick={() => setShowUnreadOnly(false)}
@@ -324,7 +324,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
               type="button"
               variant="ghost"
               size="sm"
-              className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+              className="h-6 px-1.5 text-2xs text-muted-foreground hover:text-foreground"
               onClick={clearAll}
               disabled={clearableIds.length === 0}
             >
@@ -358,7 +358,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
                       <span className="font-medium">{item.label}</span>{' '}
                       {item.isNew ? 'wants to register as' : 'wants to connect as'}{' '}
                       <span className="font-medium">@{item.handle}</span>
-                      <span className="ml-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                      <span className="ml-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-3xs font-medium text-amber-600 dark:text-amber-400">
                         Approval pending
                       </span>
                     </p>
@@ -374,7 +374,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
                           {item.mode === 'available' ? 'A new version is available' : "What's new"}
                         </span>
                         {item.mode === 'available' && (
-                          <span className="ml-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                          <span className="ml-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-3xs font-medium text-amber-600 dark:text-amber-400">
                             Update available
                           </span>
                         )}
@@ -390,7 +390,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
                           <Button
                             type="button"
                             size="sm"
-                            className="w-fit text-[11px]"
+                            className="w-fit text-2xs"
                             onClick={() => item.onReload?.()}
                           >
                             Reload now
@@ -401,7 +401,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
                             type="button"
                             size="sm"
                             variant={item.mode === 'updated' ? 'default' : 'outline'}
-                            className="w-fit text-[11px]"
+                            className="w-fit text-2xs"
                             onClick={() => item.onShowNotes?.()}
                           >
                             What’s new
@@ -412,7 +412,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
                   ) : (
                     <p className="leading-snug">{item.title}</p>
                   )}
-                  {item.at && <p className="mt-0.5 text-[11px] text-muted-foreground">{relative(item.at)}</p>}
+                  {item.at && <p className="mt-0.5 text-2xs text-muted-foreground">{relative(item.at)}</p>}
                 </div>
               </div>
             ))

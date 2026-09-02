@@ -98,7 +98,7 @@ function Avatar({ choice, size = 'md' }: { choice: Pick<MemberChoice, 'name' | '
       aria-hidden
       className={cn(
         'grid shrink-0 place-items-center rounded-md font-semibold text-white',
-        size === 'sm' ? 'size-5 text-[9px]' : 'size-8 text-[11px]',
+        size === 'sm' ? 'size-5 text-[9px]' : 'size-8 text-2xs',
         choice.kind === 'user' && 'bg-muted text-muted-foreground',
       )}
       style={choice.kind === 'agent' ? { backgroundColor: choice.color } : undefined}
@@ -378,7 +378,7 @@ function MemberRow({
         {subtitle && <span className="block truncate text-xs text-muted-foreground">{subtitle}</span>}
       </span>
       {chip && (
-        <span className="hidden shrink-0 rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-muted-foreground sm:block">
+        <span className="hidden shrink-0 rounded-full border border-border bg-background px-2 py-0.5 text-2xs text-muted-foreground sm:block">
           {chip}
         </span>
       )}

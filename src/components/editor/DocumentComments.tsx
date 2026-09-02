@@ -116,7 +116,7 @@ export function DocumentComments({
         <MessageCircle data-icon="inline-start" className="size-3.5 text-muted-foreground" />
         <span className="text-xs font-semibold text-foreground">Comments</span>
         {unresolvedCount > 0 && (
-          <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+          <Badge variant="secondary" className="h-5 px-1.5 text-3xs">
             {unresolvedCount}
           </Badge>
         )}
@@ -185,7 +185,7 @@ export function DocumentComments({
           </Item>
         )}
         {replyTo && (
-          <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-3xs text-muted-foreground">
             <CornerDownRight className="size-3" />
             <span>Replying to comment</span>
             <Button
@@ -257,7 +257,7 @@ function CommentThread({
       <CommentBody comment={comment} onResolve={onResolve} onDelete={onDelete} agentNames={agentNames} />
 
       {comment.anchor_text && (
-        <blockquote className="mt-2 line-clamp-2 rounded border-l-2 border-l-primary bg-muted/60 px-2 py-1 text-[10px] italic text-muted-foreground">
+        <blockquote className="mt-2 line-clamp-2 rounded border-l-2 border-l-primary bg-muted/60 px-2 py-1 text-3xs italic text-muted-foreground">
           "{comment.anchor_text.slice(0, 120)}{comment.anchor_text.length > 120 ? '...' : ''}"
         </blockquote>
       )}
@@ -275,7 +275,7 @@ function CommentThread({
           type="button"
           variant="ghost"
           size="xs"
-          className="mt-1 h-5 px-1.5 text-[10px] text-muted-foreground"
+          className="mt-1 h-5 px-1.5 text-3xs text-muted-foreground"
           onClick={isReplyTarget ? onCancelReply : onStartReply}
         >
           {isReplyTarget ? 'Cancel' : 'Reply'}
@@ -307,7 +307,7 @@ function CommentBody({
               the agent's name is unavailable it says "Agent" — vaguer, but
               true, which is the half that matters when the question is whether
               a person or a machine wrote this. */}
-          <span className={cn('font-semibold text-foreground', compact ? 'text-[10px]' : 'text-[11px]')}>
+          <span className={cn('font-semibold text-foreground', compact ? 'text-3xs' : 'text-2xs')}>
             {comment.agent_id ? (agentNames?.[comment.agent_id] || 'Agent') : 'Teammate'}
           </span>
           {comment.agent_id && (
@@ -338,7 +338,7 @@ function CommentBody({
             <Trash2 data-icon="inline-start" className="size-3" />
           </Button>
         </div>
-        <p className={cn('whitespace-pre-wrap break-words text-foreground', compact ? 'text-[11px]' : 'text-xs')}>
+        <p className={cn('whitespace-pre-wrap break-words text-foreground', compact ? 'text-2xs' : 'text-xs')}>
           {comment.content}
         </p>
       </div>
@@ -354,7 +354,7 @@ function UserAvatar({ email, seed, className }: { email?: string; seed?: string;
 
   return (
     <Avatar className={cn(className)}>
-      <AvatarFallback className={cn(color, 'text-[10px] font-bold text-white')}>{userInitial(email || source)}</AvatarFallback>
+      <AvatarFallback className={cn(color, 'text-3xs font-bold text-white')}>{userInitial(email || source)}</AvatarFallback>
     </Avatar>
   );
 }

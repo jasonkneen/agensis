@@ -340,7 +340,7 @@ export function ChatThreadPanel({
             />
             <InputGroupAddon align="block-end" className={COMPOSER_ADDON_CLASS}>
               <div className="flex min-w-0 items-center gap-2">
-                <label className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                <label className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
                   <Checkbox
                     checked={broadcastToChannel}
                     onCheckedChange={checked => setBroadcastToChannel(checked === true)}
@@ -471,7 +471,7 @@ export function ThreadBubble({
             name={senderName}
             initials={senderName.slice(0, 2).toUpperCase()}
             className="size-7 rounded-md"
-            fallbackClassName="bg-transparent text-[10px] text-muted-foreground"
+            fallbackClassName="bg-transparent text-3xs text-muted-foreground"
           />
         ) : <Bot className="size-3.5" />}
       </div>
@@ -489,7 +489,7 @@ export function ThreadBubble({
           ) : (
             <span className="truncate text-xs font-semibold text-foreground" style={accentStyle ? { color: 'var(--agent-accent)' } : undefined}>{senderName}</span>
           )}
-          {timeLabel && <span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel}</span>}
+          {timeLabel && <span className="shrink-0 text-2xs text-muted-foreground">{timeLabel}</span>}
           {ownMutation.mutable && (
             <span className="ml-auto flex shrink-0 items-center gap-0.5">
               <Button
@@ -546,7 +546,7 @@ export function ThreadBubble({
                   type="button"
                   onClick={() => setExpanded(value => !value)}
                   aria-expanded={expanded}
-                  className="mt-0.5 rounded text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                  className="mt-0.5 rounded text-2xs font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
                 >
                   {expanded ? 'Show less' : 'Show more'}
                 </button>
