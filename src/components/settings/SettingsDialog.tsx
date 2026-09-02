@@ -26,7 +26,15 @@ import type { ThemeMode } from '../../hooks/useTheme';
 import type { Workspace } from '../../types';
 import { applyUiAppearanceSettings, getSettings, setSetting, type AppSettings, type NotificationLevel, type UiFontFamily } from '../../lib/settings';
 import { THEME_PRESETS, applyThemePreset } from '../../showcase/themePresets';
-import { DEFAULT_RADII, applyDefaultRadius, isDefaultRadius, type DefaultRadius } from '../../showcase/defaultTheme';
+import {
+  applyRadiusScale,
+  clampRadiusScale,
+  radiusScaleFrom,
+  RADIUS_PILL_THRESHOLD,
+  RADIUS_SCALE_MAX,
+  RADIUS_SCALE_MIN,
+  RADIUS_SCALE_STEP,
+} from '../../showcase/defaultTheme';
 import { NEO_THEMES, NEO_GROUPS, applyNeoTheme, resolveNeoStyle } from '../../showcase/neoThemes';
 import { NORMAL_THEMES, NORMAL_GROUPS, applyNormalTheme, clearNormalTheme, getStoredNormalTheme } from '../../showcase/normalThemes';
 import { TW_WORLDS, applyTwTheme, getStoredTwTheme } from '../../showcase/twThemes';
@@ -506,10 +514,10 @@ function AppearancePanel({
   const [backgroundOpacity, setBackgroundOpacity] = useState(() => Math.round((workspace?.background_opacity ?? DEFAULT_BACKGROUND_OPACITY) * 100));
   const [fontFamily, setFontFamily] = useState<UiFontFamily>(initialSettings.ui_font_family);
   const [baseFontSize, setBaseFontSize] = useState(initialSettings.ui_base_font_size);
+  const [fontWeight, setFontWeight] = useState(initialSettings.ui_font_weight);
+  const [lineHeight, setLineHeight] = useState(initialSettings.ui_line_height);
   const [themePreset, setThemePreset] = useState(initialSettings.ui_theme_preset);
-  const [defaultRadius, setDefaultRadius] = useState<DefaultRadius>(
-    isDefaultRadius(initialSettings.ui_default_radius) ? initialSettings.ui_default_radius : 'soft',
-  );
+  const [radiusScale, setRadiusScale] = useState(() => radiusScaleFrom(initialSettings.ui_default_radius));
   const [neoTheme, setNeoTheme] = useState(initialSettings.ui_neo_theme);
   const [normalTheme, setNormalTheme] = useState(() => getStoredNormalTheme());
   const [twTheme, setTwTheme] = useState(() => getStoredTwTheme());
@@ -674,36 +682,36 @@ function AppearancePanel({
             </div>
 
             <div className="space-y-2">
-              <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Corners</div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="listbox" aria-label="Corner rounding">
-                {DEFAULT_RADII.map(radius => {
-                  const active = defaultRadius === radius.id;
-                  return (
-                    <button
-                      key={radius.id}
-                      type="button"
-                      role="option"
-                      aria-selected={active}
-                      title={radius.description}
-                      onClick={() => {
-                        setDefaultRadius(radius.id);
-                        setSetting('ui_default_radius', radius.id);
-                        applyDefaultRadius(radius.id);
-                      }}
-                      className={`flex min-w-0 flex-col items-center gap-2 rounded-md border px-2 py-2.5 text-center transition ${active ? 'border-primary bg-primary/10 ring-2 ring-primary' : 'border-border hover:bg-accent'}`}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="h-7 w-full border border-border bg-muted"
-                        style={{ borderRadius: radius.previewPx }}
-                      />
-                      <span className="text-xs font-semibold">{radius.label}</span>
-                      <span className="text-3xs leading-tight text-muted-foreground">{radius.description}</span>
-                    </button>
-                  );
-                })}
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Corners</div>
+                <Badge variant="secondary">
+                  {radiusScale === 0 ? 'Square' : radiusScale >= RADIUS_PILL_THRESHOLD ? 'Pill' : `${Math.round(10 * radiusScale)}px`}
+                </Badge>
               </div>
-              <FieldDescription>Soft is the default. This changes the app’s control and panel corners without changing your colour choice.</FieldDescription>
+              {/* One axis, one control. This was four preset cards whose names
+                  did not even order by radius — "Rounded" (14px) sat between
+                  "Soft" (10px) and "Pill" — so it read as four unrelated styles
+                  rather than more-or-less of one thing, and could not express
+                  anything between them. The slider drives a multiplier that all
+                  thirteen radius tokens derive from, so they keep proportion. */}
+              <Slider
+                value={[radiusScale]}
+                min={RADIUS_SCALE_MIN}
+                max={RADIUS_SCALE_MAX}
+                step={RADIUS_SCALE_STEP}
+                aria-label="Corner rounding"
+                onValueChange={value => {
+                  const next = clampRadiusScale(value[0] ?? radiusScale);
+                  setRadiusScale(next);
+                  setSetting('ui_default_radius', next);
+                  applyRadiusScale(next);
+                }}
+              />
+              <div className="flex items-center justify-between text-3xs text-muted-foreground">
+                <span>Square</span>
+                <span>Pill</span>
+              </div>
+              <FieldDescription>Changes the app’s control and panel corners without changing your colour choice.</FieldDescription>
             </div>
 
             <FieldDescription>Default keeps the app’s existing functions and palettes, with softer offset controls inspired by the ideation-canvas system.</FieldDescription>
@@ -972,6 +980,51 @@ function AppearancePanel({
             updateAppearanceSetting('ui_base_font_size', next);
           }}
         />
+      </Field>
+
+      <Field>
+        <div className="flex items-center justify-between gap-3">
+          <FieldLabel>Font weight</FieldLabel>
+          <Badge variant="secondary">{fontWeight}</Badge>
+        </div>
+        <Slider
+          value={[fontWeight]}
+          min={300}
+          max={700}
+          step={25}
+          onValueChange={value => {
+            const next = value[0] ?? fontWeight;
+            setFontWeight(next);
+            updateAppearanceSetting('ui_font_weight', next);
+          }}
+        />
+        <FieldDescription>
+          The base weight for UI text. Bricolage and Geist are variable faces, so
+          in-between values interpolate rather than snapping to the nearest cut.
+          Headings and emphasised text keep their own heavier weights.
+        </FieldDescription>
+      </Field>
+
+      <Field>
+        <div className="flex items-center justify-between gap-3">
+          <FieldLabel>Line spacing</FieldLabel>
+          <Badge variant="secondary">{lineHeight.toFixed(2)}</Badge>
+        </div>
+        <Slider
+          value={[lineHeight]}
+          min={1.2}
+          max={2}
+          step={0.05}
+          onValueChange={value => {
+            const next = value[0] ?? lineHeight;
+            setLineHeight(next);
+            updateAppearanceSetting('ui_line_height', next);
+          }}
+        />
+        <FieldDescription>
+          Multiplies each element's own size, so dense chips and body prose stay
+          in proportion instead of sharing one fixed line height.
+        </FieldDescription>
       </Field>
 
       <Field>

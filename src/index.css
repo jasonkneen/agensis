@@ -4434,67 +4434,52 @@ body {
 }
 
 :root[data-ui-theme="default"] {
- --radius: 10px;
- --radius-sm: 4px;
- --radius-md: 6px;
- --radius-lg: 8px;
- --radius-xl: 12px;
- --radius-2xl: 16px;
- --radius-3xl: 20px;
- --radius-4xl: 28px;
- --default-radius-card: 8px;
- --default-radius-modal: 10px;
- --default-radius-toolbar: 14px;
- --default-radius-control: 6px;
- --default-radius-button: 9px;
+ /* The radius tokens are NOT here any more: they are derived from
+    --default-radius-scale in the block just below, so a slider can drive all
+    thirteen at once. Left here they would be dead declarations shadowed a few
+    lines later — the kind of duplicate that survives because both copies look
+    authoritative. */
  background-image: radial-gradient(circle at 18% 8%, color-mix(in srgb, var(--primary) 7%, transparent), transparent 30rem);
 }
 
-:root[data-ui-theme="default"][data-default-radius="sharp"] {
- --radius: 0px;
- --radius-sm: 0px;
- --radius-md: 0px;
- --radius-lg: 0px;
- --radius-xl: 0px;
- --radius-2xl: 0px;
- --radius-3xl: 0px;
- --radius-4xl: 0px;
- --default-radius-card: 0px;
- --default-radius-modal: 0px;
- --default-radius-toolbar: 0px;
- --default-radius-control: 0px;
- --default-radius-button: 0px;
+:root[data-ui-theme="default"] {
+ /* GRANULAR CORNERS.
+    These used to be three fixed scopes — sharp / rounded / pill — hung off
+    [data-default-radius]. Four presets could not express "a bit rounder", and
+    their names did not even order by radius: "Rounded" (14px) sat between
+    "Soft" (10px) and "Pill", so the picker read as four unrelated styles rather
+    than one axis. It is one axis, so it is one number now.
+
+    --default-radius-scale is a multiplier the Settings slider writes onto the
+    root element (0 = square, 1 = the base values below, up to 2.4). Every token
+    is the base value times that scale, so they keep their proportions instead
+    of drifting apart at the extremes. calc() on a unitless custom property is
+    resolved at use time, which is what makes a live slider possible at all.
+
+    The two "999px" pill values are handled separately: a fully-round toolbar or
+    button is a shape, not a size, so they switch at the top of the range rather
+    than growing continuously into it. */
+ --default-radius-scale: 1;
+ --radius: calc(10px * var(--default-radius-scale));
+ --radius-sm: calc(4px * var(--default-radius-scale));
+ --radius-md: calc(6px * var(--default-radius-scale));
+ --radius-lg: calc(8px * var(--default-radius-scale));
+ --radius-xl: calc(12px * var(--default-radius-scale));
+ --radius-2xl: calc(16px * var(--default-radius-scale));
+ --radius-3xl: calc(20px * var(--default-radius-scale));
+ --radius-4xl: calc(28px * var(--default-radius-scale));
+ --default-radius-card: calc(8px * var(--default-radius-scale));
+ --default-radius-modal: calc(10px * var(--default-radius-scale));
+ --default-radius-toolbar: calc(14px * var(--default-radius-scale));
+ --default-radius-control: calc(6px * var(--default-radius-scale));
+ --default-radius-button: calc(9px * var(--default-radius-scale));
 }
 
-:root[data-ui-theme="default"][data-default-radius="rounded"] {
- --radius: 14px;
- --radius-sm: 6px;
- --radius-md: 10px;
- --radius-lg: 14px;
- --radius-xl: 18px;
- --radius-2xl: 22px;
- --radius-3xl: 28px;
- --radius-4xl: 36px;
- --default-radius-card: 14px;
- --default-radius-modal: 16px;
- --default-radius-toolbar: 20px;
- --default-radius-control: 10px;
- --default-radius-button: 14px;
-}
-
-:root[data-ui-theme="default"][data-default-radius="pill"] {
- --radius: 14px;
- --radius-sm: 8px;
- --radius-md: 14px;
- --radius-lg: 20px;
- --radius-xl: 24px;
- --radius-2xl: 28px;
- --radius-3xl: 36px;
- --radius-4xl: 44px;
- --default-radius-card: 22px;
- --default-radius-modal: 24px;
+/* At the top of the range the toolbar and button go fully round: past roughly
+   2x the base, a "rounder" rectangle stops reading as rounder and starts
+   reading as a lozenge that has not committed. */
+:root[data-ui-theme="default"][data-radius-pill="true"] {
  --default-radius-toolbar: 999px;
- --default-radius-control: 14px;
  --default-radius-button: 999px;
 }
 
@@ -4761,6 +4746,10 @@ code {
 
 html {
  font-size: var(--agensis-ui-font-size, 16px);
+ /* Unitless, so every element multiplies it against its OWN font-size and
+    inherits a proportional line box rather than one absolute height. A value
+    with units here would give a 10px chip the same leading as a heading. */
+ line-height: var(--agensis-ui-line-height, 1.5);
 }
 
 body,
@@ -4769,6 +4758,12 @@ input,
 textarea,
 select {
  font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+ /* The base weight, not a hard override: anything that sets its own weight
+    (font-medium, font-semibold, a heading) still wins, because those are more
+    specific declarations on the element itself. This only moves the floor.
+    Bricolage and Geist are variable faces with a 200-800 wght axis, so a value
+    like 350 interpolates rather than snapping to the nearest static cut. */
+ font-weight: var(--agensis-ui-font-weight, 400);
 }
 
 /* .sidebar-section-trigger is deliberately NOT in this list any more. This rule

@@ -18,8 +18,17 @@ export interface AppSettings {
   notifications_task_reminders: boolean;
   ui_font_family: UiFontFamily;
   ui_base_font_size: number;
+  ui_font_weight: number;
+  ui_line_height: number;
   ui_theme_preset: string;
-  ui_default_radius: string;
+  /**
+   * Corner rounding. A NUMBER since corners became a continuous scale (a
+   * multiplier on the base radius tokens), but typed to accept the legacy
+   * preset ids too — 'sharp' | 'soft' | 'rounded' | 'pill' — because accounts
+   * saved before the slider still hold one, and radiusScaleFrom() resolves
+   * those to the rounding they described rather than dropping to the default.
+   */
+  ui_default_radius: number | string;
   ui_neo_theme: string;
   ui_normal_theme: string;
   ui_tw_theme: string;
@@ -38,6 +47,8 @@ const DEFAULTS: AppSettings = {
   notifications_task_reminders: false,
   ui_font_family: 'bricolage',
   ui_base_font_size: 16,
+  ui_font_weight: 400,
+  ui_line_height: 1.5,
   ui_theme_preset: 'neutral',
   ui_default_radius: 'soft',
   ui_neo_theme: 'blueprint',
@@ -165,7 +176,7 @@ function ensureUiFontLoaded(value: UiFontFamily) {
   document.head.appendChild(link);
 }
 
-export function applyUiAppearanceSettings(settings: Pick<AppSettings, 'ui_font_family' | 'ui_base_font_size' | 'ui_panel_translucency' | 'ui_sidebar_translucency' | 'ui_glass_blur'> = readAll()) {
+export function applyUiAppearanceSettings(settings: Pick<AppSettings, 'ui_font_family' | 'ui_base_font_size' | 'ui_font_weight' | 'ui_line_height' | 'ui_panel_translucency' | 'ui_sidebar_translucency' | 'ui_glass_blur'> = readAll()) {
   const root = document.documentElement;
   const panel = Math.min(92, Math.max(18, settings.ui_panel_translucency || DEFAULTS.ui_panel_translucency));
   const sidebar = Math.min(92, Math.max(18, settings.ui_sidebar_translucency || DEFAULTS.ui_sidebar_translucency));
@@ -173,6 +184,14 @@ export function applyUiAppearanceSettings(settings: Pick<AppSettings, 'ui_font_f
   ensureUiFontLoaded(settings.ui_font_family);
   root.style.setProperty('--agensis-ui-font-family', fontFamilyCss(settings.ui_font_family));
   root.style.setProperty('--agensis-ui-font-size', `${Math.min(18, Math.max(12, settings.ui_base_font_size || DEFAULTS.ui_base_font_size))}px`);
+  // Weight is a real axis on the bundled variable faces (Bricolage and Geist are
+  // both 200-800), so this interpolates rather than snapping to the nearest
+  // static cut. Clamped to 300-700: below 300 the UI stops being legible at
+  // 12px and above 700 the variable axis has nothing left to give.
+  root.style.setProperty('--agensis-ui-font-weight', String(Math.min(700, Math.max(300, settings.ui_font_weight || DEFAULTS.ui_font_weight))));
+  // Unitless, so it multiplies each element's own font-size instead of pinning
+  // every line to one absolute height.
+  root.style.setProperty('--agensis-ui-line-height', String(Math.min(2, Math.max(1.2, settings.ui_line_height || DEFAULTS.ui_line_height))));
   root.style.setProperty('--agensis-panel-alpha', `${panel}%`);
   root.style.setProperty('--agensis-sidebar-alpha', `${sidebar}%`);
   root.style.setProperty('--agensis-glass-blur', `${blur}px`);
