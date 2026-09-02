@@ -31,6 +31,39 @@ function cssWithoutComments(): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');
 }
 
+describe('the default UI face', () => {
+  it('is bundled, not fetched from a third party at runtime', () => {
+    // Every font choice except this one was a bundled @fontsource package;
+    // 'bricolage' — the DEFAULT — was fetched from fonts.googleapis.com by
+    // ensureUiFontLoaded. So the app's own default look depended on Google
+    // answering, and a cold load, an offline session or the installed PWA
+    // rendered the next face in the stack instead.
+    expect(css).toMatch(/@import ["']@fontsource-variable\/bricolage-grotesque/);
+
+    // It must NOT also sit in the on-demand Google map, or it would still be
+    // requested over the network despite being bundled.
+    const map = /const UI_FONT_GOOGLE_FAMILY[\s\S]*?\n\};/.exec(settings);
+    expect(map, 'settings.ts must still declare the on-demand font map').toBeTruthy();
+    expect(map![0]).not.toMatch(/\bbricolage:/);
+  });
+
+  it('names the family the bundled file actually registers', () => {
+    // The variable build registers as 'Bricolage Grotesque Variable'. A stack
+    // asking only for 'Bricolage Grotesque' matches nothing and silently falls
+    // through to Geist — which is exactly the failure bundling it was meant to
+    // fix, so the bundle alone would have been a no-op.
+    const stacks = [...css.matchAll(/'Bricolage Grotesque[^']*'/g)].map(m => m[0]);
+    expect(stacks.length).toBeGreaterThan(0);
+    for (const [i, name] of stacks.entries()) {
+      if (name !== "'Bricolage Grotesque Variable'") {
+        // Every plain mention must be preceded by the Variable name as a
+        // higher-priority candidate in the same stack.
+        expect(stacks[i - 1], `bare ${name} with no Variable name before it`).toBe("'Bricolage Grotesque Variable'");
+      }
+    }
+  });
+});
+
 describe('mono typography', () => {
   it('defines a single --font-mono token', () => {
     expect(cssWithoutComments()).toMatch(/--font-mono:\s*'IBM Plex Mono'/);

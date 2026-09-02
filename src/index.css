@@ -27,6 +27,15 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+/* The DEFAULT UI face (settings.ts ui_font_family: 'bricolage'), and until now
+   the only one fetched from a third party at runtime: every other choice is a
+   bundled @fontsource package, but this one came from fonts.googleapis.com via
+   ensureUiFontLoaded. So the app's own default look depended on Google
+   answering — on a cold load, offline, or in the installed PWA it rendered the
+   next face in the stack (Geist) until that request landed, if it ever did.
+   The variable build is one file rather than the four static weights the
+   Google URL requested. */
+@import "@fontsource-variable/bricolage-grotesque";
 
 /* shadcn dark variant is driven by the app's existing [data-theme="dark"]
    attribute (set by useTheme) — one theme system, no .dark class. */
@@ -36,7 +45,7 @@
  --sidebar-width: 240px;
  --header-height: 52px;
  --chat-panel-width: 380px;
- --agensis-ui-font-family: 'Bricolage Grotesque', 'Geist Variable', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+ --agensis-ui-font-family: 'Bricolage Grotesque Variable', 'Bricolage Grotesque', 'Geist Variable', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
  --agensis-ui-font-size: 16px;
  /* First-paint values only: applyUiAppearanceSettings() overwrites both as an
     INLINE style on :root as soon as it runs. Kept in step with DEFAULTS in
@@ -400,13 +409,13 @@
 :root[data-ui-theme="neo"] [data-slot="dialog-content"],
 :root[data-ui-theme="neo"] [data-slot="alert-dialog-content"],
 :root[data-ui-theme="neo"] [data-slot="popover-content"] {
- font-family: var(--neo-font, var(--agensis-ui-font-family, 'Bricolage Grotesque', system-ui, -apple-system, sans-serif));
+ font-family: var(--neo-font, var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', system-ui, -apple-system, sans-serif));
 }
 
 :root[data-ui-theme="neo"] h1,
 :root[data-ui-theme="neo"] h2,
 :root[data-ui-theme="neo"] h3 {
- font-family: var(--neo-display, var(--neo-font, var(--agensis-ui-font-family, 'Bricolage Grotesque', system-ui, -apple-system, sans-serif)));
+ font-family: var(--neo-display, var(--neo-font, var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', system-ui, -apple-system, sans-serif)));
  font-weight: var(--neo-display-weight, 700);
  letter-spacing: var(--neo-display-spacing, -0.01em);
  text-transform: var(--neo-display-transform, none);
@@ -542,7 +551,7 @@
 :root[data-ui-theme="paper"] [data-slot="dialog-content"],
 :root[data-ui-theme="paper"] [data-slot="alert-dialog-content"],
 :root[data-ui-theme="paper"] [data-slot="popover-content"] {
- font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque', system-ui, -apple-system, sans-serif);
+ font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', system-ui, -apple-system, sans-serif);
 }
 
 :root[data-ui-theme="paper"][data-theme="light"] {
@@ -3554,7 +3563,7 @@ body {
 body {
  background-color: var(--canvas-base);
  color: var(--text-primary);
- font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif);
+ font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif);
  /* 1rem, NOT a hard px: `html` is set to var(--agensis-ui-font-size) (see the
     html rule near the end of this file), which the user's `ui_base_font_size`
     setting drives (settings.ts applyUiAppearanceSettings). A fixed px here was
@@ -4158,8 +4167,8 @@ body {
 }
 
 @theme inline {
- --font-heading: var(--agensis-ui-font-family, 'Bricolage Grotesque', sans-serif);
- --font-sans: var(--agensis-ui-font-family, 'Bricolage Grotesque', sans-serif);
+ --font-heading: var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', sans-serif);
+ --font-sans: var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', sans-serif);
  /* ONE mono face for the whole app, and it must be one that is actually LOADED.
     Before this token there were four competing stacks and the two most visible
     named a font nobody ships: .chat-markdown code and the code block both asked
@@ -4745,7 +4754,7 @@ button,
 input,
 textarea,
 select {
- font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+ font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
 }
 
 /* .sidebar-section-trigger is deliberately NOT in this list any more. This rule

@@ -113,7 +113,7 @@ export function fontFamilyCss(value: UiFontFamily): string {
     case 'albert-sans':
       return "'Albert Sans', 'Geist Variable', system-ui, sans-serif";
     case 'bricolage':
-      return "'Bricolage Grotesque', 'Geist Variable', system-ui, sans-serif";
+      return "'Bricolage Grotesque Variable', 'Bricolage Grotesque', 'Geist Variable', system-ui, sans-serif";
     case 'schibsted':
       return "'Schibsted Grotesk', 'Geist Variable', system-ui, sans-serif";
     case 'hanken':
@@ -132,6 +132,10 @@ export function fontFamilyCss(value: UiFontFamily): string {
 // index.css @import) since they're the long-standing defaults; system/mono
 // need no webfont. Only the 13 newer picker options load on demand, one
 // family per <link>, so picking one font doesn't pull in the other twelve.
+// Faces fetched from Google on demand. 'bricolage' is deliberately ABSENT:
+// it is the default UI font, so it is bundled (@fontsource-variable/
+// bricolage-grotesque, imported in index.css) and must never depend on a
+// third-party request that a cold, offline or PWA load cannot make.
 const UI_FONT_GOOGLE_FAMILY: Partial<Record<UiFontFamily, string>> = {
   manrope: 'Manrope:wght@400;500;600;700',
   'dm-sans': 'DM+Sans:wght@400;500;700',
@@ -141,7 +145,6 @@ const UI_FONT_GOOGLE_FAMILY: Partial<Record<UiFontFamily, string>> = {
   sora: 'Sora:wght@400;500;600;700',
   lexend: 'Lexend:wght@400;500;600;700',
   'albert-sans': 'Albert+Sans:wght@400;500;600;700',
-  bricolage: 'Bricolage+Grotesque:wght@400;500;600;700',
   schibsted: 'Schibsted+Grotesk:wght@400;500;600;700',
   hanken: 'Hanken+Grotesk:wght@400;500;600;700',
   figtree: 'Figtree:wght@400;500;600;700',
