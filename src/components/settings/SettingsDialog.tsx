@@ -1,6 +1,9 @@
 import { DEFAULT_BACKGROUND_OPACITY } from '../../lib/wallpaperDefaults';
 import { GATEWAY_PRESETS, gatewayPresetById } from '../../lib/gatewayPresets';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+// Keeps recharts out of the main bundle — see the note in UsageCharts.tsx.
+const UsageCharts = lazy(() => import('./UsageCharts'));
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   Check,
@@ -2467,6 +2470,23 @@ function UsagePanel({ workspaceId, workspaceName }: { workspaceId: string | null
   return (
     <FieldGroup>
       <FieldDescription>Storage and entity counts for {workspaceName || 'this workspace'}.</FieldDescription>
+
+      {/* Charts are lazy: recharts is ~1.1MB and this is the only shipped
+          surface that draws one, so it must not ride in the index chunk for a
+          tab most people never open. Suspense falls back to the numbers being
+          skeletoned, not to an empty box — the cards below are the source of
+          truth either way, so the panel is useful before the chart arrives. */}
+      <Suspense fallback={<div className="h-40 animate-pulse rounded-lg bg-muted/40" />}>
+        <UsageCharts
+          storage={[
+            { label: 'Uploads', bytes: usage?.uploadBytes ?? 0 },
+            { label: 'Agent memory', bytes: usage?.memoryBytes ?? 0 },
+          ]}
+          counts={counts}
+          formatBytes={formatBytes}
+        />
+      </Suspense>
+
       <ReadOnlyValue label="Storage used" value={formatBytes(usage?.totalBytes ?? 0)} />
       <div className="grid grid-cols-2 gap-2">
         <ReadOnlyValue label="Uploads" value={formatBytes(usage?.uploadBytes ?? 0)} />
