@@ -51,7 +51,7 @@
  --header-height: 52px;
  --chat-panel-width: 380px;
  --agensis-ui-font-family: 'Bricolage Grotesque Variable', 'Bricolage Grotesque', 'Geist Variable', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
- --agensis-ui-font-size: 16px;
+ --agensis-ui-font-size: 17px;
  /* First-paint values only: applyUiAppearanceSettings() overwrites both as an
     INLINE style on :root as soon as it runs. Kept in step with DEFAULTS in
     src/lib/settings.ts so the panels do not visibly change opacity a frame
@@ -4857,7 +4857,7 @@ code {
 }
 
 html {
- font-size: var(--agensis-ui-font-size, 16px);
+ font-size: var(--agensis-ui-font-size, 17px);
  /* Unitless, so every element multiplies it against its OWN font-size and
     inherits a proportional line box rather than one absolute height. A value
     with units here would give a 10px chip the same leading as a heading. */

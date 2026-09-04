@@ -46,7 +46,7 @@ const DEFAULTS: AppSettings = {
   notifications_agent_events: true,
   notifications_task_reminders: false,
   ui_font_family: 'bricolage',
-  ui_base_font_size: 16,
+  ui_base_font_size: 17,
   ui_font_weight: 400,
   ui_line_height: 1.5,
   ui_theme_preset: 'neutral',
