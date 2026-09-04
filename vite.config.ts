@@ -1,8 +1,9 @@
-import { defineConfig, type Plugin, defaultClientConditions } from 'vite';
+import { defineConfig, type Plugin, defaultClientConditions, defaultServerConditions } from 'vite';
 import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { nitro } from 'nitro/vite';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -133,7 +134,19 @@ function browserRuntimeAssets(): Plugin {
   };
 }
 
-export default defineConfig({
+/** Keep output-producing browser plugins out of Nitro's server environment. */
+function clientOnly(plugins: Plugin[]): Plugin[] {
+  for (const plugin of plugins) {
+    const applies = plugin.applyToEnvironment;
+    plugin.applyToEnvironment = (environment) => {
+      if (environment.config.consumer !== 'client') return false;
+      return applies ? applies(environment) : true;
+    };
+  }
+  return plugins;
+}
+
+export default defineConfig(({ command }) => ({
   define: {
     __BUILD_ID__: JSON.stringify(BUILD_ID),
     __APP_VERSION__: JSON.stringify(pkgVersion),
@@ -145,20 +158,32 @@ export default defineConfig({
   // catch-all rewrite and come back as text/html — the module script is then
   // rejected for a MIME mismatch and the page renders blank.
   base: isDesktopBuild ? './' : '/',
-  build: {
-    // The huddle microphone's AudioWorklet must stay a real file. Vite inlines
-    // any asset under 4 KB as a `data:` URI, and worklet scripts are governed
-    // by CSP's `script-src` — which netlify.toml sets to `'self' 'unsafe-inline'`
-    // with neither `data:` nor `blob:`. Inlined, the microphone works today and
-    // dies silently the day that policy is promoted out of Report-Only.
-    assetsInlineLimit: (filePath) => (filePath.endsWith('.worklet.js') ? false : undefined),
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (id.includes('node_modules')) {
-            if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'vendor-react';
-            if (/node_modules\/(radix-ui|@radix-ui|cmdk|sonner|vaul|lucide-react)\//.test(id)) return 'vendor-ui';
-          }
+  // Nitro's Vite integration derives the client entry from its renderer. This
+  // app deliberately keeps the renderer disabled because Netlify already owns
+  // the route map (landing page, SPA paths, join proxy and real 404s), so name
+  // the browser entry explicitly instead of letting a server environment fall
+  // back to index.html.
+  environments: {
+    client: {
+      build: {
+        // The huddle microphone's AudioWorklet must stay a real file. Vite
+        // inlines any asset under 4 KB as a `data:` URI, and worklet scripts
+        // are governed by CSP's `script-src`, which excludes data/blob URLs.
+        assetsInlineLimit: (filePath) => (filePath.endsWith('.worklet.js') ? false : undefined),
+        rollupOptions: {
+          input: path.resolve(import.meta.dirname, 'index.html'),
+          output: {
+            manualChunks(id) {
+              if (id.includes('node_modules')) {
+                if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'vendor-react';
+                // Streamdown's parser and Shiki bridge are substantial but
+                // only needed by rich-text surfaces. Shiki languages/themes
+                // remain their own on-demand chunks.
+                if (/node_modules\/(?:@streamdown|streamdown|remark-|rehype-|remend|unified|mdast-util-|micromark|hast-util-|unist-util-)/.test(id)) return 'vendor-markdown';
+                if (/node_modules\/(radix-ui|@radix-ui|cmdk|sonner|vaul|lucide-react)\//.test(id)) return 'vendor-ui';
+              }
+            },
+          },
         },
       },
     },
@@ -179,10 +204,51 @@ export default defineConfig({
     // front-end dependency that ships its own source.
     conditions: ['source', ...defaultClientConditions],
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(import.meta.dirname, './src'),
     },
   },
+  ssr: {
+    // The workspace library exposes source TypeScript under the `source`
+    // condition. Nitro's renderer and Vite's SSR transforms must resolve the
+    // same module identity as the browser or hydration/build chunks can drift.
+    noExternal: ['@agensis/ui'],
+    resolve: { conditions: ['source', ...defaultServerConditions] },
+  },
+  optimizeDeps: {
+    include: [
+      // Pre-bundle the chat/session dependencies at startup. Discovering one
+      // halfway through a live conversation forces Vite to re-optimise and can
+      // strand open tabs on stale chunk hashes. Keep this to direct deps only.
+      '@base-ui/react',
+      '@streamdown/code',
+      'blobatar',
+      'class-variance-authority',
+      'clsx',
+      'cmdk',
+      'date-fns',
+      'lucide-react',
+      'react-resizable-panels',
+      'sonner',
+      'streamdown',
+      'tailwind-merge',
+      'vaul',
+    ],
+  },
   server: {
+    // Transform the conversation hot path while Vite is booting. Warming the
+    // entire application would only move work into startup; these are the
+    // modules reached by the first channel navigation and every stream tick.
+    warmup: {
+      clientFiles: [
+        './src/main.tsx',
+        './src/App.tsx',
+        './src/components/windows/ChatWindowContent.tsx',
+        './src/components/chat/ChatThreadPanel.tsx',
+        './src/components/chat/MarkdownContent.tsx',
+        './src/components/chat/ToolStepGroup.tsx',
+        './src/components/chat/ComposerMentionUI.tsx',
+      ],
+    },
     // Parallel review/implementation worktrees live beneath this checkout.
     // Without explicit ignores, another agent's build rewrites thousands of
     // dist files and Vite treats every one as an application change, causing
@@ -211,9 +277,10 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
-    emitVersionJson(),
-    browserRuntimeAssets(),
-    VitePWA({
+    ...clientOnly([
+      emitVersionJson(),
+      browserRuntimeAssets(),
+      ...VitePWA({
       // 'prompt' (not 'autoUpdate') so an open tab is never force-reloaded out
       // from under the user mid-session — the update surface is our themed
       // dialog/toast instead. Note the SW itself no longer WAITS for that
@@ -283,7 +350,7 @@ export default defineConfig({
         // Workbox emits these imports at the top of the generated worker, so the
         // proxy's fetch listener is registered before Workbox's own.
         importScripts: ['/scramjet-sw.js'],
-        globPatterns: ['index.html', 'assets/{index,vendor-react,vendor-ui}-*.{js,css}', '**/*.{svg,png,woff2}'],
+        globPatterns: ['index.html', 'assets/{index,vendor-react,vendor-ui,vendor-markdown}-*.{js,css}', '**/*.{svg,png,woff2}'],
         // Allowlist, not denylist: Workbox matches these against
         // `url.pathname + url.search`, so a denylist entry like /^\/$/ misses
         // `/?utm_source=x` and the SW would hand a returning visitor the SPA
@@ -346,6 +413,29 @@ export default defineConfig({
           },
         ],
       },
-    }),
+      }),
+    ]),
+    // Nitro owns the production static output pass, while the existing Fly
+    // Express/WS server and Netlify HTTP mirror remain the two application
+    // backends. Nitro v3 defaults serverDir to false; do not point it at
+    // ./server, which is an Express service rather than Nitro route handlers.
+    // Desktop still needs Vite's plain relative-asset dist for file://.
+    ...(command === 'build' && !isDesktopBuild
+      ? (nitro({
+          preset: process.env.AGENSIS_NITRO_PRESET || 'netlify_static',
+          // Agensis is client-rendered and Netlify's checked-in redirect map is
+          // the routing authority. Disabling the catch-all renderer preserves
+          // its landing page, join proxy and hard-404 behaviour.
+          renderer: false,
+          prerender: { crawlLinks: false, routes: [] },
+          // The current Nitro 3 beta still asks Vite to build a server
+          // environment for static presets. Give that environment a harmless
+          // entry and keep its unused artifact outside the publish directory.
+          entry: './scripts/nitro-static-entry.mjs',
+          output: {
+            serverDir: './node_modules/.nitro/agensis-static-server',
+          },
+        }) as unknown as Plugin[])
+      : []),
   ],
-});
+}));

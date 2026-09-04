@@ -433,9 +433,25 @@ const agentMarketplace: WireframeScene = {
   ],
 };
 
+/** Equal channel rows gaining live Markdown, code controls, and progress. */
+const streamingChannel: WireframeScene = {
+  id: 'streaming-channel',
+  alt: 'Two equally aligned channel messages appear on one shared edge, followed by a live code block and progress marker.',
+  shapes: [
+    { kind: 'panel', x: 8, y: 8, w: 144, h: 84, tone: 'muted', motion: 'none' },
+    { kind: 'chip', x: 16, y: 20, w: 12, h: 12, tone: 'base', motion: 'fade', delay: 0.1 },
+    { kind: 'row', x: 36, y: 20, w: 94, h: 12, tone: 'base', motion: 'fade', delay: 0.15 },
+    { kind: 'chip', x: 16, y: 43, w: 12, h: 12, tone: 'accent', motion: 'slide-up', delay: 0.5 },
+    { kind: 'row', x: 36, y: 43, w: 76, h: 10, tone: 'accent', motion: 'slide-up', delay: 0.55 },
+    { kind: 'panel', x: 36, y: 59, w: 94, h: 20, tone: 'base', motion: 'slide-up', delay: 0.8 },
+    { kind: 'bar', x: 43, y: 65, w: 58, h: 4, tone: 'muted', motion: 'fade', delay: 1.0 },
+    { kind: 'chip', x: 36, y: 83, w: 24, h: 5, tone: 'accent', motion: 'pulse', delay: 1.2 },
+  ],
+};
+
 export const WIREFRAME_SCENES = {
   // In the gallery today.
-  agentMarketplace, socialSignInGuard, automationRule, codexRuntime, connectionResources, stewardedResourceWork, auditLog, typingDots, stopReason, toolLoop,
+  streamingChannel, agentMarketplace, socialSignInGuard, automationRule, codexRuntime, connectionResources, stewardedResourceWork, auditLog, typingDots, stopReason, toolLoop,
   // Retired from the gallery when their feature stopped being news. Kept as
   // authored vocabulary — a scene costs nothing and is the reference for how
   // this format is meant to read.
@@ -457,6 +473,12 @@ export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
  * its scene stays in WIREFRAME_SCENES.
  */
 export const GALLERY_SLIDES: GallerySlide[] = [
+  {
+    note: 'streaming-channel-refresh',
+    title: 'Live work, one shared channel',
+    body: 'People and agents stay on the same left edge while Markdown settles smoothly, themed code gains controls, and new work arrives with restrained motion.',
+    scene: streamingChannel,
+  },
   {
     note: 'agent-marketplace',
     title: 'Hire an agent without handing over its definition',
@@ -486,12 +508,6 @@ export const GALLERY_SLIDES: GallerySlide[] = [
     title: 'Local sign-in shows the local path',
     body: 'A self-hosted account page now leaves unavailable Google and GitHub buttons out and presents email and password directly.',
     scene: socialSignInGuard
-  },
-  {
-    note: 'onboarding-codex-runtime',
-    title: 'Choosing Codex now connects Codex',
-    body: 'The setup choice is saved before the command is made, so a Codex agent uses the Codex CLI and your logged-in OpenAI account.',
-    scene: codexRuntime,
   },
 ];
 

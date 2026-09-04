@@ -62,18 +62,18 @@ function SourceChip({ source, onOpen }: { source: LibrarySource; onOpen: () => v
         onOpen();
       }}
       title={describeSource(source)}
-      className={`inline-flex max-w-[11rem] items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2 text-2xs transition-colors ${
+      className={`inline-flex max-w-[11rem] items-center gap-1 rounded-sm py-0.5 pr-1 text-[0.6875rem] font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
         // A CONNECTED agent's copy is filled; an offline agent's is outlined.
         // Same fill/outline vocabulary the Skills window uses for
         // advertised-vs-configured, and the same underlying question: is this
         // claim backed by something live, or is it the last thing we were told?
         agent?.connected || !agent
-          ? 'bg-muted text-foreground hover:bg-muted/70'
-          : 'border border-dashed border-border text-muted-foreground hover:bg-muted/40'
+          ? 'text-muted-foreground hover:text-foreground'
+          : 'text-muted-foreground/70 underline decoration-dashed underline-offset-2 hover:text-foreground'
       }`}
     >
       <span
-        className={`flex size-4 shrink-0 items-center justify-center rounded-full text-[8px] font-semibold leading-none text-white ${agent?.connected || !agent ? '' : 'opacity-60'}`}
+        className={`flex size-3.5 shrink-0 items-center justify-center rounded-full text-[7px] font-semibold leading-none text-white ${agent?.connected || !agent ? '' : 'opacity-60'}`}
         style={{ backgroundColor: agent?.color || 'var(--primary)' }}
         aria-hidden="true"
       >
@@ -82,8 +82,8 @@ function SourceChip({ source, onOpen }: { source: LibrarySource; onOpen: () => v
             avatar={agent.avatar}
             name={agent.name}
             initials={agent.initials}
-            className="size-4 rounded-full"
-            fallbackClassName="bg-transparent text-[8px] text-white"
+            className="size-3.5 rounded-full"
+            fallbackClassName="bg-transparent text-[7px] text-white"
           />
         ) : 'WS'}
       </span>
@@ -323,55 +323,64 @@ export function DocumentLibraryWindowContent({
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-4 p-3">
+        <div className="space-y-3 py-2">
           {groups.map(group => (
             <section key={group.domain}>
-              <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                <FolderTree className="size-3.5" />
+              <h3 className="flex items-center gap-1.5 px-3 pb-1.5 pt-1 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
+                <FolderTree className="size-3" />
                 {group.domain}
                 <span className="font-normal normal-case">({group.entries.length})</span>
               </h3>
-              <div className="space-y-1.5">
+              <div className="border-y border-border/70 bg-card/20">
                 {group.entries.map(entry => {
                   const active = entry.key === selectedKey;
                   return (
-                    <button
+                    <div
                       key={entry.key}
-                      type="button"
-                      onClick={() => select(entry.key)}
-                      aria-pressed={active}
-                      className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
-                        active ? 'border-primary bg-primary/5' : 'border-border bg-card/40 hover:bg-card/70'
+                      data-selected={active ? 'true' : undefined}
+                      className={`document-library-list-row border-b border-border/60 transition-colors last:border-b-0 ${
+                        active ? 'bg-primary/[0.07]' : 'hover:bg-muted/35'
                       }`}
                     >
-                      <div className="flex items-center gap-2">
-                        <FileText className="size-3.5 shrink-0 text-primary" />
-                        <span className="truncate text-sm font-medium text-foreground">{entry.title}</span>
-                        {/* The count is the library's whole reason for existing:
-                            it says "several places have this" at list level,
-                            where the comparison is actually made. */}
-                        {entry.sources.length > 1 && (
-                          <Badge variant="secondary" className="ml-auto shrink-0" title={`${entry.sources.length} copies`}>
-                            <Users className="size-3" />
-                            {entry.sources.length}
-                          </Badge>
+                      <button
+                        type="button"
+                        data-flat-control
+                        onClick={() => select(entry.key)}
+                        aria-pressed={active}
+                        className="block w-full px-3 pt-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+                      >
+                        <div className="flex items-center gap-2">
+                          <FileText className="size-3.5 shrink-0 text-primary" />
+                          <span className="truncate text-[0.8125rem] font-medium text-foreground">{entry.title}</span>
+                          {/* The count is the library's whole reason for existing:
+                              it says "several places have this" at list level,
+                              where the comparison is actually made. */}
+                          {entry.sources.length > 1 && (
+                            <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[0.6875rem] text-muted-foreground" title={`${entry.sources.length} copies`}>
+                              <Users className="size-3" />
+                              {entry.sources.length}
+                            </span>
+                          )}
+                        </div>
+                        {entry.primary.summary && (
+                          <p className="mt-0.5 line-clamp-1 pl-5.5 text-[0.6875rem] leading-snug text-muted-foreground">
+                            {entry.primary.summary}
+                          </p>
                         )}
-                      </div>
-                      {entry.primary.summary && (
-                        <p className="mt-1 line-clamp-2 pl-5.5 text-2xs leading-snug text-muted-foreground">
-                          {entry.primary.summary}
-                        </p>
-                      )}
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1 pl-5.5">
+                      </button>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 pb-1.5 pl-8.5">
                         {entry.sources.map(source => (
                           <SourceChip
                             key={source.id}
                             source={source}
-                            onOpen={() => { select(entry.key); setComparingId(source.id === entry.primary.id ? null : source.id); }}
+                            onOpen={() => {
+                              setSelectedKey(entry.key);
+                              setComparingId(source.id === entry.primary.id ? null : source.id);
+                            }}
                           />
                         ))}
                       </div>
-                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -423,10 +432,10 @@ export function DocumentLibraryWindowContent({
         <ScrollArea className="min-h-0 flex-1">
           <div className="space-y-4 p-3">
             <div>
-              <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <h4 className="mb-1.5 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
                 Where this lives
               </h4>
-              <div className="space-y-1">
+              <div className="border-y border-border/70 bg-card/20">
                 {selected.sources.map(source => {
                   const agreement = compareToPrimary(selected, source);
                   const isPrimary = source.id === selected.primary.id;
@@ -434,12 +443,13 @@ export function DocumentLibraryWindowContent({
                     <button
                       key={source.id}
                       type="button"
+                      data-flat-control
                       onClick={() => setComparingId(isPrimary ? null : (comparingId === source.id ? null : source.id))}
                       aria-pressed={comparingId === source.id}
-                      className={`flex w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-left transition-colors ${
+                      className={`document-library-source-row flex w-full items-center gap-2 border-b border-border/60 px-2.5 py-1.5 text-left transition-colors outline-none last:border-b-0 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 ${
                         comparingId === source.id
-                          ? 'border-primary bg-primary/5'
-                          : 'border-border bg-card/40 hover:bg-card/70'
+                          ? 'bg-primary/[0.07]'
+                          : 'hover:bg-muted/35'
                       }`}
                     >
                       <span
@@ -458,22 +468,16 @@ export function DocumentLibraryWindowContent({
                         ) : 'WS'}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm text-foreground">
+                        <span className="block truncate text-[0.8125rem] text-foreground">
                           {source.agent?.name || 'This workspace'}
                         </span>
                         <span className="block truncate font-mono text-3xs text-muted-foreground">
                           {source.path || LIBRARY_SOURCE_LABELS[source.kind]}
                         </span>
                       </span>
-                      {isPrimary ? (
-                        <Badge variant="outline" className="shrink-0 text-3xs">latest</Badge>
-                      ) : agreement === 'identical' ? (
-                        <Badge variant="outline" className="shrink-0 text-3xs">same</Badge>
-                      ) : agreement === 'different' ? (
-                        <Badge variant="secondary" className="shrink-0 text-3xs">differs</Badge>
-                      ) : (
-                        <Badge variant="outline" className="shrink-0 text-3xs text-muted-foreground">compare</Badge>
-                      )}
+                      <span className={`shrink-0 text-[0.6875rem] font-medium ${agreement === 'different' ? 'text-primary' : 'text-muted-foreground'}`}>
+                        {isPrimary ? 'latest' : agreement === 'identical' ? 'same' : agreement === 'different' ? 'differs' : 'compare'}
+                      </span>
                     </button>
                   );
                 })}
@@ -489,7 +493,7 @@ export function DocumentLibraryWindowContent({
             {comparing && diff ? (
               <div>
                 <div className="mb-1.5 flex items-center gap-2">
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <h4 className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
                     {comparing.agent?.name || 'This workspace'} vs latest
                   </h4>
                   <Badge variant="secondary" className="text-3xs">{describeDiff(diff)}</Badge>
@@ -511,7 +515,7 @@ export function DocumentLibraryWindowContent({
             ) : (
               <div>
                 <div className="mb-1.5 flex items-center gap-2">
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Latest version</h4>
+                  <h4 className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">Latest version</h4>
                   <span className="text-2xs text-muted-foreground">{describeSource(selected.primary)}</span>
                   {selected.primary.kind === 'workspace' && onOpenWorkspaceDocument && (
                     <Button
@@ -532,7 +536,7 @@ export function DocumentLibraryWindowContent({
                     <div className="h-3 w-4/5 animate-pulse rounded bg-muted" />
                   </div>
                 ) : primaryBody ? (
-                  <div className="library-content-markdown rounded-lg border border-border bg-card/40 p-3">
+                  <div className="library-content-markdown rounded-md border border-border/70 bg-card/30 p-3">
                     {/* Untrusted text: a file from somebody else's machine.
                         MarkdownContent builds elements and never touches
                         innerHTML, which is what makes rendering it safe. */}

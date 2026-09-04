@@ -124,6 +124,7 @@ export function ToolStepGroup({ row, compact = false }: { row: TranscriptStepRow
       role="group"
       aria-label={count > 0 ? `Agent activity, ${callCountLabel(count)}` : 'Agent activity'}
       className={cn('chat-tool-steps min-w-0 py-1', compact ? COMPACT_INDENT : CHANNEL_INDENT)}
+      data-live={live ? 'true' : undefined}
     >
       <div className="min-w-0 border-l border-border pl-2.5">
         <div className="flex min-w-0 flex-wrap items-center gap-1">

@@ -27,6 +27,11 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+
+/* Streamdown generates its controls and streaming caret inside the package,
+   so Tailwind must scan those compiled modules as well as our source. */
+@source "../node_modules/streamdown/dist/*.js";
+@source "../node_modules/@streamdown/code/dist/*.js";
 /* The DEFAULT UI face (settings.ts ui_font_family: 'bricolage'), and until now
    the only one fetched from a third party at runtime: every other choice is a
    bundled @fontsource package, but this one came from fonts.googleapis.com via
@@ -1540,52 +1545,17 @@
  min-height: calc(var(--sidebar-folder-trigger-h) + var(--sidebar-row-frame));
 }
 
-/* A SECTION NAME IS A LABEL, NOT A ROW.
-   It names the group beneath it ("Documents", then the documents), so it is
-   set small, uppercase and tracked, and it does not carry the height, weight
-   or hover fill of the items it introduces. Those still look clickable; this
-   reads as a heading, which is what stops a sidebar looking like one long
-   undifferentiated list of buttons. */
+/* A section name is a label, not another row. Match Legion's quiet roster
+   headings: 11px at the default UI size, medium weight, restrained tracking,
+   and the theme's muted opaque ink. The previous 12px / 700 / 0.07em treatment
+   made five navigation labels shout more loudly than the content beneath. */
 .sidebar-section-trigger {
  min-height: calc(var(--sidebar-section-trigger-h) + var(--sidebar-row-frame));
- /* TWO STEPS BELOW THE UI FONT, measured on the app's own (Tailwind) type
-    scale: base 1rem -> sm 0.875rem -> xs 0.75rem.
-
-    Deliberately a rem, never a px. `html` is set to
-    `font-size: var(--agensis-ui-font-size)` (see the html rule near the end of
-    this file), so 1rem IS the size chosen in Settings -> Appearance -> UI font
-    size, clamped 12-18px. A rem therefore tracks that setting for free; a px
-    would only look right at the default.
-
-    That keeps the label a constant two steps under the base and one step under
-    the item rows it introduces (which are text-sm): 9px vs 10.5px at a 12px
-    setting, 11.25 vs 13.13 at 15, 13.5 vs 15.75 at 18 — smaller at every point
-    in the range.
-
-    Supersedes 0.8125rem, which was within a hair of the rows and so read as a
-    row rather than as their heading. Case, weight and colour still do most of
-    the separating; the size is what stops it competing. */
- font-size: 0.75rem;
- /* 700, not 600: at label size, uppercase and tracked, 600 reads as barely
-    heavier than the rows below it. The weight is what makes a small quiet
-    label still parse as a HEADING rather than as smaller text. */
- font-weight: 700;
- letter-spacing: 0.07em;
+ font-size: 0.6875rem;
+ font-weight: 500;
+ letter-spacing: 0.025em;
  text-transform: uppercase;
- /* Mixed toward --card, NOT toward transparent, and this is the whole point:
-    the sidebar paints bg-card/45, so it is already 45% card over the
-    wallpaper. Alpha text on top of that stacked a SECOND transparency, and the
-    wallpaper showed through the glyphs themselves — which is why these read as
-    dimmed-to-disabled on some themes while staying fine on others. Mixing
-    toward the surface keeps the label sitting back from the item rows without
-    ever letting the image behind it into the letterforms, so contrast no
-    longer depends on which wallpaper is loaded.
-
-    72%, not 62%: a section name is a BUTTON — it collapses the section — and
-    interactive text has to clear a readable contrast in its own right. It
-    still sits below the item rows (82%), which is what keeps a label reading
-    as a heading rather than as another row. */
- color: color-mix(in srgb, var(--foreground) 72%, var(--card));
+ color: var(--muted-foreground);
 }
 
 .sidebar-section-trigger:hover {
@@ -3232,7 +3202,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
    !important, so nothing less wins here. Still clearly under neo's own rows
    (0.78rem), which is the point. */
 :root[data-ui-theme="neo"] .sidebar-section-trigger {
- font-size: 0.75rem !important;
+ font-size: 0.6875rem !important;
 }
 
 .file-tree {
@@ -3399,6 +3369,15 @@ button[data-slot="badge"][data-variant="default"]:hover {
  font-weight: 400;
 }
 
+/* The document library is an information browser, not a gallery of CTA cards.
+   Rows share rules and one selected inset marker; this also keeps Default's
+   generic bordered-button elevation from turning every file into a raised
+   tile. */
+.document-library-list-row[data-selected="true"],
+.document-library-source-row[aria-pressed="true"] {
+ box-shadow: inset 2px 0 0 var(--primary);
+}
+
 .chat-markdown h1,
 .chat-markdown h2,
 .chat-markdown h3 {
@@ -3474,6 +3453,127 @@ button[data-slot="badge"][data-variant="default"]:hover {
  color: var(--ink-muted);
  font-size: 0.7rem;
  text-transform: uppercase;
+}
+
+/* Streamdown keeps incomplete markdown stable while an agent is writing and
+   supplies the code copy/download controls used by Legion. Its structure uses
+   shadcn tokens; these adapters make those surfaces feel native to every
+   Agensis theme family without fixing them to one palette. */
+.chat-streamdown {
+ min-width: 0;
+ overflow-wrap: anywhere;
+}
+
+.chat-streamdown > div {
+ min-width: 0;
+}
+
+.chat-streamdown [data-streamdown="code-block"] {
+ margin-block: 0.85rem;
+ border-color: var(--border);
+ border-radius: var(--radius-md);
+ background: color-mix(in srgb, var(--card) 76%, var(--canvas-base));
+}
+
+.chat-streamdown [data-streamdown="code-block-body"] {
+ border-color: color-mix(in srgb, var(--border) 80%, transparent);
+ border-radius: calc(var(--radius-md) - 2px);
+ background: var(--canvas-base);
+ font-family: var(--font-mono);
+ font-size: 0.8125rem;
+}
+
+.chat-streamdown [data-streamdown="code-block-body"] pre,
+.chat-streamdown [data-streamdown="code-block-body"] code {
+ border: 0;
+ border-radius: 0;
+ background: transparent;
+ padding: 0;
+ font-family: inherit;
+ font-size: inherit;
+}
+
+.chat-streamdown [data-streamdown="code-block-header"] {
+ color: var(--muted-foreground);
+}
+
+.chat-streamdown [data-located-block] [data-streamdown="code-block-header"] > span {
+ opacity: 0;
+}
+
+.chat-streamdown [data-streamdown$="-button"] {
+ color: var(--muted-foreground);
+ transition: color var(--transition-fast), background-color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.chat-streamdown [data-streamdown$="-button"]:hover {
+ color: var(--foreground);
+}
+
+.chat-streamdown [data-streamdown="inline-code"] {
+ font-family: var(--font-mono);
+ font-size: 0.88em;
+}
+
+.chat-streamdown [data-streamdown="link"] {
+ color: var(--primary);
+ text-decoration: underline;
+ text-decoration-color: color-mix(in srgb, var(--primary) 35%, transparent);
+ text-underline-offset: 2px;
+ transition: color var(--transition-fast), text-decoration-color var(--transition-fast);
+}
+
+.chat-streamdown [data-streamdown="link"]:hover {
+ text-decoration-color: currentColor;
+}
+
+.chat-streamdown [data-streamdown="table-wrapper"] {
+ max-width: 100%;
+ border-color: var(--border);
+ border-radius: var(--radius-md);
+}
+
+.chat-stream-status {
+ min-height: 1rem;
+}
+
+/* New transcript material arrives with the same short, physical movement as
+   Legion. All properties here are compositor-only: no height, blur, gradient
+   position or layout animation is introduced on the streaming hot path. */
+@keyframes chat-message-in {
+ from {
+  opacity: 0;
+  transform: translateY(6px);
+ }
+}
+
+@keyframes chat-tool-row-in {
+ from {
+  opacity: 0;
+  transform: translateY(-2px);
+ }
+}
+
+.channel-message-surface [data-slot="message-scroller-content"] > :last-child .chat-message-row,
+.channel-message-surface [data-slot="message-scroller-content"] > :last-child .chat-thread-message {
+ animation: chat-message-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.channel-message-surface [data-slot="message-scroller-content"] > :last-child .chat-tool-steps {
+ animation: chat-tool-row-in 180ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+ .channel-message-surface [data-slot="message-scroller-content"] > :last-child .chat-message-row,
+ .channel-message-surface [data-slot="message-scroller-content"] > :last-child .chat-thread-message,
+ .channel-message-surface [data-slot="message-scroller-content"] > :last-child .chat-tool-steps {
+  animation: none;
+ }
+
+ .chat-streamdown [data-streamdown$="-button"],
+ .chat-streamdown [data-streamdown="link"] {
+  transition: none;
+ }
 }
 
 .chat-markdown-table-wrap {
@@ -4463,10 +4563,10 @@ body {
     than one axis. It is one axis, so it is one number now.
 
     --default-radius-scale is a multiplier the Settings slider writes onto the
-    root element (0 = square, 1 = the base values below, up to 2.4). Every token
-    is the base value times that scale, so they keep their proportions instead
-    of drifting apart at the extremes. calc() on a unitless custom property is
-    resolved at use time, which is what makes a live slider possible at all.
+    root element (0 = square, 1 = a 10px maximum, up to 2.4). Smaller tokens
+    retain their proportions, while xl and above stop at the number displayed
+    in Settings. Previously the badge could say 11px while rounded-2xl resolved
+    to 17.6px, which made a precise-looking value actively misleading.
 
     The two "999px" pill values are handled separately: a fully-round toolbar or
     button is a shape, not a size, so they switch at the top of the range rather
@@ -4476,13 +4576,13 @@ body {
  --radius-sm: calc(4px * var(--default-radius-scale));
  --radius-md: calc(6px * var(--default-radius-scale));
  --radius-lg: calc(8px * var(--default-radius-scale));
- --radius-xl: calc(12px * var(--default-radius-scale));
- --radius-2xl: calc(16px * var(--default-radius-scale));
- --radius-3xl: calc(20px * var(--default-radius-scale));
- --radius-4xl: calc(28px * var(--default-radius-scale));
+ --radius-xl: var(--radius);
+ --radius-2xl: var(--radius);
+ --radius-3xl: var(--radius);
+ --radius-4xl: var(--radius);
  --default-radius-card: calc(8px * var(--default-radius-scale));
  --default-radius-modal: calc(10px * var(--default-radius-scale));
- --default-radius-toolbar: calc(14px * var(--default-radius-scale));
+ --default-radius-toolbar: var(--radius);
  --default-radius-control: calc(6px * var(--default-radius-scale));
  --default-radius-button: calc(9px * var(--default-radius-scale));
 }
@@ -4915,17 +5015,17 @@ select {
 /* Plain buttons (the settings cards and other small pickers) do not carry a
    data-slot, but their existing `border` utility is still a useful semantic
    boundary for the same tactile treatment. */
-:root[data-ui-theme="default"] button:not([data-slot="button"])[class~="border"]:not([data-variant="ghost"]) {
+:root[data-ui-theme="default"] button:not([data-slot="button"]):not([data-flat-control])[class~="border"]:not([data-variant="ghost"]) {
  box-shadow: var(--default-hard-shadow) !important;
  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
 }
 
-:root[data-ui-theme="default"] button:not([data-slot="button"])[class~="border"]:not([data-variant="ghost"]):hover {
+:root[data-ui-theme="default"] button:not([data-slot="button"]):not([data-flat-control])[class~="border"]:not([data-variant="ghost"]):hover {
  transform: translate(-1px, -1px);
  box-shadow: var(--default-hard-shadow-hover) !important;
 }
 
-:root[data-ui-theme="default"] button:not([data-slot="button"])[class~="border"]:not([data-variant="ghost"]):active {
+:root[data-ui-theme="default"] button:not([data-slot="button"]):not([data-flat-control])[class~="border"]:not([data-variant="ghost"]):active {
  transform: translate(2px, 2px);
  box-shadow: none !important;
 }
@@ -4971,7 +5071,8 @@ select {
 :root[data-ui-theme="default"] [data-slot="alert-dialog-content"],
 :root[data-ui-theme="default"] [data-slot="popover-content"],
 :root[data-ui-theme="default"] [data-slot="dropdown-menu-content"],
-:root[data-ui-theme="default"] [data-slot="select-content"] {
+:root[data-ui-theme="default"] [data-slot="select-content"],
+:root[data-ui-theme="default"] .settings-choice-card {
  border-radius: var(--default-radius-card) !important;
  border-color: color-mix(in srgb, var(--border) 78%, var(--foreground) 22%);
  background: var(--card);
@@ -5000,6 +5101,10 @@ select {
 :root[data-ui-theme="default"] .task-card-expanded,
 :root[data-ui-theme="default"] .thread-widget-card {
  box-shadow: var(--shadow-md) !important;
+}
+
+:root[data-ui-theme="default"] .task-card {
+ border-radius: var(--radius);
 }
 
 :root[data-ui-theme="default"] [data-window-surface] {
@@ -5148,8 +5253,8 @@ select {
     renders — if the base .sidebar-section-trigger size moves, move this too or
     neo silently keeps the old one. It was 0.82rem once, which left neo with
     section names larger than its own items. */
- font-size: 0.75rem !important;
- letter-spacing: 0.07em;
+ font-size: 0.6875rem !important;
+ letter-spacing: 0.025em;
 }
 
 :root[data-ui-theme="neo"] .sidebar-section-header .sidebar-section-trigger:hover {

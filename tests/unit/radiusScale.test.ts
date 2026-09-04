@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   applyRadiusScale,
   clampRadiusScale,
+  radiusMaxPxFrom,
   radiusScaleFrom,
+  DEFAULT_RADIUS_MAX_PX,
   DEFAULT_RADIUS_SCALE,
   RADIUS_PILL_THRESHOLD,
   RADIUS_SCALE_MAX,
@@ -44,6 +46,12 @@ describe('radius scale', () => {
     // An unparseable stored value must not produce NaN corners.
     expect(clampRadiusScale('not a number')).toBe(DEFAULT_RADIUS_SCALE);
     expect(clampRadiusScale(undefined)).toBe(DEFAULT_RADIUS_SCALE);
+  });
+
+  it('reports the literal maximum radius instead of a nominal base value', () => {
+    expect(radiusMaxPxFrom(DEFAULT_RADIUS_SCALE)).toBe(DEFAULT_RADIUS_MAX_PX);
+    expect(radiusMaxPxFrom(1.1)).toBe(11);
+    expect(radiusMaxPxFrom(RADIUS_SCALE_MAX)).toBe(24);
   });
 
   it('writes the multiplier the CSS reads, and the pill flag only at the top', () => {

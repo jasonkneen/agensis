@@ -17,7 +17,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
-import { MarkdownContent, trimUrlTail } from '../../src/components/chat/MarkdownContent';
+import { MarkdownContent } from '../../src/components/chat/MarkdownContent';
+import { trimUrlTail } from '../../src/lib/chatLinks';
 
 const render = (content: string) => renderToStaticMarkup(createElement(MarkdownContent, { content }));
 

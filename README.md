@@ -57,7 +57,7 @@ server.
 
 ## Tech stack
 
-React 19 · TypeScript · Vite · Postgres · Node/Express · WebSocket ·
+React 19 · TypeScript · Vite + Nitro · Postgres · Node/Express · WebSocket ·
 Tailwind · Vite PWA · Electron (desktop shell)
 
 ## Quick start
@@ -97,7 +97,7 @@ volumes, are in [docs/DOCKER.md](./docs/DOCKER.md).
 | `npm run desktop:dev:prod` | **Dev setup B:** Electron HMR + Fly (live web sees local ACP) |
 | `npm run desktop:build:prod` | Package desktop for Fly (ship; signs if cert present) |
 | `npm run desktop:build:local` | Package desktop for local `:3142` |
-| `npm run build` | production frontend build |
+| `npm run build` | Vite client + Nitro Netlify-static production build |
 | `npm run ci` | typecheck, all test suites, smoke, lint |
 
 ### Desktop local development setups
@@ -131,6 +131,12 @@ and no public address. On macOS the service is a per-user LaunchAgent with
 to inspect or remove that exact profile.
 
 ## Architecture
+
+Vite owns development and the browser bundle. The production web build then
+runs Nitro's build-only Netlify-static pass; Nitro is deliberately absent from
+development and desktop builds, so it neither opens a second dev port nor
+changes Electron's `file://` asset layout. The checked-in Netlify redirect map
+remains authoritative for the landing page, `/app`, join links, and hard 404s.
 
 Two backends run against one database:
 

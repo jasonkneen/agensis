@@ -124,3 +124,22 @@ describe('mono typography', () => {
     expect(monoCase![1]).toContain('IBM Plex Mono');
   });
 });
+
+describe('sidebar section typography', () => {
+  it('keeps navigation group labels on the same quiet hierarchy as Legion', () => {
+    const live = cssWithoutComments();
+    const baseRule = /\.sidebar-section-trigger\s*\{([\s\S]*?)\}/.exec(live)?.[1] ?? '';
+
+    expect(baseRule).toMatch(/font-size:\s*0\.6875rem/);
+    expect(baseRule).toMatch(/font-weight:\s*500/);
+    expect(baseRule).toMatch(/letter-spacing:\s*0\.025em/);
+    expect(baseRule).toMatch(/color:\s*var\(--muted-foreground\)/);
+
+    // Neo has higher-specificity overrides, so it must not strand the old,
+    // louder typography after the shared rule changes.
+    const sectionRules = [...live.matchAll(/[^{}]*\.sidebar-section-trigger[^{}]*\{([^{}]*)\}/g)]
+      .map(match => match[1]);
+    expect(sectionRules.some(rule => /font-size:\s*0\.75rem/.test(rule))).toBe(false);
+    expect(sectionRules.some(rule => /letter-spacing:\s*0\.07em/.test(rule))).toBe(false);
+  });
+});

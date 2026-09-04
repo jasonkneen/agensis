@@ -27,12 +27,15 @@ export const DEFAULT_RADIUS: DefaultRadius = 'soft';
  * between `soft` (10px) and `pill`, so the picker read as four unrelated
  * styles. The scale below is a multiplier on the base token values in
  * index.css: 0 is square, 1 is the old `soft`, and the presets survive only as
- * named points on it so an existing stored value still means something.
+ * named points on it so an existing stored value still means something. The
+ * number shown in Settings is the maximum non-pill radius, not an abstract
+ * base that larger Tailwind tokens are allowed to multiply past.
  */
 export const RADIUS_SCALE_MIN = 0;
 export const RADIUS_SCALE_MAX = 2.4;
 export const RADIUS_SCALE_STEP = 0.05;
 export const DEFAULT_RADIUS_SCALE = 1;
+export const DEFAULT_RADIUS_MAX_PX = 10;
 
 /** Past this the toolbar and primary button go fully round rather than rounder. */
 export const RADIUS_PILL_THRESHOLD = 2;
@@ -71,6 +74,11 @@ export function clampRadiusScale(value: unknown): number {
 export function radiusScaleFrom(value: unknown): number {
   if (isDefaultRadius(value)) return PRESET_SCALE[value];
   return clampRadiusScale(value);
+}
+
+/** The literal CSS-pixel ceiling represented by the Settings readout. */
+export function radiusMaxPxFrom(value: unknown): number {
+  return Math.round(DEFAULT_RADIUS_MAX_PX * radiusScaleFrom(value));
 }
 
 export function getStoredDefaultRadius(): DefaultRadius {

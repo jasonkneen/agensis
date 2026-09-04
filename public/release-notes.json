@@ -1,5 +1,19 @@
 [
   {
+    "version": "streaming-channel-refresh",
+    "date": "2026-09-04",
+    "title": "Smoother live conversations",
+    "summary": "Channels and threads now use the same resilient live-message rendering as Legion while keeping Agensis's shared-room layout: every person and agent stays on the same left edge, with no mine-versus-theirs alternation. Markdown remains stable as it arrives, code follows the selected theme, and restrained motion makes new work easier to follow without turning a busy channel into a chat-bubble interface.",
+    "highlights": [
+      "People and agents share one left-aligned channel layout in the main transcript, threads, and delegated sub-threads",
+      "Incomplete Markdown stays readable while a reply streams instead of flashing raw markers",
+      "Code blocks gain theme-aware highlighting, file-location captions, copy, and download controls",
+      "Live replies show clear Working feedback plus brief message and tool-step movement",
+      "Reduced-motion preferences disable the new arrival animations",
+      "Vite warms and pre-bundles the conversation path; Nitro now completes the Netlify-static production output"
+    ]
+  },
+  {
     "version": "agent-marketplace",
     "date": "2026-08-10",
     "title": "Agent marketplace: share templates, hire agents",

@@ -176,6 +176,12 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@agensis/ui/components/message-scroller';
+import {
+  Message as UiMessage,
+  MessageAvatar as UiMessageAvatar,
+  MessageContent as UiMessageContent,
+  MessageHeader as UiMessageHeader,
+} from '@agensis/ui/components/message';
 import { Spinner } from '@agensis/ui/components/spinner';
 import {
   AlertDialog,
@@ -3292,16 +3298,18 @@ function ChatMessageBubble({
   ) : null;
 
   return (
-    <div
+    <UiMessage
+      align="start"
       className="chat-message-row group relative flex w-full min-w-0 gap-3 px-4 py-2 pr-20"
       data-agent-message={isAgentMessage ? 'true' : undefined}
+      data-streaming={isStreaming ? 'true' : undefined}
       style={accentStyle}
     >
-      <div className="chat-message-avatar mt-0.5 flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-3xs font-semibold text-muted-foreground">
+      <UiMessageAvatar className="chat-message-avatar mt-0.5 size-8 self-start rounded-lg bg-muted text-3xs font-semibold text-muted-foreground">
         <MessageAvatar avatar={avatar} name={senderName} initials={initials} isAgent={msg.sender_kind === 'agent' || msg.role === 'assistant'} />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-baseline gap-2">
+      </UiMessageAvatar>
+      <UiMessageContent className="min-w-0 flex-1 gap-0">
+        <UiMessageHeader className="min-w-0 items-baseline gap-2 px-0 text-sm">
           {canOpenAgentProfile ? (
             <button
               type="button"
@@ -3338,7 +3346,7 @@ function ChatMessageBubble({
               </span>
             )
           )}
-        </div>
+        </UiMessageHeader>
         {isEditing ? (
           <div className="mt-2 max-w-4xl space-y-2">
             <textarea
@@ -3388,9 +3396,14 @@ function ChatMessageBubble({
           </div>
         )}
         {isStreaming && msg.content && (
-          <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+          <div
+            className="chat-stream-status mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"
+            data-stream-status
+            role="status"
+            aria-live="polite"
+          >
             <Spinner className="size-3" />
-            Streaming
+            <span className="text-shimmer">Working</span>
           </div>
         )}
         {/* ONE row: reply stats, sub-thread chips, and the create button all sit
@@ -3453,7 +3466,7 @@ function ChatMessageBubble({
             eye on its own line here; it is a chip in the row above now, and a
             second line under the pills saying a third thing about the same
             message is what made this area churn in the first place. */}
-      </div>
+      </UiMessageContent>
       {/* Full-height rail bounded to this message row; the toolbar inside is sticky so it
           rides into view as you scroll a tall message (top → mid-viewport → bottom-right)
           instead of scrolling off the top with the message header. */}
@@ -3522,7 +3535,7 @@ function ChatMessageBubble({
           )}
         </div>
       </div>
-    </div>
+    </UiMessage>
   );
 }
 

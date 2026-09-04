@@ -9,22 +9,6 @@ export type ThemeMode = 'light' | 'dark' | 'system' | 'default-light' | 'default
 
 const STORAGE_KEY = 'agensis_theme';
 
-/**
- * Modes that were persisted under an older id, mapped to what they are called
- * now. `localStorage` is the ONLY store for the theme mode, so this is the
- * whole migration: a browser that last wrote the old id keeps the theme the
- * person chose instead of silently falling back to `dark`.
- *
- * Read-only and one-way. The first `setTheme` after this rewrites the entry
- * under the new id, so the mapping only ever has to survive one visit — but it
- * costs nothing to keep, and removing it would reset anyone who has not been
- * back since.
- */
-const LEGACY_MODES: Readonly<Record<string, ThemeMode>> = {
-  'tinyworld-light': 'paper-light',
-  'tinyworld-dark': 'paper-dark',
-};
-
 function getSystemTheme(): 'light' | 'dark' {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
@@ -106,7 +90,6 @@ export function useTheme() {
       || stored === 'neo-light' || stored === 'neo-dark'
       || stored === 'normal-light' || stored === 'normal-dark'
     ) return stored;
-    if (stored && stored in LEGACY_MODES) return LEGACY_MODES[stored];
     return 'default-light';
   });
 

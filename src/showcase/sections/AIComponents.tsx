@@ -217,7 +217,7 @@ export default function AIComponentsSection() {
         </BubbleGroup>
       </Example>
 
-      <Example label="Message" full>
+      <Example label="Channel message" full>
         <MessageGroup className="w-full max-w-lg">
           <Message align="start">
             <MessageAvatar className="size-8">
@@ -225,7 +225,7 @@ export default function AIComponentsSection() {
             </MessageAvatar>
             <MessageContent>
               <MessageHeader>Assistant</MessageHeader>
-              <Bubble variant="muted" align="start">
+              <Bubble variant="ghost" align="start">
                 <BubbleContent>
                   Hi! Ask me anything about your project and I’ll do my best to
                   help.
@@ -234,12 +234,12 @@ export default function AIComponentsSection() {
             </MessageContent>
           </Message>
 
-          <Message align="end">
+          <Message align="start">
             <MessageAvatar className="size-8">
               <UserIcon className="size-4" />
             </MessageAvatar>
             <MessageContent>
-              <Bubble variant="default" align="end">
+              <Bubble variant="ghost" align="start">
                 <BubbleContent>How do I deploy to production?</BubbleContent>
               </Bubble>
               <MessageFooter>Delivered · 9:41 AM</MessageFooter>
@@ -255,7 +255,7 @@ export default function AIComponentsSection() {
               <MessageScrollerContent className="p-4">
                 {scrollerMessages.map((msg) => (
                   <MessageScrollerItem key={msg.id}>
-                    <Message align={msg.role === 'user' ? 'end' : 'start'}>
+                    <Message align="start">
                       <MessageAvatar className="size-8">
                         {msg.role === 'user' ? (
                           <UserIcon className="size-4" />
@@ -264,10 +264,7 @@ export default function AIComponentsSection() {
                         )}
                       </MessageAvatar>
                       <MessageContent>
-                        <Bubble
-                          variant={msg.role === 'user' ? 'default' : 'muted'}
-                          align={msg.role === 'user' ? 'end' : 'start'}
-                        >
+                        <Bubble variant="ghost" align="start">
                           <BubbleContent>{msg.text}</BubbleContent>
                         </Bubble>
                       </MessageContent>

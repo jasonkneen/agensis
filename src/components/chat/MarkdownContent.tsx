@@ -1,29 +1,272 @@
-import React from 'react';
+import React, { type ComponentPropsWithoutRef } from 'react';
+import { createCodePlugin } from '@streamdown/code';
+import {
+  CodeBlock,
+  CodeBlockCopyButton,
+  CodeBlockDownloadButton,
+  defaultRemarkPlugins,
+  Streamdown,
+  type BundledLanguage,
+  type Components,
+  type CustomRenderer,
+  type CustomRendererProps,
+} from 'streamdown';
 import { MermaidDiagram } from './MermaidDiagram';
-import { parseBlocks, parseFrontmatter, closeOpenMarkers, type Block, type FrontmatterValue } from '../../lib/markdownBlocks';
+import { LocatedCodeBlock } from './LocatedCodeBlock';
+import { parseFrontmatter, type FrontmatterValue } from '../../lib/markdownBlocks';
 import { slugMentionHandle, CHANNEL_MENTION_HANDLE } from '../../lib/channelMentions';
+import { useChatShikiThemes } from '../../lib/chatCodeTheme';
+import { normalizeFenceLanguages } from '../../lib/chatFenceLanguage';
+import { trimUrlTail } from '../../lib/chatLinks';
 
 interface MarkdownContentProps {
   content: string;
   compact?: boolean;
-  /** While true, the content is an in-progress stream: close dangling inline
-   *  markers on the tail so partial `**`/`` ` `` don't flash as raw markdown. */
+  /** Marks an in-progress model stream so Streamdown repairs incomplete markdown
+   * and keeps its caret and code surfaces in their live state. */
   streaming?: boolean;
   onMentionClick?: (mention: string) => void;
 }
 
-export const MarkdownContent = React.memo(function MarkdownContent({ content, compact = false, streaming = false, onMentionClick }: MarkdownContentProps) {
-  // Only resolve frontmatter once the message has settled — mid-stream content
-  // may still be growing the `---` block itself and would flicker as it parses.
-  const { frontmatter, blocks } = React.useMemo(() => {
-    const fm = streaming ? null : parseFrontmatter(content);
-    const body = fm ? fm.body : content;
-    return { frontmatter: fm, blocks: parseBlocks(streaming ? closeOpenMarkers(body) : body) };
-  }, [content, streaming]);
+const LOCATED_LANGUAGES = [
+  'typescript',
+  'tsx',
+  'javascript',
+  'jsx',
+  'json',
+  'jsonc',
+  'css',
+  'scss',
+  'html',
+  'markdown',
+  'mdx',
+  'xml',
+  'zig',
+  'rust',
+  'go',
+  'python',
+  'ruby',
+  'php',
+  'java',
+  'kotlin',
+  'swift',
+  'c',
+  'cpp',
+  'csharp',
+  'bash',
+  'fish',
+  'sql',
+  'yaml',
+  'toml',
+  'ini',
+  'dotenv',
+  'dockerfile',
+  'makefile',
+];
+
+function MermaidCodeBlock({ code, isIncomplete, language }: CustomRendererProps) {
+  if (!isIncomplete) return <MermaidDiagram code={code} />;
+  const lang = language as BundledLanguage;
   return (
-    <div className={compact ? 'chat-markdown chat-markdown-compact' : 'chat-markdown'}>
+    <CodeBlock code={code} language={lang} isIncomplete lineNumbers={false}>
+      <CodeBlockDownloadButton code={code} language={lang} />
+      <CodeBlockCopyButton code={code} />
+    </CodeBlock>
+  );
+}
+
+// Module scope is intentional: Streamdown memoizes settled blocks and renderer
+// identity must not change on each token of an active stream.
+const CHAT_RENDERERS: CustomRenderer[] = [
+  { language: ['mermaid'], component: MermaidCodeBlock },
+  { language: LOCATED_LANGUAGES, component: LocatedCodeBlock },
+];
+
+const MENTION_HREF_PREFIX = '#agensis-mention=';
+
+interface MarkdownNode {
+  type: string;
+  value?: string;
+  url?: string;
+  children?: MarkdownNode[];
+}
+
+const MENTION_SKIP_NODES = new Set(['code', 'inlineCode', 'definition', 'html', 'link', 'linkReference']);
+
+function mentionNodes(value: string): MarkdownNode[] | null {
+  const nodes: MarkdownNode[] = [];
+  const pattern = /(^|[^\w])@([a-zA-Z0-9_.-]{1,64})\b/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(value))) {
+    const prefix = match[1] || '';
+    const handle = match[2];
+    const mentionStart = match.index + prefix.length;
+    if (mentionStart > cursor) nodes.push({ type: 'text', value: value.slice(cursor, mentionStart) });
+    nodes.push({
+      type: 'link',
+      url: `${MENTION_HREF_PREFIX}${encodeURIComponent(handle)}`,
+      children: [{ type: 'text', value: `@${handle}` }],
+    });
+    cursor = mentionStart + handle.length + 1;
+  }
+
+  if (nodes.length === 0) return null;
+  if (cursor < value.length) nodes.push({ type: 'text', value: value.slice(cursor) });
+  return nodes;
+}
+
+/** Turn plain @handles into safe in-app links without touching code or URLs. */
+function remarkAgensisMentions() {
+  return (tree: MarkdownNode) => {
+    const rewrite = (parent: MarkdownNode) => {
+      if (MENTION_SKIP_NODES.has(parent.type) || !parent.children) return;
+      const next: MarkdownNode[] = [];
+      for (const child of parent.children) {
+        if (child.type === 'text' && typeof child.value === 'string') {
+          next.push(...(mentionNodes(child.value) ?? [child]));
+        } else {
+          rewrite(child);
+          next.push(child);
+        }
+      }
+      parent.children = next;
+    };
+    rewrite(tree);
+  };
+}
+
+/** Preserve chat-authored single line breaks from the previous renderer. */
+function remarkAgensisHardBreaks() {
+  return (tree: MarkdownNode) => {
+    const rewrite = (parent: MarkdownNode) => {
+      if (MENTION_SKIP_NODES.has(parent.type) || !parent.children) return;
+      const next: MarkdownNode[] = [];
+      for (const child of parent.children) {
+        if (child.type === 'text' && typeof child.value === 'string' && child.value.includes('\n')) {
+          const lines = child.value.split('\n');
+          lines.forEach((line, index) => {
+            if (index > 0) next.push({ type: 'break' });
+            if (line) next.push({ type: 'text', value: line });
+          });
+        } else {
+          rewrite(child);
+          next.push(child);
+        }
+      }
+      parent.children = next;
+    };
+    rewrite(tree);
+  };
+}
+
+type LinkProps = ComponentPropsWithoutRef<'a'> & { node?: unknown };
+type CodeProps = ComponentPropsWithoutRef<'code'> & { node?: unknown };
+
+function InlineCodeLink({ children }: CodeProps) {
+  const text = typeof children === 'string' ? children : '';
+  const href = /^https?:\/\/[^\s<>`]+$/.test(text.trim()) ? trimUrlTail(text.trim()) : '';
+  const code = <code>{children}</code>;
+  return href ? (
+    <a data-streamdown="link" href={href} target="_blank" rel="noreferrer noopener">
+      {code}
+    </a>
+  ) : code;
+}
+
+function markdownComponents(onMentionClick?: (mention: string) => void): Components {
+  const Link = ({ href, children, node: _node, ...props }: LinkProps) => {
+    void _node;
+    if (href?.startsWith(MENTION_HREF_PREFIX)) {
+      const encoded = href.slice(MENTION_HREF_PREFIX.length);
+      let handle = encoded;
+      try { handle = decodeURIComponent(encoded); } catch { /* use the safe encoded value */ }
+      if (slugMentionHandle(handle) === CHANNEL_MENTION_HANDLE) {
+        return <span className="chat-mention-link chat-mention-everyone">{children}</span>;
+      }
+      return (
+        <button type="button" className="chat-mention-link" onClick={() => onMentionClick?.(handle)}>
+          {children}
+        </button>
+      );
+    }
+
+    const external = typeof href === 'string' && /^https?:\/\//i.test(href);
+    const inPage = typeof href === 'string' && href.startsWith('#');
+    if (!external && !inPage) return <span>{children}</span>;
+    return (
+      <a
+        {...props}
+        data-streamdown="link"
+        href={href}
+        {...(external ? { target: '_blank', rel: 'noreferrer noopener' } : {})}
+      >
+        {children}
+      </a>
+    );
+  };
+  const Strong = ({ children }: ComponentPropsWithoutRef<'strong'>) => <strong>{children}</strong>;
+  const Emphasis = ({ children }: ComponentPropsWithoutRef<'em'>) => <em>{children}</em>;
+
+  return {
+    // Streamdown's renderer map narrows intrinsic component signatures through
+    // its markdown AST generics; these implementations deliberately accept the
+    // same runtime anchor/code props while discarding only the AST node value.
+    a: Link as unknown as NonNullable<Components['a']>,
+    inlineCode: InlineCodeLink as unknown as NonNullable<Components['inlineCode']>,
+    strong: Strong as unknown as NonNullable<Components['strong']>,
+    em: Emphasis as unknown as NonNullable<Components['em']>,
+  };
+}
+
+export const MarkdownContent = React.memo(function MarkdownContent({
+  content,
+  compact = false,
+  streaming = false,
+  onMentionClick,
+}: MarkdownContentProps) {
+  const themes = useChatShikiThemes();
+  const components = React.useMemo(() => markdownComponents(onMentionClick), [onMentionClick]);
+  const plugins = React.useMemo(
+    () => ({ code: createCodePlugin({ themes }), renderers: CHAT_RENDERERS }),
+    [themes],
+  );
+  const remarkPlugins = React.useMemo(
+    () => [
+      ...Object.values(defaultRemarkPlugins),
+      remarkAgensisHardBreaks,
+      ...(onMentionClick ? [remarkAgensisMentions] : []),
+    ],
+    [onMentionClick],
+  );
+
+  // Frontmatter is intentionally held back until a stream settles: while its
+  // closing fence is incomplete it remains ordinary streamed text and cannot
+  // flicker between document metadata and prose.
+  const { frontmatter, source } = React.useMemo(() => {
+    const parsed = streaming ? null : parseFrontmatter(content);
+    const body = parsed ? parsed.body : content;
+    return { frontmatter: parsed, source: normalizeFenceLanguages(body) };
+  }, [content, streaming]);
+
+  return (
+    <div className={compact ? 'chat-markdown chat-streamdown chat-markdown-compact' : 'chat-markdown chat-streamdown'}>
       {frontmatter && <FrontmatterHeader meta={frontmatter.meta} />}
-      {blocks.map((block, index) => renderBlock(block, index, onMentionClick, streaming))}
+      <Streamdown
+        components={components}
+        plugins={plugins}
+        remarkPlugins={remarkPlugins}
+        shikiTheme={themes}
+        mode={streaming ? 'streaming' : 'static'}
+        isAnimating={streaming}
+        caret={streaming ? 'block' : undefined}
+        lineNumbers={false}
+        skipHtml
+        dir="auto"
+      >
+        {source}
+      </Streamdown>
     </div>
   );
 });
@@ -32,7 +275,7 @@ function FrontmatterHeader({ meta }: { meta: Record<string, FrontmatterValue> })
   const name = typeof meta.name === 'string' ? meta.name : '';
   const description = typeof meta.description === 'string' ? meta.description : '';
   const metadata = (typeof meta.metadata === 'object' && meta.metadata ? meta.metadata : {}) as Record<string, string>;
-  const title = name.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const title = name.replace(/[-_]/g, ' ').replace(/\b\w/g, character => character.toUpperCase());
   const badges = Object.entries(metadata).filter(([key]) => key !== 'originSessionId');
 
   if (!title && !description && badges.length === 0) return null;
@@ -50,186 +293,4 @@ function FrontmatterHeader({ meta }: { meta: Record<string, FrontmatterValue> })
       )}
     </div>
   );
-}
-
-// Render a block's text with single newlines as hard breaks. The block parser joins
-// soft-wrapped lines with "\n"; without this they collapse to spaces (CommonMark soft
-// break) and fuse separate sentences into one running paragraph.
-function renderInlineLines(text: string, onMentionClick?: (mention: string) => void): React.ReactNode[] {
-  const lines = text.split('\n');
-  const out: React.ReactNode[] = [];
-  lines.forEach((line, idx) => {
-    if (idx > 0) out.push(<br key={`br-${idx}`} />);
-    out.push(<React.Fragment key={`ln-${idx}`}>{renderInline(line, onMentionClick)}</React.Fragment>);
-  });
-  return out;
-}
-
-function renderBlock(block: Block, index: number, onMentionClick?: (mention: string) => void, streaming = false) {
-  switch (block.type) {
-    case 'code':
-      // Render mermaid fences as diagrams — but only once the block is complete.
-      // While streaming, the fence body is still arriving and would fail to parse,
-      // so show it as a plain code block until the message settles.
-      if (block.language === 'mermaid' && !streaming) {
-        return <MermaidDiagram key={index} code={block.content} />;
-      }
-      return (
-        <pre key={index} className="chat-markdown-code">
-          {block.language && <span className="chat-markdown-code-lang">{block.language}</span>}
-          <code>{block.content}</code>
-        </pre>
-      );
-    case 'heading': {
-      const Tag = `h${block.level}` as 'h1' | 'h2' | 'h3';
-      return <Tag key={index}>{renderInline(block.content, onMentionClick)}</Tag>;
-    }
-    case 'list': {
-      const Tag = block.ordered ? 'ol' : 'ul';
-      return (
-        <Tag key={index}>
-          {block.items.map((item, itemIndex) => (
-            <li key={itemIndex}>{renderInline(item, onMentionClick)}</li>
-          ))}
-        </Tag>
-      );
-    }
-    case 'blockquote':
-      return <blockquote key={index}>{renderInlineLines(block.content, onMentionClick)}</blockquote>;
-    case 'table':
-      return (
-        <div key={index} className="chat-markdown-table-wrap">
-          <table>
-            <tbody>
-              {block.rows.map((row, rowIndex) => (
-                <tr key={rowIndex}>
-                  {row.map((cell, cellIndex) => {
-                    const Cell = rowIndex === 0 ? 'th' : 'td';
-                    return <Cell key={cellIndex}>{renderInline(cell, onMentionClick)}</Cell>;
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-    case 'paragraph':
-      return <p key={index}>{renderInlineLines(block.content, onMentionClick)}</p>;
-    default:
-      return null;
-  }
-}
-
-/**
- * Drop characters that a writer meant as punctuation from the end of a matched
- * URL. A closing bracket is only dropped when the URL does not contain the
- * matching opener, so paths that legitimately carry brackets survive.
- */
-export function trimUrlTail(url: string): string {
-  let end = url.length;
-  while (end > 0) {
-    const char = url[end - 1];
-    if ('.,;:!?"\''.includes(char)) { end -= 1; continue; }
-    const opener = char === ')' ? '(' : char === ']' ? '[' : char === '}' ? '{' : '';
-    if (opener && !url.slice(0, end - 1).includes(opener)) { end -= 1; continue; }
-    break;
-  }
-  // Never return an empty href: a match that is all punctuation keeps its text.
-  return end > 'https://'.length ? url.slice(0, end) : url;
-}
-
-function renderInline(text: string, onMentionClick?: (mention: string) => void): React.ReactNode[] {
-  const parts: React.ReactNode[] = [];
-  // Bare URLs are last in the alternation so `[label](href)` and `` `code` ``
-  // still win over the http:// inside them.
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\)|https?:\/\/[^\s<>`]+)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = pattern.exec(text))) {
-    if (match.index > lastIndex) {
-      parts.push(...renderPlainText(text.slice(lastIndex, match.index), parts.length, onMentionClick));
-    }
-    const token = match[0];
-    if (token.startsWith('`')) {
-      // Agents write URLs inside backticks constantly. Keep the code styling —
-      // that is what the author asked for — but a link you cannot click is not
-      // a link, so wrap it in an anchor.
-      const inner = token.slice(1, -1);
-      const codeUrl = /^https?:\/\/[^\s<>`]+$/.test(inner.trim()) ? trimUrlTail(inner.trim()) : '';
-      parts.push(codeUrl
-        ? <a key={parts.length} href={codeUrl} target="_blank" rel="noreferrer"><code>{inner}</code></a>
-        : <code key={parts.length}>{inner}</code>);
-    } else if (token.startsWith('**')) {
-      parts.push(<strong key={parts.length}>{renderInline(token.slice(2, -2), onMentionClick)}</strong>);
-    } else if (token.startsWith('*')) {
-      parts.push(<em key={parts.length}>{renderInline(token.slice(1, -1), onMentionClick)}</em>);
-    } else if (token.startsWith('[')) {
-      const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-      const href = link?.[2] || '';
-      const safeHref = /^https?:\/\//i.test(href) ? href : undefined;
-      parts.push(safeHref
-        ? <a key={parts.length} href={safeHref} target="_blank" rel="noreferrer">{link?.[1]}</a>
-        : <span key={parts.length}>{link?.[1] || token}</span>);
-    } else {
-      // A bare URL. Sentence punctuation that happens to sit against the end of
-      // one is not part of it — "see https://x.dev/a." links the URL and leaves
-      // the full stop as text. Unbalanced closing brackets go back too, so a URL
-      // written inside (parentheses) does not swallow the one that closes them.
-      const url = trimUrlTail(token);
-      parts.push(<a key={parts.length} href={url} target="_blank" rel="noreferrer">{url}</a>);
-      lastIndex = match.index + url.length;
-      pattern.lastIndex = lastIndex;
-      continue;
-    }
-    lastIndex = match.index + token.length;
-  }
-
-  if (lastIndex < text.length) {
-    parts.push(...renderPlainText(text.slice(lastIndex), parts.length, onMentionClick));
-  }
-  return parts;
-}
-
-// Note the `[^\w]` prefix rather than the dispatcher's `\s`: rendering is
-// deliberately the more permissive of the two, so "(@scout)" still LOOKS like a
-// mention even though the server would not dispatch on it. Who a message
-// dispatches is decided in src/lib/channelMentions.ts; this only decides what
-// reads as a mention.
-function renderPlainText(text: string, keyOffset: number, onMentionClick?: (mention: string) => void): React.ReactNode[] {
-  if (!onMentionClick) return [text];
-  const parts: React.ReactNode[] = [];
-  const pattern = /(^|[^\w])@([a-zA-Z0-9_.-]{1,64})\b/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text))) {
-    const prefix = match[1] || '';
-    const handle = match[2];
-    const mentionStart = match.index + prefix.length;
-    if (mentionStart > lastIndex) parts.push(text.slice(lastIndex, mentionStart));
-    // `@channel` is a mention of the room, not of anyone whose profile could
-    // open. Styled as a mention, rendered as a span: a button that does nothing
-    // when clicked is worse than plain text that never invited the click.
-    if (slugMentionHandle(handle) === CHANNEL_MENTION_HANDLE) {
-      parts.push(
-        <span key={`${keyOffset}-${parts.length}-channel`} className="chat-mention-link chat-mention-everyone">
-          @{handle}
-        </span>,
-      );
-    } else {
-      parts.push(
-        <button
-          key={`${keyOffset}-${parts.length}-${handle}`}
-          type="button"
-          className="chat-mention-link"
-          onClick={() => onMentionClick(handle)}
-        >
-          @{handle}
-        </button>,
-      );
-    }
-    lastIndex = mentionStart + handle.length + 1;
-  }
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
-  return parts;
 }

@@ -6,7 +6,9 @@ avoid breaking things. Read this before editing.
 
 ## Architecture in one breath
 
-- **Frontend**: React 19 + TypeScript + Vite, deployed to **Netlify**.
+- **Frontend**: React 19 + TypeScript + Vite, with a build-only Nitro
+  Netlify-static output pass, deployed to **Netlify**. Nitro stays out of dev
+  and desktop builds and does not own application backend routes.
 - **Two backends over ONE Neon Postgres DB**:
   - `server/index.cjs` — long-running Node/Express/**WebSocket** server. Owns
     realtime (`/backend/ws`), agent daemon orchestration, and the runtime schema

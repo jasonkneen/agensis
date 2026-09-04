@@ -33,6 +33,7 @@ import { THEME_PRESETS, applyThemePreset } from '../../showcase/themePresets';
 import {
   applyRadiusScale,
   clampRadiusScale,
+  radiusMaxPxFrom,
   radiusScaleFrom,
   RADIUS_PILL_THRESHOLD,
   RADIUS_SCALE_MAX,
@@ -689,7 +690,7 @@ function AppearancePanel({
               <div className="flex items-center justify-between gap-3">
                 <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Corners</div>
                 <Badge variant="secondary">
-                  {radiusScale === 0 ? 'Square' : radiusScale >= RADIUS_PILL_THRESHOLD ? 'Pill' : `${Math.round(10 * radiusScale)}px`}
+                  {radiusScale === 0 ? 'Square' : radiusScale >= RADIUS_PILL_THRESHOLD ? 'Pill' : `${radiusMaxPxFrom(radiusScale)}px max`}
                 </Badge>
               </div>
               {/* One axis, one control. This was four preset cards whose names
@@ -697,7 +698,8 @@ function AppearancePanel({
                   "Soft" (10px) and "Pill" — so it read as four unrelated styles
                   rather than more-or-less of one thing, and could not express
                   anything between them. The slider drives a multiplier that all
-                  thirteen radius tokens derive from, so they keep proportion. */}
+                  thirteen radius tokens derive from. Larger tokens stop at the
+                  displayed ceiling instead of silently exceeding it. */}
               <Slider
                 value={[radiusScale]}
                 min={RADIUS_SCALE_MIN}
@@ -715,7 +717,7 @@ function AppearancePanel({
                 <span>Square</span>
                 <span>Pill</span>
               </div>
-              <FieldDescription>Changes the app’s control and panel corners without changing your colour choice.</FieldDescription>
+              <FieldDescription>Sets the largest non-pill corner radius. Compact controls stay proportionally tighter.</FieldDescription>
             </div>
 
             <FieldDescription>Default keeps the app’s existing functions and palettes, with softer offset controls inspired by the ideation-canvas system.</FieldDescription>

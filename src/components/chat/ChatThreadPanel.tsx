@@ -48,6 +48,12 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@agensis/ui/components/message-scroller';
+import {
+  Message as UiMessage,
+  MessageAvatar as UiMessageAvatar,
+  MessageContent as UiMessageContent,
+  MessageHeader as UiMessageHeader,
+} from '@agensis/ui/components/message';
 import { Spinner } from '@agensis/ui/components/spinner';
 import { useComposerMentions } from '../../hooks/useComposerMentions';
 import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI';
@@ -459,12 +465,14 @@ export function ThreadBubble({
   ) : null;
 
   return (
-    <div
+    <UiMessage
+      align="start"
       className={`chat-thread-message flex min-w-0 gap-2 rounded-md px-2 py-1.5 ${isParent ? 'opacity-80' : ''}`}
       data-agent-message={isAgentMessage ? 'true' : undefined}
+      data-streaming={isStreaming ? 'true' : undefined}
       style={accentStyle}
     >
-      <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+      <UiMessageAvatar className="mt-0.5 size-7 self-start rounded-md bg-muted text-muted-foreground">
         {isUser ? <User className="size-3.5" /> : msg.sender_kind === 'agent' || msg.role === 'assistant' ? (
           <AgentAvatar
             avatar={agentAvatar}
@@ -474,9 +482,9 @@ export function ThreadBubble({
             fallbackClassName="bg-transparent text-3xs text-muted-foreground"
           />
         ) : <Bot className="size-3.5" />}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
+      </UiMessageAvatar>
+      <UiMessageContent className="min-w-0 flex-1 gap-0">
+        <UiMessageHeader className="items-baseline gap-2 px-0 text-xs">
           {canOpenAgentProfile && onAgentProfile ? (
             <button
               type="button"
@@ -516,7 +524,7 @@ export function ThreadBubble({
               </Button>
             </span>
           )}
-        </div>
+        </UiMessageHeader>
         <div className="mt-0.5 text-sm leading-relaxed text-foreground">
           {ownMutation.editing ? (
             <div className="space-y-1.5">
@@ -540,7 +548,7 @@ export function ThreadBubble({
             </div>
           ) : displayContent ? (
             <>
-              <MarkdownContent content={displayContent} />
+              <MarkdownContent content={displayContent} streaming={isStreaming} />
               {canExpand && (
                 <button
                   type="button"
@@ -553,15 +561,26 @@ export function ThreadBubble({
               )}
             </>
           ) : isStreaming ? (
-            <span className="flex items-center gap-2 text-muted-foreground">
+            <span className="chat-stream-status flex items-center gap-2 text-muted-foreground" role="status" aria-live="polite">
               <Spinner className="size-3" />
-              Thinking
+              <span className="text-shimmer">Working</span>
             </span>
           ) : !isUser ? (
             <span className="text-muted-foreground">{EMPTY_STREAM_RESPONSE}</span>
           ) : null}
           {artifact && <ChatArtifact artifact={artifact} />}
         </div>
+        {isStreaming && displayContent && (
+          <div
+            className="chat-stream-status mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"
+            data-stream-status
+            role="status"
+            aria-live="polite"
+          >
+            <Spinner className="size-3" />
+            <span className="text-shimmer">Working</span>
+          </div>
+        )}
         {/* Reactions and the seen pill share one row, as in the channel — see
             src/lib/seenPill.ts for why the pill is derived from the read markers
             rather than stored as a reaction.
@@ -581,8 +600,8 @@ export function ThreadBubble({
             resolveFace={resolveReaderFace}
           />
         )}
-      </div>
-    </div>
+      </UiMessageContent>
+    </UiMessage>
   );
 }
 
