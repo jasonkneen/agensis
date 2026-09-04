@@ -164,7 +164,7 @@ function mountMembersInvitesRoutes(app, deps = {}) {
    // separate read could observe a value this UPDATE did not overwrite.
    const rows = await getDb().unsafe(
     `update workspace_members m set role = $3
-          from (select id, role from workspace_members where id = $1 and workspace_id = $2) prev
+          from (select id, role from workspace_members where id = $1 and workspace_id = $2 for update) prev
           where m.id = prev.id
           returning m.*, prev.role as audit_previous_role`,
     [memberId, workspaceId, role],
@@ -437,6 +437,17 @@ function mountMembersInvitesRoutes(app, deps = {}) {
    // create a realtime event for state that never became durable.
    if (result.memberRows.length > 0) notifyDbSubscribers('workspace_members', 'INSERT', result.memberRows);
    if (result.inviteRows.length > 0) notifyDbSubscribers('workspace_invites', 'UPDATE', result.inviteRows);
+   for (const member of result.memberRows) {
+    await recordAudit({
+     workspaceId: result.workspaceId,
+     actor: { userId: String(req.userId || '') },
+     action: 'member.created',
+     target: { type: 'workspace_member', id: String(member.id || '') },
+     after: String(member.role || ''),
+     detail: { member_user_id: String(member.user_id || '') },
+     requestIp: clientIpFromReq ? clientIpFromReq(req) : '',
+    });
+   }
    res.json({
     data: { workspaceId: result.workspaceId, workspace: result.workspace },
     error: null,

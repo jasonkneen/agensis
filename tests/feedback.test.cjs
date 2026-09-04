@@ -250,7 +250,8 @@ function recordingDb() {
  const db = async (sql, params = []) => {
   const text = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
   calls.push({ text, params });
-  if (text.startsWith('select id from workspaces where is_system')) return [{ id: 'sys-1' }];
+  if (text.startsWith('select id, user_id from workspaces where is_system')) return [{ id: 'sys-1', user_id: 'owner-1' }];
+  if (text.startsWith('select id from app_users order by created_at')) return [{ id: 'owner-1' }];
   if (text.startsWith('insert into tasks')) return [{ id: 'task-1' }];
   if (text.startsWith('insert into feedback_reports')) return [{ id: 'report-1' }];
   if (text.startsWith('update tasks set source_id')) return [];
@@ -349,13 +350,53 @@ test('ensureSystemWorkspace reuses the existing System workspace instead of crea
  assert.equal(db.calls.some((call) => call.text.startsWith('insert into workspaces')), false);
 });
 
+test('ensureSystemWorkspace refuses an existing row owned by the wrong configured account', async () => {
+ const previous = process.env.AGENSIS_SYSTEM_OWNER_EMAIL;
+ process.env.AGENSIS_SYSTEM_OWNER_EMAIL = 'owner@example.com';
+ const db = async (sql, params = []) => {
+  const text = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+  if (text.startsWith('select id, user_id from workspaces where is_system')) return [{ id: 'sys-1', user_id: 'other-user' }];
+  if (text.startsWith('select id from app_users where lower(email)')) return [{ id: 'owner-1' }];
+  throw new Error(`Unexpected SQL: ${text}`);
+ };
+ try {
+  await assert.rejects(
+   () => core.ensureSystemWorkspace(db),
+   { status: 500, message: 'The System workspace owner does not match AGENSIS_SYSTEM_OWNER_EMAIL' },
+  );
+ } finally {
+  if (previous === undefined) delete process.env.AGENSIS_SYSTEM_OWNER_EMAIL;
+  else process.env.AGENSIS_SYSTEM_OWNER_EMAIL = previous;
+ }
+});
+
+test('ensureSystemWorkspace validates the fallback oldest-account owner when no configured email exists', async () => {
+ const previous = process.env.AGENSIS_SYSTEM_OWNER_EMAIL;
+ delete process.env.AGENSIS_SYSTEM_OWNER_EMAIL;
+ const db = async (sql) => {
+  const text = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+  if (text.startsWith('select id, user_id from workspaces where is_system')) return [{ id: 'sys-1', user_id: 'other-user' }];
+  if (text.startsWith('select id from app_users order by created_at')) return [{ id: 'oldest-user' }];
+  throw new Error(`Unexpected SQL: ${text}`);
+ };
+ try {
+  await assert.rejects(
+   () => core.ensureSystemWorkspace(db),
+   { status: 500, message: 'The System workspace owner does not match the oldest account' },
+  );
+ } finally {
+  if (previous === undefined) delete process.env.AGENSIS_SYSTEM_OWNER_EMAIL;
+  else process.env.AGENSIS_SYSTEM_OWNER_EMAIL = previous;
+ }
+});
+
 test('ensureSystemWorkspace creates one on first use, race-safe', async () => {
  const calls = [];
  let created = false;
  const db = async (sql, params = []) => {
   const text = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
   calls.push({ text, params });
-  if (text.startsWith('select id from workspaces where is_system')) return created ? [{ id: 'sys-new' }] : [];
+  if (text.startsWith('select id, user_id from workspaces where is_system')) return created ? [{ id: 'sys-new', user_id: 'owner-1' }] : [];
   if (text.startsWith('select id from app_users')) return [{ id: 'owner-1' }];
   if (text.startsWith('insert into workspaces')) { created = true; return []; }
   throw new Error(`Unexpected SQL: ${text}`);

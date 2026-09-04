@@ -4,6 +4,12 @@ const QUEUE_STORE = 'sync_queue';
 const CACHE_STORE = 'data_cache';
 const OWNER_STORAGE_KEY = 'agensis_offline_owner';
 
+// Incremented whenever the account-owned offline stores are invalidated. An
+// operation that started under an older generation may still finish after the
+// clear (IndexedDB work is asynchronous), but it must not repopulate a cache
+// that now belongs to another account or has been redacted.
+let offlineDataGeneration = 0;
+
 // Bounds so a long offline session (or a wedged sync) can't grow IndexedDB
 // without limit. Oldest entries are evicted first once either bound is exceeded.
 const MAX_QUEUE_ENTRIES = 5000;
@@ -77,9 +83,20 @@ export async function prepareOfflineDataForUser(userId: string | null): Promise<
   else localStorage.removeItem(OWNER_STORAGE_KEY);
 }
 
+export function getOfflineDataGeneration(): number {
+  return offlineDataGeneration;
+}
+
+/** Mark pending reads/writes from the previous account or privacy state stale. */
+export function invalidateOfflineDataGeneration(): number {
+  offlineDataGeneration += 1;
+  return offlineDataGeneration;
+}
+
 /** Remove both cached reads and queued writes for the current browser account. */
 export async function clearOfflineData(): Promise<void> {
   if (typeof indexedDB === 'undefined') return;
+  invalidateOfflineDataGeneration();
   const db = await openDb();
   try {
     const transaction = db.transaction([QUEUE_STORE, CACHE_STORE], 'readwrite');
@@ -171,6 +188,33 @@ export async function cacheSet(key: string, data: unknown): Promise<void> {
   const entry: CacheEntry = { key, data, updated_at: Date.now() };
   await req(tx(db, CACHE_STORE, 'readwrite').put(entry));
   db.close();
+}
+
+/**
+ * Store a fetched value only if the account/privacy generation that started the
+ * fetch is still current. The second check repairs the small asynchronous
+ * window where invalidation races an IndexedDB transaction: if invalidation
+ * happened while this write was in flight, the invalidating operation owns the
+ * final redaction/clear and this call reports that it lost the race.
+ */
+export async function cacheSetIfGeneration(
+  key: string,
+  data: unknown,
+  generation: number,
+): Promise<boolean> {
+  if (getOfflineDataGeneration() !== generation) return false;
+  const db = await openDb();
+  try {
+    // Keep the generation check adjacent to transaction creation. Once the
+    // transaction exists, IndexedDB orders a later account-clear/redaction
+    // transaction after it, so the invalidating write remains the final one.
+    if (getOfflineDataGeneration() !== generation) return false;
+    const entry: CacheEntry = { key, data, updated_at: Date.now() };
+    await req(tx(db, CACHE_STORE, 'readwrite').put(entry));
+    return getOfflineDataGeneration() === generation;
+  } finally {
+    db.close();
+  }
 }
 
 export async function cacheGet<T = unknown>(key: string): Promise<T | null> {

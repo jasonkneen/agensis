@@ -1,5 +1,5 @@
 import { useEffect, useCallback, useRef } from 'react';
-import { backendClient } from '../lib/backendClient';
+import { apiAuthHeaders, backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import { useWorkspaceListState, useWorkspaceState } from './useWorkspaceState';
@@ -59,7 +59,14 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
     !seed?.length,
     Boolean(workspaceId),
   );
-  const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Debounce independently per document. A single timer here means typing in
+  // one editor cancels another editor's pending write (and deleting one doc
+  // cancels every other pending write).
+  const autoSaveTimers = useRef(new Map<string, {
+    timer: ReturnType<typeof setTimeout>;
+    updates: { title?: string; content?: string; folder?: string | null };
+    owner: string;
+  }>());
   // Per-doc content cache (id -> body). Populated by fetchDocumentContent and
   // invalidated when a doc's realtime UPDATE arrives (its body may have changed).
   const contentCache = useRef<Map<string, string>>(new Map());
@@ -182,23 +189,72 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
     return result;
   }, [setDocuments, workspaceId]);
 
+  // The backend client resolves its token at request time. Keep the exact
+  // authorization value with each debounced write so an account switch cannot
+  // flush an edit created by the previous account under the new account.
+  const currentAuthOwner = useCallback(() => apiAuthHeaders().Authorization || '', []);
+  // Capture ownership at render time as well as at timer execution time. A
+  // stale callback retained by an editor can run after auth storage changes;
+  // reading only the current token there would incorrectly re-own old work.
+  const renderAuthOwner = apiAuthHeaders().Authorization || '';
+
+  // A hook instance can survive a workspace switch. Flush pending writes using
+  // the save function captured for the workspace that owned them, instead of
+  // dropping a user's last edit at the debounce boundary.
+  useEffect(() => () => {
+    const pendingSaves = [...autoSaveTimers.current.entries()];
+    autoSaveTimers.current.clear();
+    for (const [id, pending] of pendingSaves) {
+      clearTimeout(pending.timer);
+      if (pending.owner && pending.owner === currentAuthOwner()) {
+        void saveDocument(id, pending.updates);
+      }
+    }
+  }, [currentAuthOwner, saveDocument]);
+
   const autoSave = useCallback((id: string, updates: { title?: string; content?: string; folder?: string | null }) => {
-    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
-    autoSaveTimer.current = setTimeout(() => {
-      saveDocument(id, updates);
+    const owner = renderAuthOwner;
+    if (!owner || owner !== currentAuthOwner()) return;
+    const pending = autoSaveTimers.current.get(id);
+    const sameOwnerPending = pending?.owner === owner ? pending : undefined;
+    if (pending) {
+      clearTimeout(pending.timer);
+      autoSaveTimers.current.delete(id);
+    }
+    const mergedUpdates = { ...(sameOwnerPending?.updates || {}), ...updates };
+    const timer = setTimeout(() => {
+      autoSaveTimers.current.delete(id);
+      if (owner === currentAuthOwner()) void saveDocument(id, mergedUpdates);
     }, 800);
-  }, [saveDocument]);
+    autoSaveTimers.current.set(id, { timer, updates: mergedUpdates, owner });
+  }, [currentAuthOwner, renderAuthOwner, saveDocument]);
 
   const deleteDocument = useCallback(async (id: string) => {
-    if (autoSaveTimer.current) {
-      clearTimeout(autoSaveTimer.current);
-      autoSaveTimer.current = null;
+    const pending = autoSaveTimers.current.get(id);
+    if (pending) {
+      clearTimeout(pending.timer);
+      autoSaveTimers.current.delete(id);
     }
-    await offlineDelete('documents', id, `documents_meta_${workspaceId}`);
+    const deleted = await offlineDelete('documents', id, `documents_meta_${workspaceId}`);
+    if (!deleted) {
+      // A rejected delete leaves the row usable. Restore its pending edit too,
+      // otherwise the failed destructive action would also lose an unrelated
+      // title/body change that happened just before it.
+      const currentPending = autoSaveTimers.current.get(id);
+      if (!currentPending && pending && pending.owner === currentAuthOwner()) {
+        autoSave(id, pending.updates);
+      }
+      return false;
+    }
+    const newerPending = autoSaveTimers.current.get(id);
+    if (newerPending) {
+      clearTimeout(newerPending.timer);
+      autoSaveTimers.current.delete(id);
+    }
     contentCache.current.delete(id);
     setDocuments(prev => prev.filter(d => d.id !== id));
     return true;
-  }, [setDocuments, workspaceId]);
+  }, [autoSave, currentAuthOwner, setDocuments, workspaceId]);
 
   const toggleFavorite = useCallback(async (id: string, currentValue: boolean) => {
     const result = await offlineUpdate('documents', id, {

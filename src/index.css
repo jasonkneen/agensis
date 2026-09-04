@@ -5561,6 +5561,147 @@ select {
  background: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent) !important;
 }
 
+/* ============================================================================
+   CARBON — quiet, solid workspace chrome
+
+   Carbon is the restrained dark workspace theme: opaque charcoal planes,
+   hairline separators, neutral selection fills, and one warm focus colour.
+   The palette itself lives in normalThemes.ts; this block owns only the visual
+   traits a colour seed cannot express. It deliberately keeps Agensis messages
+   as equal, full-width channel rows rather than introducing sender-side chat
+   bubbles.
+   ============================================================================ */
+:root[data-normal-theme="carbon"] {
+ --radius-sm: 5px;
+ --radius-md: 8px;
+ --radius-lg: 10px;
+ --radius-xl: 12px;
+ --radius-2xl: 12px;
+ --radius-3xl: 12px;
+ --radius-4xl: 12px;
+ --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.18);
+ --shadow-md: 0 6px 18px -12px rgb(0 0 0 / 0.42);
+ --shadow-lg: 0 10px 28px -18px rgb(0 0 0 / 0.5);
+ --shadow-xl: 0 14px 36px -22px rgb(0 0 0 / 0.58);
+ --shadow-window: 0 0 0 1px var(--border), 0 18px 42px -30px rgb(0 0 0 / 0.72);
+ --chrome-cast: none;
+}
+
+/* This visual language is solid rather than glass. Bypass the user glass
+   alpha for Carbon surfaces without mutating their stored preference, so
+   switching to another theme restores exactly the translucency they chose. */
+:root[data-normal-theme="carbon"] [data-sidebar-panel],
+:root[data-normal-theme="carbon"] [data-window-surface],
+:root[data-normal-theme="carbon"] .settings-dialog,
+:root[data-normal-theme="carbon"] .settings-dialog-header,
+:root[data-normal-theme="carbon"] .settings-dialog-nav,
+:root[data-normal-theme="carbon"] .settings-dialog-content,
+:root[data-normal-theme="carbon"] .settings-dialog-scroll,
+:root[data-normal-theme="carbon"] [data-slot="dialog-content"],
+:root[data-normal-theme="carbon"] [data-slot="popover-content"],
+:root[data-normal-theme="carbon"] [data-slot="dropdown-menu-content"],
+:root[data-normal-theme="carbon"] .agensis-glass-panel,
+:root[data-normal-theme="carbon"] .home-workspace-composer {
+ backdrop-filter: none !important;
+ -webkit-backdrop-filter: none !important;
+}
+
+:root[data-normal-theme="carbon"] [data-sidebar-panel] {
+ border-color: var(--border) !important;
+ background: var(--sidebar) !important;
+}
+
+:root[data-normal-theme="carbon"] .sidebar-accent-wash {
+ display: none;
+}
+
+:root[data-normal-theme="carbon"] [data-window-surface],
+:root[data-normal-theme="carbon"] .settings-dialog,
+:root[data-normal-theme="carbon"] .settings-dialog-header,
+:root[data-normal-theme="carbon"] .settings-dialog-nav,
+:root[data-normal-theme="carbon"] .settings-dialog-content,
+:root[data-normal-theme="carbon"] .settings-dialog-scroll,
+:root[data-normal-theme="carbon"] [data-slot="card"] {
+ background: var(--card) !important;
+}
+
+:root[data-normal-theme="carbon"] [data-slot="dialog-content"],
+:root[data-normal-theme="carbon"] [data-slot="popover-content"],
+:root[data-normal-theme="carbon"] [data-slot="dropdown-menu-content"],
+:root[data-normal-theme="carbon"] .agensis-glass-panel {
+ background: var(--popover) !important;
+}
+
+:root[data-normal-theme="carbon"] .home-workspace-composer {
+ background: var(--card) !important;
+}
+
+:root[data-normal-theme="carbon"] .channel-shell {
+ --channel-surface: var(--background) !important;
+ --channel-header: var(--card) !important;
+ --channel-composer: var(--card) !important;
+ --channel-side: var(--card) !important;
+}
+
+:root[data-normal-theme="carbon"] .channel-message-surface,
+:root[data-normal-theme="carbon"] .channel-message-surface [data-slot="message-scroller-viewport"],
+:root[data-normal-theme="carbon"] .channel-message-surface [data-slot="message-scroller-content"] {
+ background: var(--channel-surface) !important;
+}
+
+:root[data-normal-theme="carbon"] .channel-header,
+:root[data-normal-theme="carbon"] .channel-composer,
+:root[data-normal-theme="carbon"] .channel-side-panel {
+ border-color: var(--border) !important;
+}
+
+:root[data-normal-theme="carbon"] .channel-composer [data-slot="input-group"] {
+ border-color: var(--border) !important;
+ background: var(--secondary) !important;
+ box-shadow: none;
+}
+
+:root[data-normal-theme="carbon"] :is(
+ .sidebar-action-row[data-active="true"],
+ .sidebar-item-row[data-active="true"],
+ .sidebar-session-row[data-active="true"],
+ .sidebar-agent-row[data-active="true"]
+) {
+ border-color: transparent !important;
+ background: var(--secondary) !important;
+ color: var(--foreground) !important;
+}
+
+:root[data-normal-theme="carbon"] .chat-message-row,
+:root[data-normal-theme="carbon"] .chat-thread-message {
+ border-bottom: 1px solid var(--border-subtle);
+ border-radius: 0;
+ background: transparent;
+ transition: background-color 120ms ease;
+}
+
+:root[data-normal-theme="carbon"] .chat-message-row:hover,
+:root[data-normal-theme="carbon"] .chat-message-row:focus-within,
+:root[data-normal-theme="carbon"] .chat-thread-message:hover,
+:root[data-normal-theme="carbon"] .chat-thread-message:focus-within {
+ background: color-mix(in srgb, var(--foreground) 3%, transparent);
+}
+
+:root[data-normal-theme="carbon"] :is(.chat-message-row, .chat-thread-message)[data-streaming="true"] {
+ border-bottom-color: var(--accent-border);
+}
+
+:root[data-normal-theme="carbon"] .chat-stream-status [data-slot="spinner"] {
+ color: var(--primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+ :root[data-normal-theme="carbon"] .chat-message-row,
+ :root[data-normal-theme="carbon"] .chat-thread-message {
+  transition: none;
+ }
+}
+
 /* Touch: canvas objects and their resize handles are dragged directly, so the
    browser must not claim the gesture for panning/zooming. (The drawing surface
    itself sets touch-action:none inline when a draw tool is active.) */

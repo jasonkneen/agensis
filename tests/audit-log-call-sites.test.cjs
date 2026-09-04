@@ -106,6 +106,39 @@ function audit(db, index = 0) {
   };
 }
 
+test('gateway reads omit custom headers and encrypted keys for read-role members', async () => {
+ const headerSecret = 'Bearer gateway-header-sentinel';
+ const keyCipher = 'v1:encrypted-gateway-key-sentinel';
+ const db = makeDb({
+  role: 'viewer',
+  rows: {
+   'select * from gateway_configs': [{
+    id: 'gateway-1', workspace_id: WORKSPACE, name: 'Private gateway',
+    base_url: 'https://gateway.example.test/v1', model: 'model-x', protocol: 'openai-chat',
+    headers: { Authorization: headerSecret }, api_key_cipher: keyCipher,
+    created_at: '2026-09-04T00:00:00.000Z', updated_at: '2026-09-04T00:00:00.000Z',
+   }],
+  },
+ });
+ __test.setTestDb(db);
+ const token = await __test.issueToken(USER, '1');
+ await withServer(async (baseUrl) => {
+  const response = await call(baseUrl, 'GET', `/backend/workspaces/${WORKSPACE}/gateways`, token);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.data, [{
+   id: 'gateway-1', workspace_id: WORKSPACE, name: 'Private gateway',
+   base_url: 'https://gateway.example.test/v1', model: 'model-x', protocol: 'openai-chat',
+   has_key: true, created_at: '2026-09-04T00:00:00.000Z', updated_at: '2026-09-04T00:00:00.000Z',
+  }]);
+  const serialized = JSON.stringify(body);
+  assert.equal(serialized.includes(headerSecret), false);
+  assert.equal(serialized.includes(keyCipher), false);
+  assert.equal('headers' in body.data[0], false);
+  assert.equal('api_key_cipher' in body.data[0], false);
+ });
+});
+
 test('a member role change writes member.role_changed with the OLD role', async () => {
   // MUTATION: revert the UPDATE to the plain `returning *` form (no prev join)
   // -> before_value is '' and this fails. The whole content of the row is
@@ -161,7 +194,62 @@ test('a member removal writes member.removed, and a no-op DELETE writes nothing'
   await withServer(async (baseUrl) => {
     assert.equal((await call(baseUrl, 'DELETE', `/backend/workspaces/${WORKSPACE}/members/${MEMBER}`, token2)).status, 200);
   });
-  assert.equal(empty.audits.length, 0);
+ assert.equal(empty.audits.length, 0);
+});
+
+test('generic workspace member CRUD writes audit records', async () => {
+ const insertedDb = makeDb({
+  rows: {
+   'insert into "workspace_members"': [{ role: 'editor', __audit_id: MEMBER, __audit_workspace_id: WORKSPACE, __audit_user_id: 'user-2', __audit_role: 'editor' }],
+  },
+ });
+ __test.setTestDb(insertedDb);
+ const token = await __test.issueToken(USER, '1');
+ await withServer(async (baseUrl) => {
+  const res = await call(baseUrl, 'POST', '/backend/db/insert', token, {
+   table: 'workspace_members',
+   values: { workspace_id: WORKSPACE, user_id: 'user-2', role: 'editor' },
+   returning: 'role',
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual((await res.json()).data, [{ role: 'editor' }]);
+ });
+ assert.equal(insertedDb.audits.length, 1);
+ assert.equal(audit(insertedDb).action, 'member.created');
+
+ const updatedDb = makeDb({
+  rows: {
+   'update "workspace_members"': [{ role: 'editor', __audit_id: MEMBER, __audit_workspace_id: WORKSPACE, __audit_user_id: 'user-2', __audit_previous_role: 'viewer', __audit_role: 'editor' }],
+  },
+ });
+ __test.setTestDb(updatedDb);
+ const updateToken = await __test.issueToken(USER, '1');
+ await withServer(async (baseUrl) => {
+  const res = await call(baseUrl, 'POST', '/backend/db/update', updateToken, {
+   table: 'workspace_members', filters: [{ column: 'id', operator: 'eq', value: MEMBER }], values: { role: 'editor' }, returning: 'role',
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual((await res.json()).data, [{ role: 'editor' }]);
+ });
+ assert.equal(updatedDb.audits.length, 1);
+ assert.equal(audit(updatedDb).action, 'member.role_changed');
+ assert.equal(audit(updatedDb).before_value, 'viewer');
+
+ const deletedDb = makeDb({
+  rows: {
+   'delete from "workspace_members"': [{ id: MEMBER, workspace_id: WORKSPACE, user_id: 'user-2', role: 'editor' }],
+  },
+ });
+ __test.setTestDb(deletedDb);
+ const deleteToken = await __test.issueToken(USER, '1');
+ await withServer(async (baseUrl) => {
+  const res = await call(baseUrl, 'POST', '/backend/db/delete', deleteToken, {
+   table: 'workspace_members', filters: [{ column: 'id', operator: 'eq', value: MEMBER }],
+  });
+  assert.equal(res.status, 200);
+ });
+ assert.equal(deletedDb.audits.length, 1);
+ assert.equal(audit(deletedDb).action, 'member.removed');
 });
 
 test('an invite records the email DOMAIN and never the token or the local-part', async () => {

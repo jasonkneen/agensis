@@ -61,14 +61,22 @@ test('generic projections exclude workspace and agent credential material', () =
   }
 });
 
+test('generic workspace writes cannot create or retag the System workspace', () => {
+ const written = core.stripPrivilegedDbValues('workspaces', {
+  name: 'ordinary',
+  is_system: true,
+  user_id: 'attacker',
+ });
+ assert.equal('is_system' in written, false);
+ assert.equal('user_id' in written, false);
+ assert.equal(written.name, 'ordinary');
+});
+
 test('Fly and Netlify project insert, update, and delete RETURNING clauses', () => {
   for (const relative of ['server/index.cjs', 'netlify/functions/backend.mjs']) {
     const source = read(relative);
-    assert.match(
-      source,
-      /insert into \$\{tableSql\}[^`]+returning \$\{normalizeColumns\(safeSelectColumns\(table, returningColumns\)\)\}/s,
-      `${relative} generic insert must use the safe projection`,
-    );
+    assert.match(source, /const auditReturning = table === 'workspace_members'/, `${relative} member audits must use an internal canonical projection`);
+    assert.match(source, /insert into \$\{tableSql\}[^`]+returning \$\{auditReturning\}/s, `${relative} generic insert must use the safe projection`);
     assert.match(
       source,
       /const returningColumns = table === 'chat_sessions' \? '\*' : returning;/,

@@ -126,7 +126,10 @@ export function useSessionMessages(sessionId: string | null): SessionMessagesRes
     // Stale-response guard: the window may have switched sessions (or
     // unmounted) while this was in flight — never prepend a foreign
     // session's rows or flip state for a session we no longer show.
-    if (currentSessionRef.current !== requestedSessionId) return;
+    if (
+     currentSessionRef.current !== requestedSessionId
+     || closedSessionIdsRef.current.has(requestedSessionId)
+    ) return;
     if (!body) return;
     const older = (body?.data?.messages ?? []).map(normalizeMessage);
     setHasMore(Boolean(body?.data?.hasMore));

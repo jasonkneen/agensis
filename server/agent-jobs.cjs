@@ -1565,7 +1565,7 @@ function createAgentJobs(deps = {}) {
   }
   const deltaRows = await tx.unsafe(
    `update agent_jobs
-      set response = $2,
+      set response = case when $2 <> '' then $2 else response end,
           updated_at = now(),
           metadata = $3::jsonb
       where id = $1 and status = 'running'
@@ -1854,6 +1854,7 @@ function createAgentJobs(deps = {}) {
   const segmentRows = await tx.unsafe(
    `update agent_jobs
       set updated_at = now(),
+          response = '',
           metadata = $2::jsonb
       where id = $1 and status = 'running'
         and connection_id = $3

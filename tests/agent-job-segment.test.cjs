@@ -258,7 +258,7 @@ test('a valid segment finalises the placeholder and opens a new one', async () =
   const jobUpdate = jobUpdates[jobUpdates.length - 1];
   assert.ok(jobUpdate, 'the job metadata is refreshed');
   assert.match(jobUpdate.n, /metadata = \$2::jsonb/);
-  assert.ok(!/set response/.test(jobUpdate.n), 'a segment does not rewrite the job response');
+  assert.ok(jobUpdates.some((entry) => /response = ''/.test(entry.n)), 'a segment clears the prior response before the next block');
   const metadata = jobUpdate.params[1];
   assert.equal(typeof metadata, 'object', 'bound as an object — a stringified bind corrupts jsonb into a string scalar');
   assert.ok(!Array.isArray(metadata));

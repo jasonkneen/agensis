@@ -82,9 +82,27 @@ function installDb({
           || params[3] !== job.connection_id) return [];
         return [{ status: job.status }];
       }
+      if (n.startsWith('update agent_jobs') && n.includes('response = case')) {
+        if (job.status !== 'running' || params[4] !== job.connection_id) return [];
+        if (params[1] !== '') job.response = params[1];
+        job.metadata = params[2];
+        return [{ id: params[0] }];
+      }
       if (n.startsWith('update agent_jobs set updated_at')) {
         if (job.status !== 'running' || params[3] !== job.connection_id) return [];
+        job.metadata = params[1];
         return [{ id: params[0] }];
+      }
+      if (n.startsWith('update agent_jobs set status = $2')) {
+        job.status = params[1];
+        job.response = params[2];
+        return [{ ...job }];
+      }
+      if (n.startsWith('update messages set content = $2')) {
+        return [{
+          id: 'msg-placeholder', session_id: 'session-1', role: 'assistant',
+          content: params[1], sender_kind: 'agent', sender_id: params[2], sender_name: params[3],
+        }];
       }
       // The reply bubble the step threads under. The mock previously answered
       // NOTHING here, so the code fell through to the unverified id and the
@@ -420,4 +438,37 @@ test('a live placeholder still wins over the work-thread fallback', async () => 
   // Row-derived parent wins: the placeholder has no parent of its own, so steps
   // nest under the placeholder itself exactly as before.
   assert.equal(insert.params[2], 'msg-placeholder', 'unchanged behaviour when the placeholder is alive');
+});
+
+test('an empty heartbeat preserves streamed response for a bodyless final result', async () => {
+  const job = { ...JOB, response: '', metadata: { mode: 'daemon', responseMessageId: 'msg-placeholder' } };
+  const calls = installDb({ job });
+  const ws = agentWs();
+
+  await __test.handleAgentJobDelta(ws, { jobId: 'job-1', content: 'streamed answer' });
+  assert.equal(job.response, 'streamed answer');
+  await __test.handleAgentJobDelta(ws, { jobId: 'job-1', content: '', elapsedMs: 1000 });
+  assert.equal(job.response, 'streamed answer', 'the heartbeat did not erase the accumulated answer');
+
+  // The final frame intentionally carries no response/content. The handler must
+  // use the value retained on the job row to update the placeholder.
+  const jobs = createAgentJobs({
+    getDb: () => calls.db,
+    PLACEHOLDER_CONTENT_RE: /^Thinking\\s/, agentLiveMessageContent: () => 'Thinking 0s',
+    forbidden: (message) => Object.assign(new Error(message), { status: 403 }),
+    badRequest: (message) => Object.assign(new Error(message), { status: 400 }),
+    notifyDbSubscribers: () => {},
+    parseJsonObject: (value) => (value && typeof value === 'object' ? value : {}),
+    textFromValue: (value) => String(value ?? ''),
+    slugHandle: (value) => String(value || '').toLowerCase(),
+    verifyThreadParent: async () => null,
+    scheduleTaskQueueDrain: () => {}, drainPendingChatTurn: () => {},
+    settleCapturedChatTask: () => {}, continueConversation: async () => {},
+    updateAgentHeartbeat: async () => {}, logMessageActivity: async () => {},
+    mirrorAgentReplyToTaskComment: async () => {},
+  });
+  await jobs.handleAgentJobResult(ws, { jobId: 'job-1' });
+  const finalMessage = calls.find((call) => call.n.startsWith('update messages set content = $2'));
+  assert.ok(finalMessage, 'the bodyless result still finalised the placeholder');
+  assert.equal(finalMessage.params[1], 'streamed answer');
 });

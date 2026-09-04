@@ -770,8 +770,8 @@ test('POST /backend/auth/signin rate-limits repeated failed attempts for the sam
   });
 });
 
-test('POST /backend/auth/signin: a correct password is never locked out by prior failed attempts (L3)', async () => {
-  installDb({ authSecret: 'fixed-test-secret' });
+test('POST /backend/auth/signin rejects even a correct password after the pre-verification budget is exhausted', async () => {
+    const fakeDb = installDb({ authSecret: 'fixed-test-secret' });
 
   await withServer(async (baseUrl) => {
     const email = 'lockout-victim@example.com'; // unique so its per-email budget starts fresh
@@ -792,15 +792,29 @@ test('POST /backend/auth/signin: a correct password is never locked out by prior
       });
     }
 
-    // The real user must still sign in with the correct password — no lockout.
+    const lookupsBeforeExhaustedAttempt = fakeDb.calls.filter(call =>
+      String(call.sql).toLowerCase().includes('select id, email, password_hash')
+       && String(call.sql).toLowerCase().includes('where email = $1')).length;
+    const exhausted = await fetch(`${baseUrl}/backend/auth/signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: 'definitely-wrong' }),
+    });
+    assert.equal(exhausted.status, 429);
+    const lookupsAfterExhaustedAttempt = fakeDb.calls.filter(call =>
+      String(call.sql).toLowerCase().includes('select id, email, password_hash')
+       && String(call.sql).toLowerCase().includes('where email = $1')).length;
+    assert.equal(lookupsAfterExhaustedAttempt, lookupsBeforeExhaustedAttempt, 'an exhausted request must not query or verify the password');
+
+    // The gate is deliberately before password verification. The email+IP key
+    // limits this network while allowing the same user to recover from another
+    // network after the window expires.
     const ok = await fetch(`${baseUrl}/backend/auth/signin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     });
-    assert.equal(ok.status, 200, 'correct password must succeed despite prior failed attempts');
-    const body = await ok.json();
-    assert.ok(body.data?.token, 'issues a token');
+    assert.equal(ok.status, 429, 'the exhausted pre-verification budget applies before password verification');
   });
 });
 

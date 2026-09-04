@@ -68,9 +68,8 @@ function resolveStoragePathForWorkspace(workspaceId, storagePath) {
 // NEVER stores or serves it verbatim: the stored/served Content-Type is
 // always derived from this allowlist, keyed on the upload's file extension.
 //
-// `.html` and `.svg` can carry executable script when rendered inline by a
-// browser, so — per plan 002's "reject-and-neutralize" decision — uploads of
-// those two extensions are still accepted (matching the client's advertised
+// HTML, SVG and XML can carry executable script when rendered inline by a
+// browser, so uploads of those extensions are still accepted (matching the client's advertised
 // feature set) but their Content-Type is neutralized to `text/plain` here,
 // at storage time, rather than trusting anything downstream to catch it.
 const UPLOAD_EXTENSION_CONTENT_TYPES = {
@@ -104,7 +103,7 @@ const UPLOAD_EXTENSION_CONTENT_TYPES = {
  jsx: 'text/plain',
  html: 'text/plain', // neutralized — see FORCE_ATTACHMENT_EXTENSIONS below
  css: 'text/css',
- xml: 'application/xml',
+ xml: 'text/plain', // XML may contain executable XHTML or SVG namespaces.
  yml: 'text/yaml',
  yaml: 'text/yaml',
 };
@@ -113,20 +112,19 @@ const UPLOAD_EXTENSION_CONTENT_TYPES = {
 // served as a download (Content-Disposition: attachment), independent of
 // whatever Content-Type ends up stored (belt-and-suspenders: this check runs
 // at serve time using the ORIGINAL FILENAME, since Step 1 above already
-// neutralizes the stored type for these two to `text/plain`, which would
+// neutralizes their stored type to `text/plain`, which would
 // otherwise make a stored-type-only check below a no-op for the normal
 // upload path).
-const FORCE_ATTACHMENT_EXTENSIONS = new Set(['html', 'svg']);
+const FORCE_ATTACHMENT_EXTENSIONS = new Set(['html', 'svg', 'xml']);
 
-// Defense-in-depth: `uploaded_files` is also reachable through the generic
-// `/backend/db/*` CRUD routes (it's in ALLOWED_TABLES), so a write-role user
-// could PATCH a row's `type` column directly to one of these dangerous MIME
-// strings without ever going through the upload handler above. Force
-// attachment for these regardless of the file's extension/name.
+// Legacy rows can still carry active MIME types even after their display name
+// changes. Neutralize those types independently of the filename. Generic writes
+// protect `type`, but existing stored values also need safe serving semantics.
 const FORCE_ATTACHMENT_CONTENT_TYPES = new Set([
  'text/html',
  'image/svg+xml',
  'application/xhtml+xml',
+ 'application/xml',
  'text/xml',
 ]);
 

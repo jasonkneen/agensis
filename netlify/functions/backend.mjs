@@ -187,11 +187,12 @@ async function getTokenVersion(userId) {
 // globally accurate. This is a first abuse-protection layer, not a hard quota.
 const aiChatRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const dispatchRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
-// Plan 004 — auth hardening: signin is keyed per-email (matches the client's
-// documented "5 attempts" lockout intent); signup is keyed per-IP and looser,
-// to slow down bulk account creation without punishing normal signup retries.
+// Plan 004 — auth hardening: signin is keyed per (email, IP) and per-IP at once.
+// Both checks run before password verification, while the email+IP key prevents
+// a remote attacker from locking out a user who signs in from another network.
+// Signup remains keyed per-IP and looser.
 const signinRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
-// Per-IP FAILED-attempt limiter (L3): bounds credential-stuffing across emails.
+// Per-IP attempt limiter: bounds credential-stuffing across emails.
 const signinIpFailureLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const signupRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 // Voice: a Cartesia token is a credential at a metered provider, so minting is
@@ -235,6 +236,20 @@ function rateLimitBlock(limiter, key) {
  const retryAfter = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
  return new Response(
   JSON.stringify({ data: null, error: { message: 'Rate limit exceeded. Please retry shortly.', code: 'rate_limited' } }),
+  { status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': String(retryAfter) } },
+ );
+}
+
+function signinBudget(email, req) {
+ const ip = clientIpFromRequest(req);
+ const emailKey = `signin:${email}:${ip}`;
+ const ipKey = `signin-ip:${ip}`;
+ const emailResult = signinRateLimiter.check(emailKey);
+ const ipResult = signinIpFailureLimiter.check(ipKey);
+ if (emailResult.allowed && ipResult.allowed) return { emailKey, ipKey };
+ const retryAfter = Math.max(1, Math.ceil(Math.max(emailResult.retryAfterMs, ipResult.retryAfterMs) / 1000));
+ return new Response(
+  JSON.stringify({ data: null, error: { message: 'Too many sign-in attempts. Please wait a minute and try again.', code: 'rate_limited' } }),
   { status: 429, headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', 'Retry-After': String(retryAfter) } },
  );
 }
@@ -1241,16 +1256,30 @@ async function handleUpdateWorkspaceMember(workspaceId, memberId, req, userId) {
  const role = String(body?.role || '').trim();
  if (!allowedRoles.includes(role)) return jsonError(400, new Error('Invalid workspace member role'));
  const rows = await query(
-  `update workspace_members set role = $3
-      where id = $1 and workspace_id = $2
-      returning *`,
+  `update workspace_members m set role = $3
+      from (select id, role from workspace_members where id = $1 and workspace_id = $2 for update) prev
+      where m.id = prev.id
+      returning m.*, prev.role as audit_previous_role`,
   [memberId, workspaceId, role],
  );
  if (!rows[0]) return jsonError(404, new Error('Workspace member not found'));
- return json({ data: rows[0], error: null });
+ const { audit_previous_role: previousRole, ...member } = rows[0];
+ await recordAuditEntry({
+  workspaceId,
+  actor: { userId: String(userId || '') },
+  action: 'member.role_changed',
+  target: { type: 'workspace_member', id: memberId },
+  before: String(previousRole || ''),
+  after: role,
+  detail: { member_user_id: String(member.user_id || '') },
+  requestIp: clientIpFromRequest(req),
+  db: query,
+  jsonParam: JSON.stringify,
+ });
+ return json({ data: member, error: null });
 }
 
-async function handleDeleteWorkspaceMember(workspaceId, memberId, userId) {
+async function handleDeleteWorkspaceMember(workspaceId, memberId, req, userId) {
  if (!workspaceId) return jsonError(400, new Error('workspace id is required'));
  if (!memberId) return jsonError(400, new Error('member id is required'));
  await assertWorkspaceRole({ userId, workspaceId, capability: 'manage', db: query });
@@ -1261,6 +1290,19 @@ async function handleDeleteWorkspaceMember(workspaceId, memberId, userId) {
       returning *`,
   [memberId, workspaceId],
  );
+ if (rows[0]) {
+  await recordAuditEntry({
+   workspaceId,
+   actor: { userId: String(userId || '') },
+   action: 'member.removed',
+   target: { type: 'workspace_member', id: memberId },
+   before: String(rows[0].role || ''),
+   detail: { member_user_id: String(rows[0].user_id || '') },
+   requestIp: clientIpFromRequest(req),
+   db: query,
+   jsonParam: JSON.stringify,
+  });
+ }
  return json({ data: rows[0] ?? null, error: null });
 }
 
@@ -1918,23 +1960,15 @@ async function handleAuth(pathname, req) {
 
  // signin — no complexity check (existing users must be able to log in with
  // whatever password they already have).
+ const signinKeys = signinBudget(email, req);
+ if (signinKeys instanceof Response) return signinKeys;
  const rows = await query('select id, email, password_hash, display_name, accent_color, created_at, token_version from app_users where email = $1 limit 1', [email]);
  const user = rows[0];
  const passwordOk = user && verifyPassword(password, user.password_hash);
-
- // L3 (2026-07 review): only FAILED attempts count, and a correct password is
- // never blocked, so a guesser can't lock a victim out. Mirrors the daemon.
  if (!passwordOk) {
-  const emailAllowed = signinRateLimiter.check(`signin:${email}`).allowed;
-  const ipAllowed = signinIpFailureLimiter.check(`signin-ip:${clientIpFromRequest(req)}`).allowed;
-  if (!emailAllowed || !ipAllowed) {
-   return new Response(JSON.stringify({ data: null, error: { message: 'Too many failed sign-in attempts. Please wait a minute and try again.', code: 'rate_limited' } }), {
-    status: 429,
-    headers: { 'Content-Type': 'application/json', 'Retry-After': '60' },
-   });
-  }
   return jsonError(401, new Error('Invalid email or password'));
  }
+ signinRateLimiter.reset(signinKeys.emailKey);
  const sessionUser = { id: user.id, email: user.email, display_name: user.display_name, accent_color: user.accent_color, created_at: user.created_at };
  return json({ data: { user: sessionUser, token: issueToken(sessionUser.id, user.token_version) }, error: null });
 }
@@ -2648,8 +2682,11 @@ async function handleDb(pathname, req, userId) {
     params,
    });
    const returningColumns = table === 'chat_sessions' ? '*' : returning;
+   const auditReturning = table === 'workspace_members'
+    ? `${normalizeColumns(safeSelectColumns(table, returningColumns))}, id as "__audit_id", workspace_id as "__audit_workspace_id", user_id as "__audit_user_id", role as "__audit_role"`
+    : normalizeColumns(safeSelectColumns(table, returningColumns));
    const inserted = await db(
-    `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) ${insertSource} returning ${normalizeColumns(safeSelectColumns(table, returningColumns))}`,
+    `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) ${insertSource} returning ${auditReturning}`,
     params,
    );
    if (table === 'messages' && inserted.length !== effectiveRows.length) {
@@ -2665,9 +2702,33 @@ async function handleDb(pathname, req, userId) {
    }
    return inserted;
   };
-  const result = table === 'chat_sessions'
+ const rawResult = table === 'chat_sessions'
    ? await withDbTransaction(insertRows)
    : await insertRows(query);
+ const result = rawResult.map((row) => {
+  if (table !== 'workspace_members') return row;
+  const next = { ...row };
+  delete next.__audit_id;
+  delete next.__audit_workspace_id;
+  delete next.__audit_user_id;
+  delete next.__audit_role;
+  return next;
+ });
+ if (table === 'workspace_members') {
+  for (const member of rawResult) {
+   await recordAuditEntry({
+    workspaceId: member.__audit_workspace_id || null,
+    actor: { userId },
+    action: 'member.created',
+    target: { type: 'workspace_member', id: String(member.__audit_id || '') },
+    after: String(member.__audit_role || ''),
+    detail: { member_user_id: String(member.__audit_user_id || '') },
+    requestIp: clientIpFromRequest(req),
+    db: query,
+    jsonParam: JSON.stringify,
+   });
+  }
+ }
   if (table === 'messages') {
    await logMessageActivity(result);
   }
@@ -2795,15 +2856,26 @@ async function handleDb(pathname, req, userId) {
     || Object.prototype.hasOwnProperty.call(safeValues, 'folder')
    );
   let canonicalClosedSessionRows = [];
-  const projectedReturning = normalizeColumns(safeSelectColumns(table, returning));
-  const integrityReturning = editsMessageContent
-   ? `${projectedReturning}, id as "__integrity_id", session_id as "__integrity_session_id"`
+ const projectedReturning = normalizeColumns(safeSelectColumns(table, returning));
+ const memberProjectedReturning = projectedReturning === '*'
+  ? 'm.*'
+  : projectedReturning.split(',').map((column) => `m.${column}`).join(', ');
+ const integrityReturning = editsMessageContent
+  ? `${projectedReturning}, id as "__integrity_id", session_id as "__integrity_session_id"`
    : closesSessions
     ? `${projectedReturning}, id as "__integrity_id"`
     : changesSessionPrivacy
      ? `${projectedReturning}, id as "__integrity_id", visibility as "__integrity_visibility", folder as "__integrity_folder"`
      : projectedReturning;
-  const rawResult = editsMessageContent || changesSessionPrivacy || closesSessions
+ const rawResult = table === 'workspace_members'
+  ? await query(
+   `update ${tableSql} m set ${setClause}
+      from (select id, workspace_id, user_id, role from ${tableSql}${where.clause} for update) prev
+     where m.id = prev.id
+     returning ${memberProjectedReturning}, prev.id as "__audit_id", prev.workspace_id as "__audit_workspace_id", prev.user_id as "__audit_user_id", prev.role as "__audit_previous_role", m.role as "__audit_role"`,
+   where.params,
+  )
+  : editsMessageContent || changesSessionPrivacy || closesSessions
    ? await withDbTransaction(async (transactionQuery) => {
     let lockedSessionIds = [];
     if (closesSessions) {
@@ -2889,6 +2961,11 @@ async function handleDb(pathname, req, userId) {
    delete next.__integrity_session_id;
    delete next.__integrity_visibility;
    delete next.__integrity_folder;
+   delete next.__audit_id;
+   delete next.__audit_workspace_id;
+   delete next.__audit_user_id;
+   delete next.__audit_role;
+   delete next.__audit_previous_role;
    return next;
   });
   if (table === 'messages' && result.length === 0) {
@@ -2896,6 +2973,22 @@ async function handleDb(pathname, req, userId) {
   }
   if (closesSessions && canonicalClosedSessionRows.length !== result.length) {
    throw forbidden('Conversation closure could not be canonicalized');
+  }
+ if (table === 'workspace_members') {
+   for (const member of rawResult) {
+    await recordAuditEntry({
+     workspaceId: member.__audit_workspace_id,
+     actor: { userId },
+     action: Object.prototype.hasOwnProperty.call(safeValues, 'role') ? 'member.role_changed' : 'member.updated',
+     target: { type: 'workspace_member', id: String(member.__audit_id || '') },
+     before: Object.prototype.hasOwnProperty.call(safeValues, 'role') ? String(member.__audit_previous_role || '') : '',
+     after: Object.prototype.hasOwnProperty.call(safeValues, 'role') ? String(member.__audit_role || '') : '',
+     detail: { member_user_id: String(member.__audit_user_id || '') },
+     requestIp: clientIpFromRequest(req),
+     db: query,
+     jsonParam: JSON.stringify,
+    });
+   }
   }
 
   // AFTER the row is written, and awaited only so the serverless container is
@@ -2972,6 +3065,21 @@ async function handleDb(pathname, req, userId) {
    );
   if (table === 'messages' && result.length === 0) {
    throw forbidden('Message access changed before the delete completed');
+  }
+  if (table === 'workspace_members') {
+   for (const member of result) {
+    await recordAuditEntry({
+     workspaceId: member.workspace_id || null,
+     actor: { userId },
+     action: 'member.removed',
+     target: { type: 'workspace_member', id: String(member.id || '') },
+     before: String(member.role || ''),
+     detail: { member_user_id: String(member.user_id || '') },
+     requestIp: clientIpFromRequest(req),
+     db: query,
+     jsonParam: JSON.stringify,
+    });
+   }
   }
   const publicResult = table === 'messages' ? redactDeletedMessageRows(result) : result;
   return json({ data: single ? (publicResult[0] ?? null) : null, error: null });
@@ -3547,11 +3655,12 @@ async function route(req) {
   );
  }
  if (req.method === 'DELETE' && workspaceMemberMatch) {
-  return handleDeleteWorkspaceMember(
-   decodeURIComponent(workspaceMemberMatch[1]),
-   decodeURIComponent(workspaceMemberMatch[2]),
-   await requireUserId(req),
-  );
+ return handleDeleteWorkspaceMember(
+  decodeURIComponent(workspaceMemberMatch[1]),
+  decodeURIComponent(workspaceMemberMatch[2]),
+  req,
+  await requireUserId(req),
+ );
  }
  const workspaceAgentsMatch = pathname.match(/^\/backend\/workspaces\/([^/]+)\/agents$/);
  if (req.method === 'GET' && workspaceAgentsMatch) {

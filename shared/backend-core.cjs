@@ -596,6 +596,9 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
   'user_id',
   'mcp_token_hash',
   'mcp_auto_approve',
+  // The System workspace is a server-resolved destination for feedback. A
+  // generic workspace edit must never be able to create or retag that anchor.
+  'is_system',
  ]),
  // The three columns the dedicated gateway routes exist to VALIDATE or PROTECT.
  // Allowlisting gateway_configs opens /backend/db/insert|update on it, and those
@@ -773,13 +776,12 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
  // because "the API key is NEVER returned to the client" is the stated contract in
  // server/workspaces-routes.cjs.
  //
- // `headers` is off this list too, and that is a DEPARTURE from publicGatewayConfig
- // rather than a copy of it: the REST projection passes headers through verbatim,
- // and an operator can put an `Authorization: Bearer …` in there. The generic path
- // is new surface with no consumer that needs the value (useGateways refetches over
- // REST and never reads the realtime row), so it gets the smaller set. Same rule as
- // channel_bridges.config: strip the whole column, so a header nobody has thought
- // of yet is excluded by default rather than by review.
+ // `headers` is off this list too: it may contain an `Authorization: Bearer …`
+ // credential, and the REST projection now omits it as well. The generic path
+ // has no consumer that needs the value (useGateways refetches over REST and
+ // never reads the realtime row), so both lanes get the smaller set. Same rule
+ // as channel_bridges.config: strip the whole column, so a header nobody has
+ // thought of yet is excluded by default rather than by review.
  gateway_configs: [
   'id', 'workspace_id', 'name', 'base_url', 'model', 'protocol', 'created_at', 'updated_at',
  ],
@@ -2003,6 +2005,7 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   throw forbidden('Direct user table access is not allowed');
  }
 
+
  // Activity is an append-only history feed. In particular, session-derived
  // rows inherit the source session's current audience on SELECT and realtime;
  // allowing a generic UPDATE or DELETE before that gate would expose both an
@@ -3062,10 +3065,20 @@ function feedbackTaskTitle(description) {
  * flow if that guess is wrong.
  */
 async function ensureSystemWorkspace(db) {
- const existing = await db('select id from workspaces where is_system = true order by created_at asc limit 1', []);
- if (existing[0]) return existing[0].id;
-
  const configuredEmail = String(process.env.AGENSIS_SYSTEM_OWNER_EMAIL || '').trim().toLowerCase();
+ const existing = await db('select id, user_id from workspaces where is_system = true order by created_at asc limit 1', []);
+ if (existing[0]) {
+  const expectedOwner = configuredEmail
+   ? await db('select id from app_users where lower(email) = $1 limit 1', [configuredEmail])
+   : await db('select id from app_users order by created_at asc limit 1', []);
+  if (!expectedOwner[0] || String(existing[0].user_id || '') !== String(expectedOwner[0].id)) {
+   throw httpError(500, configuredEmail
+    ? 'The System workspace owner does not match AGENSIS_SYSTEM_OWNER_EMAIL'
+    : 'The System workspace owner does not match the oldest account');
+  }
+  return existing[0].id;
+ }
+
  let ownerId = null;
  if (configuredEmail) {
   const rows = await db('select id from app_users where lower(email) = $1 limit 1', [configuredEmail]);
@@ -3083,8 +3096,16 @@ async function ensureSystemWorkspace(db) {
   [SYSTEM_WORKSPACE_NAME, SYSTEM_WORKSPACE_DESCRIPTION, SYSTEM_WORKSPACE_ICON, ownerId],
  );
 
- const created = await db('select id from workspaces where is_system = true order by created_at asc limit 1', []);
+ const created = await db('select id, user_id from workspaces where is_system = true order by created_at asc limit 1', []);
  if (!created[0]) throw httpError(500, 'Could not resolve the System workspace');
+ const expectedOwner = configuredEmail
+  ? await db('select id from app_users where lower(email) = $1 limit 1', [configuredEmail])
+  : await db('select id from app_users order by created_at asc limit 1', []);
+ if (!expectedOwner[0] || String(created[0].user_id || '') !== String(expectedOwner[0].id)) {
+  throw httpError(500, configuredEmail
+   ? 'The System workspace owner does not match AGENSIS_SYSTEM_OWNER_EMAIL'
+   : 'The System workspace owner does not match the oldest account');
+ }
  return created[0].id;
 }
 
@@ -3212,7 +3233,9 @@ async function insertFeedbackReport({ db, jsonParam, userId, sourceWorkspaceId, 
  * a typo must not silently produce a row nobody can filter for.
  */
 const AUDIT_ACTIONS = Object.freeze(new Set([
+ 'member.created',
  'member.role_changed',
+ 'member.updated',
  'member.removed',
  'invite.created',
  'invite.revoked',

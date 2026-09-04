@@ -9337,8 +9337,29 @@ function publicFlowEventRecord(table, row) {
 
 async function flowEventLocation(table, row) {
  if (table === 'messages') {
-  const sessions = await getDb().unsafe('select id, workspace_id from chat_sessions where id = $1 limit 1', [row.session_id]);
-  return sessions[0] ? { workspaceId: sessions[0].workspace_id, channelId: row.session_id } : null;
+  // Messages have no workspace_id of their own. Resolve the source session's
+  // current privacy marker before a workspace-wide Flow can see the event.
+  // A missing/deleted session, or a private session, is not eligible: the
+  // event must not escape merely because its workspace can be inferred.
+  const sessions = await getDb().unsafe(
+   'select id, workspace_id, visibility, folder, deleted_at from chat_sessions where id = $1 limit 1',
+   [row.session_id],
+  );
+  const session = sessions[0];
+  if (!session || session.deleted_at || isPrivateSessionRow(session)) return null;
+  return session.workspace_id ? { workspaceId: session.workspace_id, channelId: row.session_id } : null;
+ }
+ if (table === 'chat_sessions') {
+  // The change row may have come from a narrow RETURNING projection. Resolve
+  // the current row so privacy cannot be bypassed by an incomplete or stale
+  // event payload.
+  const sessions = await getDb().unsafe(
+   'select id, workspace_id, visibility, folder, deleted_at from chat_sessions where id = $1 limit 1',
+   [row.id],
+  );
+  const session = sessions[0];
+  if (!session || session.deleted_at || isPrivateSessionRow(session)) return null;
+  return session.workspace_id ? { workspaceId: session.workspace_id, channelId: session.id } : null;
  }
  return row.workspace_id ? { workspaceId: row.workspace_id, channelId: table === 'chat_sessions' ? row.id : null } : null;
 }
@@ -9414,9 +9435,64 @@ async function claimFlowWebhookDelivery() {
  return rows[0] || null;
 }
 
+// A delivery can sit in the queue while its source session changes from
+// workspace-visible to private. Re-check the canonical location immediately
+// before sending so an event that was eligible at enqueue time cannot escape
+// after that transition.
+async function flowDeliverySourceIsEligible(delivery) {
+ const eventType = String(delivery?.event_type || '');
+ const sourceTable = eventType.startsWith('message.')
+  ? 'messages'
+  : eventType.startsWith('channel.') ? 'chat_sessions' : null;
+ if (!sourceTable) return true;
+ const payload = typeof delivery?.payload === 'string'
+  ? parseJsonObject(delivery.payload)
+  : delivery?.payload;
+ const channelId = payload?.channelId || payload?.data?.channelId;
+ if (!channelId) return false;
+ const sourceRow = sourceTable === 'messages'
+  ? { session_id: channelId }
+  : { id: channelId };
+ const location = await flowEventLocation(sourceTable, sourceRow);
+ return !!location
+  && String(location.workspaceId) === String(delivery.workspace_id || payload?.workspaceId || '');
+}
+
 async function deliverNextFlowWebhook() {
  const delivery = await claimFlowWebhookDelivery();
  if (!delivery) return false;
+ let sourceEligible = null;
+ try {
+  sourceEligible = await flowDeliverySourceIsEligible(delivery);
+ } catch (error) {
+  // A temporary DB outage is different from a source that is now private.
+  // Leave the claimed row on the normal retry path rather than dead-lettering
+  // it (and destroying its payload) on an inconclusive lookup.
+  console.error('[flows] source eligibility check failed', error?.message || error);
+ }
+ if (sourceEligible === false) {
+  await getDb().unsafe(
+   `update flow_webhook_deliveries
+       set status = 'dead', payload = '{}'::jsonb,
+           last_error = 'source session is no longer workspace-visible',
+           lease_expires_at = null, updated_at = now()
+     where id = $1 and claim_token = $2`,
+   [delivery.id, delivery.claim_token],
+  );
+  return true;
+ }
+ if (sourceEligible === null) {
+  const attempts = Number(delivery.attempt_count || 1);
+  const { dead, delaySeconds } = flowWebhookRetryDecision({ httpStatus: null, attempts });
+  await getDb().unsafe(
+   `update flow_webhook_deliveries
+        set status = $3, next_attempt_at = now() + ($4 * interval '1 second'),
+            last_error = $5, lease_expires_at = null, updated_at = now()
+      where id = $1 and claim_token = $2`,
+   [delivery.id, delivery.claim_token, dead ? 'dead' : 'pending', delaySeconds, 'source session eligibility check failed'],
+  );
+  return true;
+ }
  const body = JSON.stringify(delivery.payload);
  const timestamp = String(Math.floor(Date.now() / 1000));
  let httpStatus = null;
@@ -10517,7 +10593,7 @@ function createApp() {
   resourceOperationRateLimiter,
  });
 
- mountFlowRoutes(app, { ...coreDeps(), createPostgresFlowConnectionStore, getFlowConnectionCore, mcpEndpoint, normalizeBaseUrl, normalizeFlowWebhookUrl, requestBaseUrl });
+ mountFlowRoutes(app, { ...coreDeps(), createPostgresFlowConnectionStore, getFlowConnectionCore, isPrivateSessionRow, mcpEndpoint, normalizeBaseUrl, normalizeFlowWebhookUrl, requestBaseUrl });
  mountWorkspaceMcpRoutes(app, { ...coreDeps(), claudeMcpAddCommand, configBlock, createWorkspaceMcpToken, decideAgentRegistration, hashAgentToken, mcpEndpoint, normalizeBaseUrl, requestBaseUrl });
 
  app.post('/backend/db/select', requireAuth, async (req, res) => {
@@ -10635,8 +10711,11 @@ function createApp() {
     // before commit. The internal return uses the complete reviewed public
     // session shape; the caller's narrower projection is applied after commit.
     const returningColumns = table === 'chat_sessions' ? '*' : returning;
+    const auditReturning = table === 'workspace_members'
+     ? `${normalizeColumns(safeSelectColumns(table, returningColumns))}, id as "__audit_id", workspace_id as "__audit_workspace_id", user_id as "__audit_user_id", role as "__audit_role"`
+     : normalizeColumns(safeSelectColumns(table, returningColumns));
     const inserted = await db(
-     `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) ${insertSource} returning ${normalizeColumns(safeSelectColumns(table, returningColumns))}`,
+     `insert into ${tableSql} (${columns.map(quoteIdent).join(', ')}) ${insertSource} returning ${auditReturning}`,
      params,
     );
     if (table === 'messages' && inserted.length !== effectiveRows.length) {
@@ -10652,15 +10731,39 @@ function createApp() {
     }
     return inserted;
    };
-   const result = table === 'chat_sessions'
+   const rawResult = table === 'chat_sessions'
     ? await getDb().begin((transaction) => insertRows(
      (sql, params) => transaction.unsafe(sql, params),
     ))
     : await insertRows(sharedDbAdapter);
+   const result = rawResult.map((row) => {
+    if (table !== 'workspace_members') return row;
+    const next = { ...row };
+    delete next.__audit_id;
+    delete next.__audit_workspace_id;
+    delete next.__audit_user_id;
+    delete next.__audit_role;
+    return next;
+   });
 
    // The transaction above has committed before any session row can fan out.
    // No socket can observe a private child before its inherited member graph.
    notifyDbSubscribers(table, 'INSERT', result);
+
+   if (table === 'workspace_members') {
+    for (let index = 0; index < result.length; index += 1) {
+     const member = rawResult[index] || {};
+     await recordAudit({
+      workspaceId: member.__audit_workspace_id || null,
+      actor: { userId: req.userId },
+      action: 'member.created',
+      target: { type: 'workspace_member', id: String(member.__audit_id || '') },
+      after: String(member.__audit_role || ''),
+      detail: { member_user_id: String(member.__audit_user_id || '') },
+      requestIp: clientIpFromReq(req),
+     });
+    }
+   }
 
    // A message posted into a bridged channel goes out to the outside network it
    // mirrors. Fire-and-forget AFTER the row is written and broadcast: a Telegram
@@ -10888,6 +10991,9 @@ function createApp() {
    let sessionClosureEffects = null;
    let canonicalClosedSessionRows = [];
    const projectedReturning = normalizeColumns(safeSelectColumns(table, returning));
+   const memberProjectedReturning = projectedReturning === '*'
+    ? 'm.*'
+    : projectedReturning.split(',').map((column) => `m.${column}`).join(', ');
    const integrityReturning = editsMessageContent
     ? `${projectedReturning}, id as "__integrity_id", session_id as "__integrity_session_id"`
     : closesSessions
@@ -10895,7 +11001,15 @@ function createApp() {
      : changesSessionPrivacy
       ? `${projectedReturning}, id as "__integrity_id", visibility as "__integrity_visibility", folder as "__integrity_folder"`
       : projectedReturning;
-   const rawResult = editsMessageContent || changesSessionPrivacy || closesSessions
+   const rawResult = table === 'workspace_members'
+    ? await getDb().unsafe(
+     `update ${tableSql} m set ${setClause}
+        from (select id, workspace_id, user_id, role from ${tableSql}${where.clause} for update) prev
+       where m.id = prev.id
+       returning ${memberProjectedReturning}, prev.id as "__audit_id", prev.workspace_id as "__audit_workspace_id", prev.user_id as "__audit_user_id", prev.role as "__audit_previous_role", m.role as "__audit_role"`,
+     where.params,
+    )
+    : editsMessageContent || changesSessionPrivacy || closesSessions
     ? await getDb().begin(async (transaction) => {
      let lockedSessionIds = [];
      if (closesSessions) {
@@ -10985,6 +11099,11 @@ function createApp() {
     delete next.__integrity_session_id;
     delete next.__integrity_visibility;
     delete next.__integrity_folder;
+    delete next.__audit_id;
+    delete next.__audit_workspace_id;
+    delete next.__audit_user_id;
+    delete next.__audit_role;
+    delete next.__audit_previous_role;
     return next;
    });
    if (table === 'messages' && result.length === 0) {
@@ -10997,6 +11116,20 @@ function createApp() {
    // the committed write while `result` preserves the requested HTTP shape.
    const realtimeResult = closesSessions ? canonicalClosedSessionRows : result;
    notifyDbSubscribers(table, 'UPDATE', realtimeResult);
+   if (table === 'workspace_members') {
+    for (const member of rawResult) {
+     await recordAudit({
+      workspaceId: member.__audit_workspace_id,
+      actor: { userId: req.userId },
+      action: Object.prototype.hasOwnProperty.call(safeValues, 'role') ? 'member.role_changed' : 'member.updated',
+      target: { type: 'workspace_member', id: String(member.__audit_id || '') },
+      before: Object.prototype.hasOwnProperty.call(safeValues, 'role') ? String(member.__audit_previous_role || '') : '',
+      after: Object.prototype.hasOwnProperty.call(safeValues, 'role') ? String(member.__audit_role || '') : '',
+      detail: { member_user_id: String(member.__audit_user_id || '') },
+      requestIp: clientIpFromReq(req),
+     });
+    }
+   }
 
    // A sharing change is not just a stored flag: it decides what this agent has
    // ALREADY contributed. Prune what is now withheld and ask live daemons to
@@ -11133,6 +11266,19 @@ function createApp() {
     throw forbidden('Message access changed before the delete completed');
    }
    notifyDbSubscribers(table, table === 'messages' ? 'UPDATE' : 'DELETE', result);
+   if (table === 'workspace_members') {
+    for (const member of result) {
+     await recordAudit({
+      workspaceId: member.workspace_id || null,
+      actor: { userId: req.userId },
+      action: 'member.removed',
+      target: { type: 'workspace_member', id: String(member.id || '') },
+      before: String(member.role || ''),
+      detail: { member_user_id: String(member.user_id || '') },
+      requestIp: clientIpFromReq(req),
+     });
+    }
+   }
    if (scrubbedActivity.length > 0) {
     notifyDbSubscribers('activity_events', 'UPDATE', scrubbedActivity);
    }
@@ -11535,6 +11681,10 @@ module.exports = {
   registerTestWebsocketClient,
   notifyDbSubscribers,
   relayBroadcast,
+  flowEventLocation,
+  enqueueFlowWebhookEvents,
+  flowDeliverySourceIsEligible,
+  deliverNextFlowWebhook,
   registerTestConnectedAgent,
   listTestConnectedAgents,
   // One live daemon per agent: registration supersedes an older live connection.

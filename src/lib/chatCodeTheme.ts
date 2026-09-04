@@ -57,6 +57,7 @@ function subscribeToTheme(onChange: () => void): () => void {
       'class',
       'data-theme',
       'data-ui-theme',
+      'data-normal-theme',
       'data-normal-theme-group',
       'data-neo-style',
       'style',

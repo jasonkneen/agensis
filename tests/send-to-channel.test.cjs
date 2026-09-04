@@ -232,9 +232,10 @@ function installDb({ messages = [humanMessage()] } = {}) {
         jobs.set(job.id, job);
         return [{ ...job }];
       }
-      if (n.startsWith('update agent_jobs set updated_at = now(), metadata = $2::jsonb')) {
+      if (n.startsWith('update agent_jobs set updated_at = now(),') && n.includes('metadata = $2::jsonb')) {
         const job = jobs.get(params[0]);
         if (!job || job.status !== 'running' || params.at(-1) !== job.connection_id) return [];
+        if (n.includes("response = ''")) job.response = '';
         job.metadata = params[1];
         return [{ id: job.id }];
       }

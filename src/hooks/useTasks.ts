@@ -131,7 +131,8 @@ export function useTasks(workspaceId: string | null, userId?: string, seed?: Tas
   }, [updateTask]);
 
   const deleteTask = useCallback(async (id: string) => {
-    await offlineDelete('tasks', id, `tasks_${workspaceId}`);
+    const deleted = await offlineDelete('tasks', id, `tasks_${workspaceId}`);
+    if (!deleted) return false;
     setTasks(prev => prev.filter(t => t.id !== id));
     return true;
   }, [setTasks, workspaceId]);

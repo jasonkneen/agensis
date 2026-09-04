@@ -1,5 +1,19 @@
 [
   {
+    "version": "workspace-privacy-and-reliability",
+    "date": "2026-09-04",
+    "title": "Stronger privacy and more reliable saves",
+    "summary": "Workspace switching, private conversations, document editing, and agent replies now handle delayed updates more reliably. Sign-in, integration events, and uploaded files have stronger access safeguards.",
+    "highlights": [
+      "Account and workspace switches clear information from the previous session",
+      "Private conversations stay out of workspace-wide integration events",
+      "Editing multiple documents no longer lets one autosave cancel another",
+      "Open documents refresh when another participant updates them, while preserving local edits",
+      "Rejected deletions keep the original item visible",
+      "Agent replies survive empty progress updates, and matching automations are no longer hidden behind unrelated rules"
+    ]
+  },
+  {
     "version": "streaming-channel-refresh",
     "date": "2026-09-04",
     "title": "Smoother live conversations",

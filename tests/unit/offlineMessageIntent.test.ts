@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   cacheGet,
   cacheSet,
+  clearOfflineData,
   enqueue,
   peekQueue,
   queueCount,
 } from '../../src/lib/offlineDb';
 import {
   offlineMessageSendResult,
+  cachedFetch,
   redactCachedSessionMessages,
 } from '../../src/lib/offlineBackend';
 
@@ -35,6 +37,11 @@ function request<T>(result: T, upgrade = false): RequestLike<T> {
   return value;
 }
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  return { promise: new Promise<T>(done => { resolve = done; }), resolve };
+}
+
 class MemoryIndexedDb {
   private stores = new Map<string, {
     rows: Map<unknown, Stored>;
@@ -58,9 +65,9 @@ class MemoryIndexedDb {
           nextKey: 1,
         });
       },
-      transaction: (name: string) => ({
-        objectStore: () => {
-          const state = stores.get(name);
+      transaction: (name: string | string[]) => ({
+        objectStore: (storeName?: string) => {
+          const state = stores.get(storeName || (Array.isArray(name) ? name[0] : name));
           if (!state) throw new Error(`Missing object store: ${name}`);
           const keyOf = (entry: Stored) => entry[state.keyPath];
           return {
@@ -106,6 +113,38 @@ beforeEach(() => {
 });
 
 describe('durable offline message intents', () => {
+  it('does not let a pending fetch restore a redacted transcript cache', async () => {
+    await cacheSet('messages_page_session-1', {
+      messages: [{ id: 'secret', session_id: 'session-1', content: 'old private body' }],
+      hasMore: true,
+    });
+    Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
+    const response = deferred<{ messages: Stored[]; hasMore: boolean }>();
+    const pending = cachedFetch('messages_page_session-1', () => response.promise);
+
+    await redactCachedSessionMessages('session-1');
+    response.resolve({
+      messages: [{ id: 'secret', session_id: 'session-1', content: 'new private body' }],
+      hasMore: false,
+    });
+
+    await expect(pending).resolves.toBeNull();
+    expect(await cacheGet('messages_page_session-1')).toEqual({ messages: [], hasMore: false });
+  });
+
+  it('does not let a pending fetch restore data after an account clear', async () => {
+    await cacheSet('workspaces', [{ id: 'workspace-a', name: 'A' }]);
+    Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
+    const response = deferred<Stored[]>();
+    const pending = cachedFetch('workspaces', () => response.promise);
+
+    await clearOfflineData();
+    response.resolve([{ id: 'workspace-a', name: 'private A' }]);
+
+    await expect(pending).resolves.toBeNull();
+    expect(await cacheGet('workspaces')).toBeNull();
+  });
+
   it('queues message persistence and agent dispatch as one intent and updates the cached page', async () => {
     await cacheSet('messages_page_session-1', {
       messages: [{

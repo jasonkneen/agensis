@@ -957,7 +957,11 @@ function createRealtime(deps = {}) {
      const authenticated = await authReady;
      if (!authenticated) return;
      if (message.action === 'subscribe') {
-      const binding = { channel: message.channel, ...(message.binding || {}) };
+      // The top-level channel is the value that was authenticated above. A
+      // nested binding is client input and must never be able to replace it —
+      // otherwise a socket authorized for one workspace can store a binding
+      // that receives another workspace's broadcast frames.
+      const binding = { ...(message.binding || {}), channel: message.channel };
       await authorizeRealtimeBinding(ws.userId, message.channel, binding);
       const bindingKey = JSON.stringify(binding);
       const exists = (ws.subscriptions || []).some((subscription) => JSON.stringify(subscription) === bindingKey);

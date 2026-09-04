@@ -169,7 +169,54 @@ test('subscriptions are capped per socket', async () => {
     assert.equal(rejection.code, 'subscription_limit');
   } finally {
     await server.close();
-  }
+ }
+});
+
+test('a nested binding cannot replace the authenticated broadcast channel', async () => {
+ // MUTATION: restore `{ channel: message.channel, ...(message.binding || {}) }`
+ // and the victim workspace's frame is delivered to the owner workspace socket.
+ const realtime = buildRealtime({ verifyToken: async (token) => (token === 'tok' ? 'user-owner' : null) });
+ const server = await listen(realtime);
+ try {
+  const client = new WebSocket(server.url);
+  await new Promise((resolve) => client.once('open', resolve));
+  client.send(JSON.stringify({ type: 'auth', token: 'tok' }));
+  assert.equal((await nextMessage(client)).event, 'authenticated');
+
+  const received = [];
+  client.on('message', (raw) => received.push(JSON.parse(String(raw))));
+  client.send(JSON.stringify({
+   action: 'subscribe',
+   channel: 'agent-status:ws-owner',
+   binding: {
+    type: 'broadcast',
+    channel: 'agent-status:ws-victim',
+    event: 'agent_status',
+   },
+  }));
+  // Wait for the subscribe acknowledgement before exercising delivery.
+  await new Promise((resolve, reject) => {
+   const timer = setTimeout(() => reject(new Error('no subscribe acknowledgement')), 5_000);
+   const onMessage = (raw) => {
+    const frame = JSON.parse(String(raw));
+    if (frame.event !== 'subscribed') return;
+    clearTimeout(timer);
+    client.off('message', onMessage);
+    resolve();
+   };
+   client.on('message', onMessage);
+  });
+
+  realtime.relayBroadcast('agent-status:ws-victim', 'agent_status', { workspaceId: 'ws-victim' });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(received.filter((frame) => frame.type === 'broadcast').length, 0, 'victim workspace frames must stay private');
+
+  realtime.relayBroadcast('agent-status:ws-owner', 'agent_status', { workspaceId: 'ws-owner' });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(received.filter((frame) => frame.type === 'broadcast').length, 1, 'the authenticated channel still receives its own frames');
+ } finally {
+  await server.close();
+ }
 });
 
 test('an oversized frame is refused instead of buffered', async () => {

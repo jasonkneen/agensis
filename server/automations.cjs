@@ -86,6 +86,12 @@ const AUTOMATION_MAX_RUNS_PER_TICK = 20;
  */
 const AUTOMATION_MAX_MATCHES_PER_EVENT = 10;
 
+// Conditions are evaluated in JavaScript, so candidates are read in bounded
+// keyset pages. The scan ceiling keeps one hot write from walking an unbounded
+// automation table while still allowing rules beyond the first page to match.
+const AUTOMATION_MATCH_PAGE_SIZE = 50;
+const AUTOMATION_MAX_CANDIDATES_PER_EVENT = 1_000;
+
 /**
  * Per-automation ceiling on runs enqueued in a rolling minute.
  *
@@ -170,17 +176,73 @@ function createAutomations(deps = {}) {
   * is what keeps this cheap on a hot write path, and it is the one a careless
   * edit would drop.
   */
- async function matchAutomations(workspaceId, eventType) {
+ async function matchAutomations(workspaceId, eventType, { afterCreatedAt = null, afterId = null } = {}) {
+  const params = [String(workspaceId), String(eventType)];
+  let cursor = '';
+  if (afterCreatedAt && afterId) {
+   params.push(afterCreatedAt, String(afterId));
+   cursor = ` and (created_at > $3::timestamptz
+                or (created_at = $3::timestamptz and id > $4::uuid))`;
+  }
+  params.push(AUTOMATION_MATCH_PAGE_SIZE);
   const rows = await getDb().unsafe(
-   `select id, workspace_id, name, enabled, trigger_event, definition, created_by
+   `select id, workspace_id, name, enabled, trigger_event, definition, created_by,
+           created_at::text as created_at
       from automations
-     where workspace_id = $1 and trigger_event = $2 and enabled = true
-     order by created_at asc
-     limit $3`,
-   [String(workspaceId), String(eventType), AUTOMATION_MAX_MATCHES_PER_EVENT + 1],
+     where workspace_id = $1 and trigger_event = $2 and enabled = true${cursor}
+     order by automations.created_at asc, id asc
+     limit $${params.length}`,
+   params,
   );
   // Defence in depth: never trust the row's `enabled` to have been filtered.
   return rows.filter((row) => row.enabled === true);
+ }
+
+ async function eligibleAutomations(workspaceId, eventType, payload) {
+  const eligible = [];
+  let afterCreatedAt = null;
+  let afterId = null;
+  let scanned = 0;
+  let hitPageBoundary = false;
+  while (scanned < AUTOMATION_MAX_CANDIDATES_PER_EVENT) {
+   const page = await matchAutomations(workspaceId, eventType, { afterCreatedAt, afterId });
+   if (page.length === 0) break;
+   const batch = page.slice(0, AUTOMATION_MAX_CANDIDATES_PER_EVENT - scanned);
+   scanned += batch.length;
+   for (const automation of batch) {
+    const definition = parseDefinition(automation.definition);
+    if (evaluateConditions(definition.when, payload)) eligible.push({ automation, definition });
+   }
+   // Once the execution cap plus one match is known, later rows cannot affect
+   // the selected execution set. This preserves bounded work on a runaway
+   // workspace while retaining the first ten matching rules by creation order.
+   if (eligible.length > AUTOMATION_MAX_MATCHES_PER_EVENT) break;
+   if (page.length < AUTOMATION_MATCH_PAGE_SIZE || batch.length < page.length) break;
+   hitPageBoundary = true;
+   const last = batch[batch.length - 1];
+   if (!last?.created_at || !last?.id) break;
+   afterCreatedAt = last.created_at;
+   afterId = last.id;
+  }
+  if (scanned >= AUTOMATION_MAX_CANDIDATES_PER_EVENT && hitPageBoundary) {
+   onWarn(`automation candidate scan reached ${AUTOMATION_MAX_CANDIDATES_PER_EVENT} rows for ${eventType} in workspace ${workspaceId}`);
+  }
+  return eligible;
+ }
+
+ async function queuedRunSourceIsEligible(runWorkspaceId, payload) {
+  const eventType = String(payload?.type || '');
+  const sourceTable = eventType.startsWith('message.')
+   ? 'messages'
+   : eventType.startsWith('channel.') ? 'chat_sessions' : null;
+  if (!sourceTable) return true;
+  const channelId = payload?.channelId || payload?.data?.channelId;
+  if (!channelId) return false;
+  const sourceRow = sourceTable === 'messages'
+   ? { session_id: channelId }
+   : { id: channelId };
+  const location = await flowEventLocation(sourceTable, sourceRow);
+  return !!location && String(location.workspaceId) === String(runWorkspaceId || '');
  }
 
  /** Rolling-minute run count for one automation. */
@@ -266,13 +328,6 @@ function createAutomations(deps = {}) {
    const location = await flowEventLocation(table, row);
    if (!location?.workspaceId) continue;
 
-   const matches = await matchAutomations(location.workspaceId, flowEventType);
-   if (matches.length > AUTOMATION_MAX_MATCHES_PER_EVENT) {
-    onWarn(`event ${flowEventType} in workspace ${location.workspaceId} matched ${matches.length} automations; running the first ${AUTOMATION_MAX_MATCHES_PER_EVENT}`);
-   }
-   const capped = matches.slice(0, AUTOMATION_MAX_MATCHES_PER_EVENT);
-   if (capped.length === 0) continue;
-
    const record = publicFlowEventRecord(table, row);
    const version = row.version || row.updated_at || row.created_at
     || crypto.createHash('sha256').update(JSON.stringify(record)).digest('hex').slice(0, 16);
@@ -286,11 +341,17 @@ function createAutomations(deps = {}) {
     data: record,
    };
 
-   for (const automation of capped) {
-    const definition = parseDefinition(automation.definition);
-    // Conditions are evaluated HERE, before the row is written, so an event
-    // that does not match costs one evaluation and no queue row at all.
-    if (!evaluateConditions(definition.when, payload)) continue;
+   // Evaluate bounded keyset pages before applying the execution cap. Slicing
+   // the first candidate page first let ten non-matching channel rules hide a
+   // later rule whose condition did match.
+   const eligible = await eligibleAutomations(location.workspaceId, flowEventType, payload);
+   if (eligible.length > AUTOMATION_MAX_MATCHES_PER_EVENT) {
+    onWarn(`event ${flowEventType} in workspace ${location.workspaceId} matched ${eligible.length} automations; running the first ${AUTOMATION_MAX_MATCHES_PER_EVENT}`);
+   }
+
+   for (const { automation, definition } of eligible.slice(0, AUTOMATION_MAX_MATCHES_PER_EVENT)) {
+    // Conditions are evaluated before the row is written, so a non-matching
+    // event costs one evaluation and no queue row at all.
 
     const recent = await recentRunCount(automation.id);
     if (recent >= AUTOMATION_MAX_RUNS_PER_MINUTE) {
@@ -345,6 +406,7 @@ function createAutomations(deps = {}) {
        set status = $2,
            steps = coalesce($3::jsonb, steps),
            error = $4,
+           payload = case when $6::boolean then '{}'::jsonb else payload end,
            claim_token = null,
            lease_expires_at = null,
            updated_at = now()
@@ -353,7 +415,7 @@ function createAutomations(deps = {}) {
        and status = 'inflight'
        and lease_expires_at > now()
      returning *`,
-   [String(run.id), patch.status, patch.steps === undefined ? null : patch.steps, patch.error ?? null, run.claim_token],
+   [String(run.id), patch.status, patch.steps === undefined ? null : patch.steps, patch.error ?? null, run.claim_token, patch.clearPayload === true],
   );
   if (rows.length) {
    notifySafely('automation_runs', () => notifyDbSubscribers('automation_runs', 'UPDATE', rows));
@@ -584,6 +646,28 @@ function createAutomations(deps = {}) {
 
   const definition = parseDefinition(run.definition || automation.definition);
   const payload = parseDefinition(run.payload);
+  let sourceEligible = true;
+  try {
+   sourceEligible = await queuedRunSourceIsEligible(run.workspace_id, payload);
+  } catch (error) {
+   onWarn(`automation ${run.automation_id} source eligibility check failed: ${error.message || error}`);
+   // A failed visibility lookup is inconclusive. Keep the payload and let the
+   // normal run retry policy handle a transient database/network failure.
+   sourceEligible = null;
+  }
+  if (sourceEligible === false) {
+   return finishRun(run, {
+    status: 'skipped',
+    error: 'source session is no longer workspace-visible',
+    clearPayload: true,
+   });
+  }
+  if (sourceEligible === null) {
+   return finishRun(run, {
+    status: 'error',
+    error: 'source session visibility could not be checked',
+   });
+  }
   const results = [];
   let failed = null;
 
@@ -1011,6 +1095,8 @@ module.exports = {
  mountAutomationRoutes,
  AUTOMATION_MAX_RUNS_PER_TICK,
  AUTOMATION_MAX_MATCHES_PER_EVENT,
+ AUTOMATION_MATCH_PAGE_SIZE,
+ AUTOMATION_MAX_CANDIDATES_PER_EVENT,
  AUTOMATION_MAX_RUNS_PER_MINUTE,
  AUTOMATION_RUNAWAY_STRIKES,
  AUTOMATION_MAX_ATTEMPTS,

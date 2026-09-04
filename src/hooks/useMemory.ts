@@ -1,26 +1,35 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useEffect, useCallback } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
+import { useWorkspaceListState, useWorkspaceState } from './useWorkspaceState';
 import type { MemoryFact } from '../types';
 
 export function useMemory(workspaceId: string | null) {
-  const [facts, setFacts] = useState<MemoryFact[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [facts, setFacts, beginFactsRequest] = useWorkspaceListState<MemoryFact>(workspaceId, []);
+  const [loading, setLoading] = useWorkspaceState(workspaceId, true, Boolean(workspaceId));
 
   const fetchFacts = useCallback(async () => {
-    if (!workspaceId) return;
+    const isCurrent = beginFactsRequest();
+    if (!workspaceId) {
+      setFacts([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-    const data = await cachedFetch<MemoryFact[]>(`memory_${workspaceId}`, async () => {
-      const { data } = await backendClient
-        .from('memory_facts')
-        .select('*')
-        .eq('workspace_id', workspaceId)
-        .order('created_at', { ascending: false });
-      return data;
-    });
-    if (data) setFacts(data);
-    setLoading(false);
-  }, [workspaceId]);
+    try {
+      const data = await cachedFetch<MemoryFact[]>(`memory_${workspaceId}`, async () => {
+        const { data } = await backendClient
+          .from('memory_facts')
+          .select('*')
+          .eq('workspace_id', workspaceId)
+          .order('created_at', { ascending: false });
+        return data;
+      });
+      if (isCurrent() && data) setFacts(data);
+    } finally {
+      if (isCurrent()) setLoading(false);
+    }
+  }, [beginFactsRequest, setFacts, setLoading, workspaceId]);
 
   useEffect(() => {
     fetchFacts();
@@ -36,9 +45,10 @@ export function useMemory(workspaceId: string | null) {
     if (data) {
       setFacts(prev => [data as unknown as MemoryFact, ...prev]);
     }
-  }, [workspaceId]);
+  }, [setFacts, workspaceId]);
 
   const updateFact = useCallback(async (id: string, fact: string, category: string) => {
+    if (!workspaceId) return null;
     const result = await offlineUpdate('memory_facts', id, {
       fact,
       category,
@@ -47,12 +57,14 @@ export function useMemory(workspaceId: string | null) {
     if (result) {
       setFacts(prev => prev.map(f => f.id === id ? { ...f, ...result } as MemoryFact : f));
     }
-    }, [workspaceId]);
+  }, [setFacts, workspaceId]);
 
   const deleteFact = useCallback(async (id: string) => {
-    await offlineDelete('memory_facts', id, `memory_${workspaceId}`);
-    setFacts(prev => prev.filter(f => f.id !== id));
-    }, [workspaceId]);
+    if (!workspaceId) return false;
+    const deleted = await offlineDelete('memory_facts', id, `memory_${workspaceId}`);
+    if (deleted) setFacts(prev => prev.filter(f => f.id !== id));
+    return deleted;
+  }, [setFacts, workspaceId]);
 
   const categories = [...new Set(facts.map(f => f.category))];
 

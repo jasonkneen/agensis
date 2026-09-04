@@ -71,7 +71,7 @@ function automationRow(overrides = {}) {
  * params). Everything issued is recorded on `queries` so a test can assert on
  * what was actually asked, including the SQL text where the guard lives there.
  */
-function makeDb({ rows = {}, recentRuns = 0 } = {}) {
+function makeDb({ rows = {}, recentRuns = 0, automationRows = null } = {}) {
  const queries = [];
  const events = [];
  const db = {
@@ -82,6 +82,17 @@ function makeDb({ rows = {}, recentRuns = 0 } = {}) {
    const q = raw.toLowerCase();
    queries.push({ sql: raw, params });
    events.push({ type: 'query', sql: raw, params });
+   if (Array.isArray(automationRows) && q.startsWith('select id, workspace_id, name, enabled, trigger_event, definition, created_by')) {
+    const pageSize = Number(params.at(-1));
+    const afterCreatedAt = params.length === 5 ? String(params[2]) : '';
+    const afterId = params.length === 5 ? String(params[3]) : '';
+    const candidates = automationRows
+     .filter((row) => String(row.workspace_id) === String(params[0]) && String(row.trigger_event) === String(params[1]) && row.enabled === true)
+     .filter((row) => !afterCreatedAt
+      || row.created_at > afterCreatedAt
+      || (row.created_at === afterCreatedAt && String(row.id) > afterId));
+    return candidates.slice(0, pageSize);
+   }
    for (const [prefix, value] of Object.entries(rows)) {
     if (q.startsWith(prefix)) return typeof value === 'function' ? value(params) : value;
    }
@@ -509,6 +520,29 @@ test('fan-out beyond the cap drops the extras and says so', async () => {
  assert.ok(engine.warnings.some((line) => /matched/.test(line)), 'the drop must be recorded, not silent');
 });
 
+test('a matching automation beyond the first page is still considered', async () => {
+ const baseCreatedAt = Date.parse('2026-07-30T10:00:00.000Z');
+ const candidates = Array.from({ length: 75 }, (_, index) => automationRow({
+  id: `auto-${index}`,
+  created_at: new Date(baseCreatedAt + index * 60_000).toISOString(),
+  definition: index === 74
+   ? goodDefinition()
+   : goodDefinition({ when: [{ field: 'data.content', op: 'contains', value: 'never matches' }] }),
+ }));
+ const db = makeDb({
+  automationRows: candidates,
+  rows: { 'insert into automation_runs': (params) => [{ id: `run-${params[0]}` }] },
+ });
+ const engine = build(db);
+ const queued = await engine.enqueueAutomationRuns('messages', 'INSERT', [messageRow()]);
+ assert.equal(queued.length, 1, 'the matching rule on the second keyset page must run');
+ const pages = db.queries.filter((entry) => entry.sql.toLowerCase().includes('from automations'));
+ assert.equal(pages.length, 2, 'candidate reads stay paged and bounded');
+ assert.match(pages[1].sql, /created_at > \$3::timestamptz/);
+ assert.match(pages[1].sql, /order by automations\.created_at asc, id asc/,
+  'sort by the indexed timestamp, not its text projection');
+});
+
 test('the rate limit skips a run, and repeated trips DISABLE the automation', async () => {
  // MUTATION: make the limiter throttle without ever disabling -> the disable
  // assert fails. An automation a limiter merely throttles keeps running at the
@@ -789,6 +823,58 @@ test('a run whose automation was disabled after enqueue is SKIPPED', async () =>
  const finish = db.queries.find((entry) => /update automation_runs set status = \$2/i.test(entry.sql));
  assert.match(finish.sql.toLowerCase(), /steps = coalesce\(\$3::jsonb, steps\)/);
  assert.equal(finish.params[2], null, 'settling without new results must preserve the durable ledger');
+});
+
+test('a queued message event is discarded if its session becomes private', async () => {
+ let privateNow = false;
+ const db = makeDb({
+  rows: {
+   'select id, workspace_id, name, enabled, trigger_event': [automationRow()],
+   "update automation_runs set status = 'inflight'": [{
+    id: 'run-1', automation_id: 'auto-1', workspace_id: WORKSPACE, attempt_count: 1,
+    payload: {
+     type: 'message.created',
+     workspaceId: WORKSPACE,
+     channelId: CHANNEL,
+     data: { content: 'the deploy failed' },
+    },
+   }],
+   'insert into automation_runs': [{ id: 'run-1' }],
+   'select * from automations where id': [automationRow()],
+   'update automation_runs set status = $2': (params) => [{ id: 'run-1', status: params[1] }],
+  },
+ });
+ const engine = build(db, {
+  flowEventLocation: async () => (privateNow ? null : { workspaceId: WORKSPACE, channelId: CHANNEL }),
+ });
+ await engine.enqueueAutomationRuns('messages', 'INSERT', [messageRow()]);
+ privateNow = true;
+ const result = await engine.runOneAutomation();
+ assert.equal(result.status, 'skipped');
+ assert.equal(db.queries.some((entry) => entry.sql.toLowerCase().startsWith('insert into messages')), false);
+ const finish = db.queries.find((entry) => /update automation_runs set status = \$2/i.test(entry.sql));
+ assert.equal(finish.params[5], true, 'discarding stale private payloads clears the queued content');
+});
+
+test('a failed queued visibility lookup retries without clearing its payload', async () => {
+ const db = makeDb({
+  rows: {
+   "update automation_runs set status = 'inflight'": [{
+    id: 'run-1', automation_id: 'auto-1', workspace_id: WORKSPACE, attempt_count: 1,
+    payload: { type: 'message.created', workspaceId: WORKSPACE, channelId: CHANNEL },
+   }],
+   'select * from automations where id': [automationRow()],
+   'update automation_runs set status = $2': (params) => [{ id: 'run-1', status: params[1] }],
+  },
+ });
+ const engine = build(db, {
+  flowEventLocation: async () => { throw new Error('temporary database outage'); },
+ });
+ const result = await engine.runOneAutomation();
+ assert.equal(result.status, 'error');
+ const finish = db.queries.find((entry) => /update automation_runs set status = \$2/i.test(entry.sql));
+ assert.ok(finish);
+ assert.equal(finish.params[5], false, 'an inconclusive lookup preserves the queued payload for retry');
 });
 
 test('a run posts the message and settles done', async () => {

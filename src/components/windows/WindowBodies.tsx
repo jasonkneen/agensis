@@ -154,7 +154,9 @@ export type DocWindowBodyProps = Omit<
   'onDelete' | 'onTitleChange'
 > & {
   windowId: string;
-  onDeleteDocument: (id: string) => void;
+  // `false` means the server rejected the delete; preserve the open editor in
+  // that case. Void remains accepted for callers that do not need the result.
+  onDeleteDocument: (id: string) => void | Promise<boolean>;
   onCloseWindow: (winId: string) => void;
   onUpdateWindow: (id: string, updates: Partial<FloatingWindow>) => void;
   onRequestConfirm: (confirm: {
@@ -184,8 +186,8 @@ export function DocWindowBody({
         description: 'This removes the document from the workspace.',
         actionLabel: 'Delete',
         onConfirm: async () => {
-          await onDeleteDocument(id);
-          onCloseWindow(windowId);
+          const deleted = await onDeleteDocument(id);
+          if (deleted !== false) onCloseWindow(windowId);
         },
       });
     },

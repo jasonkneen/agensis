@@ -10,6 +10,7 @@ import { useFiles } from '../../src/hooks/useFiles';
 import { useSharing } from '../../src/hooks/useSharing';
 import { useTasks } from '../../src/hooks/useTasks';
 import { useWorkspaceBootstrap } from '../../src/hooks/useWorkspaceBootstrap';
+import { useMemory } from '../../src/hooks/useMemory';
 import type { AgentConnection } from '../../src/types';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -17,6 +18,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const moduleMocks = vi.hoisted(() => ({
   cachedFetch: vi.fn(),
   from: vi.fn(),
+  offlineDelete: vi.fn(),
 }));
 
 vi.mock('../../src/hooks/useTableSubscription', () => ({
@@ -25,13 +27,14 @@ vi.mock('../../src/hooks/useTableSubscription', () => ({
 }));
 vi.mock('../../src/hooks/useSessionRevocationSignal', () => ({ useSessionRevocationSignal: vi.fn() }));
 vi.mock('../../src/lib/backendClient', () => ({
+  apiAuthHeaders: () => ({ Authorization: 'Bearer test-account' }),
   apiUrl: (path: string) => path,
   apiAuthHeaders: () => ({}),
   backendClient: { from: moduleMocks.from },
 }));
 vi.mock('../../src/lib/offlineBackend', () => ({
   cachedFetch: moduleMocks.cachedFetch,
-  offlineDelete: vi.fn(),
+  offlineDelete: moduleMocks.offlineDelete,
   offlineInsert: vi.fn(),
   offlineInsertResult: vi.fn(),
   offlineMessageSendResult: vi.fn(),
@@ -55,6 +58,7 @@ let latestRegistrations: ReturnType<typeof useAgentRegistrations>;
 let latestBootstrap: ReturnType<typeof useWorkspaceBootstrap>;
 let latestSharing: ReturnType<typeof useSharing>;
 let latestFiles: ReturnType<typeof useFiles>;
+let latestMemory: ReturnType<typeof useMemory>;
 let listLoadingRenders: boolean[][] = [];
 let latestLists: {
   documentIds: string[];
@@ -83,6 +87,10 @@ function SharingProbe({ workspaceId }: { workspaceId: string | null }) {
 }
 function FilesProbe({ workspaceId, seed }: { workspaceId: string; seed: Parameters<typeof useFiles>[1] }) {
   latestFiles = useFiles(workspaceId, seed);
+  return null;
+}
+function MemoryProbe({ workspaceId }: { workspaceId: string | null }) {
+  latestMemory = useMemory(workspaceId);
   return null;
 }
 function ListsProbe({ workspaceId }: { workspaceId: string | null }) {
@@ -114,6 +122,7 @@ beforeEach(() => {
   root = createRoot(container);
   moduleMocks.cachedFetch.mockReset();
   moduleMocks.from.mockReset();
+  moduleMocks.offlineDelete.mockReset();
   listLoadingRenders = [];
 });
 afterEach(() => {
@@ -124,6 +133,44 @@ afterEach(() => {
 });
 
 describe('workspace request identity', () => {
+  it('keeps workspace B memory facts when workspace A resolves last', async () => {
+    const requests = new Map<string, Deferred<unknown>>();
+    moduleMocks.cachedFetch.mockImplementation((key: string) => {
+      const request = deferred<unknown>();
+      requests.set(key, request);
+      return request.promise;
+    });
+
+    act(() => root.render(createElement(MemoryProbe, { workspaceId: 'A' })));
+    act(() => root.render(createElement(MemoryProbe, { workspaceId: 'B' })));
+
+    await act(async () => {
+      requests.get('memory_B')?.resolve([{ id: 'fact-B', workspace_id: 'B', fact: 'B', category: 'general' }]);
+      await settle();
+    });
+    expect(latestMemory.facts.map(fact => fact.id)).toEqual(['fact-B']);
+
+    await act(async () => {
+      requests.get('memory_A')?.resolve([{ id: 'fact-A', workspace_id: 'A', fact: 'A', category: 'general' }]);
+      await settle();
+    });
+    expect(latestMemory.facts.map(fact => fact.id)).toEqual(['fact-B']);
+  });
+
+  it('keeps a memory fact when the backend rejects its delete', async () => {
+    moduleMocks.cachedFetch.mockResolvedValue([
+      { id: 'fact-B', workspace_id: 'B', fact: 'B', category: 'general' },
+    ]);
+    moduleMocks.offlineDelete.mockResolvedValue(false);
+    act(() => root.render(createElement(MemoryProbe, { workspaceId: 'B' })));
+    await act(settle);
+
+    await act(async () => {
+      await latestMemory.deleteFact('fact-B');
+    });
+    expect(latestMemory.facts.map(fact => fact.id)).toEqual(['fact-B']);
+  });
+
   it('keeps workspace B connections and loading when workspace A resolves last', async () => {
     const a = deferred<Response>();
     const b = deferred<Response>();

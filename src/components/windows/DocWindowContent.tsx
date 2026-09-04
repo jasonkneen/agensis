@@ -326,16 +326,28 @@ export const DocWindowContent = React.memo(function DocWindowContent({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [pendingAnchor, setPendingAnchor] = useState('');
   const contentRef = useRef<HTMLDivElement>(null);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const lastSnapshotContentRef = useRef<string>(doc.content || '');
   const lastSnapshotTimeRef = useRef<number>(Date.now());
+  const localDirtyRef = useRef(false);
+  const titleRef = useRef(title);
+  titleRef.current = title;
+  const documentRevisionRef = useRef(`${doc.version ?? ''}:${doc.updated_at ?? ''}`);
+  const editorAuthOwnerRef = useRef<string | null>(null);
+  if (editorAuthOwnerRef.current === null) {
+    editorAuthOwnerRef.current = apiAuthHeaders().Authorization || '';
+  }
 
   const { createSnapshot } = useDocumentVersions(
     doc.id,
     workspaceId ?? null,
     userId,
   );
+
+  useEffect(() => () => {
+    if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
+  }, []);
   const sketchDrawRef = useRef<{
     canvas: HTMLCanvasElement;
     move: (ev: MouseEvent) => void;
@@ -343,17 +355,23 @@ export const DocWindowContent = React.memo(function DocWindowContent({
   } | null>(null);
 
   const triggerAutoSave = useCallback((newTitle?: string, newContent?: string) => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      const savedTitle = newTitle ?? title;
-      // Sanitize on write (defence-in-depth): the DB stores clean HTML, so a future
-      // reader that forgets to sanitize can't reintroduce stored XSS.
-      const savedContent = sanitizeHtml(newContent ?? contentRef.current?.innerHTML ?? '');
-      onAutoSave(doc.id, {
-        title: savedTitle,
-        content: savedContent,
-      });
+    localDirtyRef.current = true;
+    const savedTitle = newTitle ?? title;
+    // Sanitize on write (defence-in-depth): the DB stores clean HTML, so a future
+    // reader that forgets to sanitize can't reintroduce stored XSS.
+    const savedContent = sanitizeHtml(newContent ?? contentRef.current?.innerHTML ?? '');
+    // useDocuments owns the one 800ms document debounce. Sending this captured
+    // edit now also lets a closing editor hand its last edit to that queue.
+    onAutoSave(doc.id, {
+      title: savedTitle,
+      content: savedContent,
+    });
 
+    if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
+    const owner = editorAuthOwnerRef.current;
+    snapshotTimerRef.current = setTimeout(() => {
+      snapshotTimerRef.current = null;
+      if (!owner || apiAuthHeaders().Authorization !== owner) return;
       // Auto-snapshot: if content changed by >= 100 chars and >= 60s since last snapshot
       const charDiff = Math.abs(savedContent.length - lastSnapshotContentRef.current.length);
       const timeSinceLastSnapshot = Date.now() - lastSnapshotTimeRef.current;
@@ -366,12 +384,36 @@ export const DocWindowContent = React.memo(function DocWindowContent({
   }, [doc.id, title, onAutoSave, createSnapshot]);
 
   useEffect(() => {
-    setTitle(doc.title);
+    const revision = `${doc.version ?? ''}:${doc.updated_at ?? ''}`;
+    const revisionChanged = documentRevisionRef.current !== revision;
+    documentRevisionRef.current = revision;
     let cancelled = false;
     const applyBody = (body: string) => {
       if (cancelled) return;
+      const cleanBody = sanitizeHtml(body || '');
+      const currentBody = contentRef.current?.innerHTML || '';
+
+      // A revision can be our own debounced save or another user's edit. Keep
+      // a dirty editor intact while the latter is in flight. Once the server
+      // echoes the exact local title/body, treat that revision as our ack and
+      // clear the dirty marker without resetting the DOM or cursor.
+      if (localDirtyRef.current) {
+        const isLocalSaveAck = cleanBody === sanitizeHtml(currentBody) && titleRef.current === doc.title;
+        if (!isLocalSaveAck) {
+          // Keep the pending local save. The editor's existing last-writer
+          // behavior is safer than silently discarding the user's edit when a
+          // concurrent remote revision arrives.
+          return;
+        }
+        localDirtyRef.current = false;
+        lastSnapshotContentRef.current = cleanBody;
+        lastSnapshotTimeRef.current = Date.now();
+        return;
+      }
+
+      setTitle(doc.title);
       if (contentRef.current) {
-        contentRef.current.innerHTML = sanitizeHtml(body || '');
+        contentRef.current.innerHTML = cleanBody;
         hydrateSketchCanvases(contentRef.current);
       }
       lastSnapshotContentRef.current = body || '';
@@ -381,13 +423,13 @@ export const DocWindowContent = React.memo(function DocWindowContent({
     // `undefined` for a doc opened by id (Sidebar, search, picker) — fetch the
     // body on demand. A doc that already carries content (e.g. straight from a
     // just-created-doc response) skips the round trip.
-    if (doc.content !== undefined) {
+    if (doc.content !== undefined && !revisionChanged) {
       applyBody(doc.content);
     } else {
-      fetchDocumentContent(doc.id).then(applyBody);
+      fetchDocumentContent(doc.id, revisionChanged).then(applyBody);
     }
     return () => { cancelled = true; };
-  }, [doc.id, doc.title, doc.content, fetchDocumentContent]);
+  }, [doc.id, doc.title, doc.content, doc.version, doc.updated_at, fetchDocumentContent]);
 
   // Keep embedded "Task list" blocks in sync with live task status. `tasks` is
   // websocket-backed (see useTasks), so this re-runs whenever a task's status

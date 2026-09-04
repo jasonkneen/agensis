@@ -523,3 +523,27 @@ test('an upload that would exceed the workspace storage quota is rejected 413', 
     else delete process.env.WORKSPACE_STORAGE_QUOTA_BYTES;
   }
 });
+test('XML with XHTML script is stored as text and served as an inert download', async () => {
+  const fakeDb = installDb({ authSecret: 'fixed-test-secret', roles: { 'ws-1:user-editor': 'editor' } });
+  await withServer(async (baseUrl) => {
+    const token = await __test.issueToken('user-editor', '1');
+    const response = await authedFetch(baseUrl, token, '/backend/files/upload', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspace_id: 'ws-1', name: 'document.xml',
+        contentBase64: Buffer.from('<html xmlns="http://www.w3.org/1999/xhtml"><script>document.title="executed"</script></html>').toString('base64'),
+      }),
+    });
+    assert.equal(response.status, 200);
+    const { data } = await response.json();
+    assert.equal(data.type, 'text/plain');
+    const content = await authedFetch(baseUrl, token, `/backend/files/${data.id}/content`);
+    assert.equal(content.headers.get('content-type'), 'application/octet-stream');
+    assert.match(content.headers.get('content-disposition'), /^attachment;/);
+    // Old uploads remain safe even if their display name is later changed.
+    Object.assign(fakeDb.uploadedFiles.get(data.id), { name: 'renamed.txt', type: 'application/xml' });
+    const legacy = await authedFetch(baseUrl, token, `/backend/files/${data.id}/content`);
+    assert.equal(legacy.headers.get('content-type'), 'application/octet-stream');
+    assert.match(legacy.headers.get('content-disposition'), /^attachment;/);
+  });
+});

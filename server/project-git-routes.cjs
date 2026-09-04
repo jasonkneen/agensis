@@ -128,20 +128,25 @@ function mountProjectGitRoutes(app, deps = {}) {
  // entry (index, worktree) followed by the path, NUL-separated (handles paths
  // with spaces/newlines safely, unlike the newline-delimited non -z format).
  function parsePorcelainStatus(raw) {
-  return raw
-   .split('\0')
-   .filter(Boolean)
-   .map((entry) => {
-    const indexState = entry[0];
-    const worktreeState = entry[1];
-    const filePath = entry.slice(3);
-    let status = 'modified';
-    if (indexState === '?' && worktreeState === '?') status = 'untracked';
-    else if (indexState === 'A') status = 'added';
-    else if (indexState === 'D' || worktreeState === 'D') status = 'deleted';
-    else if (indexState === 'R') status = 'renamed';
-    return { path: filePath, status, staged: indexState !== ' ' && indexState !== '?' };
-   });
+  const entries = raw.split('\0');
+  const files = [];
+  for (let i = 0; i < entries.length; i += 1) {
+   const entry = entries[i];
+   if (!entry) continue;
+   const indexState = entry[0];
+   const worktreeState = entry[1];
+   const filePath = entry.slice(3);
+   let status = 'modified';
+   if (indexState === '?' && worktreeState === '?') status = 'untracked';
+   else if (indexState === 'A') status = 'added';
+   else if (indexState === 'D' || worktreeState === 'D') status = 'deleted';
+   else if (indexState === 'R' || worktreeState === 'R') status = 'renamed';
+   // A rename/copy has a second NUL-delimited record containing its old path.
+   // It has no status prefix and must never become a separate changed file.
+   if (/[RC]/.test(indexState + worktreeState)) i += 1;
+   files.push({ path: filePath, status, staged: indexState !== ' ' && indexState !== '?' });
+  }
+  return files;
  }
 
  app.get('/backend/workspaces/:id/git/status', requireAuth, async (req, res) => {
@@ -203,7 +208,7 @@ function mountProjectGitRoutes(app, deps = {}) {
    let isUntracked = false;
    try {
     const { stdout } = await execFileAsync(
-     'git', ['-C', root, 'status', '--porcelain=v1', '-z', '--', relativePath],
+     'git', ['--literal-pathspecs', '-C', root, 'status', '--porcelain=v1', '-z', '--', relativePath],
      { timeout: 5000 },
     );
     isUntracked = stdout.startsWith('??');
@@ -226,7 +231,7 @@ function mountProjectGitRoutes(app, deps = {}) {
    }
 
    const { stdout } = await execFileAsync(
-    'git', ['-C', root, 'diff', 'HEAD', '--', relativePath],
+    'git', ['--literal-pathspecs', '-C', root, 'diff', 'HEAD', '--', relativePath],
     { timeout: 8000, maxBuffer: 8 * 1024 * 1024 },
    );
    res.json({ data: { path: relativePath, untracked: false, diff: stdout, content: '' }, error: null });
@@ -268,7 +273,7 @@ function mountProjectGitRoutes(app, deps = {}) {
    if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
    const root = await requireWritableGitRoot(req, workspaceId);
    const relativePaths = resolveStagePaths(root, req.body);
-   await execFileAsync('git', ['-C', root, 'add', '--', ...relativePaths], { timeout: 8000 });
+   await execFileAsync('git', ['--literal-pathspecs', '-C', root, 'add', '--', ...relativePaths], { timeout: 8000 });
    res.json({ data: { staged: relativePaths }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);
@@ -281,7 +286,7 @@ function mountProjectGitRoutes(app, deps = {}) {
    if (!workspaceId) return jsonError(res, 400, new Error('workspace id is required'));
    const root = await requireWritableGitRoot(req, workspaceId);
    const relativePaths = resolveStagePaths(root, req.body);
-   await execFileAsync('git', ['-C', root, 'reset', 'HEAD', '--', ...relativePaths], { timeout: 8000 });
+   await execFileAsync('git', ['--literal-pathspecs', '-C', root, 'reset', 'HEAD', '--', ...relativePaths], { timeout: 8000 });
    res.json({ data: { unstaged: relativePaths }, error: null });
   } catch (error) {
    jsonError(res, error.status || 500, error);

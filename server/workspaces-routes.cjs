@@ -8,10 +8,10 @@
 // The workspace surface: the list, its agents projection, and the inference
 // gateway CRUD.
 //
-// A gateway's API key is stored AES-256-GCM-encrypted in api_key_cipher and is
-// NEVER returned — publicGatewayConfig reports only `has_key`. The base URL is
-// run through assertSafeOutboundUrl before it is stored, because the server will
-// later fetch it from inside Fly's network.
+// A gateway's API key is stored AES-256-GCM-encrypted in api_key_cipher and its
+// custom headers may contain bearer credentials. Neither is returned to a
+// browser — publicGatewayConfig reports only `has_key`. Managers can still set
+// or rotate both values through the dedicated write routes.
 //
 // Resolving a gateway for an actual turn is NOT here: that is
 // server/lib/gateways.cjs, shared with server/ai-chat-routes.cjs, because the
@@ -62,9 +62,9 @@ function mountWorkspacesRoutes(app, deps = {}) {
  });
 
  // Gateway configs: workspace-level named routes to an external OpenAI-compatible
- // endpoint. The API key is stored encrypted (api_key_cipher) and is NEVER
- // returned to the client — publicGatewayConfig strips it and reports only whether
- // a key is configured. Selecting a gateway in chat routes that turn's inference
+ // endpoint. The API key is stored encrypted (api_key_cipher) and custom headers
+ // stay server-side; publicGatewayConfig reports only whether a key is configured.
+ // Selecting a gateway in chat routes that turn's inference
  // through /backend/ai-chat's gateway branch instead of the managed Anthropic key.
 
  // SSRF guard (H1). base_url comes straight from the request body and /backend/ai-chat
@@ -76,7 +76,6 @@ function mountWorkspacesRoutes(app, deps = {}) {
    base_url: row.base_url,
    model: row.model,
    protocol: row.protocol || 'openai-chat',
-   headers: parseJsonObject(row.headers),
    has_key: Boolean(row.api_key_cipher),
    created_at: row.created_at,
    updated_at: row.updated_at,

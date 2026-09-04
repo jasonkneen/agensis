@@ -13,10 +13,9 @@ const path = require('path');
 //
 // The stored and served Content-Type is NEVER the browser-reported one — it is
 // derived from the extension allowlist in server/lib/storage-paths.cjs, and
-// .html/.svg are neutralised to text/plain at storage time. Serving additionally
+// .html/.svg/.xml are neutralised to text/plain at storage time. Serving additionally
 // forces Content-Disposition: attachment for those extensions and for a set of
-// dangerous stored types, because `uploaded_files` is also reachable through the
-// generic /backend/db/* routes and a write-role user could PATCH `type` directly.
+// dangerous stored types to protect legacy rows independently of their names.
 //
 // Every path read or written goes through resolveStoragePathForWorkspace, which
 // enforces containment under both the upload root and the file's own workspace.

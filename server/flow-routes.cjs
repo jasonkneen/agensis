@@ -17,6 +17,7 @@ function mountFlowRoutes(app, deps = {}) {
   requireAuth, jsonError, enforceWorkspaceRole, getDb,
   createPostgresFlowConnectionStore, getFlowConnectionCore, mcpEndpoint,
   normalizeBaseUrl, normalizeFlowWebhookUrl, requestBaseUrl,
+  isPrivateSessionRow = () => false,
  } = deps;
 
  app.post('/backend/workspaces/:id/flow-connections', requireAuth, async (req, res) => {
@@ -26,10 +27,13 @@ function mountFlowRoutes(app, deps = {}) {
    const channelId = req.body?.channelId ? String(req.body.channelId).trim() : null;
    if (channelId) {
     const rows = await getDb().unsafe(
-     'select id from chat_sessions where id = $1 and workspace_id = $2 limit 1',
+     'select id, visibility, folder, deleted_at from chat_sessions where id = $1 and workspace_id = $2 limit 1',
      [channelId, workspaceId],
     );
     if (!rows[0]) return jsonError(res, 404, new Error('Channel not found in this workspace'));
+    if (rows[0].deleted_at || isPrivateSessionRow(rows[0])) {
+     return jsonError(res, 403, new Error('Flow connections cannot target private conversations'));
+    }
    }
    const created = await getFlowConnectionCore().create({
     workspaceId,

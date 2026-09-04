@@ -8,6 +8,9 @@ import {
   cacheApplyDelete,
   cacheApplyMessagePageInsert,
   purgeQueuedSessionMutations,
+  cacheSetIfGeneration,
+  getOfflineDataGeneration,
+  invalidateOfflineDataGeneration,
 } from './offlineDb';
 
 type BackendError = { message: string; code?: string | null } | null | undefined;
@@ -199,14 +202,21 @@ export async function cachedFetch<T>(
   fetcher: () => Promise<T | null>,
 ): Promise<T | null> {
   if (navigator.onLine) {
+    const generation = getOfflineDataGeneration();
     try {
       const data = await fetcher();
       if (data != null) {
-        await cacheSet(cacheKey, data);
+        const accepted = await cacheSetIfGeneration(cacheKey, data, generation);
+        // A privacy/account invalidation won the race while this request was
+        // in flight. Do not hand the now-stale response to a mounted consumer
+        // either; callers should keep their redacted/empty state.
+        if (!accepted) return null;
       }
       return data;
     } catch {
-      return cacheGet<T>(cacheKey);
+      if (getOfflineDataGeneration() !== generation) return null;
+      const cached = await cacheGet<T>(cacheKey);
+      return getOfflineDataGeneration() === generation ? cached : null;
     }
   }
 
@@ -222,6 +232,7 @@ export async function cachedFetch<T>(
 export function redactCachedSessionMessages(sessionId: string): Promise<void> {
   const id = String(sessionId || '').trim();
   if (!id) return Promise.resolve();
+  invalidateOfflineDataGeneration();
   return Promise.all([
     cacheSet(`messages_page_${id}`, { messages: [], hasMore: false }),
     purgeQueuedSessionMutations(id),

@@ -53,55 +53,75 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
     label: 'Resize applet editor',
   });
   const splitWide = appletSplit.containerSize >= 720;
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Guards the async fetch below from clobbering an edit the user already made
-  // while the body was still in flight (fetch is not instant, autosave is 800ms).
-  const editedRef = useRef(false);
+  // Guards remote revisions from clobbering an edit the user already made
+  // while the body was in flight (fetch is not instant, autosave is 800ms).
+  const localDirtyRef = useRef(false);
+  const titleRef = useRef(title);
+  titleRef.current = title;
+  const contentRef = useRef(content);
+  contentRef.current = content;
+  const documentRevisionRef = useRef(`${doc.version ?? ''}:${doc.updated_at ?? ''}`);
 
   useEffect(() => {
-    setTitle(doc.title);
-    editedRef.current = false;
+    const revision = `${doc.version ?? ''}:${doc.updated_at ?? ''}`;
+    const revisionChanged = documentRevisionRef.current !== revision;
+    documentRevisionRef.current = revision;
     // NET-06: the documents LIST is metadata-only, so `doc.content` is
     // `undefined` for a doc opened by id (Sidebar, picker) — fetch the body on
     // demand instead of rendering blank code/preview forever.
-    if (doc.content !== undefined) {
-      setContent(doc.content);
-      setLoadingContent(false);
-      return;
-    }
     let cancelled = false;
-    setLoadingContent(true);
-    fetchDocumentContent(doc.id).then(body => {
-      if (cancelled || editedRef.current) return;
-      setContent(body);
+    const applyBody = (body: string) => {
+      if (cancelled) return;
+      const remoteBody = body || '';
+      if (localDirtyRef.current) {
+        const isLocalSaveAck = remoteBody === contentRef.current && titleRef.current === doc.title;
+        if (!isLocalSaveAck) {
+          // Keep the pending local save. The existing last-writer behavior is
+          // safer than silently discarding the user's edit on a conflict.
+          setLoadingContent(false);
+          return;
+        }
+        localDirtyRef.current = false;
+        setLoadingContent(false);
+        return;
+      }
+      setTitle(doc.title);
+      setContent(remoteBody);
       setLoadingContent(false);
-    });
+    };
+
+    if (doc.content !== undefined && !revisionChanged) {
+      applyBody(doc.content);
+    } else {
+      // A revision refresh should leave the currently mounted editor/preview
+      // in place while the body request is in flight; hiding it would reset a
+      // CodeMirror selection even when the revision turns out to be our ack.
+      if (!revisionChanged) setLoadingContent(true);
+      fetchDocumentContent(doc.id, revisionChanged).then(applyBody);
+    }
     return () => { cancelled = true; };
-  }, [doc.id, doc.title, doc.content, fetchDocumentContent]);
+  }, [doc.id, doc.title, doc.content, doc.version, doc.updated_at, fetchDocumentContent]);
 
   const triggerAutoSave = useCallback((newTitle?: string, newContent?: string) => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      onAutoSave(doc.id, {
-        title: newTitle ?? title,
-        content: newContent ?? content,
-      });
-    }, 800);
+    localDirtyRef.current = true;
+    // useDocuments owns the one 800ms debounce. Pass the captured edit now so
+    // closing this editor cannot strand its last change in a local timer.
+    onAutoSave(doc.id, {
+      title: newTitle ?? title,
+      content: newContent ?? content,
+    });
   }, [doc.id, title, content, onAutoSave]);
-
-  useEffect(() => () => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-  }, []);
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const next = e.target.value;
+    localDirtyRef.current = true;
     setTitle(next);
     onTitleChange(next);
     triggerAutoSave(next, undefined);
   };
 
   const handleContentChange = useCallback((next: string) => {
-    editedRef.current = true;
+    localDirtyRef.current = true;
     setContent(next);
     triggerAutoSave(undefined, next);
   }, [triggerAutoSave]);

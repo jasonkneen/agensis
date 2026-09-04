@@ -149,6 +149,14 @@ than allowlisting quietly.
 
 ## Realtime
 
+Workspace-wide Flows and automation events have their own privacy gate, separate
+from socket fanout. Resolve the source session through `flowEventLocation` before
+enqueueing a message/channel event, and re-check eligibility before executing a
+queued event. Private, missing, and deleted source sessions are not eligible.
+Never infer that a partial change row is public because it lacks `visibility`.
+The WebSocket subscription's top-level channel is authoritative; nested binding
+fields must never replace the channel that was authorized.
+
 Clients receive live updates via `notifyDbSubscribers(table, eventType, rows)`
 in `server/index.cjs`, which fans DB-change events to subscribed WebSocket
 clients. Streaming agent output works by inserting a `Thinking …` placeholder
@@ -1230,6 +1238,20 @@ Permissions, grants, and Access modes are handled by the CLI's
 Pinned by `tests/desktop-local-runtime.test.cjs`.
 
 ## Conventions
+
+- HTML, SVG, and XML uploads are served as inert downloads. XML can contain
+  executable XHTML/SVG namespaces, so `application/xml` is not a safe inline
+  type. Keep both the extension guard and the legacy stored-type guard.
+- Treat user-supplied Git paths as literal paths (`--literal-pathspecs`), even
+  after filesystem containment checks. Git's pathspec syntax can otherwise
+  address paths outside the checked directory.
+- Account changes remount the authenticated workspace tree and its window/call
+  providers. Pending cache reads must also respect offline-data generations;
+  clearing a visible transcript alone does not stop a late response from
+  restoring its bytes to IndexedDB.
+- Document autosaves are independent per document. Remote revision updates
+  refresh clean editors and preserve dirty local edits. A rejected deletion
+  must keep both the row and its open editor visible.
 
 - Match the surrounding file's style: 2-space indent, its semicolon convention,
   `cn()` for class merging, shadcn/ui primitives already imported in the file.

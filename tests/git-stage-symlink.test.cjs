@@ -262,3 +262,57 @@ test('F3: git/status returns the empty payload (never touches disk) when the hos
     cleanupScratchRepo(scratch);
   }
 });
+
+test('Git treats caller paths literally for diff, stage and unstage', async () => {
+  const scratch = setupScratchRepo();
+  const git = args => execFileSync('git', args, { cwd: scratch.root, encoding: 'utf8' });
+  try {
+    const allowed = path.join(scratch.root, 'allowed');
+    fs.mkdirSync(allowed);
+    fs.writeFileSync(path.join(allowed, 'kept.txt'), 'inside\n');
+    git(['add', 'inside.txt', 'allowed/kept.txt']);
+    git(['commit', '--quiet', '-m', 'initial']);
+    fs.writeFileSync(path.join(scratch.root, 'inside.txt'), 'outside workspace sentinel\n');
+    installDb({ root: allowed });
+    const token = await __test.issueToken(USER_ID, '1');
+    await withServer(async baseUrl => {
+      const requestPath = ':(top)inside.txt';
+      const diff = await authedFetch(baseUrl, token, `/backend/workspaces/${WORKSPACE_ID}/git/diff?path=${encodeURIComponent(requestPath)}`);
+      assert.equal(diff.status, 200);
+      assert.equal((await diff.json()).data.diff, '');
+      const stage = await authedFetch(baseUrl, token, `/backend/workspaces/${WORKSPACE_ID}/git/stage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: requestPath }),
+      });
+      assert.notEqual(stage.status, 200);
+      assert.equal(git(['diff', '--cached', '--name-only']), '');
+      git(['add', 'inside.txt']);
+      await authedFetch(baseUrl, token, `/backend/workspaces/${WORKSPACE_ID}/git/unstage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: requestPath }),
+      });
+      assert.equal(git(['diff', '--cached', '--name-only']).trim(), 'inside.txt');
+    });
+  } finally {
+    cleanupScratchRepo(scratch);
+  }
+});
+
+test('Git rename status consumes the original-path record', async () => {
+  const scratch = setupScratchRepo();
+  const git = args => execFileSync('git', args, { cwd: scratch.root, encoding: 'utf8' });
+  try {
+    git(['add', 'inside.txt']);
+    git(['commit', '--quiet', '-m', 'initial']);
+    git(['mv', 'inside.txt', 'renamed file.txt']);
+    installDb({ root: scratch.root });
+    const token = await __test.issueToken(USER_ID, '1');
+    await withServer(async baseUrl => {
+      const response = await authedFetch(baseUrl, token, `/backend/workspaces/${WORKSPACE_ID}/git/status`);
+      assert.equal(response.status, 200);
+      const { data } = await response.json();
+      const tracked = data.files.filter(file => file.staged);
+      assert.deepEqual(tracked.map(({ path, status }) => ({ path, status })), [{ path: 'renamed file.txt', status: 'renamed' }]);
+    });
+  } finally {
+    cleanupScratchRepo(scratch);
+  }
+});

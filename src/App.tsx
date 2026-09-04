@@ -123,9 +123,9 @@ import { useMemory } from './hooks/useMemory';
 import { useFiles } from './hooks/useFiles';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { useTheme } from './hooks/useTheme';
-import { WindowManagerProvider, useWindowManager } from './providers/WindowManagerProvider';
-import { HuddleDockProvider } from './components/huddle/HuddleDockContext';
+import { useWindowManager } from './providers/WindowManagerProvider';
 import { HuddleDock } from './components/huddle/HuddleDock';
+import { AccountScopedProviders } from './components/auth/AccountScopedProviders';
 import { useItemPresence } from './hooks/useItemPresence';
 import { useMultiplayerCursors } from './hooks/useMultiplayerCursors';
 import { useSharing } from './hooks/useSharing';
@@ -639,30 +639,72 @@ function reportWriteFailure(action: string, failure: WriteFailure | null) {
 }
 
 export default function App() {
+  const auth = useAuth();
+  // Providers contain durable UI state (open windows, huddle panels). Keying
+  // them by the authenticated account makes sign-out an actual ownership
+  // boundary, so the next account cannot inherit a prior account's session
+  // windows or in-memory workspace state.
+  const accountKey = auth.user?.id || 'signed-out';
   return (
-    <WindowManagerProvider>
-      {/* Above AppContent, deliberately: the huddle session must outlive every
-          view AppContent renders, or navigating away drops the call — which is
-          exactly what it did while the session lived inside the channel. */}
-      <HuddleDockProvider>
-        <AppContent />
-      </HuddleDockProvider>
-    </WindowManagerProvider>
+    <AccountScopedProviders accountKey={accountKey}>
+      <AppContent auth={auth} />
+    </AccountScopedProviders>
   );
 }
 
-function AppContent() {
+type AuthState = ReturnType<typeof useAuth>;
+
+function AppContent({ auth }: { auth: AuthState }) {
   const {
     user,
     loading: authLoading,
     signIn,
     signUp,
-    signOut,
     signInWithOAuth,
     socialAuthProviders,
     authNotice,
     dismissAuthNotice,
-  } = useAuth();
+  } = auth;
+
+  if (authLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <Spinner className="size-8" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    // Mount AppUpdateManager here too: SW registration + the update prompt live
+    // inside it, and logged-out visitors otherwise never register the service
+    // worker — an outdated SW would serve the stale SPA shell forever.
+    return (
+      <>
+        <AuthPage
+          onSignIn={signIn}
+          onSignUp={signUp}
+          onOAuthSignIn={signInWithOAuth}
+          socialAuthProviders={socialAuthProviders}
+          notice={authNotice}
+          onDismissNotice={dismissAuthNotice}
+        />
+        <AppUpdateManager swOnly />
+      </>
+    );
+  }
+
+  return <AuthenticatedApp key={user.id} auth={{ ...auth, user }} />;
+}
+
+type AuthenticatedAuthState = Omit<AuthState, 'user'> & {
+  user: NonNullable<AuthState['user']>;
+};
+
+function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
+  const {
+    user,
+    signOut,
+  } = auth;
   // The update surface (deploy toast + "what's new" dialog + version check +
   // cache-bust reload) is mounted as <AppUpdateManager /> in the tree below.
   // Seeded from the last workspace this browser was in, so a reload lands you
@@ -1478,7 +1520,7 @@ function AppContent() {
   // Farm device-code pairing: after sign-in, return to /integrations/farm?code=…
   // (FarmIntegrationApproval stashes the path before redirecting here).
   useEffect(() => {
-    if (!user || authLoading) return;
+    if (!user) return;
     try {
       const params = new URLSearchParams(window.location.search);
       const fromQuery = params.get('redirect') || '';
@@ -1504,7 +1546,7 @@ function AppContent() {
     } catch {
       /* ignore storage / navigation failures */
     }
-  }, [user, authLoading]);
+  }, [user]);
 
   // CursorBuddy and the Agensis CLI link unauthenticated users here. Once login
   // completes, CursorBuddy opens the agent surface; CLI setup additionally posts
@@ -1792,7 +1834,9 @@ function AppContent() {
   }, [toggleTaskStatus, logEvent]);
 
   const handleDeleteTask = useCallback(async (id: string) => {
-    return deleteTask(id);
+    const deleted = await deleteTask(id);
+    if (!deleted) toast.error('Could not delete the task. Nothing was removed.');
+    return deleted;
   }, [deleteTask]);
 
   const handleDocumentOpen = useCallback((doc: Document) => {
@@ -2305,7 +2349,11 @@ function AppContent() {
   }, [createSubThread]);
   const handleDeleteDocumentFromScene = useCallback(async (id: string) => {
     const doc = documents.find(d => d.id === id);
-    await deleteDocument(id);
+    const deleted = await deleteDocument(id);
+    if (!deleted) {
+      toast.error('Could not delete the document. Nothing was removed.');
+      return false;
+    }
     if (doc) {
       logEvent({
         event_type: 'document_deleted',
@@ -2314,7 +2362,13 @@ function AppContent() {
         title: `Document deleted: ${doc.title}`,
       });
     }
+    return true;
   }, [documents, deleteDocument, logEvent]);
+  const handleDeleteFact = useCallback(async (id: string) => {
+    const deleted = await deleteFact(id);
+    if (!deleted) toast.error('Could not delete the memory. Nothing was removed.');
+    return deleted;
+  }, [deleteFact]);
   const handleAddFactFromScene = useCallback((fact: string, category: string) => {
     addFact(fact, category);
     logEvent({
@@ -2338,34 +2392,6 @@ function AppContent() {
   const handleSidebarAgentProfile = useCallback((agent: { id: string; agentId: string | null; handle: string | null; name: string }) => {
     handleOpenAgentProfile(agent.agentId || agent.id || agent.handle || agent.name);
   }, [handleOpenAgentProfile]);
-
-  if (authLoading) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-background">
-        <Spinner className="size-8" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    // Mount AppUpdateManager here too: SW registration + the update prompt live
-    // inside it, and logged-out visitors otherwise never register the service
-    // worker — an outdated SW (e.g. one predating the landing page) would serve
-    // the stale SPA shell forever with no update path to escape it.
-    return (
-      <>
-        <AuthPage
-          onSignIn={signIn}
-          onSignUp={signUp}
-          onOAuthSignIn={signInWithOAuth}
-          socialAuthProviders={socialAuthProviders}
-          notice={authNotice}
-          onDismissNotice={dismissAuthNotice}
-        />
-        <AppUpdateManager swOnly />
-      </>
-    );
-  }
 
   return (
     <TooltipProvider>
@@ -2691,7 +2717,7 @@ function AppContent() {
                   onToggleFavorite={toggleFavorite}
                   onAddFact={handleAddFactFromScene}
                   onUpdateFact={updateFact}
-                  onDeleteFact={deleteFact}
+                  onDeleteFact={handleDeleteFact}
                   onCreateTask={handleCreateTask}
                   onUpdateTask={handleUpdateTask}
                   onToggleTaskStatus={handleToggleTaskStatus}
@@ -3169,7 +3195,7 @@ function CanvasLayerScene({
   onOpenSessionById: (sessionId: string) => void;
   /** Inbox rows carry more than a session id — see components/inbox/inboxNavigation. */
   onOpenInboxItem: InboxOpenSession;
-  onDeleteDocument: (id: string) => void;
+  onDeleteDocument: (id: string) => Promise<boolean>;
   onAutoSaveDocument: (id: string, updates: { title?: string; content?: string }) => void;
   onAddToCanvasApplet: (doc: Document) => void;
   fetchDocumentContent: (id: string, force?: boolean) => Promise<string>;
@@ -3178,7 +3204,7 @@ function CanvasLayerScene({
   onToggleFavorite: (id: string, current: boolean) => void;
   onAddFact: (fact: string, category: string) => void;
   onUpdateFact: (id: string, fact: string, category: string) => void;
-  onDeleteFact: (id: string) => void;
+  onDeleteFact: (id: string) => void | Promise<boolean>;
   onCreateTask: (input: CreateTaskInput) => void;
   onUpdateTask: (id: string, updates: Partial<Task>) => void;
   onToggleTaskStatus: (task: Task) => void;

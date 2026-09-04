@@ -7,11 +7,11 @@
 //
 // Sign-up, sign-in, sign-out, the account routes, and the email lookup RPC.
 //
-// Rate limiting here is per-EMAIL and per-IP at once, which is the point: a
-// per-IP limit alone lets a botnet spray one account, and a per-email limit
-// alone lets one host walk the whole user table. signinRateLimiter is keyed on
-// the email the caller claims; signinIpFailureLimiter counts that caller's
-// failures whatever email they name.
+// Rate limiting here is per (EMAIL, IP) and per-IP at once. Both checks happen
+// before password verification, so an exhausted budget cannot be used to spend
+// unbounded scrypt work. Including the IP in the email key means a bad actor
+// cannot lock the account for a legitimate user arriving from another network;
+// the separate per-IP budget still bounds credential stuffing from that host.
 //
 // Sign-out bumps the account's token_version and clears the cached copy, which
 // is what makes an issued token stop verifying everywhere at once — including on
@@ -31,6 +31,19 @@ function mountAuthRoutes(app, deps = {}) {
   setCachedTokenVersion, signinIpFailureLimiter, signinRateLimiter,
   signupRateLimiter, verifyPassword,
  } = deps;
+
+ function signinBudget(req, res, email) {
+  const ip = clientIpFromReq(req);
+  const emailKey = `signin:${email}:${ip}`;
+  const ipKey = `signin-ip:${ip}`;
+  const emailResult = signinRateLimiter.check(emailKey);
+  const ipResult = signinIpFailureLimiter.check(ipKey);
+  if (emailResult.allowed && ipResult.allowed) return { emailKey, ipKey };
+  const retryAfterMs = Math.max(emailResult.retryAfterMs, ipResult.retryAfterMs);
+  res.setHeader('Retry-After', String(Math.max(1, Math.ceil(retryAfterMs / 1000))));
+  jsonError(res, 429, new Error('Too many sign-in attempts. Please wait a minute and try again.'));
+  return null;
+ }
 
  app.post('/backend/auth/signup', async (req, res) => {
   try {
@@ -70,24 +83,26 @@ function mountAuthRoutes(app, deps = {}) {
    const password = String(req.body?.password || '');
    if (!email || !password) return jsonError(res, 400, new Error('Email and password are required'));
 
+   // This gate deliberately precedes the user lookup and password verifier.
+   // A correct password after exhaustion is refused until the window expires,
+   // while the (email, IP) key prevents a remote attacker from locking out a
+   // user who signs in from a different network.
+   const signinKeys = signinBudget(req, res, email);
+   if (!signinKeys) return;
+
    const rows = await getDb().unsafe('select id, email, password_hash, display_name, accent_color, created_at, token_version from app_users where email = $1 limit 1', [email]);
    const user = rows[0];
    const passwordOk = user && (await verifyPassword(password, user.password_hash));
-
-   // L3 (2026-07 review): only FAILED attempts count toward the limiters, and
-   // a correct password is never blocked — so a guessing script can't lock a
-   // victim out by exhausting their email's budget with wrong passwords. The
-   // per-email limiter still slows targeted brute force (5/min), and a
-   // per-IP failure limiter bounds credential stuffing across many emails.
    if (!passwordOk) {
-    const emailAllowed = signinRateLimiter.check(`signin:${email}`).allowed;
-    const ipAllowed = signinIpFailureLimiter.check(`signin-ip:${clientIpFromReq(req)}`).allowed;
-    if (!emailAllowed || !ipAllowed) {
-     res.setHeader('Retry-After', '60');
-     return jsonError(res, 429, new Error('Too many failed sign-in attempts. Please wait a minute and try again.'));
-    }
     return jsonError(res, 401, new Error('Invalid email or password'));
    }
+
+   // A successful login proves the caller owns the credential. Clear this
+   // email+IP bucket so an otherwise valid user does not carry stale failures
+   // forward. Keep the aggregate IP budget intact: resetting it after every successful
+   // login would let an attacker replenish the stuffing allowance by alternating
+   // guesses against accounts they control.
+   signinRateLimiter.reset(signinKeys.emailKey);
 
    res.json({
     data: {

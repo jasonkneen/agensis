@@ -100,6 +100,12 @@ export function expandNormal(seed: NormalSeed): Record<string, string> {
 export const NORMAL_THEMES: NormalTheme[] = [
  // ── Minimal — neutral grey scales ────────────────────────────────────────
  {
+  id: 'carbon', label: 'Carbon', group: 'Minimal',
+  swatch: ['#ff6b2c', '#111213', '#08090a'],
+  light: { bg: '#f5f4f2', elevated: '#ffffff', raised: '#e9e8e5', muted: '#deddd9', fg: '#1b1b1b', fgMuted: '#6d6d6b', primary: '#d9541e', onPrimary: '#160b06', border: '#d2d0cc' },
+  dark: { bg: '#08090a', elevated: '#111213', raised: '#28292b', muted: '#191a1b', fg: '#eceae7', fgMuted: '#92918f', primary: '#ff6b2c', onPrimary: '#160b06', border: '#292b2d' },
+ },
+ {
   id: 'slate', label: 'Slate', group: 'Minimal',
   swatch: ['#1e40af', '#f1f5f9', '#f8fafc'],
   light: { bg: '#f8fafc', elevated: '#ffffff', raised: '#f1f5f9', muted: '#e2e8f0', fg: '#0f172a', fgMuted: '#64748b', primary: '#1e40af', onPrimary: '#ffffff', border: '#cbd5e1' },
@@ -244,6 +250,7 @@ export function findNormalTheme(id: string): NormalTheme | undefined {
 export function clearNormalTheme() {
  const root = document.documentElement;
  for (const key of NORMAL_MANAGED_KEYS) root.style.removeProperty(key);
+ root.removeAttribute('data-normal-theme');
  root.removeAttribute('data-normal-theme-group');
 }
 
@@ -259,6 +266,7 @@ function applyNormalThemeVars(theme: NormalTheme, scheme: 'light' | 'dark') {
  for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
  // Expose the group so CSS can tune non-colour traits per family (e.g. the
  // Minimal/Developer/Tinted groups cap corner roundness — see index.css).
+ root.setAttribute('data-normal-theme', theme.id);
  root.setAttribute('data-normal-theme-group', theme.group);
 }
 
