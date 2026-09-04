@@ -90,6 +90,16 @@ export function getStoredDefaultRadius(): DefaultRadius {
   }
 }
 
+/** Read either a current numeric slider value or a legacy preset id. */
+export function getStoredRadiusScale(): number {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    return stored === null ? DEFAULT_RADIUS_SCALE : radiusScaleFrom(stored);
+  } catch {
+    return DEFAULT_RADIUS_SCALE;
+  }
+}
+
 /**
  * Apply a granular corner scale. Writes the multiplier the CSS reads, plus a
  * flag for the two tokens that switch to fully-round at the top of the range.

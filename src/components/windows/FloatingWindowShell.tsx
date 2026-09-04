@@ -791,6 +791,7 @@ export function FloatingWindowShell({
         // snapping always works against the same numbers useWindows stores.
         data-window-bounds={`${Math.round(displayBounds.x)},${Math.round(displayBounds.y)},${Math.round(displayBounds.width)},${Math.round(displayBounds.height)}`}
         data-window-view-mode={isFullSurface ? 'full' : 'floating'}
+        data-window-bleed-top={bleedTop > 0 ? 'true' : undefined}
         hidden={isHidden}
         inert={isHidden ? true : undefined}
         aria-hidden={isHidden || undefined}

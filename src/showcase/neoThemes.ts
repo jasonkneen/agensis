@@ -231,6 +231,7 @@ const RADII: Record<NeoRadius, Record<string, string>> = {
 // ---- token keys this module owns (cleared on switch) ---------------------
 export const NEO_MANAGED_KEYS = [
   '--neo-ink', '--neo-shadow-ink', '--neo-dot', '--neo-dot-size',
+  '--neo-edge',
   '--neo-font', '--neo-display', '--neo-display-weight', '--neo-display-spacing', '--neo-display-transform',
   '--neo-texture', '--neo-texture-size',
   '--neo-shadow-xs', '--neo-shadow-sm', '--neo-shadow-md', '--neo-shadow-lg', '--neo-shadow-x', '--neo-shadow-y',
@@ -244,6 +245,7 @@ export const NEO_MANAGED_KEYS = [
   '--ink', '--ink-secondary', '--ink-muted',
   '--success', '--warning', '--error',
   '--sh-accent', '--sh-accent-foreground',
+  '--border', '--border-strong', '--accent-border', '--sh-border', '--input', '--ring',
 ] as const;
 
 const mix = (a: string, pa: number, b: string) => `color-mix(in srgb, ${a} ${pa}%, ${b})`;
@@ -262,8 +264,8 @@ export function expand(seed: NeoSeed, scheme: NeoScheme): Record<string, string>
   // card/raised explicitly; this hue-tint reaches every dark theme's muted
   // fill and gives new palettes depth without per-theme tuning.
   const card = seed.card ?? (dark ? mix(paper, 89, `${primary} 11%`) : mix(paper, 42, '#ffffff 58%'));
-  const raised = seed.raised ?? (dark ? mix(paper, 81, `${primary} 19%`) : mix(paper, 84, `${ink} 16%`));
-  const muted = seed.muted ?? (dark ? mix(paper, 91, `${primary} 9%`) : mix(paper, 86, `${ink} 14%`));
+  const raised = seed.raised ?? (dark ? mix(paper, 81, `${primary} 19%`) : mix(card, 86, `${primary} 14%`));
+  const muted = seed.muted ?? (dark ? mix(paper, 91, `${primary} 9%`) : mix(card, 94, `${primary} 6%`));
   const overlay = card;
   const textSecondary = mix(ink, 78, `${paper} 22%`);
   const textMuted = mix(ink, 52, `${paper} 48%`);
@@ -287,10 +289,12 @@ export function expand(seed: NeoSeed, scheme: NeoScheme): Record<string, string>
   const warning = seed.warning ?? (dark ? '#ffd166' : '#f5d95f');
   const error = seed.error ?? (dark ? '#ff5f63' : '#ff3b30');
   const shAccent = mix(primary, 84, `${dark ? '#000000' : '#ffffff'} 16%`);
+  const edge = mix(ink, dark ? 48 : 74, paper);
 
   return {
     '--neo-ink': ink,
     '--neo-shadow-ink': shadow,
+    '--neo-edge': edge,
     '--neo-dot': dot,
     '--primary': primary,
     '--primary-foreground': onPrimary,
@@ -316,6 +320,12 @@ export function expand(seed: NeoSeed, scheme: NeoScheme): Record<string, string>
     '--error': error,
     '--sh-accent': shAccent,
     '--sh-accent-foreground': onPrimary,
+    '--border': edge,
+    '--border-strong': edge,
+    '--accent-border': edge,
+    '--sh-border': edge,
+    '--input': edge,
+    '--ring': edge,
   };
 }
 
@@ -335,7 +345,7 @@ export const NEO_THEMES: NeoTheme[] = [
 
   // ───────────────────────── POP — bright & loud ──────────────────────────
   {
-    id: 'classic', label: 'Classic', group: 'Pop', style: 'brutal',
+    id: 'classic', label: 'Original', group: 'Pop', style: 'brutal',
     swatch: ['#ffd84a', '#ff6bcb', INK],
     light: { paper: mix('#ffd84a', 13, 'white 87%'), ink: INK, primary: '#ffd84a', onPrimary: INK, card: '#ffffff' },
     dark: { paper: '#141414', ink: '#f4efe4', primary: '#ffd166', onPrimary: INK, card: '#1e1e1e', raised: '#272727', shadow: '#6b6258' },

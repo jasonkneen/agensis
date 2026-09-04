@@ -1,5 +1,16 @@
 [
   {
+    "version": "calmer-workspace-themes",
+    "date": "2026-09-04",
+    "title": "Cleaner themes, clearer workspaces",
+    "summary": "Brutal themes keep their character with lighter frames, quieter lists and more balanced dark surfaces. Default stays softly outlined, while Classic keeps standard styling.",
+    "highlights": [
+      "Window frames and sidebar headers align without doubled outlines",
+      "Rows and labels stay flat, with depth reserved for actions and floating panels",
+      "Light and dark palettes stay consistent when switching themes"
+    ]
+  },
+  {
     "version": "workspace-privacy-and-reliability",
     "date": "2026-09-04",
     "title": "Stronger privacy and more reliable saves",

@@ -441,20 +441,18 @@
 :root[data-ui-theme="neo"][data-theme="light"] {
  --neo-ink: #0a0a0a;
  --neo-shadow-ink: #0a0a0a;
- /* Border ink. In light this IS the full ink — the classic black-on-cream
-     brutal outline (unchanged). Dark softens it (see the dark block) so borders
-     stop reading as glaring near-white on near-black. All neo *border* usages
-     route through this; text/dot/shadow stay on --neo-ink. */
- --neo-edge: var(--neo-ink);
+ /* Structural edges sit below text contrast in light mode. Keeping the text
+     token separate prevents every nested card from becoming a full-ink box. */
+ --neo-edge: color-mix(in srgb, var(--neo-ink) 74%, var(--background));
 
  --canvas-base: color-mix(in srgb, var(--primary) 13%, white 87%);
  --canvas-elevated: #ffffff;
  --canvas-raised: color-mix(in srgb, var(--primary) 28%, white 72%);
  --canvas-overlay: #ffffff;
 
- --border: var(--neo-ink);
+ --border: var(--neo-edge);
  --border-subtle: color-mix(in srgb, var(--neo-ink) 14%, transparent);
- --border-strong: var(--neo-ink);
+ --border-strong: var(--neo-edge);
 
  --ink: #0a0a0a;
  --ink-secondary: #2d2d2d;
@@ -463,7 +461,7 @@
  --accent: var(--primary);
  --accent-hover: color-mix(in srgb, var(--primary) 86%, var(--foreground) 14%);
  --accent-subtle: color-mix(in srgb, var(--primary) 24%, transparent);
- --accent-border: var(--neo-ink);
+ --accent-border: var(--neo-edge);
 
  --success: #00c875;
  --warning: #f5d95f;
@@ -483,9 +481,9 @@
  --muted-foreground: #2d2d2d;
  --sh-accent: color-mix(in srgb, var(--primary) 84%, white 16%);
  --sh-accent-foreground: var(--primary-foreground);
- --sh-border: var(--neo-ink);
- --input: var(--neo-ink);
- --ring: var(--neo-ink);
+ --sh-border: var(--neo-edge);
+ --input: var(--neo-edge);
+ --ring: var(--neo-edge);
 }
 
 :root[data-ui-theme="neo"][data-theme="dark"] {
@@ -829,64 +827,74 @@
 }
 
 :root[data-ui-theme="neo"] [data-slot="button"]:not([data-size^="icon"]):not([data-size="xs"]):not([data-size="sm"]) {
- border-width: 2px;
- box-shadow: var(--neo-shadow-sm);
+ border-width: 1px;
+ box-shadow: none;
 }
 
 :root[data-ui-theme="neo"] [data-slot="card"],
 :root[data-ui-theme="neo"] [data-slot="dialog-content"],
 :root[data-ui-theme="neo"] [data-slot="alert-dialog-content"] {
- border-width: 2px;
- box-shadow: var(--neo-shadow-md);
+ border-width: 1px;
+ box-shadow: none;
 }
 
-/* Floating menu / popover / overlay family. The shadcn base gives these a soft
-   1px `ring-1 ring-foreground/10` plus a blurred `shadow-md` — which reads as
-   generic, not brutal, so they never matched the dialogs/cards above. Route
-   them through the same brutal language: a solid 2px ink border (--border,
-   which resolves to --neo-edge per scheme) and a hard offset shadow. The
-   notifications panel is a Popover, so it's covered here too. Overriding
-   box-shadow wholesale also clears the base ring+blur (both live on box-shadow
-   in Tailwind). Sub-menus and tooltips get the tighter sm offset. */
+:root[data-ui-theme="neo"] [data-slot="card"] {
+ border-color: var(--border-subtle);
+}
+
+:root[data-ui-theme="neo"] [data-slot="dialog-content"],
+:root[data-ui-theme="neo"] [data-slot="alert-dialog-content"] {
+ box-shadow: var(--neo-shadow-sm);
+}
+
+/* Portals remain lifted above the document plane, with a one-pixel edge and the
+   small two-pixel offset reserved for overlays. */
 :root[data-ui-theme="neo"] [data-slot="popover-content"],
 :root[data-ui-theme="neo"] [data-slot="dropdown-menu-content"],
 :root[data-ui-theme="neo"] [data-slot="context-menu-content"],
 :root[data-ui-theme="neo"] [data-slot="menubar-content"],
 :root[data-ui-theme="neo"] [data-slot="menubar"],
 :root[data-ui-theme="neo"] [data-slot="hover-card-content"] {
- border-width: 2px;
+ border-width: 1px;
  border-color: var(--border);
- box-shadow: var(--neo-shadow-md);
+ box-shadow: var(--neo-shadow-sm);
 }
 
 :root[data-ui-theme="neo"] [data-slot="dropdown-menu-sub-content"],
 :root[data-ui-theme="neo"] [data-slot="context-menu-sub-content"],
 :root[data-ui-theme="neo"] [data-slot="menubar-sub-content"],
 :root[data-ui-theme="neo"] [data-slot="tooltip-content"] {
- border-width: 2px;
+ border-width: 1px;
  border-color: var(--neo-edge);
- box-shadow: var(--neo-shadow-sm);
+ box-shadow: var(--neo-shadow-xs);
 }
 
 /* Sonner toasts ship their own stylesheet (soft 1px border + blurred shadow),
    so override with !important to force the brutal edge + hard offset. */
 :root[data-ui-theme="neo"] [data-sonner-toast] {
- border-width: 2px !important;
+ border-width: 1px !important;
  border-color: var(--border) !important;
- box-shadow: var(--neo-shadow-md) !important;
+ box-shadow: var(--neo-shadow-sm) !important;
 }
 
 :root[data-ui-theme="neo"] [data-slot="item"][data-variant="outline"],
 :root[data-ui-theme="neo"] [data-slot="item"][data-variant="muted"] {
- border-width: 2px;
- box-shadow: var(--neo-shadow-xs);
+ border-width: 1px;
+ border-color: var(--border-subtle);
+ box-shadow: none;
+}
+
+:root[data-ui-theme="neo"] [data-slot="item"] {
+ border-width: 1px;
+ border-color: var(--border-subtle);
+ box-shadow: none;
 }
 
 :root[data-ui-theme="neo"] [data-slot="button"][data-size^="icon"],
 :root[data-ui-theme="neo"] [data-slot="button"][data-size="xs"],
 :root[data-ui-theme="neo"] [data-slot="button"][data-size="sm"] {
- border-width: 2px;
- box-shadow: var(--neo-shadow-sm);
+ border-width: 1px;
+ box-shadow: none;
  transform: none;
 }
 
@@ -923,15 +931,21 @@
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="default"],
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="destructive"] {
  border-color: var(--neo-edge);
+ box-shadow: var(--neo-shadow-sm);
 }
 
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="default"]:hover,
+:root[data-ui-theme="neo"] [data-slot="button"][data-variant="destructive"]:hover {
+ transform: translate(2px, 2px);
+ box-shadow: none !important;
+}
+
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="outline"]:hover,
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="secondary"]:hover,
 :root[data-ui-theme="neo"] [data-slot="select-trigger"]:hover,
 :root[data-ui-theme="neo"] [data-slot="toggle-group-item"]:hover,
 :root[data-ui-theme="neo"] .home-suggestion-pill:hover {
- transform: translate(var(--neo-shadow-x), var(--neo-shadow-y));
+ transform: none;
  box-shadow: none !important;
 }
 
@@ -943,21 +957,34 @@
 
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="outline"][data-size="sm"],
 :root[data-ui-theme="neo"] [data-slot="button"][data-variant="secondary"][data-size="sm"] {
- box-shadow: var(--neo-shadow-sm);
+ box-shadow: none;
+}
+
+:root[data-ui-theme="neo"] :is(
+ [data-slot="button"], [data-slot="toggle-group-item"], [data-slot="select-trigger"],
+ [data-slot="input"], [data-slot="textarea"], input, textarea, select
+):not([data-slot="input-group-control"]):focus-visible {
+ outline: 2px solid var(--ring);
+ outline-offset: 2px;
+}
+
+:root[data-ui-theme="neo"] [data-slot="badge"]:focus-visible {
+ outline: 2px solid var(--ring);
+ outline-offset: 2px;
 }
 
 :root[data-ui-theme="neo"] [data-slot="input-group"],
 :root[data-ui-theme="neo"] [data-slot="select-trigger"],
 :root[data-ui-theme="neo"] [data-slot="select-content"] {
  border-color: var(--border);
- border-width: 2px;
+ border-width: 1px;
  background: var(--card);
- box-shadow: var(--shadow-sm);
+ box-shadow: none;
 }
 
 :root[data-ui-theme="neo"] [data-slot="toggle-group-item"] {
- border-width: 2px;
- box-shadow: var(--neo-shadow-sm);
+ border-width: 1px;
+ box-shadow: none;
  border-radius: 999px;
  background: var(--card);
 }
@@ -971,8 +998,8 @@
 :root[data-ui-theme="neo"] input:not([data-slot="input-group-control"]):not([type="range"]):not([type="checkbox"]):not([type="radio"]):not(.doc-title-input),
 :root[data-ui-theme="neo"] textarea:not([data-slot="input-group-control"]),
 :root[data-ui-theme="neo"] select {
- border-width: 2px;
- box-shadow: var(--shadow-sm);
+ border-width: 1px;
+ box-shadow: none;
 }
 
 :root[data-ui-theme="neo"] .doc-title-input {
@@ -1018,20 +1045,19 @@
 
 :root[data-ui-theme="neo"] .sidebar-action-row {
  box-sizing: border-box;
- width: calc(100% - 5px) !important;
- max-width: calc(100% - 5px) !important;
+ width: 100% !important;
+ max-width: 100% !important;
  /* NO min-height here. The height comes from --sidebar-action-row-h plus this
     theme's --sidebar-row-frame (see the rhythm block above). A restated height
     is what made the base-scope reduction a no-op in this theme. */
- /* Unselected rows are plain list text, not cards — the hard border + offset
-    shadow is reserved for the active row below. Keep border-width so nothing
-    shifts by 2px when a row becomes selected. */
- border-width: 2px !important;
+ /* Unselected rows are plain list text, not cards. Keep the quiet frame stable
+    when a row becomes selected so the list does not reflow. */
+ border-width: 1px !important;
  border-color: transparent !important;
  background: transparent !important;
  box-shadow: none !important;
  border-radius: 10px !important;
- margin-right: 5px;
+ margin-right: 0;
  margin-bottom: var(--sidebar-row-clearance);
  font-size: 0.82rem !important;
 }
@@ -1052,15 +1078,15 @@
 
 :root[data-ui-theme="neo"] .sidebar-search {
  box-sizing: border-box;
- width: calc(100% - 5px) !important;
- max-width: calc(100% - 5px) !important;
+ width: 100% !important;
+ max-width: 100% !important;
  min-height: 2.25rem !important;
- border-width: 2px !important;
+ border-width: 1px !important;
  border-color: var(--border) !important;
  background: var(--card) !important;
- box-shadow: 3px 3px 0 var(--neo-shadow-ink) !important;
+ box-shadow: none !important;
  border-radius: 10px !important;
- margin-right: 5px;
+ margin-right: 0;
  font-size: 0.82rem !important;
 }
 
@@ -1094,15 +1120,13 @@
 
 :root[data-ui-theme="neo"][data-theme="dark"] .sidebar-search,
 :root[data-ui-theme="neo"][data-theme="dark"] .channel-header,
-:root[data-ui-theme="neo"][data-theme="dark"] .doc-toolbar,
-:root[data-ui-theme="neo"][data-theme="dark"] [data-floating-window]>div:first-child {
+:root[data-ui-theme="neo"][data-theme="dark"] .doc-toolbar {
  border-width: 1px !important;
  box-shadow: 2px 2px 0 color-mix(in srgb, var(--neo-shadow-ink) 72%, transparent) !important;
 }
 
 :root[data-ui-theme="neo"][data-theme="dark"] .channel-header,
-:root[data-ui-theme="neo"][data-theme="dark"] .doc-toolbar,
-:root[data-ui-theme="neo"][data-theme="dark"] [data-floating-window]>div:first-child {
+:root[data-ui-theme="neo"][data-theme="dark"] .doc-toolbar {
  box-shadow: none !important;
 }
 
@@ -1937,15 +1961,15 @@
 }
 
 :root[data-ui-theme="neo"] .task-card-expanded {
- border: 2px solid var(--border) !important;
+ border: 1px solid var(--border-subtle) !important;
  background: color-mix(in srgb, var(--card) 82%, var(--canvas-base)) !important;
- box-shadow: var(--neo-shadow-md) !important;
- margin-bottom: 5px;
+ box-shadow: none !important;
+ margin-bottom: 0;
 }
 
 :root[data-ui-theme="neo"] .task-card-expanded .task-row {
  border: 0 !important;
- border-bottom: 2px solid var(--border) !important;
+ border-bottom: 1px solid var(--border) !important;
  border-radius: 8px 8px 0 0 !important;
  background: color-mix(in srgb, var(--primary) 12%, var(--card) 88%) !important;
  box-shadow: none !important;
@@ -1962,13 +1986,13 @@
 
 :root[data-ui-theme="neo"] .task-subtask-row,
 :root[data-ui-theme="neo"] .task-comment-row {
- border: 2px solid var(--border) !important;
+ border: 1px solid var(--border-subtle) !important;
  background: color-mix(in srgb, var(--muted) 62%, var(--card)) !important;
  box-shadow: none !important;
 }
 
 :root[data-ui-theme="neo"] .task-input-group {
- border-width: 2px !important;
+ border-width: 1px !important;
  border-color: var(--border) !important;
  background: var(--card) !important;
  box-shadow: none !important;
@@ -1992,15 +2016,6 @@
  box-shadow: var(--neo-shadow-xs);
 }
 
-:root[data-ui-theme="neo"] [data-floating-window]>div:first-child {
- min-height: 42px;
- border-bottom-width: 2px;
-}
-
-:root[data-ui-theme="neo"] [data-floating-window]>div:first-child [data-slot="button"][data-size^="icon"] {
- border-radius: 999px;
-}
-
 :root[data-ui-theme="neo"] .sidebar-item-row:hover,
 :root[data-ui-theme="neo"] .sidebar-item-row[data-state="open"] {
  background: var(--muted) !important;
@@ -2021,11 +2036,11 @@
 :root[data-ui-theme="neo"] .sidebar-session-row[data-active="true"],
 :root[data-ui-theme="neo"] .sidebar-agent-row[data-active="true"],
 :root[data-ui-theme="neo"] .sidebar-folder-trigger[data-active="true"] {
- border-width: 2px !important;
+ border-width: 1px !important;
  border-style: solid !important;
  border-color: var(--border) !important;
  background: var(--card) !important;
- box-shadow: var(--neo-shadow-sm) !important;
+ box-shadow: none !important;
  color: var(--ink) !important;
 }
 
@@ -2039,7 +2054,7 @@
    reader already understands, so keyboard focus is still shown and there is
    still only ever one frame. */
 :root[data-ui-theme="neo"] .sidebar-agent-row:focus-within {
- border-width: 2px !important;
+ border-width: 1px !important;
  border-style: solid !important;
  border-color: var(--ring) !important;
 }
@@ -2077,7 +2092,7 @@
 }
 
 :root[data-ui-theme="neo"] [data-floating-window] {
- border-width: 2px;
+ border: 0 !important;
  box-shadow: var(--shadow-lg);
 }
 
@@ -2372,13 +2387,13 @@
    0 6px 16px -6px color-mix(in srgb, var(--foreground) 14%, transparent);
 }
 
-/* Brutal: every bordered surface in this theme wears a hard 2px ink edge, so
-   the rail's cards do too, with the offset shadow that goes with it. */
+/* Neo keeps the widget as one quiet information surface: a 1px edge without
+   an offset, while row hover fills provide the local grouping cue. */
 :root[data-ui-theme="neo"] .thread-widget-card {
- border: 2px solid var(--neo-edge);
+ border: 1px solid var(--border-subtle);
  border-radius: var(--radius-md);
  background: var(--card);
- box-shadow: var(--neo-shadow-xs);
+ box-shadow: none;
 }
 
 /* The header's hairline (border-border/60 in the TSX) is a soft separator by
@@ -2386,7 +2401,7 @@
    read as a divider as hard as the frame around it, not a washed-out ghost of
    it. */
 :root[data-ui-theme="neo"] .thread-widget-card > div:first-child {
- border-bottom-width: 2px;
+ border-bottom-width: 1px;
  border-bottom-color: var(--neo-edge);
 }
 
@@ -2759,50 +2774,52 @@
 :root[data-ui-theme="neo"] .agents-list-card,
 :root[data-ui-theme="neo"] .agent-detail-summary,
 :root[data-ui-theme="neo"] .agent-detail-section {
- border-color: var(--border) !important;
- border-width: 2px !important;
+ border-color: var(--border-subtle) !important;
+ border-width: 1px !important;
+ box-shadow: none !important;
 }
 
 :root[data-ui-theme="neo"] .agents-list-card {
- margin-right: 4px;
- margin-bottom: 5px;
+ margin-right: 0;
+ margin-bottom: 0;
  background: transparent !important;
- /* Resting depth so the card reads as a raised surface before hover; hover and
-    selected states deepen it further for a clear delta. */
- box-shadow: var(--neo-shadow-xs) !important;
+ /* The list uses its edge and accent fills for state; nested shadows would make
+    each row read as another floating card. */
+ box-shadow: none !important;
 }
 
 :root[data-ui-theme="neo"] .agents-list-card:hover {
  background: color-mix(in srgb, var(--agent-accent, var(--primary)) 12%, var(--card) 88%) !important;
- box-shadow: var(--neo-shadow-sm) !important;
+ box-shadow: none !important;
  transform: none;
 }
 
 :root[data-ui-theme="neo"] .agents-list-card[data-agent-selected="true"] {
  background: color-mix(in srgb, var(--agent-accent, var(--primary)) 18%, var(--card) 82%) !important;
- box-shadow: var(--neo-shadow-md) !important;
+ box-shadow: none !important;
  transform: none;
 }
 
 :root[data-ui-theme="neo"] .agent-detail-summary,
 :root[data-ui-theme="neo"] .agent-detail-section {
- box-shadow: var(--neo-shadow-md) !important;
+ box-shadow: none !important;
 }
 
 :root[data-ui-theme="neo"] .agent-profile-stat,
 :root[data-ui-theme="neo"] .agent-profile-card {
- border-color: var(--border) !important;
- border-width: 2px !important;
+ border-color: var(--border-subtle) !important;
+ border-width: 1px !important;
+ box-shadow: none !important;
 }
 
 :root[data-ui-theme="neo"] .agent-profile-stat {
- box-shadow: var(--neo-shadow-sm) !important;
+ box-shadow: none !important;
 }
 
 :root[data-ui-theme="neo"] .agent-profile-card {
- margin-right: 4px;
- margin-bottom: 5px;
- box-shadow: var(--neo-shadow-md) !important;
+ margin-right: 0;
+ margin-bottom: 0;
+ box-shadow: none !important;
 }
 
 /* Every message avatar gets the same edge in neo — not just agents'. The
@@ -2822,11 +2839,11 @@
  box-shadow: var(--neo-shadow-xs);
 }
 
-/* Reaction pills — same 1px border in every other theme, but neo's chip
-   language elsewhere (tool-step chips, sidebar chips) is a hard 2px edge. */
+/* Reaction pills stay compact information chips with the same quiet 1px edge
+   as other nested Neo surfaces. */
 :root[data-ui-theme="neo"] .chat-reaction-chip {
- border-width: 2px !important;
- box-shadow: var(--neo-shadow-xs);
+ border-width: 1px !important;
+ box-shadow: none;
 }
 
 @container (min-width: 640px) {
@@ -3130,14 +3147,14 @@
 
 :root[data-ui-theme="neo"] [data-slot="badge"] {
  min-height: 1.55rem;
- border-color: color-mix(in srgb, var(--border) 72%, transparent) !important;
+ border-color: var(--border-subtle) !important;
  background: color-mix(in srgb, var(--card) 94%, var(--primary) 6%) !important;
  color: var(--foreground) !important;
  padding-block: 0.2rem !important;
  line-height: 1.2 !important;
  font-weight: 650 !important;
- border-width: 2px !important;
- box-shadow: 1.5px 1.5px 0 color-mix(in srgb, var(--neo-shadow-ink) 72%, transparent);
+ border-width: 1px !important;
+ box-shadow: none !important;
 }
 
 :root[data-ui-theme="neo"] [data-slot="badge"][data-variant="outline"] {
@@ -5249,37 +5266,29 @@ select {
  border-radius: 12px !important;
 }
 
-/* Brutalist rows (neo + paper) have a hard OFFSET shadow that extends down-right.
-   The sidebar scroll viewport clips overflow-x, so each row must reserve right+bottom
-   room or the shadow's right edge gets cut flat (the reported clipping). */
+/* Neo list rows are information surfaces. Their 1px edge sits inside the panel,
+   so they do not reserve space for or paint an offset shadow. */
 :root[data-ui-theme="neo"] .sidebar-action-row,
 :root[data-ui-theme="neo"] .sidebar-search,
 :root[data-ui-theme="neo"] .sidebar-section-trigger,
 :root[data-ui-theme="neo"] .sidebar-folder-trigger,
 :root[data-ui-theme="neo"] .sidebar-item-row,
-/* The DM row belongs in this list too, and being left out of it is why the
-   SELECTED DM row was the one row clipped at the panel's right edge: every
-   other row reserves 6px for its 2px offset shadow, the DM row ran the full
-   width, and [data-sidebar-panel]'s `overflow: hidden` cut its border and
-   shadow off mid-edge. Measured: item row right edge 245.5px, DM row 251.5px,
-   in a 260px sidebar. */
+/* Include the DM row so every information row shares the panel width. */
 :root[data-ui-theme="neo"] .sidebar-agent-row {
- width: calc(100% - 6px) !important;
- max-width: calc(100% - 6px) !important;
+ width: 100% !important;
+ max-width: 100% !important;
  margin-left: 0 !important;
- margin-right: 6px !important;
+ margin-right: 0 !important;
  margin-bottom: var(--sidebar-row-clearance) !important;
 }
 
 :root[data-ui-theme="neo"] .sidebar-search {
- box-shadow: var(--neo-shadow-sm) !important;
+ box-shadow: none !important;
 }
 
-/* Selected nav row only — unselected rows stay flat (see the base
-   .sidebar-action-row rule above), so the card shadow reads as "selected"
-   instead of decorating every row in the list. */
+/* Selected nav rows use the same quiet frame; colour and background carry state. */
 :root[data-ui-theme="neo"] .sidebar-action-row[data-active="true"] {
- box-shadow: var(--neo-shadow-sm) !important;
+ box-shadow: none !important;
 }
 
 :root[data-ui-theme="paper"] .sidebar-action-row,
@@ -5298,11 +5307,9 @@ select {
 }
 
 :root[data-ui-theme="neo"] .sidebar-action-row:hover,
-:root[data-ui-theme="neo"] .sidebar-search:hover,
-:root[data-ui-theme="neo"] [data-slot="button"]:hover,
-:root[data-ui-theme="neo"] [data-slot="toggle-group-item"]:hover,
-:root[data-ui-theme="neo"] .home-suggestion-pill:hover {
- transform: translate(1px, 1px) !important;
+:root[data-ui-theme="neo"] .sidebar-search:hover {
+ transform: none !important;
+ box-shadow: none !important;
 }
 
 /* Neo / Paper: section headers and folder triggers match action-row card style */
@@ -5312,9 +5319,9 @@ select {
    the group header just introduces it, same as every other theme. ── */
 :root[data-ui-theme="neo"] .sidebar-section-header {
  box-sizing: border-box;
- width: calc(100% - 6px) !important;
- max-width: calc(100% - 6px) !important;
- margin-right: 6px !important;
+ width: 100% !important;
+ max-width: 100% !important;
+ margin-right: 0 !important;
  margin-bottom: var(--sidebar-row-clearance) !important;
  /* border-width 0, not 2px-transparent. This heading never becomes a card —
     the rule three lines down is the whole treatment, a flat label with a hover
@@ -5730,41 +5737,24 @@ select {
  text-transform: uppercase;
  letter-spacing: 0.04em;
  font-weight: 700 !important;
- border-width: 2px !important;
- border-color: var(--neo-edge) !important;
- /* Every neo badge rule below has to win with !important, which would otherwise
-    wipe out the shared `control-outer-ring` utility — Tailwind v4 paints ring-*
-    through box-shadow, so an !important box-shadow drops the ring instead of
-    layering with it. Compose it in as the first layer of the neo shadow: the
-    default is an invisible zero-spread shadow, and only badges that opted into
-    the utility (the `outline` variant, see badge.tsx) get a real ring. */
- --neo-badge-ring: 0 0 0 0 transparent;
- box-shadow: var(--neo-badge-ring), var(--neo-shadow-xs) !important;
-}
-
-/* The ring is a dark-mode-only treatment (see --control-outer-ring above), and
-   this selector must out-specify the default set on the base rule. */
-:root[data-ui-theme="neo"][data-theme="dark"] [data-slot="badge"].control-outer-ring:not([data-variant="ghost"]):not([data-variant="link"]) {
- --neo-badge-ring: 0 0 0 1px var(--control-outer-ring);
+ border-width: 1px !important;
+ border-color: var(--border-subtle) !important;
+ /* Badges are compact labels. Keep their border quiet and let focus-visible
+    outlines, rather than a ring-plus-shadow stack, carry keyboard state. */
+ box-shadow: none !important;
 }
 
 /* profile flavours — square + airy for editorial/terminal, chunkier for the
    loud profiles. (No rotation here: badges sit inline in dense UI.) */
 :root[data-ui-theme="neo"][data-neo-style="editorial"] [data-slot="badge"] {
  border-radius: 0 !important;
- /* No neo drop shadow in this flavour, but keep the outer ring layer. */
- box-shadow: var(--neo-badge-ring, 0 0 0 0 transparent) !important;
+ box-shadow: none !important;
  letter-spacing: 0.12em;
 }
 
 :root[data-ui-theme="neo"][data-neo-style="techno"] [data-slot="badge"],
 :root[data-ui-theme="neo"][data-neo-style="flat"] [data-slot="badge"] {
  border-radius: 0 !important;
-}
-
-:root[data-ui-theme="neo"][data-neo-style="heavy"] [data-slot="badge"],
-:root[data-ui-theme="neo"][data-neo-style="sticker"] [data-slot="badge"] {
- box-shadow: var(--neo-badge-ring, 0 0 0 0 transparent), var(--neo-shadow-sm) !important;
 }
 
 /* ---- pill switch with a bordered circular knob (skill signature) ----------- */
@@ -5904,7 +5894,7 @@ select {
    shell, so both must start their content on the same line and end on the same
    line. `--neo-chrome-band-top` is where that line is, measured from the shell's
    top edge: WORKSPACE_CHROME_GAP (8px, the canvas column's padding) +
-   [data-floating-window]'s 2px frame + the window surface's 1px border.
+   [data-floating-window]'s borderless wrapper + the window surface's 1px border.
 
    The sidebar is flush to the shell's top edge, so whatever it spends on its OWN
    top border comes out of that budget — which is why the header's padding is
@@ -5915,13 +5905,20 @@ select {
    remaining step, and a 0.5px offset between the two dividers. Whole pixels
    here, one token, and the arithmetic below can no longer drift from it. */
 :root[data-ui-theme="neo"] {
- --neo-chrome-band-top: 11px;
- --neo-sidebar-frame: 2px;
+ --neo-chrome-band-top: 9px;
+ --neo-sidebar-frame: 1px;
  /* The rule under BOTH header bars, and the amount the band's inner content has
     to stop short of its own bottom edge. One token so the two bars cannot end up
     with rules of different weights, and so the pill below can be sized against
     the same number instead of overhanging it. */
- --neo-band-divider: 2px;
+ --neo-band-divider: 1px;
+}
+
+/* Full-bleed windows begin at the canvas edge rather than after the regular
+   8px workspace gutter. Their titlebar still shares the sidebar's one-pixel
+   frame and separator, so only the measured top band changes. */
+:root[data-ui-theme="neo"]:has([data-window-bleed-top="true"]:not([hidden])) {
+ --neo-chrome-band-top: 1px;
 }
 
 /* sidebar header matches window titlebar treatment */
@@ -6096,6 +6093,8 @@ select {
    translucency so it still reads as floating, but no blur and far more solid. */
 :root[data-ui-theme="neo"] [data-window-surface] {
  background: var(--card) !important;
+ border-width: 1px !important;
+ border-style: solid !important;
  backdrop-filter: none !important;
  -webkit-backdrop-filter: none !important;
 }

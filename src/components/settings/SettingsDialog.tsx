@@ -720,7 +720,7 @@ function AppearancePanel({
               <FieldDescription>Sets the largest non-pill corner radius. Compact controls stay proportionally tighter.</FieldDescription>
             </div>
 
-            <FieldDescription>Default keeps the app’s existing functions and palettes, with softer offset controls inspired by the ideation-canvas system.</FieldDescription>
+            <FieldDescription>Softer borders and subtle offset shadows.</FieldDescription>
           </div>
         )}
 
@@ -870,11 +870,7 @@ function AppearancePanel({
               ))}
             </div>
 
-            <FieldDescription>
-              {isNormalFamily
-                ? 'Click the active theme to deselect and return to the default look.'
-                : 'Pick a theme to repaint the app. Toggle Light / Dark above to switch scheme.'}
-            </FieldDescription>
+            <FieldDescription>Standard themes with clean borders and soft depth.</FieldDescription>
           </div>
         )}
 
@@ -944,11 +940,7 @@ function AppearancePanel({
               ))}
             </div>
 
-            <FieldDescription>
-              {isNeoFamily
-                ? 'Repaints the whole app with brutal chrome. Each theme has matching light and dark variants.'
-                : 'Picking a theme switches you into the Brutal family.'}
-            </FieldDescription>
+            <FieldDescription>Crisp edges, bold accents and solid surfaces.</FieldDescription>
           </div>
         )}
       </Field>

@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { syncNeoTheme, findNeoTheme, getStoredNeoTheme } from '../showcase/neoThemes';
-import { syncNormalTheme } from '../showcase/normalThemes';
-import { syncTwTheme, findTwTheme, getStoredTwTheme } from '../showcase/twThemes';
+import { syncNeoTheme, clearNeoThemeVars, findNeoTheme, getStoredNeoTheme } from '../showcase/neoThemes';
+import { syncNormalTheme, clearNormalTheme } from '../showcase/normalThemes';
+import { syncTwTheme, clearTwTheme, findTwTheme, getStoredTwTheme } from '../showcase/twThemes';
 import { applyThemePreset, getStoredPreset } from '../showcase/themePresets';
-import { applyDefaultRadius, getStoredDefaultRadius } from '../showcase/defaultTheme';
+import { applyRadiusScale, getStoredRadiusScale } from '../showcase/defaultTheme';
 
 export type ThemeMode = 'light' | 'dark' | 'system' | 'default-light' | 'default-dark' | 'default-system' | 'paper-light' | 'paper-dark' | 'neo-light' | 'neo-dark' | 'normal-light' | 'normal-dark';
 
@@ -55,29 +55,29 @@ function applyTheme(mode: ThemeMode) {
   document.documentElement.style.background = bg;
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute('content', bg);
-  // Reconcile the neo palette layer now that family + scheme are settled.
-  // For the neo family this applies the stored neo theme's matching light/dark
-  // seed; for other families it clears neo overrides and restores the accent.
-  syncNeoTheme();
+  // The registries share surface keys. Clear stale inline tokens from every
+  // family before applying the active one, otherwise a later inactive-family
+  // clear can erase the active palette (notably Neo).
+  clearNeoThemeVars();
+  clearNormalTheme();
+  clearTwTheme();
+
   // Default owns its radius through a scoped data attribute. Keeping this
   // outside the colour families means switching away cannot leak roundness.
-  applyDefaultRadius(getStoredDefaultRadius());
-  // Normal themes overwrite the accent preset vars applied by syncNeoTheme's
-  // non-neo branch so they win cleanly without any ordering dependency.
-  syncNormalTheme(mode);
-  // syncNormalTheme's clear branch strips --primary/--ring/--sh-accent (they're
-  // in NORMAL_MANAGED_KEYS) for classic + paper, wiping the accent preset
-  // that syncNeoTheme's non-neo branch just applied. App.tsx only re-asserts it
-  // on mount, so without this a light<->dark toggle silently drops the accent.
-  // Re-assert last for the families that keep a preset (not neo, not normal-*).
-  if (family !== 'neo' && mode !== 'normal-light' && mode !== 'normal-dark') {
+  applyRadiusScale(getStoredRadiusScale());
+
+  // Apply the active family last. Paper worlds deliberately leave accent
+  // preset keys alone, so restore the saved preset after applying the world.
+  if (family === 'neo') {
+    syncNeoTheme();
+  } else if (family === 'paper') {
+    syncTwTheme(mode);
+    applyThemePreset(getStoredPreset());
+  } else if (mode === 'normal-light' || mode === 'normal-dark') {
+    syncNormalTheme(mode);
+  } else {
     applyThemePreset(getStoredPreset());
   }
-  // Reconcile the Paper paper layer (world canvas/border/text/flourish).
-  // Worlds deliberately don't own --primary/--sh-accent, so this composes with
-  // the accent preset just applied above rather than fighting it: paper →
-  // apply the stored world's light/dark paper; other families → clear it.
-  syncTwTheme(mode);
 }
 
 export function useTheme() {

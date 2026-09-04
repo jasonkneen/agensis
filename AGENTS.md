@@ -1239,6 +1239,12 @@ Pinned by `tests/desktop-local-runtime.test.cjs`.
 
 ## Conventions
 
+- Theme families have distinct roles: Default is softly brutal, Classic
+  (including legacy light/dark modes) is standard, and Neo/Brutal uses bolder
+  accents. Each window surface owns one frame; its wrapper owns placement and
+  floating elevation. Target `[data-window-titlebar]` for header styling, never
+  `> div:first-child`, which is the entire surface. Apply the active palette
+  after clearing inactive families because their managed CSS variables overlap.
 - HTML, SVG, and XML uploads are served as inert downloads. XML can contain
   executable XHTML/SVG namespaces, so `application/xml` is not a safe inline
   type. Keep both the extension guard and the legacy stored-type guard.
