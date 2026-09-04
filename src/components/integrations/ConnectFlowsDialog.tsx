@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Check, Copy, Link2 } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
+import { Button } from '@agensis/ui/components/button';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@agensis/ui/components/dialog';
+import { Input } from '@agensis/ui/components/input';
 import { createFlowConnection, type FlowConnectionInfo } from '../../lib/flowConnect';
 
 export function ConnectFlowsDialog({

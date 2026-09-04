@@ -12,9 +12,9 @@ import {
   X,
 } from 'lucide-react';
 import type { CanvasTool } from '../../types';
-import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Button } from '@agensis/ui/components/button';
+import { Separator } from '@agensis/ui/components/separator';
+import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 import { cn } from '@/lib/utils';
 
 const TOOLS: Array<{ id: CanvasTool; icon: typeof MousePointer2; label: string }> = [

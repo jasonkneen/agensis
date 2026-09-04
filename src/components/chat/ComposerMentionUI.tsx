@@ -1,7 +1,7 @@
 import { Bot, FileText, X } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from '@/components/ui/command';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from '@agensis/ui/components/command';
 import { agentHandle } from '../../lib/agentAccent';
 import type { ComposerMentions } from '../../hooks/useComposerMentions';
 

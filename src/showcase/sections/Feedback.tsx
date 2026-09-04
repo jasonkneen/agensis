@@ -7,10 +7,10 @@ import {
   RefreshCwIcon,
 } from 'lucide-react';
 import { SectionShell, Example } from '@/showcase/SectionShell';
-import { Alert, AlertTitle, AlertDescription, AlertAction } from '@/components/ui/alert';
-import { Progress } from '@/components/ui/progress';
-import { Spinner } from '@/components/ui/spinner';
-import { Button } from '@/components/ui/button';
+import { Alert, AlertTitle, AlertDescription, AlertAction } from '@agensis/ui/components/alert';
+import { Progress } from '@agensis/ui/components/progress';
+import { Spinner } from '@agensis/ui/components/spinner';
+import { Button } from '@agensis/ui/components/button';
 
 export default function FeedbackSection() {
   const [progress, setProgress] = useState(40);

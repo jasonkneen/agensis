@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Bot, Command as CommandIcon, FileText, FolderOpen, HardDrive, Layers, Paperclip, Sparkles, Upload, Wrench, X } from 'lucide-react';
 import type { CanvasGroup, Document, UploadedFile, WorkspaceAgent } from '../../types';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import { AgentAvatar } from '@/components/agents/AgentAvatar';
 import { agentHandle } from '../../lib/agentAccent';
 import { safeAttachmentSize } from '../../lib/messageAttachments';
@@ -303,7 +303,7 @@ function ComposerAddRow({
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate">{label}</span>
-        <span className="block truncate text-[11px] text-muted-foreground">{detail}</span>
+        <span className="block truncate text-2xs text-muted-foreground">{detail}</span>
       </span>
     </button>
   );
@@ -318,7 +318,7 @@ export function FileChip({ name, label, onRemove }: { name: string; label?: stri
   return (
     <span className="inline-flex max-w-[200px] shrink-0 items-center gap-1 rounded-md border border-border bg-muted/60 px-1.5 py-0.5 text-xs text-foreground">
       {ext && (
-        <span className="shrink-0 rounded bg-primary/15 px-1 py-0.5 text-[10px] font-bold leading-none text-primary">
+        <span className="shrink-0 rounded bg-primary/15 px-1 py-0.5 text-3xs font-bold leading-none text-primary">
           {ext}
         </span>
       )}

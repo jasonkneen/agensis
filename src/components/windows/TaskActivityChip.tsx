@@ -42,7 +42,7 @@ function IdleChip({ since, compact }: { since: number; compact?: boolean }) {
     <span
       className={cn(
         'inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-muted-foreground',
-        compact ? 'text-[10px] leading-none' : 'text-[11px] leading-none',
+        compact ? 'text-3xs leading-none' : 'text-2xs leading-none',
       )}
       title={idleTaskTitle(elapsed)}
     >
@@ -79,7 +79,7 @@ function WorkingChip({
     <span
       className={cn(
         'inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-primary',
-        compact ? 'text-[10px] leading-none' : 'text-[11px] leading-none',
+        compact ? 'text-3xs leading-none' : 'text-2xs leading-none',
       )}
       title={workingTaskTitle(elapsed, jobs)}
     >

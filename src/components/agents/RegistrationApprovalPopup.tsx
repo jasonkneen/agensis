@@ -1,5 +1,5 @@
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@agensis/ui/components/dialog';
+import { Button } from '@agensis/ui/components/button';
 import { useAgentRegistrations } from '../../hooks/useAgentRegistrations';
 
 // The "X wants to register as @q — Allow?" popup. Mounted once at the app root; it shows

@@ -15,15 +15,15 @@ import {
 } from '../../lib/memoryBrowserView';
 import { DocumentComments } from '../editor/DocumentComments';
 import { MarkdownContent } from '../chat/MarkdownContent';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from '@/components/ui/empty';
+} from '@agensis/ui/components/empty';
 import {
   Item,
   ItemActions,
@@ -32,8 +32,8 @@ import {
   ItemGroup,
   ItemMedia,
   ItemTitle,
-} from '@/components/ui/item';
-import { ScrollArea } from '@/components/ui/scroll-area';
+} from '@agensis/ui/components/item';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { FOCUS_RING } from '../inbox/inboxPresentation';
 import { cn } from '@/lib/utils';
 

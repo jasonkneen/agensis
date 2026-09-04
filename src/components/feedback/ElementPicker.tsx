@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { MousePointerSquareDashed, X } from 'lucide-react';
 import { describeElement, elementChipLabel, type ElementDescriptor } from '@/lib/feedbackElement';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -159,7 +159,7 @@ export function ElementPicker({ onPick, onDone, onCancel, picked, max }: Element
         >
           <span
             className={cn(
-              'absolute left-0 max-w-[min(28rem,80vw)] truncate rounded-sm bg-primary px-1.5 py-0.5 font-mono text-[10px] leading-4 text-primary-foreground',
+              'absolute left-0 max-w-[min(28rem,80vw)] truncate rounded-sm bg-primary px-1.5 py-0.5 font-mono text-3xs leading-4 text-primary-foreground',
               // Flip the caption below the box when there is no room above it.
               rect.top < 22 ? 'top-full mt-0.5' : 'bottom-full mb-0.5',
             )}

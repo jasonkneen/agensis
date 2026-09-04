@@ -29,7 +29,7 @@ import type { InboxCategory } from '../../types';
 // the Activity detail.
 //
 // The inbox was the one surface written in absolute px (`text-[13px]` /
-// `text-[11px]`). At the default 16px base that is a coincidental match —
+// `text-2xs`). At the default 16px base that is a coincidental match —
 // `text-sm` computes to 14px — so it looked right and nobody noticed. Turn
 // the base up and it stops being a match: measured at an 17px base, the sidebar
 // label renders 14.88px while the inbox row stayed frozen at 13.00px, which is

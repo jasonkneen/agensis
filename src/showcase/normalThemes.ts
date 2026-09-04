@@ -11,8 +11,8 @@ export interface NormalSeed {
  elevated: string;    // --card, --popover, --canvas-elevated
  raised: string;      // --secondary, --canvas-raised
  muted: string;       // --muted, --canvas-overlay
- fg: string;          // --foreground, --text-primary
- fgMuted: string;     // --muted-foreground, --text-secondary
+ fg: string;          // --foreground, --ink
+ fgMuted: string;     // --muted-foreground, --ink-secondary
  primary: string;     // --primary, --accent
  onPrimary: string;   // --primary-foreground
  border: string;      // --border, --sh-border, --input
@@ -41,7 +41,7 @@ export const NORMAL_MANAGED_KEYS = [
  '--sidebar', '--sidebar-foreground',
  '--canvas-base', '--canvas-elevated', '--canvas-raised', '--canvas-overlay',
  '--border', '--border-subtle', '--border-strong',
- '--text-primary', '--text-secondary', '--text-muted', '--text-inverse',
+ '--ink', '--ink-secondary', '--ink-muted', '--ink-inverse',
  '--accent', '--accent-hover', '--accent-subtle', '--accent-border',
 ] as const;
 
@@ -86,10 +86,10 @@ export function expandNormal(seed: NormalSeed): Record<string, string> {
   '--border': border,
   '--border-subtle': borderSubtle,
   '--border-strong': borderStrong,
-  '--text-primary': fg,
-  '--text-secondary': fgMuted,
-  '--text-muted': textMuted,
-  '--text-inverse': onPrimary,
+  '--ink': fg,
+  '--ink-secondary': fgMuted,
+  '--ink-muted': textMuted,
+  '--ink-inverse': onPrimary,
   '--accent': primary,
   '--accent-hover': accentHover,
   '--accent-subtle': accentSubtle,

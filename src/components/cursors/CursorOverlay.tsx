@@ -50,7 +50,7 @@ export function CursorOverlay({ cursors, getMode }: CursorOverlayProps) {
           >
             <CursorSvg color={cursor.color} />
             <div
-              className="absolute top-3.5 left-3.5 whitespace-nowrap rounded px-2 py-0.5 text-[11px] font-medium leading-snug text-white shadow"
+              className="absolute top-3.5 left-3.5 whitespace-nowrap rounded px-2 py-0.5 text-2xs font-medium leading-snug text-white shadow"
               style={{
                 background: cursor.color,
               }}

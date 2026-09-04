@@ -6,8 +6,8 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
+} from '@agensis/ui/components/dialog';
+import { Button } from '@agensis/ui/components/button';
 import { useOwnerMessage } from '@/lib/ownerMessageContext';
 
 /**

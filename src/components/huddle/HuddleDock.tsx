@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Captions, CaptionsOff, ChevronDown, GripVertical, Headphones, Radio, Volume2, VolumeX, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,7 +11,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
+} from '@agensis/ui/components/alert-dialog';
 import { CHROME_DEPTH } from '@/lib/chromeDepth';
 import {
   buildRoomDockParticipants,
@@ -416,7 +416,7 @@ export function HuddleDock() {
                 key={participant.id}
                 title={participant.name}
                 className={cn(
-                  'grid size-6 shrink-0 place-items-center rounded-full text-[10px] font-semibold',
+                  'grid size-6 shrink-0 place-items-center rounded-full text-3xs font-semibold',
                   participant.kind === 'agent'
                     ? 'bg-primary/15 text-primary'
                     : 'bg-muted text-muted-foreground',
@@ -430,7 +430,7 @@ export function HuddleDock() {
                     name={participant.name}
                     initials={participantInitials(participant.name)}
                     className="size-6 rounded-full"
-                    fallbackClassName="bg-transparent text-[10px] text-primary"
+                    fallbackClassName="bg-transparent text-3xs text-primary"
                   />
                 ) : participantInitials(participant.name)}
               </span>

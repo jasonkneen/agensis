@@ -8,6 +8,10 @@
 
     /* Bundler mode */
     "moduleResolution": "bundler",
+    // Resolve @agensis/ui to its TS source (its exports map has a "source"
+    // condition), matching vite/vitest. Typecheck then sees the same files the
+    // bundler does, with no library build step in the loop.
+    "customConditions": ["source"],
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]

@@ -2,7 +2,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NostrCommunitySetup } from '../../src/components/chat/NostrCommunitySetup';
-import { Dialog, DialogContent } from '../../src/components/ui/dialog';
+import { Dialog, DialogContent } from '@agensis/ui/components/dialog';
 import { nostrErrorMessage, NostrRequestError } from '../../src/lib/nostrCommunities';
 import type { NostrChannel, NostrConnection } from '../../src/lib/nostrCommunities';
 

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { InlineRename } from '@/components/common/InlineRename';
 import { Building2, Plus } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@agensis/ui/components/tooltip';
 import { cn } from '@/lib/utils';
 import {
   buildWorkspaceRail,

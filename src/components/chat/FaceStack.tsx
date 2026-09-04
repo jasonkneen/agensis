@@ -96,7 +96,7 @@ export function FaceStack({ readerIds, resolveFace, max = 3, className }: FaceSt
       {/* Past the cap a numeral genuinely beats a face: four 16px slivers say
           less than "+4" does. */}
       {overflow > 0 && (
-        <span className="ml-1 text-[10px] font-medium tabular-nums">+{overflow}</span>
+        <span className="ml-1 text-3xs font-medium tabular-nums">+{overflow}</span>
       )}
     </span>
   );

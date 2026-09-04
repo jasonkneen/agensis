@@ -2,12 +2,12 @@ import { History, RotateCcw, X } from 'lucide-react';
 import type { DocumentVersion } from '../../types';
 import { stripHtml } from '../../lib/utils';
 import { sanitizeHtml } from '@/lib/sanitize';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty';
-import { Item, ItemActions, ItemContent, ItemDescription, ItemHeader, ItemTitle } from '@/components/ui/item';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Spinner } from '@/components/ui/spinner';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@agensis/ui/components/empty';
+import { Item, ItemActions, ItemContent, ItemDescription, ItemHeader, ItemTitle } from '@agensis/ui/components/item';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Spinner } from '@agensis/ui/components/spinner';
 
 interface DocumentVersionHistoryProps {
   versions: DocumentVersion[];
@@ -47,7 +47,7 @@ export function DocumentVersionHistory({
         <History data-icon="inline-start" className="size-3.5 text-muted-foreground" />
         <span className="text-xs font-semibold text-foreground">Version History</span>
         {versions.length > 0 && (
-          <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+          <Badge variant="secondary" className="h-5 px-1.5 text-3xs">
             {versions.length}
           </Badge>
         )}
@@ -79,15 +79,15 @@ export function DocumentVersionHistory({
             versions.map(version => (
               <Item key={version.id} variant="muted" className="block p-2.5">
                 <ItemHeader className="mb-1 gap-2">
-                  <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+                  <Badge variant="secondary" className="h-5 px-1.5 text-3xs">
                     v{version.version_number}
                   </Badge>
-                  <ItemTitle className="min-w-0 flex-1 truncate text-[11px]">{version.title}</ItemTitle>
+                  <ItemTitle className="min-w-0 flex-1 truncate text-2xs">{version.title}</ItemTitle>
                   <span className="shrink-0 text-[9px] text-muted-foreground">{formatTime(version.created_at)}</span>
                 </ItemHeader>
                 {version.content && (
                   <ItemContent>
-                    <ItemDescription className="truncate text-[11px]">{contentPreview(version.content)}</ItemDescription>
+                    <ItemDescription className="truncate text-2xs">{contentPreview(version.content)}</ItemDescription>
                   </ItemContent>
                 )}
                 <ItemActions className="mt-2">

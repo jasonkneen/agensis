@@ -156,6 +156,7 @@ rather than producing a command that points at the wrong host.
 
 ```text
 src/            React app — components, hooks, lib, types
+packages/ui/    @agensis/ui — the shadcn-derived primitives (MIT, see its NOTICE)
 server/         API + realtime WebSocket server
 shared/         rules both backends import (access control, validation)
 database/       canonical schema
@@ -167,8 +168,8 @@ tests/          backend (tests/*.test.cjs) and unit (tests/unit/**/*.test.ts)
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, the two test runners, and the
-conventions. [AGENTS.md](./AGENTS.md) is the deep architectural reference — read
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, the three test runners, and
+the conventions. [AGENTS.md](./AGENTS.md) is the deep architectural reference — read
 it before changing the backend.
 
 Security issues go through [SECURITY.md](./SECURITY.md), **not** public issues.
@@ -190,6 +191,13 @@ can be embedded freely. That split is deliberate: the daemon is a client you may
 want inside your own software, while this server is the part worth keeping open.
 Do not copy code from this repository into that one — it would pull AGPL terms
 into an MIT project.
+
+`packages/ui` (`@agensis/ui`) is the same split in the other direction: the
+shadcn-derived UI primitives are **MIT** ([packages/ui/LICENSE](./packages/ui/LICENSE),
+[packages/ui/NOTICE](./packages/ui/NOTICE)) so they can be lifted out later,
+which is only true while they stay clean. The same rule therefore applies in
+reverse: no code from the AGPL portions of this repository may be copied into
+`packages/ui`. It is not published today (`"private": true`).
 
 Third-party attribution is in [NOTICE](./NOTICE). Bundled media assets are
 inventoried in [ASSETS.md](./ASSETS.md).

@@ -38,19 +38,19 @@ import {
   isLiveActivityPlaceholder,
 } from '../../lib/activityStatus';
 import type { CanvasGroup, ChatSession, Document, Message as ChatMessage, MessageAttachment, UploadedFile, WorkspaceAgent } from '../../types';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
-} from '@/components/ui/empty';
+} from '@agensis/ui/components/empty';
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
   InputGroupTextarea,
-} from '@/components/ui/input-group';
+} from '@agensis/ui/components/input-group';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -58,13 +58,13 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
-} from '@/components/ui/message-scroller';
+} from '@agensis/ui/components/message-scroller';
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from '@/components/ui/popover';
-import { Spinner } from '@/components/ui/spinner';
+} from '@agensis/ui/components/popover';
+import { Spinner } from '@agensis/ui/components/spinner';
 import { useComposerMentions } from '../../hooks/useComposerMentions';
 import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI';
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
@@ -345,7 +345,7 @@ export function SubThreadPanel({
             <button
               key={p.id}
               type="button"
-              className="inline-flex h-5 items-center gap-1 rounded-md bg-muted px-2 text-[11px] text-muted-foreground hover:text-foreground"
+              className="inline-flex h-5 items-center gap-1 rounded-md bg-muted px-2 text-2xs text-muted-foreground hover:text-foreground"
               onClick={() => onAgentProfile?.(p.agent_id || p.handle || p.name || '')}
             >
               <AgentAvatar
@@ -533,7 +533,7 @@ export function SubThreadPanel({
                     side="top"
                     align="start"
                     sideOffset={8}
-                    className="z-[12060] w-[min(460px,calc(100vw-32px))] max-h-[min(560px,calc(100vh-96px))] gap-0 overflow-hidden p-0"
+                    className="w-[min(460px,calc(100vw-32px))] max-h-[min(560px,calc(100vh-96px))] gap-0 overflow-hidden p-0"
                   >
                     <ComposerAddContent
                       documents={documents}
@@ -700,7 +700,7 @@ export function SubThreadBubble({
             name={senderName}
             initials={senderName.slice(0, 2).toUpperCase()}
             className="size-7 rounded-md"
-            fallbackClassName="bg-transparent text-[10px] text-muted-foreground"
+            fallbackClassName="bg-transparent text-3xs text-muted-foreground"
           />
         ) : <Bot className="size-3.5" />}
       </div>
@@ -723,7 +723,7 @@ export function SubThreadBubble({
               {senderName}
             </span>
           )}
-          {timeLabel && <span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel}</span>}
+          {timeLabel && <span className="shrink-0 text-2xs text-muted-foreground">{timeLabel}</span>}
           {ownMutation.mutable && (
             <span className="ml-auto flex shrink-0 items-center gap-0.5">
               <Button

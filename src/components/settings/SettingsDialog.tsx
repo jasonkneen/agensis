@@ -1,5 +1,9 @@
 import { DEFAULT_BACKGROUND_OPACITY } from '../../lib/wallpaperDefaults';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { GATEWAY_PRESETS, gatewayPresetById } from '../../lib/gatewayPresets';
+
+// Keeps recharts out of the main bundle — see the note in UsageCharts.tsx.
+const UsageCharts = lazy(() => import('./UsageCharts'));
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   Check,
@@ -26,7 +30,15 @@ import type { ThemeMode } from '../../hooks/useTheme';
 import type { Workspace } from '../../types';
 import { applyUiAppearanceSettings, getSettings, setSetting, type AppSettings, type NotificationLevel, type UiFontFamily } from '../../lib/settings';
 import { THEME_PRESETS, applyThemePreset } from '../../showcase/themePresets';
-import { DEFAULT_RADII, applyDefaultRadius, isDefaultRadius, type DefaultRadius } from '../../showcase/defaultTheme';
+import {
+  applyRadiusScale,
+  clampRadiusScale,
+  radiusScaleFrom,
+  RADIUS_PILL_THRESHOLD,
+  RADIUS_SCALE_MAX,
+  RADIUS_SCALE_MIN,
+  RADIUS_SCALE_STEP,
+} from '../../showcase/defaultTheme';
 import { NEO_THEMES, NEO_GROUPS, applyNeoTheme, resolveNeoStyle } from '../../showcase/neoThemes';
 import { NORMAL_THEMES, NORMAL_GROUPS, applyNormalTheme, clearNormalTheme, getStoredNormalTheme } from '../../showcase/normalThemes';
 import { TW_WORLDS, applyTwTheme, getStoredTwTheme } from '../../showcase/twThemes';
@@ -51,30 +63,30 @@ import { AuditLogPanel } from './AuditLogPanel';
 import { useGateways } from '../../hooks/useGateways';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
+} from '@agensis/ui/components/dialog';
 import {
   Field,
   FieldDescription,
   FieldGroup,
   FieldLabel,
-} from '@/components/ui/field';
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group';
-import { Input } from '@/components/ui/input';
-import { Item, ItemContent, ItemDescription, ItemTitle } from '@/components/ui/item';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Slider } from '@/components/ui/slider';
-import { Spinner } from '@/components/ui/spinner';
-import { Switch } from '@/components/ui/switch';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+} from '@agensis/ui/components/field';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@agensis/ui/components/input-group';
+import { Input } from '@agensis/ui/components/input';
+import { Item, ItemContent, ItemDescription, ItemTitle } from '@agensis/ui/components/item';
+import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Slider } from '@agensis/ui/components/slider';
+import { Spinner } from '@agensis/ui/components/spinner';
+import { Switch } from '@agensis/ui/components/switch';
+import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 import { cn } from '@/lib/utils';
 
 interface SettingsDialogProps {
@@ -105,7 +117,11 @@ const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: 'notifications', label: 'Notifications', icon: <Bell /> },
   { id: 'appearance', label: 'Appearance', icon: <Palette /> },
   { id: 'ai', label: 'AI', icon: <Sparkles /> },
-  { id: 'tools', label: 'Tools', icon: <Wrench /> },
+  // Labelled for what the panel actually lists: locally installed agent CLIs
+  // (Claude Code, Codex, Goose, Cursor…), not "tools" in the MCP/tool-call
+  // sense, which is what "Tools" reads as everywhere else in this app.
+  // The id stays 'tools' — it is persisted and deep-linked.
+  { id: 'tools', label: 'Agent CLIs', icon: <Wrench /> },
   { id: 'connections', label: 'Connections', icon: <Plug /> },
   { id: 'secrets', label: 'Vault', icon: <KeyRound /> },
   // Next to the Vault: same manage gate, same sensitivity. The route behind it
@@ -502,10 +518,10 @@ function AppearancePanel({
   const [backgroundOpacity, setBackgroundOpacity] = useState(() => Math.round((workspace?.background_opacity ?? DEFAULT_BACKGROUND_OPACITY) * 100));
   const [fontFamily, setFontFamily] = useState<UiFontFamily>(initialSettings.ui_font_family);
   const [baseFontSize, setBaseFontSize] = useState(initialSettings.ui_base_font_size);
+  const [fontWeight, setFontWeight] = useState(initialSettings.ui_font_weight);
+  const [lineHeight, setLineHeight] = useState(initialSettings.ui_line_height);
   const [themePreset, setThemePreset] = useState(initialSettings.ui_theme_preset);
-  const [defaultRadius, setDefaultRadius] = useState<DefaultRadius>(
-    isDefaultRadius(initialSettings.ui_default_radius) ? initialSettings.ui_default_radius : 'soft',
-  );
+  const [radiusScale, setRadiusScale] = useState(() => radiusScaleFrom(initialSettings.ui_default_radius));
   const [neoTheme, setNeoTheme] = useState(initialSettings.ui_neo_theme);
   const [normalTheme, setNormalTheme] = useState(() => getStoredNormalTheme());
   const [twTheme, setTwTheme] = useState(() => getStoredTwTheme());
@@ -647,7 +663,7 @@ function AppearancePanel({
             </ToggleGroup>
 
             <div className="space-y-2">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Colour</div>
+              <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Colour</div>
               <ToggleGroup
                 type="single"
                 value={themePreset}
@@ -670,36 +686,36 @@ function AppearancePanel({
             </div>
 
             <div className="space-y-2">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Corners</div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="listbox" aria-label="Corner rounding">
-                {DEFAULT_RADII.map(radius => {
-                  const active = defaultRadius === radius.id;
-                  return (
-                    <button
-                      key={radius.id}
-                      type="button"
-                      role="option"
-                      aria-selected={active}
-                      title={radius.description}
-                      onClick={() => {
-                        setDefaultRadius(radius.id);
-                        setSetting('ui_default_radius', radius.id);
-                        applyDefaultRadius(radius.id);
-                      }}
-                      className={`flex min-w-0 flex-col items-center gap-2 rounded-md border px-2 py-2.5 text-center transition ${active ? 'border-primary bg-primary/10 ring-2 ring-primary' : 'border-border hover:bg-accent'}`}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="h-7 w-full border border-border bg-muted"
-                        style={{ borderRadius: radius.previewPx }}
-                      />
-                      <span className="text-xs font-semibold">{radius.label}</span>
-                      <span className="text-[10px] leading-tight text-muted-foreground">{radius.description}</span>
-                    </button>
-                  );
-                })}
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Corners</div>
+                <Badge variant="secondary">
+                  {radiusScale === 0 ? 'Square' : radiusScale >= RADIUS_PILL_THRESHOLD ? 'Pill' : `${Math.round(10 * radiusScale)}px`}
+                </Badge>
               </div>
-              <FieldDescription>Soft is the default. This changes the app’s control and panel corners without changing your colour choice.</FieldDescription>
+              {/* One axis, one control. This was four preset cards whose names
+                  did not even order by radius — "Rounded" (14px) sat between
+                  "Soft" (10px) and "Pill" — so it read as four unrelated styles
+                  rather than more-or-less of one thing, and could not express
+                  anything between them. The slider drives a multiplier that all
+                  thirteen radius tokens derive from, so they keep proportion. */}
+              <Slider
+                value={[radiusScale]}
+                min={RADIUS_SCALE_MIN}
+                max={RADIUS_SCALE_MAX}
+                step={RADIUS_SCALE_STEP}
+                aria-label="Corner rounding"
+                onValueChange={value => {
+                  const next = clampRadiusScale(value[0] ?? radiusScale);
+                  setRadiusScale(next);
+                  setSetting('ui_default_radius', next);
+                  applyRadiusScale(next);
+                }}
+              />
+              <div className="flex items-center justify-between text-3xs text-muted-foreground">
+                <span>Square</span>
+                <span>Pill</span>
+              </div>
+              <FieldDescription>Changes the app’s control and panel corners without changing your colour choice.</FieldDescription>
             </div>
 
             <FieldDescription>Default keeps the app’s existing functions and palettes, with softer offset controls inspired by the ideation-canvas system.</FieldDescription>
@@ -736,7 +752,7 @@ function AppearancePanel({
             {/* Accent color (only when no custom normal theme) */}
             {!isNormalFamily && (
               <div className="space-y-2">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Accent color</div>
+                <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Accent color</div>
                 <ToggleGroup
                   type="single"
                   value={themePreset}
@@ -763,7 +779,7 @@ function AppearancePanel({
                 accent preset above (world paper + your picked accent). */}
             {isPaper && (
               <div className="space-y-1.5">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Paper</div>
+                <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Paper</div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {TW_WORLDS.map(w => {
                     const active = twTheme === w.id;
@@ -805,7 +821,7 @@ function AppearancePanel({
             <div className="space-y-3">
               {NORMAL_GROUPS.map(group => (
                 <div key={group} className="space-y-1.5">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
+                  <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                     {NORMAL_THEMES.filter(t => t.group === group).map(t => {
                       const active = normalTheme === t.id && isNormalFamily;
@@ -881,7 +897,7 @@ function AppearancePanel({
             <div className="space-y-3">
               {NEO_GROUPS.map(group => (
                 <div key={group} className="space-y-1.5">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
+                  <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                     {NEO_THEMES.filter(t => t.group === group).map(t => {
                       const active = neoTheme === t.id;
@@ -968,6 +984,51 @@ function AppearancePanel({
             updateAppearanceSetting('ui_base_font_size', next);
           }}
         />
+      </Field>
+
+      <Field>
+        <div className="flex items-center justify-between gap-3">
+          <FieldLabel>Font weight</FieldLabel>
+          <Badge variant="secondary">{fontWeight}</Badge>
+        </div>
+        <Slider
+          value={[fontWeight]}
+          min={300}
+          max={700}
+          step={25}
+          onValueChange={value => {
+            const next = value[0] ?? fontWeight;
+            setFontWeight(next);
+            updateAppearanceSetting('ui_font_weight', next);
+          }}
+        />
+        <FieldDescription>
+          The base weight for UI text. Bricolage and Geist are variable faces, so
+          in-between values interpolate rather than snapping to the nearest cut.
+          Headings and emphasised text keep their own heavier weights.
+        </FieldDescription>
+      </Field>
+
+      <Field>
+        <div className="flex items-center justify-between gap-3">
+          <FieldLabel>Line spacing</FieldLabel>
+          <Badge variant="secondary">{lineHeight.toFixed(2)}</Badge>
+        </div>
+        <Slider
+          value={[lineHeight]}
+          min={1.2}
+          max={2}
+          step={0.05}
+          onValueChange={value => {
+            const next = value[0] ?? lineHeight;
+            setLineHeight(next);
+            updateAppearanceSetting('ui_line_height', next);
+          }}
+        />
+        <FieldDescription>
+          Multiplies each element's own size, so dense chips and body prose stay
+          in proportion instead of sharing one fixed line height.
+        </FieldDescription>
       </Field>
 
       <Field>
@@ -1103,13 +1164,15 @@ function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
   const [apiKey, setApiKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [presetId, setPresetId] = useState('');
+  const presetNote = presetId ? gatewayPresetById(presetId)?.note : undefined;
 
   const add = async () => {
     if (!name.trim() || !baseUrl.trim() || busy) return;
     setBusy(true);
     try {
       const created = await createGateway({ name: name.trim(), base_url: baseUrl.trim(), model: gwModel.trim(), api_key: apiKey });
-      if (created) { setName(''); setBaseUrl(''); setGwModel(''); setApiKey(''); }
+      if (created) { setName(''); setBaseUrl(''); setGwModel(''); setApiKey(''); setPresetId(''); }
     } finally {
       setBusy(false);
     }
@@ -1164,6 +1227,33 @@ function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
           ))}
         </div>
       )}
+      {/* Start from a known provider rather than typing three fields from
+          memory. A base URL is the worst of them: identical for everyone on
+          that provider, and a missing /v1 returns 404s that read as auth
+          failures. Everything stays editable afterwards, so a custom endpoint
+          — or a second account with the same provider — is still one form. */}
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {GATEWAY_PRESETS.map(preset => (
+          <Button
+            key={preset.id}
+            type="button"
+            size="xs"
+            variant={presetId === preset.id ? 'secondary' : 'outline'}
+            aria-pressed={presetId === preset.id}
+            onClick={() => {
+              setPresetId(preset.id);
+              setName(preset.label);
+              setBaseUrl(preset.baseUrl);
+              setGwModel(preset.model);
+            }}
+          >
+            {preset.label}
+          </Button>
+        ))}
+      </div>
+      {presetNote && (
+        <FieldDescription className="mt-1.5">{presetNote}</FieldDescription>
+      )}
       <div className="mt-2 grid gap-2">
         <Input value={name} onChange={e => setName(e.target.value)} placeholder="Name (e.g. OpenRouter)" className="h-8" />
         <Input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="Base URL (e.g. https://openrouter.ai/api/v1)" className="h-8 font-mono text-xs" />
@@ -1180,27 +1270,15 @@ function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
 }
 
 function AIPanel({ workspaceId }: { workspaceId: string | null }) {
-  const [useCtx, setUseCtx] = useState(getSettings().ai_use_workspace_context);
 
   return (
     <FieldGroup>
-      <Field orientation="horizontal">
-        <Switch
-          checked={useCtx}
-          onCheckedChange={checked => {
-            const next = Boolean(checked);
-            setUseCtx(next);
-            setSetting('ai_use_workspace_context', next);
-          }}
-        />
-        <div>
-          <FieldLabel>Workspace knowledge</FieldLabel>
-          <FieldDescription>
-            New chats can see your documents, tasks, memory, and canvas notes by default.
-          </FieldDescription>
-        </div>
-      </Field>
-
+      {/* No "Workspace knowledge" switch here any more. It defaulted to on, and
+          the real control is per conversation — the context chip in the
+          composer (App.tsx, `enabled={useWorkspaceCtx}`) toggles the same
+          setting where the decision actually gets made. A global mirror of a
+          per-chat control is a second place to look and a second thing to get
+          out of sync; the setting itself stays and stays defaulted to true. */}
       <GatewaysManager workspaceId={workspaceId} />
     </FieldGroup>
   );
@@ -1591,6 +1669,11 @@ function ConnectionsPanel({
                 copied={copied === 'cmd'}
                 onCopy={() => copy('cmd', info?.claudeMcpAdd || mcpFallback.claudeMcpAdd)}
               />
+              {/* 7.5rem = the w-28 (7rem) label column plus the gap-2 (0.5rem)
+                  beside it, so this sits under the VALUE column rather than
+                  under the label. Kept as a literal because it is a one-off
+                  continuation line, but if the label column ever changes width
+                  this has to move with it. */}
               <p className="pl-[7.5rem] text-xs text-muted-foreground">
                 Replace <code className="rounded bg-muted px-1">aga_YOUR_AGENT_TOKEN</code> with the bearer token
                 (or paste the token into your client&apos;s Authorization header).
@@ -1607,19 +1690,13 @@ function ConnectionsPanel({
                   onCopy={() => copy('tok', liveToken)}
                 />
               ) : info?.configured ? (
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="w-28 shrink-0 text-xs text-muted-foreground">Bearer token</span>
-                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-                    Issued earlier and not re-displayed. Rotate to mint a new token (invalidates the old one).
-                  </p>
-                </div>
+                <ConnectionNote label="Bearer token">
+                  Issued earlier and not re-displayed. Rotate to mint a new token (invalidates the old one).
+                </ConnectionNote>
               ) : (
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="w-28 shrink-0 text-xs text-muted-foreground">Bearer token</span>
-                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">
-                    Issue a credential to get a token you can paste into any MCP client.
-                  </p>
-                </div>
+                <ConnectionNote label="Bearer token">
+                  Issue a credential to get a token you can paste into any MCP client.
+                </ConnectionNote>
               )}
 
               <div className="flex items-center justify-between rounded-md border bg-card/50 px-3 py-2">
@@ -1632,8 +1709,12 @@ function ConnectionsPanel({
                 <Switch checked={auto} onCheckedChange={toggleAuto} aria-label="Auto-approve new agents" />
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" onClick={() => void mintOrRotate()} disabled={busy}>
+              {/* Both actions are the same size and both have a border. They
+                  were a default-size primary beside a ghost `sm`, so they
+                  differed in height AND in whether they looked like buttons at
+                  all — two mismatches in a two-button row. */}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" size="sm" onClick={() => void mintOrRotate()} disabled={busy}>
                   {busy ? (
                     <>
                       <Spinner data-icon="inline-start" />
@@ -1646,7 +1727,7 @@ function ConnectionsPanel({
                     </>
                   )}
                 </Button>
-                <Button type="button" variant="ghost" size="sm" onClick={() => void loadStatus()} disabled={loading || busy}>
+                <Button type="button" variant="outline" size="sm" onClick={() => void loadStatus()} disabled={loading || busy}>
                   Refresh status
                 </Button>
               </div>
@@ -1893,6 +1974,23 @@ function ConnectedClientRow({ connection }: { connection: AgentConnection }) {
         {connectionStatusLabel(status)}
       </Badge>
     </li>
+  );
+}
+
+/**
+ * A labelled row that carries prose instead of a copyable value.
+ *
+ * It exists so the label column cannot drift: these were hand-rolled divs
+ * repeating ConnectionRow's `w-28` and text classes inline, which is fine until
+ * one of them is updated and the labels stop lining up. Same geometry, one
+ * definition.
+ */
+function ConnectionNote({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-start gap-2">
+      <span className="w-28 shrink-0 pt-px text-xs text-muted-foreground">{label}</span>
+      <p className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground">{children}</p>
+    </div>
   );
 }
 
@@ -2392,6 +2490,23 @@ function UsagePanel({ workspaceId, workspaceName }: { workspaceId: string | null
   return (
     <FieldGroup>
       <FieldDescription>Storage and entity counts for {workspaceName || 'this workspace'}.</FieldDescription>
+
+      {/* Charts are lazy: recharts is ~1.1MB and this is the only shipped
+          surface that draws one, so it must not ride in the index chunk for a
+          tab most people never open. Suspense falls back to the numbers being
+          skeletoned, not to an empty box — the cards below are the source of
+          truth either way, so the panel is useful before the chart arrives. */}
+      <Suspense fallback={<div className="h-40 animate-pulse rounded-lg bg-muted/40" />}>
+        <UsageCharts
+          storage={[
+            { label: 'Uploads', bytes: usage?.uploadBytes ?? 0 },
+            { label: 'Agent memory', bytes: usage?.memoryBytes ?? 0 },
+          ]}
+          counts={counts}
+          formatBytes={formatBytes}
+        />
+      </Suspense>
+
       <ReadOnlyValue label="Storage used" value={formatBytes(usage?.totalBytes ?? 0)} />
       <div className="grid grid-cols-2 gap-2">
         <ReadOnlyValue label="Uploads" value={formatBytes(usage?.uploadBytes ?? 0)} />

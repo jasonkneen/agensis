@@ -12,13 +12,13 @@ import {
   Trash2,
   Wrench,
 } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
-import { Spinner } from '@/components/ui/spinner';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Input } from '@agensis/ui/components/input';
+import { Textarea } from '@agensis/ui/components/textarea';
+import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@agensis/ui/components/empty';
+import { Spinner } from '@agensis/ui/components/spinner';
 import { cn } from '@/lib/utils';
 import type { WorkspaceAgent } from '@/types';
 import { usePaneSplit } from '../../hooks/usePaneSplit';
@@ -96,7 +96,7 @@ function OperationRow({
       )} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-xs font-medium">{RESOURCE_OPERATION_LABELS[operation.operation]}</span>
-        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+        <span className="mt-0.5 block truncate text-2xs text-muted-foreground">
           {RESOURCE_OPERATION_STATUS_LABELS[operation.status]} · resource v{operation.resource_version}
         </span>
       </span>
@@ -305,11 +305,17 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
             agent tools remain the execution surface while the resource stays protected.
           </p>
         </div>
+        {/* Secondary header actions are `outline`, not `ghost`. A ghost button
+            has no border until you hover it, so beside the filled primary these
+            two read as loose text rather than as controls — the affordance
+            arrives only once you have already guessed there is one. Outline
+            keeps the hierarchy (one filled primary, two quieter siblings) while
+            making all three legible as buttons at rest. */}
         <div className="flex shrink-0 items-center gap-2">
-          <Button type="button" variant="ghost" size="sm" onClick={() => setShowDeleted(value => !value)}>
+          <Button type="button" variant="outline" size="sm" onClick={() => setShowDeleted(value => !value)}>
             {showDeleted ? 'Hide deleted' : 'Show deleted'}
           </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => { void refresh(); }} disabled={loading}>
+          <Button type="button" variant="outline" size="sm" onClick={() => { void refresh(); }} disabled={loading}>
             <RefreshCw data-icon="inline-start" />
             Refresh
           </Button>
@@ -442,7 +448,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                     <span className="flex items-start justify-between gap-2">
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-medium">{resource.name}</span>
-                        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                        <span className="mt-0.5 block truncate text-2xs text-muted-foreground">
                           {steward?.name || 'Missing steward'} · v{resource.version}
                         </span>
                       </span>
@@ -564,7 +570,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {RESOURCE_STEWARD_CAPABILITIES.map(capability => (
-                    <Badge key={capability} variant="outline" className="font-mono text-[11px] font-normal">
+                    <Badge key={capability} variant="outline" className="font-mono text-2xs font-normal">
                       {capability}
                     </Badge>
                   ))}
@@ -638,7 +644,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div>
                               <div className="text-xs font-semibold">{RESOURCE_OPERATION_LABELS[activeOperation.operation]}</div>
-                              <div className="mt-0.5 text-[11px] text-muted-foreground">{timestampLabel(activeOperation.created_at)}</div>
+                              <div className="mt-0.5 text-2xs text-muted-foreground">{timestampLabel(activeOperation.created_at)}</div>
                             </div>
                             <Badge variant="outline">{RESOURCE_OPERATION_STATUS_LABELS[activeOperation.status]}</Badge>
                           </div>
@@ -650,30 +656,30 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                           {activeProgress && (
                             <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
                               <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div className="text-[11px] font-semibold uppercase tracking-wide text-primary">
+                                <div className="text-2xs font-semibold uppercase tracking-wide text-primary">
                                   {isLiveResourceOperation(activeOperation) ? 'Live progress' : 'Last checkpoint'} · {activeProgress.phase}
                                 </div>
                                 {activeProgress.percent !== null && (
-                                  <span className="text-[11px] text-muted-foreground">{activeProgress.percent}%</span>
+                                  <span className="text-2xs text-muted-foreground">{activeProgress.percent}%</span>
                                 )}
                               </div>
                               <p className="mt-1 text-xs leading-relaxed">{activeProgress.message}</p>
                               {activeProgress.stepId && (
-                                <p className="mt-1 text-[11px] text-muted-foreground">
+                                <p className="mt-1 text-2xs text-muted-foreground">
                                   Step {activeProgress.stepId}{activeProgress.stepStatus ? ` · ${activeProgress.stepStatus}` : ''}
                                 </p>
                               )}
                             </div>
                           )}
                           <div>
-                            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Input</div>
-                            <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-background/70 p-2 text-[11px] leading-relaxed">
+                            <div className="mb-1 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Input</div>
+                            <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-background/70 p-2 text-2xs leading-relaxed">
                               {requestPreview(activeOperation.input_artifact)}
                             </pre>
                           </div>
                           <div>
-                            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Result</div>
-                            <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-background/70 p-2 text-[11px] leading-relaxed">
+                            <div className="mb-1 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Result</div>
+                            <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-background/70 p-2 text-2xs leading-relaxed">
                               {isLiveResourceOperation(activeOperation)
                                 ? 'Waiting for the steward agent.'
                                 : jsonPreview(activeOperation.output_artifact)}

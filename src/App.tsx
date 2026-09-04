@@ -40,9 +40,9 @@ import { RegistrationApprovalPopup } from './components/agents/RegistrationAppro
 import { WebMcpBridge } from './components/webmcp/WebMcpBridge';
 import { FeedbackButton } from './components/feedback/FeedbackButton';
 import { NotificationsBell } from './components/notifications/NotificationsBell';
-import { Separator } from './components/ui/separator';
+import { Separator } from '@agensis/ui/components/separator';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
-import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@agensis/ui/components/avatar';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from './lib/openpets';
 import {
   AlertDialog,
@@ -54,10 +54,10 @@ import {
   AlertDialogHeader,
   AlertDialogMedia,
   AlertDialogTitle,
-} from './components/ui/alert-dialog';
-import { Badge } from './components/ui/badge';
-import { Button } from './components/ui/button';
-import { Card, CardContent } from './components/ui/card';
+} from '@agensis/ui/components/alert-dialog';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Card, CardContent } from '@agensis/ui/components/card';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -65,7 +65,7 @@ import {
   ContextMenuLabel,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from './components/ui/context-menu';
+} from '@agensis/ui/components/context-menu';
 import {
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -73,11 +73,11 @@ import {
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
-} from './components/ui/dropdown-menu';
-import { Switch } from './components/ui/switch';
-import { ScrollArea } from './components/ui/scroll-area';
-import { Spinner } from './components/ui/spinner';
-import { TooltipProvider } from './components/ui/tooltip';
+} from '@agensis/ui/components/dropdown-menu';
+import { Switch } from '@agensis/ui/components/switch';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Spinner } from '@agensis/ui/components/spinner';
+import { TooltipProvider } from '@agensis/ui/components/tooltip';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
 import { AppUpdateManager } from './components/AppUpdateManager';
@@ -474,7 +474,7 @@ const CONTEXT_COUNT_ITEMS: Array<{
     { key: 'agents', label: 'AI agents', icon: <Bot /> },
     { key: 'skills', label: 'Skills', icon: <Sparkles /> },
     { key: 'commands', label: 'Commands', icon: <Command /> },
-    { key: 'tools', label: 'Tools', icon: <Wrench /> },
+    { key: 'tools', label: 'Agent CLIs', icon: <Wrench /> },
     { key: 'webhooks', label: 'Webhooks', icon: <Activity /> },
   ];
 
@@ -523,7 +523,7 @@ function KnowledgeContextControl({
       >
         <CheckCircle2 className={enabled ? 'text-pink-500' : 'text-muted-foreground'} />
         <span>Knowledge</span>
-        <Badge variant="secondary" className="ml-auto h-5 rounded-md border-0 px-1.5 text-[10px] shadow-none">
+        <Badge variant="secondary" className="ml-auto h-5 rounded-md border-0 px-1.5 text-3xs shadow-none">
           {activeTotal}
         </Badge>
       </DropdownMenuSubTrigger>
@@ -531,7 +531,7 @@ function KnowledgeContextControl({
         <div className="flex items-center justify-between gap-3 px-3 py-2.5">
           <div className="flex min-w-0 flex-col gap-0.5">
             <span className="text-sm font-semibold leading-none">Knowledge</span>
-            <span className="text-[11px] leading-none text-muted-foreground">{summary}</span>
+            <span className="text-2xs leading-none text-muted-foreground">{summary}</span>
           </div>
           <Switch
             checked={enabled}
@@ -542,7 +542,7 @@ function KnowledgeContextControl({
           />
         </div>
         <DropdownMenuSeparator className="my-0" />
-        <DropdownMenuLabel className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        <DropdownMenuLabel className="px-3 pb-1 pt-2 text-3xs font-medium uppercase tracking-wider text-muted-foreground">
           Sources
         </DropdownMenuLabel>
         <div className="px-1 pb-1">
@@ -575,7 +575,7 @@ function KnowledgeContextControl({
                 <span className="min-w-0 flex-1 truncate">{item.label}</span>
                 <span
                   className={cn(
-                    'ml-auto inline-flex min-w-[1.75rem] justify-center rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums transition-colors',
+                    'ml-auto inline-flex min-w-[1.75rem] justify-center rounded-md px-1.5 py-0.5 text-2xs font-medium tabular-nums transition-colors',
                     contributing
                       ? 'bg-pink-500/10 text-pink-600 dark:text-pink-400'
                       : 'text-muted-foreground/60',
@@ -2405,7 +2405,7 @@ function AppContent() {
             onRenameWorkspace={handleRenameWorkspace}
             onOpenTenants={isSystemOwner ? handleOpenTenants : undefined}
             onCreateWorkspace={handleCreateWorkspace}
-            loading={wsLoading || workspaceReadiness.status === 'missing' || workspaceReadiness.status === 'preparing'}
+            loading={wsLoading || workspaceReadiness.status === 'pending' || workspaceReadiness.status === 'missing' || workspaceReadiness.status === 'preparing'}
             loadError={workspaceReadiness.status === 'unavailable' ? workspaceReadiness.reason : null}
             onRetry={workspaceReadiness.canRetry ? retryWorkspaceSetup : undefined}
             titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}

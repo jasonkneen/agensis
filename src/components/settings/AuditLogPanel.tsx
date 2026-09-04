@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { FieldDescription, FieldGroup } from '@/components/ui/field';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import { Spinner } from '@/components/ui/spinner';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { FieldDescription, FieldGroup } from '@agensis/ui/components/field';
+import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
+import { Spinner } from '@agensis/ui/components/spinner';
 import { useAuditLog } from '../../hooks/useAuditLog';
 import {
   AUDIT_EMPTY_STATE,
@@ -56,6 +56,13 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
   const [filter, setFilter] = useState<'' | AuditAction>('');
   const { entries, loading, loadingMore, error, hasMore, loadMore, refresh } = useAuditLog(workspaceId, filter);
 
+  // Consecutive identical actions collapse into one row with a count and a time
+  // range. Fifteen "Connect token issued · claude · yolo (unchanged)" rows in a
+  // column say exactly what one row and a "x15" says, except they also bury
+  // every other event on the page — and the events you actually want out of an
+  // audit log are the unusual ones. Only ADJACENT rows group, and only when
+  // actor, action, target and change all match, so nothing is ever aggregated
+  // across an intervening event that would change the reading.
   const rows = useMemo(() => entries.map(entry => ({
     entry,
     time: formatAuditTime(entry.created_at),
@@ -68,6 +75,28 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
     unrestricted: isUnrestrictedShellGrant(entry),
   })), [entries]);
 
+  const groups = useMemo(() => {
+    const out: Array<{ row: typeof rows[number]; count: number; oldestTime: string }> = [];
+    for (const row of rows) {
+      const previous = out[out.length - 1];
+      const same = previous
+        && previous.row.actor === row.actor
+        && previous.row.action === row.action
+        && previous.row.target === row.target
+        && previous.row.change === row.change
+        && previous.row.detail === row.detail;
+      if (same) {
+        previous.count += 1;
+        // Entries arrive newest-first, so each later match is the older end of
+        // the range.
+        previous.oldestTime = row.time;
+        continue;
+      }
+      out.push({ row, count: 1, oldestTime: row.time });
+    }
+    return out;
+  }, [rows]);
+
   if (!workspaceId) {
     return (
       <FieldGroup>
@@ -77,7 +106,7 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
   }
 
   return (
-    <FieldGroup className="gap-3 text-[11px]">
+    <FieldGroup className="gap-3 text-2xs">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-xs font-medium">Audit log</div>
         <div className="flex items-center gap-1.5">
@@ -85,13 +114,13 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
             value={filter}
             onChange={event => setFilter(event.target.value as '' | AuditAction)}
             aria-label="Filter by action"
-            className="h-7 text-[11px]"
+            className="h-7 text-2xs"
           >
             {FILTERS.map(option => (
               <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>
             ))}
           </NativeSelect>
-          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[11px]" onClick={refresh} disabled={loading}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-2xs" onClick={refresh} disabled={loading}>
             Refresh
           </Button>
         </div>
@@ -101,47 +130,69 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
           social: "audit log" invites the assumption of tamper-PROOF. Say what it
           actually guarantees, in the panel, rather than letting someone rely on
           it in a dispute. */}
-      <p className="text-[10px] leading-snug text-muted-foreground">{AUDIT_TRUST_NOTE}</p>
+      <p className="text-3xs leading-snug text-muted-foreground">{AUDIT_TRUST_NOTE}</p>
 
       {loading && (
-        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
           <Spinner className="size-3.5" /> Loading…
         </div>
       )}
 
-      {error && <p className="text-[11px] text-destructive">{error}</p>}
+      {error && <p className="text-2xs text-destructive">{error}</p>}
 
       {!loading && !error && rows.length === 0 && (
-        <p className="text-[11px] text-muted-foreground">{AUDIT_EMPTY_STATE}</p>
+        <p className="text-2xs text-muted-foreground">{AUDIT_EMPTY_STATE}</p>
       )}
 
-      {rows.length > 0 && (
+      {groups.length > 0 && (
         <div className="overflow-x-auto rounded-md border border-border/60">
-          <table className="w-full min-w-[34rem] border-collapse text-[10px] leading-tight">
+          {/* Fixed layout so the columns hold their widths instead of being
+              re-negotiated by whichever row happens to have the longest target:
+              a table that reflows as you page through it is unreadable. */}
+          <table className="w-full min-w-[36rem] table-fixed border-collapse text-3xs leading-tight">
+            <colgroup>
+              <col className="w-[7.5rem]" />
+              <col className="w-[7rem]" />
+              <col />
+              <col className="w-[8rem]" />
+              <col className="w-[9rem]" />
+            </colgroup>
             <thead>
               <tr className="border-b border-border bg-muted/30 text-left text-[9px] uppercase tracking-wide text-muted-foreground">
-                <th className="px-2 py-1 font-medium">Time</th>
-                <th className="px-2 py-1 font-medium">Actor</th>
-                <th className="px-2 py-1 font-medium">Action</th>
-                <th className="px-2 py-1 font-medium">Target</th>
-                <th className="px-2 py-1 font-medium">Change</th>
+                <th className="px-2 py-1.5 font-medium">Time</th>
+                <th className="px-2 py-1.5 font-medium">Actor</th>
+                <th className="px-2 py-1.5 font-medium">Action</th>
+                <th className="px-2 py-1.5 font-medium">Target</th>
+                <th className="px-2 py-1.5 font-medium">Change</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map(row => (
-                <tr key={row.entry.id} className="border-b border-border/50 align-top last:border-0">
+              {groups.map(({ row, count, oldestTime }) => (
+                <tr key={row.entry.id} className="border-b border-border/50 align-top last:border-0 odd:bg-muted/15">
                   <td
-                    className="whitespace-nowrap px-2 py-0.5 text-[10px] text-muted-foreground tabular-nums"
+                    className="whitespace-nowrap px-2 py-1.5 text-3xs text-muted-foreground tabular-nums"
                     title={row.entry.created_at}
                   >
                     {row.time}
+                    {count > 1 && (
+                      <div className="text-[9px] opacity-70">to {oldestTime}</div>
+                    )}
                   </td>
-                  <td className="max-w-[7rem] truncate px-2 py-0.5 text-[10px]" title={row.actor}>
+                  <td className="truncate px-2 py-1.5 text-3xs" title={row.actor}>
                     {row.actor}
                   </td>
-                  <td className="px-2 py-0.5">
+                  <td className="px-2 py-1.5">
                     <div className="flex flex-wrap items-center gap-1">
-                      <span className="text-[10px]">{row.action}</span>
+                      <span className="text-3xs">{row.action}</span>
+                      {count > 1 && (
+                        <Badge
+                          variant="secondary"
+                          className="h-3.5 px-1 text-[8px] font-normal leading-none tabular-nums"
+                          title={`${count} identical entries between ${oldestTime} and ${row.time}`}
+                        >
+                          x{count}
+                        </Badge>
+                      )}
                       {row.unrestricted && (
                         <Badge variant="destructive" className="h-3.5 gap-0.5 px-1 text-[8px] font-normal leading-none" title="Unrestricted shell on the daemon host">
                           <ShieldAlert className="size-2" />
@@ -154,14 +205,21 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
                         </Badge>
                       )}
                     </div>
+                    {/* The detail line is the row's own sub-text, so it is
+                        indented under the action rather than starting at the
+                        cell edge, and truncates instead of wrapping into a
+                        second line that breaks the table's vertical rhythm.
+                        The full value stays reachable on hover. */}
                     {row.detail && (
-                      <div className="mt-0.5 text-[9px] text-muted-foreground">{row.detail}</div>
+                      <div className="mt-0.5 truncate border-l border-border/60 pl-1.5 text-[9px] text-muted-foreground" title={row.detail}>
+                        {row.detail}
+                      </div>
                     )}
                   </td>
-                  <td className="max-w-[8rem] truncate px-2 py-0.5 text-[10px]" title={row.target}>
+                  <td className="truncate px-2 py-1.5 text-3xs" title={row.target}>
                     {row.target}
                   </td>
-                  <td className="max-w-[9rem] truncate px-2 py-0.5 text-[10px] text-muted-foreground" title={row.change}>
+                  <td className="truncate px-2 py-1.5 text-3xs text-muted-foreground" title={row.change}>
                     {row.change}
                   </td>
                 </tr>
@@ -173,7 +231,7 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
 
       {hasMore && (
         <div>
-          <Button type="button" variant="secondary" size="sm" className="h-7 text-[11px]" onClick={loadMore} disabled={loadingMore}>
+          <Button type="button" variant="secondary" size="sm" className="h-7 text-2xs" onClick={loadMore} disabled={loadingMore}>
             {loadingMore ? <><Spinner className="size-3.5" /> Loading</> : 'Load more'}
           </Button>
         </div>

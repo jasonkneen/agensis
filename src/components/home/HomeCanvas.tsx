@@ -2,10 +2,10 @@ import { DEFAULT_BACKGROUND_OPACITY } from '../../lib/wallpaperDefaults';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Clock, FileText, Send, Sparkles, X } from 'lucide-react';
 import type { Document, MemoryFact, WorkspaceAgent } from '../../types';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from '@/components/ui/command';
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from '@/components/ui/input-group';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from '@agensis/ui/components/command';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from '@agensis/ui/components/input-group';
 import { cn } from '@/lib/utils';
 import { WORKSPACE_BACKGROUND_IMAGES } from '@/lib/backgrounds';
 import { OwnerMessageBanner } from '../onboarding/OwnerMessageBanner';
@@ -270,14 +270,14 @@ export function HomeCanvas({
         </>
       ) : null}
 
-      {/* Always-on radial vignette: darkens the edges and lifts the focal area
-          near the composer, giving the flat backdrop perceptible depth
-          regardless of the user's background-opacity setting. */}
-      <div
-        className="pointer-events-none absolute inset-0"
-        style={{ background: 'var(--home-bg-vignette, radial-gradient(135% 105% at 50% 42%, transparent 40%, rgba(0,0,0,0.20) 74%, rgba(0,0,0,DEFAULT_BACKGROUND_OPACITY) 100%))' }}
-      />
-
+      {/* The always-on radial vignette is gone. It darkened all four edges to
+          "give the flat backdrop perceptible depth", but the backdrop is the
+          user's own wallpaper — it does not need depth added to it, and against
+          the panel's rounded corner the gradient read as a dim grey ghost layer
+          sitting on top of the photo rather than as light falling off. The
+          composer already separates itself from the image with its own surface
+          and shadow, which is the contrast that actually needed solving.
+          --home-bg-vignette is still defined per theme; nothing reads it. */}
 
       <div className="pointer-events-auto relative z-10 flex w-full max-w-3xl flex-col items-center gap-5">
         <h1 className="text-center text-3xl font-semibold leading-tight text-white [text-shadow:0_2px_16px_rgba(0,0,0,0.55),0_1px_3px_rgba(0,0,0,0.65)]">What's on your mind?</h1>

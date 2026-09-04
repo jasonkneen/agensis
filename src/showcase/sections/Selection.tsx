@@ -9,12 +9,12 @@ import {
   SelectSeparator,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
+} from '@agensis/ui/components/select';
 import {
   NativeSelect,
   NativeSelectOptGroup,
   NativeSelectOption,
-} from '@/components/ui/native-select';
+} from '@agensis/ui/components/native-select';
 import {
   Combobox,
   ComboboxContent,
@@ -22,7 +22,7 @@ import {
   ComboboxInput,
   ComboboxItem,
   ComboboxList,
-} from '@/components/ui/combobox';
+} from '@agensis/ui/components/combobox';
 import {
   Command,
   CommandEmpty,
@@ -32,7 +32,7 @@ import {
   CommandList,
   CommandSeparator,
   CommandShortcut,
-} from '@/components/ui/command';
+} from '@agensis/ui/components/command';
 import {
   Calculator,
   Calendar as CalendarIcon,

@@ -27,17 +27,17 @@ import {
   type WorkspaceController,
   type WorkspaceControllerScope,
 } from '@/features/workspace-connections';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from '@/components/ui/empty';
-import { Field, FieldLabel } from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
+} from '@agensis/ui/components/empty';
+import { Field, FieldLabel } from '@agensis/ui/components/field';
+import { Input } from '@agensis/ui/components/input';
 import {
   Item,
   ItemActions,
@@ -46,9 +46,9 @@ import {
   ItemGroup,
   ItemMedia,
   ItemTitle,
-} from '@/components/ui/item';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import { Spinner } from '@/components/ui/spinner';
+} from '@agensis/ui/components/item';
+import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
+import { Spinner } from '@agensis/ui/components/spinner';
 
 interface UsersWindowContentProps {
   workspaceName: string;

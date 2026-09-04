@@ -7,7 +7,7 @@ import {
   SelectItem,
   SelectLabel,
   SelectTrigger,
-} from '@/components/ui/select';
+} from '@agensis/ui/components/select';
 
 interface ModelSelectorProps {
   value: string;

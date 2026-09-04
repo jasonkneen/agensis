@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Headphones, Radio } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import type { HuddleAgentOption } from '@/lib/huddleAgents';
 import { useHuddleSession } from './HuddleSessionContext';
 import { useHuddleDock } from './HuddleDockContext';

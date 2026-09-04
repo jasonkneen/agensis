@@ -3,20 +3,20 @@ import { Brain, Check, FileText, Lightbulb, Pencil, Plus, Tag, Trash2, X } from 
 import type { Document, MemoryFact, WorkspaceAgent } from '../../types';
 import { AgentMemoryBrowser } from './AgentMemoryBrowser';
 import { SuggestionsPanel } from './SuggestionsPanel';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from '@/components/ui/empty';
+} from '@agensis/ui/components/empty';
 import {
   Field,
   FieldGroup,
   FieldLabel,
-} from '@/components/ui/field';
+} from '@agensis/ui/components/field';
 import {
   Item,
   ItemActions,
@@ -25,13 +25,13 @@ import {
   ItemGroup,
   ItemMedia,
   ItemTitle,
-} from '@/components/ui/item';
+} from '@agensis/ui/components/item';
 import {
   NativeSelect,
   NativeSelectOption,
-} from '@/components/ui/native-select';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Textarea } from '@/components/ui/textarea';
+} from '@agensis/ui/components/native-select';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Textarea } from '@agensis/ui/components/textarea';
 import { viewPreferenceKey, type PreferenceCodec } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 

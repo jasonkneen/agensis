@@ -1,9 +1,15 @@
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
-
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
-}
+// cn() now lives in @agensis/ui (packages/ui/src/lib/utils.ts) alongside the
+// components that use it. Re-exported here so the 62 app files importing
+// '@/lib/utils' keep working, and because this module remains the app's own
+// util home for the text helpers below.
+//
+// Deep import, NOT the '@agensis/ui' barrel: the barrel re-exports all 57
+// components, so pulling cn through it drags recharts, react-day-picker, vaul,
+// embla and cmdk into the module graph of every one of those 62 files. Rollup
+// tree-shakes them back out of the production bundle (verified: no 'recharts'
+// string in dist/assets/*.js), but vite dev and vitest have no such step and
+// paid ~1.4 MB of pre-bundled deps on the first import of cn.
+export { cn } from '@agensis/ui/lib/utils'
 
 /**
  * Strip HTML tags from a string, preserving text content.

@@ -1,0 +1,15 @@
+@agensis/ui
+Copyright (c) 2026 Jason Kneen
+Licensed under the MIT License (see LICENSE).
+
+This package was extracted from the Agensis application (https://github.com/jasonkneen/agensis),
+which is licensed AGPL-3.0-only. The extraction and MIT relicensing of this package's contents
+is a deliberate act by Jason Kneen, the sole author and copyright holder of that code. No other
+code may be copied from the AGPL portions of that repository into this package.
+
+The component primitives under src/components/ui/ derive from shadcn/ui, which is MIT licensed.
+
+This package ships React components only. It contains no CSS, design tokens, themes or fonts:
+those still live in the application (src/index.css) and have not been extracted. If a future
+release adds a styles/ directory that imports @fontsource packages, their SIL Open Font License
+1.1 notices — including the Reserved Font Name on "Press Start 2P" — must be reproduced here.

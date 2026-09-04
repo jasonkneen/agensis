@@ -92,7 +92,7 @@ function LinkPreviewCard({ url, preview }: { url: string; preview: LinkPreview }
     >
       <LinkPreviewThumb imagePath={preview.imagePath} />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        {site && <span className="truncate text-[11px] text-muted-foreground">{site}</span>}
+        {site && <span className="truncate text-2xs text-muted-foreground">{site}</span>}
         {preview.title && (
           <span className="truncate text-sm font-medium text-foreground">{preview.title}</span>
         )}

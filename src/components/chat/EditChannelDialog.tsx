@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
+} from '@agensis/ui/components/dialog';
+import { Input } from '@agensis/ui/components/input';
+import { Label } from '@agensis/ui/components/label';
+import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
 import {
   channelIconChoices, channelProfileDiff, MAX_DESCRIPTION_CHARS, MAX_INTENT_CHARS,

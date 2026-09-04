@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { FolderPlus } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   Dialog,
   DialogContent,
@@ -8,14 +8,14 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
+} from '@agensis/ui/components/dialog';
 import {
   Field,
   FieldGroup,
   FieldLabel,
-} from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
-import { Spinner } from '@/components/ui/spinner';
+} from '@agensis/ui/components/field';
+import { Input } from '@agensis/ui/components/input';
+import { Spinner } from '@agensis/ui/components/spinner';
 
 interface CreateWorkspaceDialogProps {
   open: boolean;

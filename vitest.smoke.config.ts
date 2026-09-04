@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { defaultServerConditions } from 'vite';
 
 // The pre-push visual smoke gate (`npm run smoke`).
 //
@@ -29,8 +30,14 @@ export default defineConfig({
     testTimeout: 10000,
   },
   resolve: {
+    // Match vite.config.ts: resolve @agensis/ui to its TS source, not a dist
+    // build that does not exist during development.
+    conditions: ['source', ...defaultServerConditions],
     alias: {
       '@': new URL('./src', import.meta.url).pathname,
     },
+  },
+  ssr: {
+    resolve: { conditions: ['source', ...defaultServerConditions] },
   },
 });

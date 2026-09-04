@@ -52,9 +52,9 @@ import {
 import { ThemeToggle } from './ThemeToggle';
 import type { ThemeMode } from '../../hooks/useTheme';
 import type { AgentConnection, ChatSession, Document, FloatingWindow, ItemPresenceUser, Workspace, WorkspaceAgent } from '../../types';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Button } from '@/components/ui/button';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Avatar, AvatarFallback } from '@agensis/ui/components/avatar';
+import { Button } from '@agensis/ui/components/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@agensis/ui/components/collapsible';
 import {
  ContextMenu,
  ContextMenuContent,
@@ -65,16 +65,16 @@ import {
  ContextMenuSubContent,
  ContextMenuSubTrigger,
  ContextMenuTrigger,
-} from '@/components/ui/context-menu';
+} from '@agensis/ui/components/context-menu';
 import {
  DropdownMenu,
  DropdownMenuContent,
  DropdownMenuItem,
  DropdownMenuSeparator,
  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
+} from '@agensis/ui/components/dropdown-menu';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Separator } from '@agensis/ui/components/separator';
 import { AccountDialog } from '../account/AccountDialog';
 import { AgentAvatar } from '../agents/AgentAvatar';
 import { AgentStatusFeed } from './AgentStatusFeed';
@@ -1264,7 +1264,7 @@ export const Sidebar = React.memo(function Sidebar({
          Sign out
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <div className="px-2 py-1.5 text-[11px] text-muted-foreground/70">
+        <div className="px-2 py-1.5 text-2xs text-muted-foreground/70">
          agensis v{APP_VERSION} · build {BUILD_ID.slice(0, 7)}
         </div>
        </DropdownMenuContent>
@@ -1574,7 +1574,7 @@ function DmFilterButton({ filter, onChange }: { filter: DmFilter; onChange: (f: 
      onClick={e => e.stopPropagation()}
     >
      <Filter className="size-3.5" />
-     {isFiltered && <span className="text-[10px] font-medium leading-none">{current.label}</span>}
+     {isFiltered && <span className="text-3xs font-medium leading-none">{current.label}</span>}
     </button>
    </DropdownMenuTrigger>
    <DropdownMenuContent align="end" className="w-36">
@@ -1636,7 +1636,7 @@ function DirectAgentRow({
        name={agent.name}
        initials={agent.name.slice(0, 2).toUpperCase()}
        className="size-7 rounded-md"
-       fallbackClassName="bg-transparent text-[10px] text-muted-foreground"
+       fallbackClassName="bg-transparent text-3xs text-muted-foreground"
       />
      </Avatar>
      {/* Inside the avatar bounds — parent .sidebar-agent-primary is overflow:hidden,
@@ -1780,7 +1780,7 @@ function ActionTile({
    <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">{icon}</span>
    <span className="sidebar-action-label min-w-0 truncate text-left">{label}</span>
    {typeof count === 'number' && count > 0 && (
-    <span className="sidebar-action-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-primary-foreground">
+    <span className="sidebar-action-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-3xs font-bold leading-none text-primary-foreground">
      {formatCount(count)}
     </span>
    )}
@@ -1837,7 +1837,7 @@ function SidebarSection({
       <ChevronRight className={`sidebar-section-chevron size-3 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
       <span className="sidebar-section-label min-w-0 truncate text-left">{label}</span>
       {!hasAction && count > 0 && (
-       <span className="sidebar-section-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-primary-foreground">
+       <span className="sidebar-section-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-3xs font-bold leading-none text-primary-foreground">
         {formatCount(count)}
        </span>
       )}
@@ -1909,7 +1909,7 @@ function SidebarFolderGroup({
       <span className="size-4 shrink-0">{icon || <Folder className="size-4" />}</span>
       <span className="sidebar-section-label min-w-0 flex-1 truncate text-left">{label}</span>
       {count > 0 && (
-       <span className="sidebar-section-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-primary-foreground">
+       <span className="sidebar-section-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-3xs font-bold leading-none text-primary-foreground">
         {formatCount(count)}
        </span>
       )}
@@ -1979,7 +1979,7 @@ function ItemRow({
       </span>
      ))}
      {presenceUsers.length > 3 && (
-      <span className="text-[10px] leading-none text-muted-foreground">+{presenceUsers.length - 3}</span>
+      <span className="text-3xs leading-none text-muted-foreground">+{presenceUsers.length - 3}</span>
      )}
     </span>
    )}
@@ -2256,7 +2256,7 @@ function SessionRow({
          </span>
         ))}
         {presenceUsers.length > 3 && (
-         <span className="text-[10px] leading-none text-muted-foreground">+{presenceUsers.length - 3}</span>
+         <span className="text-3xs leading-none text-muted-foreground">+{presenceUsers.length - 3}</span>
         )}
        </span>
       )}
@@ -2395,7 +2395,7 @@ function LibrarySourceChips({ sources }: { sources: LibrarySource[] }) {
     </span>
    ))}
    {agents.length > 2 && (
-    <span className="text-[10px] leading-none text-muted-foreground">+{agents.length - 2}</span>
+    <span className="text-3xs leading-none text-muted-foreground">+{agents.length - 2}</span>
    )}
   </span>
  );

@@ -8,8 +8,8 @@ import {
   ChartLegend,
   ChartLegendContent,
   type ChartConfig,
-} from '@/components/ui/chart';
-import { Button } from '@/components/ui/button';
+} from '@agensis/ui/components/chart';
+import { Button } from '@agensis/ui/components/button';
 
 const monthlyData = [
   { month: 'Jan', desktop: 186, mobile: 80 },

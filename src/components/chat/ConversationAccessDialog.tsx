@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import { Spinner } from '@/components/ui/spinner';
+} from '@agensis/ui/components/dialog';
+import { Label } from '@agensis/ui/components/label';
+import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
+import { Spinner } from '@agensis/ui/components/spinner';
 import { cn } from '@/lib/utils';
 import { useSessionAccess } from '@/hooks/useSessionAccess';
 import { useWorkspaceUsers } from '@/hooks/useWorkspaceUsers';

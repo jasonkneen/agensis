@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Check, Copy, Eye, EyeOff } from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@agensis/ui/components/dialog';
+import { Button } from '@agensis/ui/components/button';
+import { Switch } from '@agensis/ui/components/switch';
 import { generateMcpToken, setMcpAutoApprove, type McpConnectInfo } from '../../lib/mcpConnect';
 import { WORKSPACE_UNAVAILABLE, describeWriteFailure } from '../../lib/writeFeedback';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';

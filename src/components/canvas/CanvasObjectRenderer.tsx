@@ -6,7 +6,7 @@ import { CANVAS_APPS, parseAppletState, extractHtmlFromDocContent, makeAppletSta
 import { apiAuthHeaders, backendClient } from '../../lib/backendClient';
 import { filterAppletTaskUpdates } from '../../lib/appletBridge';
 import { shouldFetchWithApiAuth, useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 
 interface CanvasObjectRendererProps {
   obj: CanvasObject;
@@ -412,7 +412,7 @@ function AppletObject({
         >
           <AlertTriangle style={{ width: 22, height: 22, color: 'var(--error)' }} />
           <strong style={{ fontSize: 13 }}>Applet crashed</strong>
-          <span style={{ maxWidth: 360, color: 'var(--text-secondary)', fontSize: 12 }}>{crash}</span>
+          <span style={{ maxWidth: 360, color: 'var(--ink-secondary)', fontSize: 12 }}>{crash}</span>
           <button
             type="button"
             onClick={() => {
@@ -456,9 +456,9 @@ const APPLET_THEME_TOKEN_NAMES: Record<string, string> = {
   canvasElevated: '--canvas-elevated',
   canvasRaised: '--canvas-raised',
   canvasOverlay: '--canvas-overlay',
-  textPrimary: '--text-primary',
-  textSecondary: '--text-secondary',
-  textMuted: '--text-muted',
+  textPrimary: '--ink',
+  textSecondary: '--ink-secondary',
+  textMuted: '--ink-muted',
   accent: '--accent',
   accentHover: '--accent-hover',
   shadowSm: '--shadow-sm',
@@ -543,9 +543,9 @@ function readAppletTheme() {
       canvasElevated: token('--canvas-elevated'),
       canvasRaised: token('--canvas-raised'),
       canvasOverlay: token('--canvas-overlay'),
-      textPrimary: token('--text-primary'),
-      textSecondary: token('--text-secondary'),
-      textMuted: token('--text-muted'),
+      textPrimary: token('--ink'),
+      textSecondary: token('--ink-secondary'),
+      textMuted: token('--ink-muted'),
       accent: token('--accent'),
       accentHover: token('--accent-hover'),
       shadowSm: token('--shadow-sm'),
@@ -907,7 +907,7 @@ function MediaPlaceholder({ label }: { label: string }) {
         height: '100%',
         placeItems: 'center',
         padding: 12,
-        color: 'var(--text-muted)',
+        color: 'var(--ink-muted)',
         fontSize: 12,
         textAlign: 'center',
       }}
@@ -977,7 +977,7 @@ function FileObject({
         alignItems: isPreviewable ? 'stretch' : 'center',
         justifyContent: isPreviewable ? 'flex-start' : 'center',
         gap: isPreviewable ? 0 : '6px',
-        color: 'var(--text-muted)',
+        color: 'var(--ink-muted)',
         fontSize: '12px',
         contain: 'layout paint style',
         userSelect: 'none',
@@ -997,7 +997,7 @@ function FileObject({
               padding: '6px 8px',
               borderBottom: '1px solid var(--border)',
               background: 'var(--canvas-overlay)',
-              color: 'var(--text-primary)',
+              color: 'var(--ink)',
               fontWeight: 600,
             }}
           >
@@ -1015,7 +1015,7 @@ function FileObject({
               overflow: 'hidden',
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
-              color: failed ? 'var(--text-muted)' : 'var(--text-secondary)',
+              color: failed ? 'var(--ink-muted)' : 'var(--ink-secondary)',
               fontFamily: "'JetBrains Mono', 'SFMono-Regular', Menlo, monospace",
               fontSize: Math.max(10, Math.min(13, ph / 16)),
               lineHeight: 1.45,

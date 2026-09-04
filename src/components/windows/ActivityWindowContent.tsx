@@ -14,24 +14,24 @@ import {
   X,
 } from 'lucide-react';
 import type { ActivityEvent, ActivityEventType } from '../../types';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from '@/components/ui/empty';
-import { Marker, MarkerContent } from '@/components/ui/marker';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Spinner } from '@/components/ui/spinner';
+} from '@agensis/ui/components/empty';
+import { Marker, MarkerContent } from '@agensis/ui/components/marker';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Spinner } from '@agensis/ui/components/spinner';
 import {
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-} from '@/components/ui/tabs';
-import { Textarea } from '@/components/ui/textarea';
+} from '@agensis/ui/components/tabs';
+import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
 import {
   activityEntryLabel,
@@ -259,7 +259,7 @@ function ActivityEventComments({ eventId, workspaceId, currentUserId }: { eventI
 
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="text-3xs font-medium uppercase tracking-wide text-muted-foreground">
         Comments{topLevel.length > 0 ? ` (${topLevel.length})` : ''}
       </div>
       {loading ? (
@@ -270,7 +270,7 @@ function ActivityEventComments({ eventId, workspaceId, currentUserId }: { eventI
         <div className="flex flex-col gap-2">
           {topLevel.map(comment => (
             <div key={comment.id} className="min-w-0 rounded-lg border bg-muted/30 p-2">
-              <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+              <div className="mb-1 flex flex-wrap items-center gap-1.5 text-3xs text-muted-foreground">
                 <span className="font-medium text-foreground">{comment.user_id === currentUserId ? 'You' : 'Teammate'}</span>
                 <span>·</span>
                 <span>{formatFullDate(comment.created_at)}</span>
@@ -405,7 +405,7 @@ function ActivityDetailTabs({
       </TabsContent>
       <TabsContent value="metadata" className="min-h-0 min-w-0 flex-1 overflow-auto p-3 text-sm">
         {hasActivityMetadata(event.metadata) ? (
-          <pre className="max-h-full min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/40 p-2 text-[11px] leading-relaxed">
+          <pre className="max-h-full min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/40 p-2 text-2xs leading-relaxed">
             {activityMetadataText(event.metadata)}
           </pre>
         ) : (
@@ -574,7 +574,7 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
           {days.map(group => (
             <section key={group.label} className="flex flex-col">
               <Marker variant="separator" className="px-1.5 py-1">
-                <MarkerContent className="text-[11px] uppercase tracking-wide text-muted-foreground">{group.label}</MarkerContent>
+                <MarkerContent className="text-2xs uppercase tracking-wide text-muted-foreground">{group.label}</MarkerContent>
               </Marker>
               <div className="flex flex-col">
                 {group.items.map(event => {

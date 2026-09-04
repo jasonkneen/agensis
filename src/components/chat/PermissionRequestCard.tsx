@@ -75,7 +75,7 @@ export function PermissionRequestCard({
     const Icon = allowed ? ShieldCheck : request.status === 'expired' ? Clock : ShieldAlert;
     return (
       <div className={cn('min-w-0 py-1', indent)}>
-        <div className="flex min-w-0 items-center gap-2 border-l border-border pl-2.5 text-[11px] text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-2 border-l border-border pl-2.5 text-2xs text-muted-foreground">
           <Icon className={cn('size-3.5 shrink-0', allowed ? 'text-emerald-500' : '')} aria-hidden />
           <span className="truncate font-mono" title={summary}>{shortenPathsIn(summary)}</span>
           <span
@@ -110,20 +110,20 @@ export function PermissionRequestCard({
           <ShieldAlert className="mt-0.5 size-4 shrink-0 text-amber-500" aria-hidden />
           <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold text-foreground">Waiting on you to approve a tool call</p>
-            <p className="mt-1 break-words font-mono text-[11px] leading-5 text-muted-foreground">{summary}</p>
+            <p className="mt-1 break-words font-mono text-2xs leading-5 text-muted-foreground">{summary}</p>
             {request.description && (
-              <p className="mt-1 text-[11px] leading-4 text-muted-foreground">{request.description}</p>
+              <p className="mt-1 text-2xs leading-4 text-muted-foreground">{request.description}</p>
             )}
             {request.rules.length > 0 && (
               // What "Always allow" would actually write. Shown up front rather
               // than in a tooltip: it is the one button here with consequences
               // that outlive the conversation.
-              <p className="mt-2 text-[11px] leading-4 text-muted-foreground">
+              <p className="mt-2 text-2xs leading-4 text-muted-foreground">
                 Permanent grant would be{' '}
                 {request.rules.map((rule, index) => (
                   <span key={rule}>
                     {index > 0 && ', '}
-                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">{rule}</code>
+                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-3xs">{rule}</code>
                   </span>
                 ))}
               </p>
@@ -142,7 +142,7 @@ export function PermissionRequestCard({
                 title={blocked ? 'Only a workspace admin can make a grant permanent.' : SCOPE_HINTS[scope]}
                 onClick={() => void decide('allow', scope)}
                 className={cn(
-                  'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors',
+                  'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-2xs font-semibold transition-colors',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
                   'disabled:cursor-not-allowed disabled:opacity-50',
                   scope === 'once'
@@ -160,7 +160,7 @@ export function PermissionRequestCard({
             disabled={busy}
             onClick={() => void decide('deny', 'once')}
             className={cn(
-              'inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-[11px] font-semibold text-muted-foreground transition-colors',
+              'inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-2xs font-semibold text-muted-foreground transition-colors',
               'hover:border-destructive/60 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
               'disabled:cursor-not-allowed disabled:opacity-50',
             )}
@@ -169,7 +169,7 @@ export function PermissionRequestCard({
             Deny
           </button>
         </div>
-        {error && <p className="mt-2 text-[11px] text-destructive">{error}</p>}
+        {error && <p className="mt-2 text-2xs text-destructive">{error}</p>}
       </div>
     </div>
   );

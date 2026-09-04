@@ -4,9 +4,9 @@ import { CanvasObjectRenderer } from './CanvasObjectRenderer';
 import { Trash2, Group, Ungroup, Link2, Unlink, ListTodo } from 'lucide-react';
 import type { CanvasObject, CanvasTool, CanvasObjectType, CanvasGroup, Task, WorkspaceAgent, PresenceVisibilityMode, Document } from '../../types';
 import type { CreateTaskInput } from '../../hooks/useTasks';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
 
 interface DrawingLayerProps {
@@ -1387,7 +1387,7 @@ function CanvasItemWrapper({
             <line
               x1={myCenter.x} y1={myCenter.y}
               x2={parentCenter.x} y2={parentCenter.y}
-              stroke="var(--text-muted)"
+              stroke="var(--ink-muted)"
               strokeWidth="1"
               strokeDasharray="4 3"
               opacity={0.5}
@@ -1471,7 +1471,7 @@ function CanvasItemWrapper({
           <line
             x1={myCenter.x} y1={myCenter.y}
             x2={parentCenter.x} y2={parentCenter.y}
-            stroke="var(--text-muted)"
+            stroke="var(--ink-muted)"
             strokeWidth="1"
             strokeDasharray="4 3"
             opacity={0.5}
@@ -1695,18 +1695,18 @@ function SelectionActionBar({
       className="fixed left-1/2 z-[9999] flex -translate-x-1/2 items-center gap-1 rounded-lg border bg-popover px-1.5 py-1 shadow-lg"
       style={{ bottom: `${bottomOffset}px` }}
     >
-      <Badge variant="outline" className="text-[11px]">
+      <Badge variant="outline" className="text-2xs">
         {count} selected
       </Badge>
 
       {attachMode && (
-        <Badge variant="secondary" className="text-[10px]">
+        <Badge variant="secondary" className="text-3xs">
           Click an item to attach
         </Badge>
       )}
 
       {!canMutateSelection && (
-        <Badge variant="secondary" className="text-[10px]">
+        <Badge variant="secondary" className="text-3xs">
           Read only
         </Badge>
       )}
@@ -1750,7 +1750,7 @@ function ActionButton({
       size="xs"
       onClick={onClick}
       title={label}
-      className={cn('text-[11px]', danger && 'border-destructive/30')}
+      className={cn('text-2xs', danger && 'border-destructive/30')}
     >
       {icon}
       {label}

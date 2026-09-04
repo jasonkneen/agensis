@@ -3,12 +3,12 @@ import { Check, KeyRound, Tractor } from 'lucide-react';
 
 import { apiAuthHeaders, apiUrl, backendClient } from '../../lib/backendClient';
 import type { Workspace } from '../../types';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
-import { Spinner } from '@/components/ui/spinner';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@agensis/ui/components/card';
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '@agensis/ui/components/field';
+import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
+import { Spinner } from '@agensis/ui/components/spinner';
 
 const FARM_SCOPES = [
   'Read workspace identity and agent presence',

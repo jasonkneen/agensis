@@ -153,10 +153,16 @@ describe('ACP harness form values', () => {
   it('labels harnesses for the UI', () => {
     expect(executionRuntimeDisplayLabel('desktop', 'hermes')).toBe('Hermes Agent');
     expect(executionRuntimeDisplayLabel('desktop', 'grok')).toBe('Grok Build');
-    expect(executionRuntimeDisplayLabel('claude')).toBe('Claude');
+    // "Claude (Agent SDK)" since 157c1a2e replaced desktop ACP with the local
+    // runtime daemon: the label now names the lane, because "Claude" alone no
+    // longer distinguishes the Agent SDK from the Claude Code harness.
+    expect(executionRuntimeDisplayLabel('claude')).toBe('Claude (Agent SDK)');
   });
 
-  it('prefers live connection harnessId over a stale Claude pin', () => {
+  // Renamed: an explicit classic pin now WINS over the live harness. The
+  // resolver still finds the harness (asserted below) — agentRuntimeLabel just
+  // reports the pinned runtime, which is what 157c1a2e made authoritative.
+  it('resolves the live harness but lets an explicit Claude pin name the runtime', () => {
     const harness = resolveAgentAcpHarness({
       metadata: { runtime: 'claude' },
       agentId: 'a1',
@@ -178,33 +184,37 @@ describe('ACP harness form values', () => {
         metadata: { runtime: 'agensis-desktop-acp', harnessId: 'hermes' },
       }],
       preferAcp: true,
-    })).toBe('Hermes Agent');
+    })).toBe('Claude (Agent SDK)');
   });
 
-  it('infers harness from agent name when pin is stale', () => {
+  it('infers harness from a name, but an explicit pin still wins the form value', () => {
     expect(resolveAgentAcpHarness({
       metadata: { runtime: 'claude' },
       name: 'Hermes',
       handle: 'hermes',
     })).toBe('hermes');
+    // The form value now honours the explicit classic pin rather than the name:
+    // 157c1a2e made metadata.runtime authoritative, so a 'claude'-pinned agent
+    // stays on Claude even when its name says Grok. Harness INFERENCE is still
+    // live (asserted above) — it just no longer overrides an explicit pin.
     expect(agentFormRuntimeValueForAgent({
       metadata: { runtime: 'claude' },
       name: 'Grok coder',
       preferAcp: true,
-    })).toBe('acp:grok');
+    })).toBe('claude');
   });
 
-  it('does not claim Claude on desktop when harness is unknown', () => {
+  it('reports the pinned Claude runtime when no harness is known', () => {
     expect(agentRuntimeLabel({
       metadata: { runtime: 'claude' },
       name: 'Helper',
       preferAcp: true,
-    })).toBe('Desktop ACP');
+    })).toBe('Claude (Agent SDK)');
     expect(agentFormRuntimeValueForAgent({
       metadata: { runtime: 'claude' },
       name: 'Helper',
       preferAcp: true,
-    })).toBe('desktop');
+    })).toBe('claude');
   });
 });
 
@@ -232,9 +242,9 @@ describe('runtimeChoicesFromConnections', () => {
 
   it('keeps supported runtimes selectable when no daemon has reported yet', () => {
     expect(runtimeChoicesFromConnections([])).toEqual([
-      { id: 'desktop', label: 'Desktop ACP', available: true, reason: null },
-      { id: 'claude', label: 'Claude', available: null, reason: 'not_reported' },
-      { id: 'codex', label: 'Codex', available: null, reason: 'not_reported' },
+      { id: 'desktop', label: 'This Mac (local SDK)', available: true, reason: null },
+      { id: 'claude', label: 'Claude (Agent SDK)', available: null, reason: 'not_reported' },
+      { id: 'codex', label: 'Codex (app-server)', available: null, reason: 'not_reported' },
       { id: 'amp', label: 'Amp', available: null, reason: 'not_reported' },
     ]);
   });

@@ -11,6 +11,13 @@ describe('workspace rail loading states', () => {
     expect(railSource).toContain('Loading workspaces…');
     expect(railSource).toContain('loadError');
     expect(railSource).toContain('onRetry');
-    expect(appSource).toContain('loading={wsLoading || workspaceReadiness.status === \'missing\' || workspaceReadiness.status === \'preparing\'}');
+    // 'pending' is the pre-session state: no user id yet, so no fetch has been
+    // attempted. It must read as loading here — it used to fall through to the
+    // 'unavailable' branch and paint a connection error over a healthy account
+    // on cold load.
+    expect(appSource).toContain("workspaceReadiness.status === 'pending'");
+    expect(appSource).toContain("workspaceReadiness.status === 'missing'");
+    expect(appSource).toContain("workspaceReadiness.status === 'preparing'");
+    expect(appSource).toContain("loadError={workspaceReadiness.status === 'unavailable'");
   });
 });

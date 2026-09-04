@@ -1231,13 +1231,46 @@ Pinned by `tests/desktop-local-runtime.test.cjs`.
 
 - Match the surrounding file's style: 2-space indent, its semicolon convention,
   `cn()` for class merging, shadcn/ui primitives already imported in the file.
+- **The shadcn primitives live in `packages/ui`, not in the app.** `@agensis/ui`
+  is an npm workspace holding all 57 of them, imported directly:
+  `import { Button } from '@agensis/ui/components/button'`. `src/components/ui/`
+  holds exactly one file — `sonner.tsx`, which stayed because it imports
+  `@/hooks/useTheme` and would otherwise drag an app dependency into a package
+  that has to stay liftable. The app resolves the package through the `source`
+  export condition (set in `vite.config.ts`, both vitest configs and
+  `tsconfig.app.json`), so there is no build step in the loop — but it also
+  means a broken export map fails at import time, which is what
+  `tests/unit/agensisUiPackage.test.ts` guards. That package is **MIT** inside
+  an AGPL repository: no code from the rest of this tree may be copied into it,
+  and it is `"private": true` — not published anywhere.
+  `npx shadcn add` still writes into the app (`components.json` aliases point
+  there), so move the new file into the package by hand and import it from
+  there. Do not leave a re-export shim behind: the contract test fails on one.
 - No new npm dependencies without a strong reason. Drag-and-drop is native HTML5
   (`draggable` + `onDragStart/onDragOver/onDrop`) or pointer events — see
   `src/components/windows/ThreadWidgetRail.tsx` and `TasksWindowContent.tsx`.
-- The root package is the agensis app. Keep app, backend, database and
+- The root package is the agensis app, and since the UI extraction it is also
+  an npm workspace root (`packages/*`). Adding or removing a workspace means
+  regenerating `package-lock.json` in the same commit — `npm ci` refuses a lock
+  that does not list the workspace, which takes every GitHub Actions job and the
+  Docker build down with it. Keep app, backend, database and
   deployment code out of the daemon repository — not because either repo is
   private, but because the daemon is a small, separately released client of the
   wire contract and copying server code into it duplicates the thing the
   contract exists to keep in one place.
 - User-facing rich text is sanitized through `src/lib/sanitize.ts` (DOMPurify)
   at every render/paste boundary.
+- **Text sizes are rem, never px.** `html` carries
+  `--agensis-ui-font-size` (12-18px, the Settings -> Font size slider, set in
+  `settings.ts applyUiAppearanceSettings`), so every `rem` size scales with it
+  and every `text-[11px]` does not. Tailwind's stock scale stops at `text-xs`;
+  below it use `text-2xs` (0.6875rem = 11px) and `text-3xs` (0.625rem = 10px),
+  defined in the `@theme inline` block in `src/index.css`. For 13px write
+  `text-[0.8125rem]` — only ten sites, not worth a token.
+  Two traps: (1) do **not** swap `text-[12px]`/`text-[14px]` for the stock
+  `text-xs`/`text-sm` — those carry a paired line-height the arbitrary px value
+  did not, so the swap silently reflows; write `text-[0.75rem]` /
+  `text-[0.875rem]` instead. (2) 7px, 8px and 9px are **exempt** — they are the
+  Press Start 2P retro face and avatar initials, which are deliberately fixed.
+  `src/components/layout/Sidebar.tsx` is the converted reference; roughly 300
+  px sites elsewhere are still waiting.

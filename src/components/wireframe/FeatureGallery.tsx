@@ -4,7 +4,7 @@ import {
   CarouselItem,
   CarouselNext,
   CarouselPrevious,
-} from '@/components/ui/carousel';
+} from '@agensis/ui/components/carousel';
 import { cn } from '@/lib/utils';
 import { WireframeDemo } from './WireframeDemo';
 import type { GallerySlide } from '@/lib/wireframeScenes';

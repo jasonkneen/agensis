@@ -1,7 +1,7 @@
 import { Component, type ReactNode } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
+import { Button } from '@agensis/ui/components/button';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@agensis/ui/components/empty';
 
 interface Props {
   children: ReactNode;

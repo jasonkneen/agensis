@@ -3,9 +3,9 @@ import { toast } from 'sonner';
 import { CalendarDays, Trash2 } from 'lucide-react';
 
 import { SectionShell, Example } from '@/showcase/SectionShell';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Button } from '@agensis/ui/components/button';
+import { Input } from '@agensis/ui/components/input';
+import { Label } from '@agensis/ui/components/label';
 import {
   Dialog,
   DialogClose,
@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '@/components/ui/dialog';
+} from '@agensis/ui/components/dialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,7 +26,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from '@/components/ui/alert-dialog';
+} from '@agensis/ui/components/alert-dialog';
 import {
   Sheet,
   SheetClose,
@@ -36,7 +36,7 @@ import {
   SheetHeader,
   SheetTitle,
   SheetTrigger,
-} from '@/components/ui/sheet';
+} from '@agensis/ui/components/sheet';
 import {
   Drawer,
   DrawerClose,
@@ -46,7 +46,7 @@ import {
   DrawerHeader,
   DrawerTitle,
   DrawerTrigger,
-} from '@/components/ui/drawer';
+} from '@agensis/ui/components/drawer';
 import {
   Popover,
   PopoverContent,
@@ -54,17 +54,17 @@ import {
   PopoverHeader,
   PopoverTitle,
   PopoverTrigger,
-} from '@/components/ui/popover';
+} from '@agensis/ui/components/popover';
 import {
   HoverCard,
   HoverCardContent,
   HoverCardTrigger,
-} from '@/components/ui/hover-card';
+} from '@agensis/ui/components/hover-card';
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from '@/components/ui/tooltip';
+} from '@agensis/ui/components/tooltip';
 
 export default function OverlaysSection() {
   const [name, setName] = useState('Ada Lovelace');

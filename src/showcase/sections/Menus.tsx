@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { SectionShell, Example } from '@/showcase/SectionShell';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -16,7 +16,7 @@ import {
   DropdownMenuSub,
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
-} from '@/components/ui/dropdown-menu';
+} from '@agensis/ui/components/dropdown-menu';
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -31,7 +31,7 @@ import {
   ContextMenuSub,
   ContextMenuSubTrigger,
   ContextMenuSubContent,
-} from '@/components/ui/context-menu';
+} from '@agensis/ui/components/context-menu';
 import {
   Menubar,
   MenubarMenu,
@@ -46,7 +46,7 @@ import {
   MenubarSub,
   MenubarSubTrigger,
   MenubarSubContent,
-} from '@/components/ui/menubar';
+} from '@agensis/ui/components/menubar';
 import {
   NavigationMenu,
   NavigationMenuList,
@@ -54,7 +54,7 @@ import {
   NavigationMenuTrigger,
   NavigationMenuContent,
   NavigationMenuLink,
-} from '@/components/ui/navigation-menu';
+} from '@agensis/ui/components/navigation-menu';
 import {
   User,
   Settings,

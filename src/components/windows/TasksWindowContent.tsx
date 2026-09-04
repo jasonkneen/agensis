@@ -57,9 +57,9 @@ import {
   type TaskAssignmentFilter,
   type TaskSpan,
 } from './taskSchedule';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback } from '@agensis/ui/components/avatar';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
 import {
   Command,
   CommandEmpty,
@@ -67,41 +67,41 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-} from '@/components/ui/command';
+} from '@agensis/ui/components/command';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from '@/components/ui/empty';
-import { Input } from '@/components/ui/input';
+} from '@agensis/ui/components/empty';
+import { Input } from '@agensis/ui/components/input';
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
   InputGroupInput,
-} from '@/components/ui/input-group';
+} from '@agensis/ui/components/input-group';
 import {
   Item,
   ItemActions,
   ItemContent,
   ItemGroup,
   ItemTitle,
-} from '@/components/ui/item';
+} from '@agensis/ui/components/item';
 import {
   Marker,
   MarkerContent,
   MarkerIcon,
-} from '@/components/ui/marker';
+} from '@agensis/ui/components/marker';
 import {
   NativeSelect,
   NativeSelectOptGroup,
   NativeSelectOption,
-} from '@/components/ui/native-select';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Textarea } from '@/components/ui/textarea';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+} from '@agensis/ui/components/native-select';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Textarea } from '@agensis/ui/components/textarea';
+import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 import { cn } from '@/lib/utils';
 
 interface TasksWindowContentProps {
@@ -707,7 +707,7 @@ function TaskRow({
                   <User />
                 )}
                 {assigneeLabel}
-                {assigneeActive && <span className="text-[10px] font-medium">· working</span>}
+                {assigneeActive && <span className="text-3xs font-medium">· working</span>}
               </Badge>
             )}
             {subtasks.length > 0 && (
@@ -1189,7 +1189,7 @@ function TaskDetail({
           <MarkerContent>Schedule</MarkerContent>
         </Marker>
         <div className="flex flex-wrap gap-2">
-          <label className="flex min-w-32 flex-1 flex-col gap-1 text-[11px] font-medium text-muted-foreground">
+          <label className="flex min-w-32 flex-1 flex-col gap-1 text-2xs font-medium text-muted-foreground">
             Start date
             <Input
               type="date"
@@ -1198,7 +1198,7 @@ function TaskDetail({
               onChange={e => onChangeDates({ start_date: fromDateInputValue(e.target.value) })}
             />
           </label>
-          <label className="flex min-w-32 flex-1 flex-col gap-1 text-[11px] font-medium text-muted-foreground">
+          <label className="flex min-w-32 flex-1 flex-col gap-1 text-2xs font-medium text-muted-foreground">
             Due date
             <Input
               type="date"
@@ -1378,7 +1378,7 @@ function TaskDetail({
                             name={agent.name}
                             initials={agent.name.slice(0, 2).toUpperCase()}
                             className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"
-                            fallbackClassName="bg-transparent text-[10px] text-muted-foreground"
+                            fallbackClassName="bg-transparent text-3xs text-muted-foreground"
                           />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate font-medium">{agent.name}</span>
@@ -1758,11 +1758,11 @@ function TaskCommentItem({
       )}
       <ItemContent className="min-w-0 gap-1">
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className="min-w-0 truncate text-[11px] font-semibold text-foreground">{author.label}</span>
+          <span className="min-w-0 truncate text-2xs font-semibold text-foreground">{author.label}</span>
           {isAgent && (
             <Badge variant="secondary" className="h-3.5 px-1 py-0 text-[9px] leading-none">agent</Badge>
           )}
-          <span className="shrink-0 text-[10px] text-muted-foreground">{formatRelativeTime(comment.created_at)}</span>
+          <span className="shrink-0 text-3xs text-muted-foreground">{formatRelativeTime(comment.created_at)}</span>
         </div>
         <ItemTitle className="max-w-full whitespace-normal text-xs font-normal leading-snug">{comment.content}</ItemTitle>
       </ItemContent>
@@ -1898,7 +1898,7 @@ function TaskKanban({
             >
               <div className="flex items-center justify-between px-1 pt-0.5">
                 <span className="text-xs font-semibold tracking-tight">{STATUS_LABELS[status]}</span>
-                <span className="rounded-full bg-muted px-1.5 text-[10px] font-medium leading-4 text-muted-foreground">
+                <span className="rounded-full bg-muted px-1.5 text-3xs font-medium leading-4 text-muted-foreground">
                   {items.length}
                 </span>
               </div>

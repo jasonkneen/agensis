@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { ArrowLeft, Check, ExternalLink, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Textarea } from '@/components/ui/textarea';
+import { Button } from '@agensis/ui/components/button';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
+import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
 import {
   CATEGORY_ICON,

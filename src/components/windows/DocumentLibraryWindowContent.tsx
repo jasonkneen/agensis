@@ -17,17 +17,17 @@ import { usePaneSplit } from '../../hooks/usePaneSplit';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { AgentAvatar } from '../agents/AgentAvatar';
 import { viewPreferenceKey } from '../../lib/viewPreferences';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { Badge } from '@agensis/ui/components/badge';
+import { Button } from '@agensis/ui/components/button';
+import { Input } from '@agensis/ui/components/input';
+import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from '@/components/ui/empty';
+} from '@agensis/ui/components/empty';
 
 // ---------------------------------------------------------------------------
 // THE LIBRARY — every document the workspace can reach, in one place.
@@ -62,7 +62,7 @@ function SourceChip({ source, onOpen }: { source: LibrarySource; onOpen: () => v
         onOpen();
       }}
       title={describeSource(source)}
-      className={`inline-flex max-w-[11rem] items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2 text-[11px] transition-colors ${
+      className={`inline-flex max-w-[11rem] items-center gap-1.5 rounded-full py-0.5 pl-0.5 pr-2 text-2xs transition-colors ${
         // A CONNECTED agent's copy is filled; an offline agent's is outlined.
         // Same fill/outline vocabulary the Skills window uses for
         // advertised-vs-configured, and the same underlying question: is this
@@ -117,7 +117,7 @@ function DiffView({ result }: { result: DiffResult }) {
         </p>
       )}
       <div className="overflow-x-auto rounded-lg border border-border bg-card/40">
-        <table className="w-full border-collapse font-mono text-[11px] leading-relaxed">
+        <table className="w-full border-collapse font-mono text-2xs leading-relaxed">
           <tbody>
             {hunks.map((hunk, hunkIndex) => (
               // Keyed fragment: a bare <> inside a .map() has no key, so React
@@ -125,7 +125,7 @@ function DiffView({ result }: { result: DiffResult }) {
               <Fragment key={`hunk-${hunkIndex}`}>
                 {hunk.skipped > 0 && (
                   <tr>
-                    <td colSpan={3} className="bg-muted/40 px-2 py-1 text-center text-[10px] text-muted-foreground">
+                    <td colSpan={3} className="bg-muted/40 px-2 py-1 text-center text-3xs text-muted-foreground">
                       {hunk.skipped} unchanged line{hunk.skipped === 1 ? '' : 's'}
                     </td>
                   </tr>
@@ -358,7 +358,7 @@ export function DocumentLibraryWindowContent({
                         )}
                       </div>
                       {entry.primary.summary && (
-                        <p className="mt-1 line-clamp-2 pl-5.5 text-[11px] leading-snug text-muted-foreground">
+                        <p className="mt-1 line-clamp-2 pl-5.5 text-2xs leading-snug text-muted-foreground">
                           {entry.primary.summary}
                         </p>
                       )}
@@ -461,18 +461,18 @@ export function DocumentLibraryWindowContent({
                         <span className="block truncate text-sm text-foreground">
                           {source.agent?.name || 'This workspace'}
                         </span>
-                        <span className="block truncate font-mono text-[10px] text-muted-foreground">
+                        <span className="block truncate font-mono text-3xs text-muted-foreground">
                           {source.path || LIBRARY_SOURCE_LABELS[source.kind]}
                         </span>
                       </span>
                       {isPrimary ? (
-                        <Badge variant="outline" className="shrink-0 text-[10px]">latest</Badge>
+                        <Badge variant="outline" className="shrink-0 text-3xs">latest</Badge>
                       ) : agreement === 'identical' ? (
-                        <Badge variant="outline" className="shrink-0 text-[10px]">same</Badge>
+                        <Badge variant="outline" className="shrink-0 text-3xs">same</Badge>
                       ) : agreement === 'different' ? (
-                        <Badge variant="secondary" className="shrink-0 text-[10px]">differs</Badge>
+                        <Badge variant="secondary" className="shrink-0 text-3xs">differs</Badge>
                       ) : (
-                        <Badge variant="outline" className="shrink-0 text-[10px] text-muted-foreground">compare</Badge>
+                        <Badge variant="outline" className="shrink-0 text-3xs text-muted-foreground">compare</Badge>
                       )}
                     </button>
                   );
@@ -480,7 +480,7 @@ export function DocumentLibraryWindowContent({
               </div>
               {/* Said in words, because "latest" is a claim and a reader is
                   entitled to know what it is based on. */}
-              <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+              <p className="mt-1.5 text-2xs leading-relaxed text-muted-foreground">
                 “Latest” is the most recently modified copy — the file’s own timestamp where the
                 agent reported one, otherwise when it last synced.
               </p>
@@ -492,7 +492,7 @@ export function DocumentLibraryWindowContent({
                   <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     {comparing.agent?.name || 'This workspace'} vs latest
                   </h4>
-                  <Badge variant="secondary" className="text-[10px]">{describeDiff(diff)}</Badge>
+                  <Badge variant="secondary" className="text-3xs">{describeDiff(diff)}</Badge>
                   <Button
                     type="button"
                     variant="ghost"
@@ -503,7 +503,7 @@ export function DocumentLibraryWindowContent({
                     Show latest
                   </Button>
                 </div>
-                <p className="mb-2 text-[11px] text-muted-foreground">
+                <p className="mb-2 text-2xs text-muted-foreground">
                   Green is in the latest copy only. Red is in {comparing.agent?.name || 'this copy'} only.
                 </p>
                 <DiffView result={diff} />
@@ -512,7 +512,7 @@ export function DocumentLibraryWindowContent({
               <div>
                 <div className="mb-1.5 flex items-center gap-2">
                   <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Latest version</h4>
-                  <span className="text-[11px] text-muted-foreground">{describeSource(selected.primary)}</span>
+                  <span className="text-2xs text-muted-foreground">{describeSource(selected.primary)}</span>
                   {selected.primary.kind === 'workspace' && onOpenWorkspaceDocument && (
                     <Button
                       type="button"

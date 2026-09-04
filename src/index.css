@@ -27,6 +27,15 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+/* The DEFAULT UI face (settings.ts ui_font_family: 'bricolage'), and until now
+   the only one fetched from a third party at runtime: every other choice is a
+   bundled @fontsource package, but this one came from fonts.googleapis.com via
+   ensureUiFontLoaded. So the app's own default look depended on Google
+   answering — on a cold load, offline, or in the installed PWA it rendered the
+   next face in the stack (Geist) until that request landed, if it ever did.
+   The variable build is one file rather than the four static weights the
+   Google URL requested. */
+@import "@fontsource-variable/bricolage-grotesque";
 
 /* shadcn dark variant is driven by the app's existing [data-theme="dark"]
    attribute (set by useTheme) — one theme system, no .dark class. */
@@ -36,7 +45,7 @@
  --sidebar-width: 240px;
  --header-height: 52px;
  --chat-panel-width: 380px;
- --agensis-ui-font-family: 'Bricolage Grotesque', 'Geist Variable', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+ --agensis-ui-font-family: 'Bricolage Grotesque Variable', 'Bricolage Grotesque', 'Geist Variable', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
  --agensis-ui-font-size: 16px;
  /* First-paint values only: applyUiAppearanceSettings() overwrites both as an
     INLINE style on :root as soon as it runs. Kept in step with DEFAULTS in
@@ -85,14 +94,14 @@
     is for and why the three shell columns stack the way they do. The two are
     asserted equal by tests/unit/chromeDepth.test.ts; edit both or neither.
     Short version: the sidebar is the recess, the canvas column and the
-    workspace rail are raised out of it, and nothing here may reach --z-overlay
-    (50) or Radix portals start opening behind panels. */
+    workspace rail are raised out of it, and the Radix portal band
+    (--z-overlay) sits above every other rung but the feedback picker, so a
+    select or tooltip raised from inside a dialog paints over it. */
  --z-backdrop: 0;
  --z-sidebar: 10;
  --z-content: 20;
  --z-sidebar-flyout: 30;
  --z-workspace-rail: 40;
- --z-overlay: 50;
  --z-agent-feed: 9500;
  --z-presence-panel: 9600;
  --z-cursors: 9999;
@@ -105,6 +114,7 @@
  --z-context-menu: 12010;
  --z-menu: 12050;
  --z-nested-modal: 12060;
+ --z-overlay: 12070;
  --z-picker: 12080;
  --z-picker-hud: 12090;
  --background: oklch(1 0 0);
@@ -150,10 +160,22 @@
  --border-subtle: #1f1f1f;
  --border-strong: #3a3a3a;
 
- --text-primary: #f2f2f2;
- --text-secondary: #9a9a9a;
- --text-muted: #565656;
- --text-inverse: #0c0c0c;
+ /* Text COLOURS. Named `--ink*` and not `--text-*` on purpose: `--text-` is
+    Tailwind v4's font-SIZE namespace, which this file now also uses for real
+    size steps (--text-2xs / --text-3xs in the @theme block). Under the old
+    names the two lived one keystroke apart and were only safe because the
+    colours sat at :root while the sizes sat in @theme — move a colour into
+    @theme by mistake and you get a `.text-primary` utility setting font-size to
+    a hex string. `--ink` cannot collide with any Tailwind namespace, and it is
+    the vocabulary the showcase already used internally (twThemes.ts).
+    NOT merged into --foreground / --muted-foreground even though they are
+    identical in the default, paper and neo families: the classic themes give
+    them genuinely different values (oklch foreground vs hex ink), so aliasing
+    would have silently restyled classic. */
+ --ink: #f2f2f2;
+ --ink-secondary: #9a9a9a;
+ --ink-muted: #565656;
+ --ink-inverse: #0c0c0c;
 
  --accent: #4f9cf9;
  --accent-hover: #3b87e8;
@@ -183,14 +205,14 @@
      short soft falloff. Deliberately short — a long one just muddies the first
      40px of sidebar content. */
  --chrome-cast: 1px 0 0 rgba(0, 0, 0, 0.45), 8px 0 18px -8px rgba(0, 0, 0, 0.75);
- /* The same cast, thrown LEFT. The canvas column sits above the sidebar too, so
-    it has to land on the sidebar's right edge exactly as the rail lands on its
-    left — otherwise the sidebar reads as recessed on one side and flush on the
-    other, which is not a shape any light source makes. */
- /* NO contact hairline on this one, unlike --chrome-cast. The sidebar already
-    draws its own right border, so a 1px line here lands directly beside it and
-    reads as a double rule down the seam. Falloff only. */
- --chrome-cast-left: -8px 0 18px -8px rgba(0, 0, 0, 0.75);
+ /* --chrome-cast-left used to live here: the same cast thrown LEFT, so the
+    canvas column landed on the sidebar's right edge as the rail landed on its
+    left. It is gone. Its only consumer was the canvas column, which IS the
+    wallpaper — so on any desktop with a background image it painted a
+    hard-edged grey band down the photo instead of depth on chrome. See
+    [data-workspace-viewport] further down. Do not reintroduce it without
+    solving that: the shadow needs a chrome surface to fall onto, and there
+    isn't one on that side. */
  --home-bg-image-opacity: 0.42;
  --home-bg-overlay: linear-gradient(to bottom, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.04) 72%, var(--canvas-base) 100%);
  /* Always-on radial vignette that darkens the edges and lifts the focal
@@ -209,10 +231,10 @@
  --border-subtle: #eaeaea;
  --border-strong: #cccccc;
 
- --text-primary: #1a1a1a;
- --text-secondary: #5a5a5a;
- --text-muted: #9a9a9a;
- --text-inverse: #ffffff;
+ --ink: #1a1a1a;
+ --ink-secondary: #5a5a5a;
+ --ink-muted: #9a9a9a;
+ --ink-inverse: #ffffff;
 
  --accent: #2563eb;
  --accent-hover: #1d4ed8;
@@ -234,7 +256,6 @@
  /* Sideways chrome elevation — see the dark-scheme note. Lighter and one step
      tighter here: on a pale sidebar the same falloff reads as a smudge. */
  --chrome-cast: 1px 0 0 rgba(0, 0, 0, 0.10), 7px 0 14px -8px rgba(0, 0, 0, 0.22);
- --chrome-cast-left: -7px 0 14px -8px rgba(0, 0, 0, 0.22);
  --home-bg-image-opacity: 0.34;
  --home-bg-overlay: linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 0%, rgba(0, 0, 0, 0.08) 72%, var(--canvas-base) 100%);
  --home-bg-vignette: radial-gradient(135% 105% at 50% 42%, transparent 44%, rgba(30, 24, 12, 0.10) 76%, rgba(20, 16, 8, 0.20) 100%);
@@ -252,9 +273,9 @@
  --border: #e2d5bb;
  --border-subtle: #ede2ce;
  --border-strong: #c7bca4;
- --text-primary: #2a2722;
- --text-secondary: #6f695f;
- --text-muted: #918979;
+ --ink: #2a2722;
+ --ink-secondary: #6f695f;
+ --ink-muted: #918979;
  /* Accent tokens derive from --primary so a picked accent preset (which sets
      --primary) flows through TW; with the default (neutral) preset --primary is
      TW's gold, so this is visually identical to the old hardcoded values. */
@@ -298,9 +319,9 @@
  --border: #4d4230;
  --border-subtle: #37301f;
  --border-strong: #756550;
- --text-primary: #f5ecdc;
- --text-secondary: #c8bba7;
- --text-muted: #8d806e;
+ --ink: #f5ecdc;
+ --ink-secondary: #c8bba7;
+ --ink-muted: #8d806e;
  /* Derived from --primary — see the light block. Dark-mode hover lightens
      toward white (the light block darkens toward ink). */
  --accent: var(--primary);
@@ -325,7 +346,7 @@
  --secondary: #2c2518;
  --secondary-foreground: #f5ecdc;
  --muted: #2c2518;
- /* Sits between --text-secondary (#c8bba7) and --text-muted (#8d806e) so the
+ /* Sits between --ink-secondary (#c8bba7) and --ink-muted (#8d806e) so the
      secondary/muted/low ramp keeps three distinct steps (was == secondary). */
  --muted-foreground: #a89c88;
  --sh-accent: #372d1c;
@@ -389,13 +410,13 @@
 :root[data-ui-theme="neo"] [data-slot="dialog-content"],
 :root[data-ui-theme="neo"] [data-slot="alert-dialog-content"],
 :root[data-ui-theme="neo"] [data-slot="popover-content"] {
- font-family: var(--neo-font, var(--agensis-ui-font-family, 'Bricolage Grotesque', system-ui, -apple-system, sans-serif));
+ font-family: var(--neo-font, var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', system-ui, -apple-system, sans-serif));
 }
 
 :root[data-ui-theme="neo"] h1,
 :root[data-ui-theme="neo"] h2,
 :root[data-ui-theme="neo"] h3 {
- font-family: var(--neo-display, var(--neo-font, var(--agensis-ui-font-family, 'Bricolage Grotesque', system-ui, -apple-system, sans-serif)));
+ font-family: var(--neo-display, var(--neo-font, var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', system-ui, -apple-system, sans-serif)));
  font-weight: var(--neo-display-weight, 700);
  letter-spacing: var(--neo-display-spacing, -0.01em);
  text-transform: var(--neo-display-transform, none);
@@ -430,9 +451,9 @@
  --border-subtle: color-mix(in srgb, var(--neo-ink) 14%, transparent);
  --border-strong: var(--neo-ink);
 
- --text-primary: #0a0a0a;
- --text-secondary: #2d2d2d;
- --text-muted: #595959;
+ --ink: #0a0a0a;
+ --ink-secondary: #2d2d2d;
+ --ink-muted: #595959;
 
  --accent: var(--primary);
  --accent-hover: color-mix(in srgb, var(--primary) 86%, var(--foreground) 14%);
@@ -486,9 +507,9 @@
  --border-subtle: color-mix(in srgb, var(--neo-ink) 16%, transparent);
  --border-strong: var(--neo-edge);
 
- --text-primary: #f7f1ec;
- --text-secondary: #cfc7bd;
- --text-muted: #968d82;
+ --ink: #f7f1ec;
+ --ink-secondary: #cfc7bd;
+ --ink-muted: #968d82;
 
  --accent: var(--primary);
  --accent-hover: color-mix(in srgb, var(--primary) 84%, var(--foreground) 16%);
@@ -531,7 +552,7 @@
 :root[data-ui-theme="paper"] [data-slot="dialog-content"],
 :root[data-ui-theme="paper"] [data-slot="alert-dialog-content"],
 :root[data-ui-theme="paper"] [data-slot="popover-content"] {
- font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque', system-ui, -apple-system, sans-serif);
+ font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', system-ui, -apple-system, sans-serif);
 }
 
 :root[data-ui-theme="paper"][data-theme="light"] {
@@ -676,7 +697,7 @@
  border-width: 1px !important;
  border-style: solid !important;
  border-color: var(--tw-control-outline) !important;
- color: var(--text-secondary) !important;
+ color: var(--ink-secondary) !important;
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),
   var(--tw-control-fill) !important;
@@ -702,7 +723,7 @@
  border-width: 1px !important;
  border-style: solid !important;
  border-color: transparent !important;
- color: var(--text-secondary) !important;
+ color: var(--ink-secondary) !important;
  background: transparent !important;
  box-shadow: none !important;
 }
@@ -1017,7 +1038,7 @@
 :root[data-ui-theme="neo"] .sidebar-action-row[data-active="true"] {
  border-color: var(--border) !important;
  background: var(--card) !important;
- color: var(--text-primary) !important;
+ color: var(--ink) !important;
 }
 
 :root[data-ui-theme="neo"] .sidebar-action-row[data-active="true"]:hover {
@@ -1100,7 +1121,7 @@
  box-shadow: none !important;
  outline: 0 !important;
  border-radius: 10px !important;
- color: var(--text-secondary) !important;
+ color: var(--ink-secondary) !important;
  /* Height comes from --sidebar-item-row-h + --sidebar-row-frame, not a literal. */
  justify-content: flex-start;
  padding-inline: 10px;
@@ -1247,7 +1268,13 @@
 [data-workspace-viewport] {
  position: relative;
  z-index: var(--z-content);
- box-shadow: var(--chrome-cast-left);
+ /* No cast shadow. This threw 18px of darkness leftward to make the sidebar
+    read as recessed between two raised columns — but the canvas column is the
+    wallpaper, so on any desktop with a background image the shadow landed on
+    the photo as a hard-edged grey band down its left edge rather than as depth
+    on chrome. The rail's own cast was removed earlier for the same reason (it
+    read as "a smudge"); this is the last one. The z-index stays: the column is
+    still above the sidebar for stacking, it just does not advertise it. */
 }
 
 /* Accent wash — a soft bleed of the active theme's accent in from the sidebar's
@@ -1485,6 +1512,18 @@
  font-weight: 700;
  line-height: 1;
  font-variant-numeric: tabular-nums;
+}
+
+/* Depth on the count pills, in the Default theme only.
+   They were flat fills sitting on a flat sidebar — the one element on the row
+   that is supposed to read as a raised token, rendered with less presence than
+   the row behind it. --default-hard-shadow is the same offset, blur-free shadow
+   the theme's buttons and cards already use, so this is the existing vocabulary
+   rather than a new effect; scoped to [data-ui-theme="default"] because paper
+   and neo have their own shadow languages and classic deliberately has none. */
+:root[data-ui-theme="default"] .sidebar-section-count,
+:root[data-ui-theme="default"] .sidebar-action-count {
+ box-shadow: var(--default-hard-shadow);
 }
 
 /* Two reserved right-hand columns per row: a count column, then a far-right
@@ -1997,7 +2036,7 @@
  background: var(--muted) !important;
  border-color: transparent !important;
  box-shadow: none !important;
- color: var(--text-primary) !important;
+ color: var(--ink) !important;
 }
 
 /* THE SELECTED ROW — ONE RULE, every row type.
@@ -2017,7 +2056,7 @@
  border-color: var(--border) !important;
  background: var(--card) !important;
  box-shadow: var(--neo-shadow-sm) !important;
- color: var(--text-primary) !important;
+ color: var(--ink) !important;
 }
 
 /* ONE frame, not two. The DM row is the only selected row with a nested button
@@ -3400,7 +3439,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
 .chat-markdown blockquote {
  border-left: 3px solid var(--border);
  padding-left: 0.75rem;
- color: var(--text-secondary);
+ color: var(--ink-secondary);
 }
 
 .chat-markdown code {
@@ -3408,7 +3447,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
  border-radius: var(--radius-sm);
  background: color-mix(in srgb, var(--canvas-base) 70%, transparent);
  padding: 0.08rem 0.3rem;
- font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, monospace;
+ font-family: var(--font-mono);
  font-size: 0.88em;
 }
 
@@ -3432,7 +3471,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
  position: absolute;
  top: 0.35rem;
  right: 0.55rem;
- color: var(--text-muted);
+ color: var(--ink-muted);
  font-size: 0.7rem;
  text-transform: uppercase;
 }
@@ -3460,7 +3499,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
 }
 
 .chat-mermaid-error code {
- color: var(--text-muted);
+ color: var(--ink-muted);
 }
 
 .chat-markdown table {
@@ -3500,7 +3539,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
 
 .chat-markdown-frontmatter-desc {
  margin: 0;
- color: var(--text-secondary);
+ color: var(--ink-secondary);
  font-size: 0.92em;
  line-height: 1.4;
 }
@@ -3523,7 +3562,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
  font-weight: 600;
  text-transform: uppercase;
  letter-spacing: 0.02em;
- color: var(--text-muted);
+ color: var(--ink-muted);
 }
 
 * {
@@ -3534,12 +3573,16 @@ html,
 body {
  height: 100%;
  overflow: hidden;
+ /* The shell never scrolls, so any wheel that reaches the document is a
+    chained scroll from a menu or panel that ran out of content, or a PWA
+    rubber-band on touch. Neither should move the app. */
+ overscroll-behavior: none;
 }
 
 body {
  background-color: var(--canvas-base);
- color: var(--text-primary);
- font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif);
+ color: var(--ink);
+ font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif);
  /* 1rem, NOT a hard px: `html` is set to var(--agensis-ui-font-size) (see the
     html rule near the end of this file), which the user's `ui_base_font_size`
     setting drives (settings.ts applyUiAppearanceSettings). A fixed px here was
@@ -3642,6 +3685,21 @@ body {
  background: var(--border-strong);
 }
 
+/* Firefox has no ::-webkit-scrollbar, so without this it draws the default
+   ~15px system bar while every Chromium user sees the 4px one above.
+   The @supports guard is NOT decoration: Chrome 121+ drops ALL
+   ::-webkit-scrollbar styling for any element that declares scrollbar-width
+   or scrollbar-color, so applying these unconditionally would widen the bars
+   this file spent four rules narrowing. `html` is enough — both properties
+   inherit, and the two opt-outs above (.context-count-chips,
+   .workspace-window-dock) still win locally. */
+@supports not selector(::-webkit-scrollbar) {
+ html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+ }
+}
+
 /* Document Editor Styles */
 .doc-editor {
  outline: none;
@@ -3652,7 +3710,7 @@ body {
  font-size: 2rem;
  font-weight: 700;
  line-height: 1.2;
- color: var(--text-primary);
+ color: var(--ink);
  margin-bottom: 0.75rem;
  letter-spacing: -0.02em;
 }
@@ -3661,7 +3719,7 @@ body {
  font-size: 1.4rem;
  font-weight: 600;
  line-height: 1.3;
- color: var(--text-primary);
+ color: var(--ink);
  margin-bottom: 0.5rem;
  margin-top: 1.5rem;
  letter-spacing: -0.01em;
@@ -3670,13 +3728,13 @@ body {
 .doc-editor h3 {
  font-size: 1.1rem;
  font-weight: 600;
- color: var(--text-primary);
+ color: var(--ink);
  margin-bottom: 0.4rem;
  margin-top: 1.25rem;
 }
 
 .doc-editor p {
- color: var(--text-primary);
+ color: var(--ink);
  margin-bottom: 0.6rem;
  line-height: 1.7;
 }
@@ -3685,7 +3743,7 @@ body {
 .doc-editor ol {
  padding-left: 1.5rem;
  margin-bottom: 0.6rem;
- color: var(--text-primary);
+ color: var(--ink);
 }
 
 .doc-editor li {
@@ -3696,7 +3754,7 @@ body {
 .doc-editor strong,
 .doc-editor b {
  font-weight: 600;
- color: var(--text-primary);
+ color: var(--ink);
 }
 
 .doc-editor em,
@@ -3709,7 +3767,7 @@ body {
  border: 1px solid var(--border);
  border-radius: var(--radius-sm);
  padding: 0.15em 0.4em;
- font-family: 'JetBrains Mono', 'Fira Code', monospace;
+ font-family: var(--font-mono);
  font-size: 0.85em;
  color: var(--accent);
 }
@@ -3717,14 +3775,14 @@ body {
 .doc-editor blockquote {
  border-left: 3px solid var(--accent-border);
  padding-left: 1rem;
- color: var(--text-secondary);
+ color: var(--ink-secondary);
  font-style: italic;
  margin: 0.75rem 0;
 }
 
 .doc-editor [contenteditable]:empty:before {
  content: attr(data-placeholder);
- color: var(--text-muted);
+ color: var(--ink-muted);
  pointer-events: none;
 }
 
@@ -3779,7 +3837,7 @@ body {
  border: 1px solid var(--border);
  border-radius: var(--radius-sm);
  background: rgba(255, 255, 255, 0.9);
- color: var(--text-secondary);
+ color: var(--ink-secondary);
  font: inherit;
  font-size: 11px;
  appearance: none;
@@ -3844,13 +3902,13 @@ body {
 
 .doc-block-header strong {
  font-size: 13px;
- color: var(--text-primary);
+ color: var(--ink);
 }
 
 .doc-block-header span,
 .doc-block-muted {
  font-size: 12px;
- color: var(--text-muted);
+ color: var(--ink-muted);
 }
 
 .doc-ai-prompt {
@@ -3861,7 +3919,7 @@ body {
  border: 1px solid var(--border);
  border-radius: var(--radius-sm);
  background: var(--canvas-base);
- color: var(--text-primary);
+ color: var(--ink);
  padding: 8px 10px;
  font: inherit;
  user-select: text;
@@ -3890,7 +3948,7 @@ body {
  background: var(--canvas-base);
  padding: 10px;
  white-space: pre-wrap;
- color: var(--text-secondary);
+ color: var(--ink-secondary);
  user-select: text;
 }
 
@@ -3908,7 +3966,7 @@ body {
  border-radius: var(--radius-sm);
  background: var(--canvas-base);
  padding: 7px 9px;
- color: var(--text-primary);
+ color: var(--ink);
 }
 
 .doc-task-row span {
@@ -3917,7 +3975,7 @@ body {
 }
 
 .doc-task-row small {
- color: var(--text-muted);
+ color: var(--ink-muted);
 }
 
 .doc-gen-panel,
@@ -3937,7 +3995,7 @@ body {
 }
 
 .doc-gen-heading span {
- color: var(--text-muted);
+ color: var(--ink-muted);
  font-size: 12px;
 }
 
@@ -3955,7 +4013,7 @@ body {
 }
 
 .doc-gen-item small {
- color: var(--text-muted);
+ color: var(--ink-muted);
 }
 
 .doc-gen-metrics {
@@ -3977,7 +4035,7 @@ body {
 }
 
 .doc-gen-metric span {
- color: var(--text-muted);
+ color: var(--ink-muted);
  font-size: 12px;
 }
 
@@ -3987,7 +4045,7 @@ body {
 
 .doc-gen-callout p {
  margin: 4px 0 0;
- color: var(--text-secondary);
+ color: var(--ink-secondary);
 }
 
 /* Tour highlight overlay */
@@ -4123,13 +4181,36 @@ body {
  border-radius: var(--radius-sm);
  padding: 4px 8px;
  font-size: 12px;
- color: var(--text-secondary);
+ color: var(--ink-secondary);
  box-shadow: var(--shadow-md);
 }
 
 @theme inline {
- --font-heading: var(--agensis-ui-font-family, 'Bricolage Grotesque', sans-serif);
- --font-sans: var(--agensis-ui-font-family, 'Bricolage Grotesque', sans-serif);
+ --font-heading: var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', sans-serif);
+ --font-sans: var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', sans-serif);
+ /* ONE mono face for the whole app, and it must be one that is actually LOADED.
+    Before this token there were four competing stacks and the two most visible
+    named a font nobody ships: .chat-markdown code and the code block both asked
+    for 'JetBrains Mono', which is not a dependency and is not imported, so
+    inline code silently rendered in SFMono / Menlo / Fira / Courier depending on
+    the OS while the neo theme rendered IBM Plex and every Tailwind `font-mono`
+    utility (51 of them) fell through to the framework's own system stack. Three
+    different monospace faces could appear on one screen.
+    IBM Plex Mono is the face already bundled and imported at 400/500/600 above,
+    so pointing everything here costs no new dependency and no new network
+    request. 'Press Start 2P' is deliberately NOT part of this: it is the retro
+    pixel display face, not a code face. */
+ --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+ /* Sub-xs rem steps. Tailwind's stock scale stops at text-xs (0.75rem/12px),
+    so 11px and 10px chrome was written as text-[11px]/text-[10px] — a hard
+    pixel, which is the one thing the Settings -> Font size slider (12-18px on
+    `html`, see settings.ts applyUiAppearanceSettings) cannot scale. These are
+    the same sizes at the 16px default, expressed so they move with it.
+    Deliberately WITHOUT a paired --text-*--line-height: the arbitrary px
+    classes they replace set font-size only, and adding one would silently
+    reflow every call site. */
+ --text-2xs: 0.6875rem;
+ --text-3xs: 0.625rem;
  --color-sidebar-ring: var(--sidebar-ring);
  --color-sidebar-border: var(--sidebar-border);
  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -4247,10 +4328,10 @@ body {
  --border: #e0e0e0;
  --border-subtle: #eaeaea;
  --border-strong: #cccccc;
- --text-primary: #1a1a1a;
- --text-secondary: #5a5a5a;
- --text-muted: #9a9a9a;
- --text-inverse: #ffffff;
+ --ink: #1a1a1a;
+ --ink-secondary: #5a5a5a;
+ --ink-muted: #9a9a9a;
+ --ink-inverse: #ffffff;
  --accent: var(--primary);
  --accent-hover: color-mix(in srgb, var(--primary) 82%, var(--foreground) 18%);
  --accent-subtle: color-mix(in srgb, var(--primary) 12%, transparent);
@@ -4290,7 +4371,6 @@ body {
  --shadow-2xl: 6px 6px 0 color-mix(in srgb, var(--foreground) 32%, transparent);
  --shadow-window: 4px 4px 0 color-mix(in srgb, var(--foreground) 24%, transparent);
  --chrome-cast: 1px 0 0 color-mix(in srgb, var(--foreground) 10%, transparent), 6px 0 0 color-mix(in srgb, var(--foreground) 18%, transparent);
- --chrome-cast-left: -6px 0 0 color-mix(in srgb, var(--foreground) 18%, transparent);
  --home-bg-image-opacity: 0.28;
  --home-bg-overlay: linear-gradient(to bottom, rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0.08) 72%, var(--canvas-base));
  --home-bg-vignette: radial-gradient(135% 105% at 50% 42%, transparent 44%, rgba(0, 0, 0, 0.1) 76%, rgba(0, 0, 0, 0.2) 100%);
@@ -4306,10 +4386,10 @@ body {
  --border: #2a2a2a;
  --border-subtle: #1f1f1f;
  --border-strong: #3a3a3a;
- --text-primary: #f2f2f2;
- --text-secondary: #9a9a9a;
- --text-muted: #565656;
- --text-inverse: #0c0c0c;
+ --ink: #f2f2f2;
+ --ink-secondary: #9a9a9a;
+ --ink-muted: #565656;
+ --ink-inverse: #0c0c0c;
  --accent: var(--primary);
  --accent-hover: color-mix(in srgb, var(--primary) 82%, white 18%);
  --accent-subtle: color-mix(in srgb, var(--primary) 16%, transparent);
@@ -4342,83 +4422,76 @@ body {
  --sidebar-accent-foreground: #f2f2f2;
  --sidebar-border: #2a2a2a;
  --sidebar-ring: var(--primary);
- --shadow-sm: 2px 2px 0 color-mix(in srgb, var(--foreground) 20%, transparent);
- --shadow-md: 3px 3px 0 color-mix(in srgb, var(--foreground) 24%, transparent);
- --shadow-lg: 4px 4px 0 color-mix(in srgb, var(--foreground) 28%, transparent);
- --shadow-xl: 5px 5px 0 color-mix(in srgb, var(--foreground) 32%, transparent);
- --shadow-2xl: 6px 6px 0 color-mix(in srgb, var(--foreground) 36%, transparent);
- --shadow-window: 4px 4px 0 color-mix(in srgb, var(--foreground) 26%, transparent);
- --chrome-cast: 1px 0 0 color-mix(in srgb, var(--foreground) 18%, transparent), 6px 0 0 color-mix(in srgb, var(--foreground) 26%, transparent);
- --chrome-cast-left: -6px 0 0 color-mix(in srgb, var(--foreground) 26%, transparent);
+ /* Shadows mix toward BLACK here, not toward --foreground.
+    The light theme mixes toward --foreground and that is correct there, because
+    in light mode --foreground IS near-black. Reusing the same expression in dark
+    mode inverted it: --foreground is #f2f2f2, so every "shadow" was a pale
+    offset smudge sitting LIGHTER than the surface it fell on — a highlight
+    wearing a shadow's name. Offsets and the 0 blur radius are unchanged: these
+    stay hard-edged, which is the Default theme's whole look. Only the colour and
+    the strength move, and they go up, because a dark surface needs more contrast
+    to read the same as a light one. */
+ --shadow-sm: 2px 2px 0 rgba(0, 0, 0, 0.55);
+ --shadow-md: 3px 3px 0 rgba(0, 0, 0, 0.6);
+ --shadow-lg: 4px 4px 0 rgba(0, 0, 0, 0.65);
+ --shadow-xl: 5px 5px 0 rgba(0, 0, 0, 0.7);
+ --shadow-2xl: 6px 6px 0 rgba(0, 0, 0, 0.75);
+ --shadow-window: 4px 4px 0 rgba(0, 0, 0, 0.62);
+ --chrome-cast: 1px 0 0 rgba(0, 0, 0, 0.5), 6px 0 0 rgba(0, 0, 0, 0.6);
  --home-bg-image-opacity: 0.16;
  --home-bg-overlay: linear-gradient(to bottom, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0.52) 72%, var(--canvas-base));
  --home-bg-vignette: radial-gradient(135% 105% at 50% 42%, transparent 40%, rgba(0, 0, 0, 0.2) 74%, rgba(0, 0, 0, 0.42) 100%);
- --default-hard-shadow: 2px 2px 0 color-mix(in srgb, var(--foreground) 24%, transparent);
- --default-hard-shadow-hover: 3px 3px 0 color-mix(in srgb, var(--foreground) 30%, transparent);
+ --default-hard-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
+ --default-hard-shadow-hover: 3px 3px 0 rgba(0, 0, 0, 0.7);
 }
 
 :root[data-ui-theme="default"] {
- --radius: 10px;
- --radius-sm: 4px;
- --radius-md: 6px;
- --radius-lg: 8px;
- --radius-xl: 12px;
- --radius-2xl: 16px;
- --radius-3xl: 20px;
- --radius-4xl: 28px;
- --default-radius-card: 8px;
- --default-radius-modal: 10px;
- --default-radius-toolbar: 14px;
- --default-radius-control: 6px;
- --default-radius-button: 9px;
+ /* The radius tokens are NOT here any more: they are derived from
+    --default-radius-scale in the block just below, so a slider can drive all
+    thirteen at once. Left here they would be dead declarations shadowed a few
+    lines later — the kind of duplicate that survives because both copies look
+    authoritative. */
  background-image: radial-gradient(circle at 18% 8%, color-mix(in srgb, var(--primary) 7%, transparent), transparent 30rem);
 }
 
-:root[data-ui-theme="default"][data-default-radius="sharp"] {
- --radius: 0px;
- --radius-sm: 0px;
- --radius-md: 0px;
- --radius-lg: 0px;
- --radius-xl: 0px;
- --radius-2xl: 0px;
- --radius-3xl: 0px;
- --radius-4xl: 0px;
- --default-radius-card: 0px;
- --default-radius-modal: 0px;
- --default-radius-toolbar: 0px;
- --default-radius-control: 0px;
- --default-radius-button: 0px;
+:root[data-ui-theme="default"] {
+ /* GRANULAR CORNERS.
+    These used to be three fixed scopes — sharp / rounded / pill — hung off
+    [data-default-radius]. Four presets could not express "a bit rounder", and
+    their names did not even order by radius: "Rounded" (14px) sat between
+    "Soft" (10px) and "Pill", so the picker read as four unrelated styles rather
+    than one axis. It is one axis, so it is one number now.
+
+    --default-radius-scale is a multiplier the Settings slider writes onto the
+    root element (0 = square, 1 = the base values below, up to 2.4). Every token
+    is the base value times that scale, so they keep their proportions instead
+    of drifting apart at the extremes. calc() on a unitless custom property is
+    resolved at use time, which is what makes a live slider possible at all.
+
+    The two "999px" pill values are handled separately: a fully-round toolbar or
+    button is a shape, not a size, so they switch at the top of the range rather
+    than growing continuously into it. */
+ --default-radius-scale: 1;
+ --radius: calc(10px * var(--default-radius-scale));
+ --radius-sm: calc(4px * var(--default-radius-scale));
+ --radius-md: calc(6px * var(--default-radius-scale));
+ --radius-lg: calc(8px * var(--default-radius-scale));
+ --radius-xl: calc(12px * var(--default-radius-scale));
+ --radius-2xl: calc(16px * var(--default-radius-scale));
+ --radius-3xl: calc(20px * var(--default-radius-scale));
+ --radius-4xl: calc(28px * var(--default-radius-scale));
+ --default-radius-card: calc(8px * var(--default-radius-scale));
+ --default-radius-modal: calc(10px * var(--default-radius-scale));
+ --default-radius-toolbar: calc(14px * var(--default-radius-scale));
+ --default-radius-control: calc(6px * var(--default-radius-scale));
+ --default-radius-button: calc(9px * var(--default-radius-scale));
 }
 
-:root[data-ui-theme="default"][data-default-radius="rounded"] {
- --radius: 14px;
- --radius-sm: 6px;
- --radius-md: 10px;
- --radius-lg: 14px;
- --radius-xl: 18px;
- --radius-2xl: 22px;
- --radius-3xl: 28px;
- --radius-4xl: 36px;
- --default-radius-card: 14px;
- --default-radius-modal: 16px;
- --default-radius-toolbar: 20px;
- --default-radius-control: 10px;
- --default-radius-button: 14px;
-}
-
-:root[data-ui-theme="default"][data-default-radius="pill"] {
- --radius: 14px;
- --radius-sm: 8px;
- --radius-md: 14px;
- --radius-lg: 20px;
- --radius-xl: 24px;
- --radius-2xl: 28px;
- --radius-3xl: 36px;
- --radius-4xl: 44px;
- --default-radius-card: 22px;
- --default-radius-modal: 24px;
+/* At the top of the range the toolbar and button go fully round: past roughly
+   2x the base, a "rounder" rectangle stops reading as rounder and starts
+   reading as a lozenge that has not committed. */
+:root[data-ui-theme="default"][data-radius-pill="true"] {
  --default-radius-toolbar: 999px;
- --default-radius-control: 14px;
  --default-radius-button: 999px;
 }
 
@@ -4685,6 +4758,10 @@ code {
 
 html {
  font-size: var(--agensis-ui-font-size, 16px);
+ /* Unitless, so every element multiplies it against its OWN font-size and
+    inherits a proportional line box rather than one absolute height. A value
+    with units here would give a 10px chip the same leading as a heading. */
+ line-height: var(--agensis-ui-line-height, 1.5);
 }
 
 body,
@@ -4692,7 +4769,13 @@ button,
 input,
 textarea,
 select {
- font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+ font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+ /* The base weight, not a hard override: anything that sets its own weight
+    (font-medium, font-semibold, a heading) still wins, because those are more
+    specific declarations on the element itself. This only moves the floor.
+    Bricolage and Geist are variable faces with a 200-800 wght axis, so a value
+    like 350 interpolates rather than snapping to the nearest static cut. */
+ font-weight: var(--agensis-ui-font-weight, 400);
 }
 
 /* .sidebar-section-trigger is deliberately NOT in this list any more. This rule
@@ -5117,7 +5200,7 @@ select {
  /* No min-height, for the same reason as neo above: `border-width: 0` took the
     control frame off this heading, and a heading does not need the height that
     frame was sized for. */
- color: var(--text-secondary) !important;
+ color: var(--ink-secondary) !important;
  background: transparent !important;
  box-shadow: none !important;
  padding-inline: 0.3rem 0.2rem !important;
@@ -5173,7 +5256,7 @@ select {
  border-width: 1px !important;
  border-style: solid !important;
  border-color: var(--tw-control-outline) !important;
- color: var(--text-secondary) !important;
+ color: var(--ink-secondary) !important;
  background:
   linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),
   var(--tw-control-fill) !important;
@@ -5282,7 +5365,7 @@ select {
    ============================================================================ */
 
 :root[data-ui-theme="neo"] {
- --neo-mono: 'IBM Plex Mono', 'Space Mono', ui-monospace, monospace;
+ --neo-mono: var(--font-mono);
 }
 
 /* ---- stamped badges: mono uppercase micro-labels with a hard shadow --------

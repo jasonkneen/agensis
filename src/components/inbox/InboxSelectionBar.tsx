@@ -1,5 +1,5 @@
 import { Ban, Check, Loader2, MailOpen, Minus, X } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Button } from '@agensis/ui/components/button';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -10,7 +10,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from '@/components/ui/alert-dialog';
+} from '@agensis/ui/components/alert-dialog';
 import { cn } from '@/lib/utils';
 import { FOCUS_RING, PANE_HEADER } from './inboxPresentation';
 import type { InboxBulkAction, InboxBulkActionId } from './inboxSelection';

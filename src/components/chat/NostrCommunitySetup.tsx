@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Globe2, Link2, Plus, Trash2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
+import { Button } from '@agensis/ui/components/button';
+import { Checkbox } from '@agensis/ui/components/checkbox';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -11,9 +11,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import { DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
+} from '@agensis/ui/components/alert-dialog';
+import { DialogDescription, DialogHeader, DialogTitle } from '@agensis/ui/components/dialog';
+import { Input } from '@agensis/ui/components/input';
 import {
   connectNostrCommunity,
   getNostrChannels,
@@ -417,8 +417,8 @@ export function NostrCommunitySetup({
                         <span className="min-w-0 flex-1 truncate text-sm font-medium">#{channel.name}</span>
                         {channel.subscription && (
                           <span className={subscribed
-                            ? 'shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-700 dark:text-emerald-300'
-                            : 'shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300'}
+                            ? 'shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-3xs font-semibold uppercase text-emerald-700 dark:text-emerald-300'
+                            : 'shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-3xs font-semibold uppercase text-amber-700 dark:text-amber-300'}
                           >
                             {subscribed ? 'Live' : 'Paused'}
                           </span>

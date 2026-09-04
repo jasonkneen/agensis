@@ -77,7 +77,7 @@ export function InlineRename({ value, onCommit, onCancel, className, ariaLabel }
         )}
       />
       {error && (
-        <span role="alert" className="absolute left-0 top-full z-10 mt-1 whitespace-nowrap rounded bg-destructive px-1.5 py-0.5 text-[11px] text-destructive-foreground">
+        <span role="alert" className="absolute left-0 top-full z-10 mt-1 whitespace-nowrap rounded bg-destructive px-1.5 py-0.5 text-2xs text-destructive-foreground">
           {error}
         </span>
       )}

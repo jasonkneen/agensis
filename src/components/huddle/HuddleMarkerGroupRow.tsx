@@ -54,7 +54,7 @@ export function HuddleMarkerGroupRow({ group, onOpen }: Props) {
           return (
             <span
               key={message.id}
-              className="rounded-full border border-border/60 px-2 py-0.5 text-[11px] opacity-60"
+              className="rounded-full border border-border/60 px-2 py-0.5 text-2xs opacity-60"
             >
               {index + 1}
             </span>
@@ -67,7 +67,7 @@ export function HuddleMarkerGroupRow({ group, onOpen }: Props) {
             onClick={() => onOpen(target)}
             aria-label={label}
             title={label}
-            className="rounded-full border border-border/60 px-2 py-0.5 text-[11px] transition-colors hover:border-border hover:bg-muted/60 hover:text-foreground"
+            className="rounded-full border border-border/60 px-2 py-0.5 text-2xs transition-colors hover:border-border hover:bg-muted/60 hover:text-foreground"
           >
             {index + 1}
           </button>

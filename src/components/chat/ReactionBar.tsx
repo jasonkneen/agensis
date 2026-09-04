@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
 import { Smile } from 'lucide-react';
-import { Button } from '../ui/button';
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import { Button } from '@agensis/ui/components/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@agensis/ui/components/popover';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@agensis/ui/components/tooltip';
 import { cn } from '../../lib/utils';
 import {
   REACTION_PICKER_GROUPS,
@@ -106,7 +106,7 @@ export function ReactionBar({
                 /* The numeral is always shown, including at 1. "+1" and a
                    hidden count both make you hover to learn something the row
                    could just say. */
-                <span className="text-[11px] font-medium">{pill.count}</span>
+                <span className="text-2xs font-medium">{pill.count}</span>
               )}
             </button>
           </TooltipTrigger>
@@ -263,7 +263,7 @@ export function ReactionPicker({ onPick, reactionUses = [], trigger }: ReactionP
             )
           ) : (
             <>
-              <div className="px-1 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="px-1 pb-1 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
                 Frequently used
               </div>
               <div role="row" className="grid grid-cols-8 gap-0.5">
@@ -271,7 +271,7 @@ export function ReactionPicker({ onPick, reactionUses = [], trigger }: ReactionP
               </div>
               {REACTION_PICKER_GROUPS.map(group => (
                 <div key={group.name}>
-                  <div className="px-1 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <div className="px-1 pb-1 pt-2 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
                     {group.name}
                   </div>
                   <div role="row" className="grid grid-cols-8 gap-0.5">

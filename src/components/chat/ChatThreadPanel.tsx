@@ -22,8 +22,8 @@ import { resolvePermissionRequest } from './permissionRequests';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { validAgentAccentColor } from '../../lib/agentAccent';
 import type { Document, Message as ChatMessage, WorkspaceAgent } from '../../types';
-import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
+import { Button } from '@agensis/ui/components/button';
+import { Checkbox } from '@agensis/ui/components/checkbox';
 import { clipToBlockBoundary } from '../../lib/threadParentPreview';
 
 /** Roughly how much of the thread parent to show before offering "Show more". */
@@ -34,12 +34,12 @@ import {
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
-} from '@/components/ui/empty';
+} from '@agensis/ui/components/empty';
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupTextarea,
-} from '@/components/ui/input-group';
+} from '@agensis/ui/components/input-group';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -47,8 +47,8 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
-} from '@/components/ui/message-scroller';
-import { Spinner } from '@/components/ui/spinner';
+} from '@agensis/ui/components/message-scroller';
+import { Spinner } from '@agensis/ui/components/spinner';
 import { useComposerMentions } from '../../hooks/useComposerMentions';
 import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI';
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
@@ -340,7 +340,7 @@ export function ChatThreadPanel({
             />
             <InputGroupAddon align="block-end" className={COMPOSER_ADDON_CLASS}>
               <div className="flex min-w-0 items-center gap-2">
-                <label className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                <label className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
                   <Checkbox
                     checked={broadcastToChannel}
                     onCheckedChange={checked => setBroadcastToChannel(checked === true)}
@@ -471,7 +471,7 @@ export function ThreadBubble({
             name={senderName}
             initials={senderName.slice(0, 2).toUpperCase()}
             className="size-7 rounded-md"
-            fallbackClassName="bg-transparent text-[10px] text-muted-foreground"
+            fallbackClassName="bg-transparent text-3xs text-muted-foreground"
           />
         ) : <Bot className="size-3.5" />}
       </div>
@@ -489,7 +489,7 @@ export function ThreadBubble({
           ) : (
             <span className="truncate text-xs font-semibold text-foreground" style={accentStyle ? { color: 'var(--agent-accent)' } : undefined}>{senderName}</span>
           )}
-          {timeLabel && <span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel}</span>}
+          {timeLabel && <span className="shrink-0 text-2xs text-muted-foreground">{timeLabel}</span>}
           {ownMutation.mutable && (
             <span className="ml-auto flex shrink-0 items-center gap-0.5">
               <Button
@@ -546,7 +546,7 @@ export function ThreadBubble({
                   type="button"
                   onClick={() => setExpanded(value => !value)}
                   aria-expanded={expanded}
-                  className="mt-0.5 rounded text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                  className="mt-0.5 rounded text-2xs font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
                 >
                   {expanded ? 'Show less' : 'Show more'}
                 </button>

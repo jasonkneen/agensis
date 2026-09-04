@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, RotateCw, TriangleAlert } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Button } from '@agensis/ui/components/button';
+import { Input } from '@agensis/ui/components/input';
 import { apiAuthHeaders, apiBaseUrl } from '@/lib/backendClient';
 
 /**

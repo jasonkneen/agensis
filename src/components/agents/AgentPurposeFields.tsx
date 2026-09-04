@@ -1,13 +1,13 @@
-import { Checkbox } from '@/components/ui/checkbox';
+import { Checkbox } from '@agensis/ui/components/checkbox';
 import {
   Field,
   FieldDescription,
   FieldLabel,
-} from '@/components/ui/field';
+} from '@agensis/ui/components/field';
 import {
   NativeSelect,
   NativeSelectOption,
-} from '@/components/ui/native-select';
+} from '@agensis/ui/components/native-select';
 import {
   RESOURCE_FACETS,
   RESOURCE_FACET_LABELS,
