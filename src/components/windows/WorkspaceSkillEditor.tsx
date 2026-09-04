@@ -87,7 +87,7 @@ export function WorkspaceSkillEditor({ skill, existingNames, onCancel, onSave }:
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
         <div>
-          <label htmlFor="skill-title" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <label htmlFor="skill-title" className="ui-section-label mb-1 block">
             Title
           </label>
           <Input
@@ -110,7 +110,7 @@ export function WorkspaceSkillEditor({ skill, existingNames, onCancel, onSave }:
         </div>
 
         <div>
-          <label htmlFor="skill-summary" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <label htmlFor="skill-summary" className="ui-section-label mb-1 block">
             Summary
           </label>
           <Input
@@ -127,7 +127,7 @@ export function WorkspaceSkillEditor({ skill, existingNames, onCancel, onSave }:
         </div>
 
         <div className="flex min-h-0 flex-col">
-          <label htmlFor="skill-body" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <label htmlFor="skill-body" className="ui-section-label mb-1 block">
             Procedure
           </label>
           <Textarea

@@ -32,6 +32,19 @@ function cssWithoutComments(): string {
 }
 
 describe('the default UI face', () => {
+  it('starts at the same 16px medium scale as Legion before settings hydrate', () => {
+    // The stylesheet paints before localStorage is read. If its fallback and
+    // settings.ts disagree, the whole app visibly resizes during boot.
+    expect(css).toMatch(/--agensis-ui-font-size:\s*16px/);
+    expect(css).toMatch(/font-size:\s*var\(--agensis-ui-font-size,\s*16px\)/);
+    expect(settings).toMatch(/ui_base_font_size:\s*16,/);
+
+    // This token has the same first-paint contract and had drifted to 16px
+    // while the setting applied 14px on the next frame.
+    expect(css).toMatch(/--agensis-glass-blur:\s*14px/);
+    expect(settings).toMatch(/ui_glass_blur:\s*14,/);
+  });
+
   it('is bundled, not fetched from a third party at runtime', () => {
     // Every font choice except this one was a bundled @fontsource package;
     // 'bricolage' — the DEFAULT — was fetched from fonts.googleapis.com by

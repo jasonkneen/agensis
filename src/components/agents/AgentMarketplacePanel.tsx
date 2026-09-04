@@ -96,7 +96,7 @@ export function AgentMarketplaceSection({
   return (
     <div className="mt-6">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <span className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <span className="ui-section-label inline-flex items-center gap-1.5">
           <Store className="size-3.5" />
           Marketplace
         </span>

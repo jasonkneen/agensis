@@ -311,9 +311,9 @@ function CommentBody({
             {comment.agent_id ? (agentNames?.[comment.agent_id] || 'Agent') : 'Teammate'}
           </span>
           {comment.agent_id && (
-            <span className="rounded-sm bg-muted px-1 text-[9px] leading-4 text-muted-foreground">agent</span>
+            <span className="rounded-sm bg-muted px-1 text-3xs leading-4 text-muted-foreground">agent</span>
           )}
-          <span className="text-[9px] text-muted-foreground">{formatTime(comment.created_at)}</span>
+          <span className="text-3xs text-muted-foreground">{formatTime(comment.created_at)}</span>
           <div className="flex-1" />
           {!compact && (
             <Button

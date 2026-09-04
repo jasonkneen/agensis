@@ -245,7 +245,7 @@ export function ChannelMemberStep({
         {suggestionChoices.length > 0 && (
           <section className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="ui-section-label">
                 {anyMatched ? 'Suggested' : 'Most used here'}
               </div>
               <Button type="button" variant="ghost" size="xs" onClick={addAllSuggested}>
@@ -337,7 +337,7 @@ function MemberList({
   if (choices.length === 0) return null;
   return (
     <section className="space-y-2">
-      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</div>
+      <div className="ui-section-label">{title}</div>
       <div className="space-y-1">
         {choices.map(choice => (
           <MemberRow

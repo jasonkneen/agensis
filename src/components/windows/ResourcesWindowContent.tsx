@@ -672,13 +672,13 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                             </div>
                           )}
                           <div>
-                            <div className="mb-1 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Input</div>
+                            <div className="ui-section-label mb-1">Input</div>
                             <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-background/70 p-2 text-2xs leading-relaxed">
                               {requestPreview(activeOperation.input_artifact)}
                             </pre>
                           </div>
                           <div>
-                            <div className="mb-1 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Result</div>
+                            <div className="ui-section-label mb-1">Result</div>
                             <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-background/70 p-2 text-2xs leading-relaxed">
                               {isLiveResourceOperation(activeOperation)
                                 ? 'Waiting for the steward agent.'

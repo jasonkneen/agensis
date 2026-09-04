@@ -776,13 +776,13 @@ export const DocWindowContent = React.memo(function DocWindowContent({
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <ScrollArea className="min-w-0 flex-1">
-          <div className="px-6 py-5">
+          <div className="mx-auto w-full max-w-[52rem] px-6 py-5">
             <Input
               type="text"
               value={title}
               onChange={handleTitleChange}
               placeholder="Untitled"
-              className="doc-title-input mb-3 h-auto w-full border-0 bg-transparent px-0 py-0 text-2xl font-bold shadow-none focus-visible:ring-0"
+              className="doc-title-input mb-3 h-auto w-full border-0 bg-transparent px-0 py-0 text-xl font-semibold tracking-tight shadow-none focus-visible:ring-0"
             />
             <div
               ref={contentRef}
@@ -792,7 +792,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
               onPaste={handlePaste}
               onDrop={handleDrop}
               data-placeholder="Start writing..."
-              className="doc-editor min-h-[200px] text-[13px] leading-[1.7] text-foreground outline-none"
+              className="doc-editor min-h-[200px] text-sm font-normal leading-relaxed text-foreground outline-none"
             />
           </div>
         </ScrollArea>

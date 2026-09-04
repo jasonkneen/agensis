@@ -275,7 +275,7 @@ export function ComposerAddContent({
 function ComposerAddSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-1 border-t border-border px-2 py-2 first:border-t-0">
-      <div className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</div>
+      <div className="ui-section-label px-1">{title}</div>
       {children}
     </section>
   );

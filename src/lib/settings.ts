@@ -46,7 +46,10 @@ const DEFAULTS: AppSettings = {
   notifications_agent_events: true,
   notifications_task_reminders: false,
   ui_font_family: 'bricolage',
-  ui_base_font_size: 17,
+  // Legion's medium/default scale is a 16px root. Keeping the same baseline
+  // lets shared text-sm/text-xs utilities land on the same visual hierarchy;
+  // users who deliberately chose another value still keep their stored choice.
+  ui_base_font_size: 16,
   ui_font_weight: 400,
   ui_line_height: 1.5,
   ui_theme_preset: 'neutral',

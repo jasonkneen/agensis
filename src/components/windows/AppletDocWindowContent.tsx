@@ -186,7 +186,7 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
           value={title}
           onChange={handleTitleChange}
           placeholder="Untitled applet"
-          className="doc-title-input mb-3 h-auto w-full border-0 bg-transparent px-0 py-0 text-2xl font-bold shadow-none focus-visible:ring-0"
+          className="doc-title-input mb-3 h-auto w-full border-0 bg-transparent px-0 py-0 text-xl font-semibold tracking-tight shadow-none focus-visible:ring-0"
         />
       </div>
 

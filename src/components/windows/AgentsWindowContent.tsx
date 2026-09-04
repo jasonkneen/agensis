@@ -1050,7 +1050,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
               </div>
 
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Templates</span>
+                <span className="ui-section-label">Templates</span>
                 {/* A real file input, hidden, rather than a fetch from a URL.
                     A URL field here would be a manage-gated request the server
                     makes to an address a user chose, which is an SSRF surface
@@ -3779,7 +3779,7 @@ function McpDialogSection({
 }) {
   return (
     <section className="rounded-lg border bg-muted/25 p-3">
-      <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="ui-section-label mb-2 flex items-center gap-1.5">
         <Icon className="size-3.5" />
         {title}
       </div>
@@ -4322,7 +4322,7 @@ function AccessSection({
         ))}
       </div>
 
-      <div className="mb-1 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+      <div className="ui-section-label mb-1">
         Always allowed
       </div>
       {rules.length > 0 ? (
@@ -4515,7 +4515,7 @@ function SharingSection({ agent, connection, onUpdateAgent }: {
 function AgentDetailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="agent-detail-section rounded-lg border bg-muted/25 p-3">
-      <div className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">{title}</div>
+      <div className="ui-section-label mb-2">{title}</div>
       {children}
     </section>
   );

@@ -263,7 +263,7 @@ export function ReactionPicker({ onPick, reactionUses = [], trigger }: ReactionP
             )
           ) : (
             <>
-              <div className="px-1 pb-1 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="ui-section-label px-1 pb-1">
                 Frequently used
               </div>
               <div role="row" className="grid grid-cols-8 gap-0.5">
@@ -271,7 +271,7 @@ export function ReactionPicker({ onPick, reactionUses = [], trigger }: ReactionP
               </div>
               {REACTION_PICKER_GROUPS.map(group => (
                 <div key={group.name}>
-                  <div className="px-1 pb-1 pt-2 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
+                  <div className="ui-section-label px-1 pb-1 pt-2">
                     {group.name}
                   </div>
                   <div role="row" className="grid grid-cols-8 gap-0.5">

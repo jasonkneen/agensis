@@ -51,14 +51,14 @@
  --header-height: 52px;
  --chat-panel-width: 380px;
  --agensis-ui-font-family: 'Bricolage Grotesque Variable', 'Bricolage Grotesque', 'Geist Variable', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
- --agensis-ui-font-size: 17px;
+ --agensis-ui-font-size: 16px;
  /* First-paint values only: applyUiAppearanceSettings() overwrites both as an
     INLINE style on :root as soon as it runs. Kept in step with DEFAULTS in
     src/lib/settings.ts so the panels do not visibly change opacity a frame
     after load. */
  --agensis-panel-alpha: 88%;
  --agensis-sidebar-alpha: 88%;
- --agensis-glass-blur: 16px;
+ --agensis-glass-blur: 14px;
  /* EVERY glass surface reads its filter from one of these three tokens and
     never from --agensis-glass-blur directly. The reason is the zero case: a
     `backdrop-filter: blur(0px) saturate(140%)` is NOT free — the property is
@@ -3177,17 +3177,67 @@ button[data-slot="badge"][data-variant="default"]:hover {
 }
 
 .memory-filter-chip[data-slot="badge"] {
- min-height: 2.125rem;
+ min-height: 1.5rem;
  align-items: center;
- padding-inline: 0.9rem;
- padding-block: 0.4rem;
- font-size: 0.8125rem;
- line-height: 1.25 !important;
+ border-radius: var(--radius-sm);
+ padding-inline: 0.5rem;
+ padding-block: 0.2rem;
+ font-size: 0.75rem;
+ font-weight: 500;
+ line-height: 1 !important;
 }
 
 .memory-filter-chip[data-slot="badge"] svg {
  width: 0.875rem !important;
  height: 0.875rem !important;
+}
+
+/* Lists and compact filters are part of the information plane, not raised
+   controls. Theme colour still applies; hard per-row shadows do not. */
+:root[data-ui-theme="neo"] [data-flat-control][data-slot="item"],
+:root[data-ui-theme="neo"] [data-flat-control][data-slot="badge"],
+:root[data-ui-theme="paper"] [data-flat-control][data-slot="item"],
+:root[data-ui-theme="paper"] [data-flat-control][data-slot="badge"] {
+ box-shadow: none !important;
+}
+
+:root[data-ui-theme="neo"] .memory-filter-chip[data-slot="badge"] {
+ min-height: 1.5rem;
+ border-width: 0 !important;
+ border-radius: var(--radius-sm) !important;
+ padding-block: 0.2rem !important;
+ font-family: inherit;
+ font-size: 0.75rem;
+ font-weight: 500 !important;
+ letter-spacing: normal;
+ text-transform: none;
+}
+
+.memory-list-row:last-child {
+ border-bottom-width: 0;
+}
+
+.memory-file-row:last-child {
+ border-bottom-width: 0;
+}
+
+.memory-file-row[aria-pressed="true"] {
+ background: color-mix(in srgb, var(--primary) 7%, var(--card)) !important;
+ box-shadow: inset 2px 0 0 var(--primary) !important;
+}
+
+/* The theme-level flat rule above is deliberately more specific than the base
+   row. Restore the selected marker at that same specificity so Neo and Paper
+   do not turn selection into background colour alone. */
+:root[data-ui-theme="neo"] [data-flat-control][data-slot="item"].memory-file-row[aria-pressed="true"],
+:root[data-ui-theme="paper"] [data-flat-control][data-slot="item"].memory-file-row[aria-pressed="true"] {
+ box-shadow: inset 2px 0 0 var(--primary) !important;
+}
+
+.memory-file-body .chat-markdown {
+ font-size: 0.875rem;
+ font-weight: 400;
+ line-height: 1.5;
 }
 
 :root[data-ui-theme="neo"] .sidebar-section-trigger,
@@ -3807,26 +3857,26 @@ body {
 }
 
 .doc-editor h1 {
- font-size: 2rem;
- font-weight: 700;
- line-height: 1.2;
+ font-size: 1.5rem;
+ font-weight: 650;
+ line-height: 1.25;
  color: var(--ink);
- margin-bottom: 0.75rem;
+ margin-bottom: 0.5rem;
  letter-spacing: -0.02em;
 }
 
 .doc-editor h2 {
- font-size: 1.4rem;
+ font-size: 1.2rem;
  font-weight: 600;
  line-height: 1.3;
  color: var(--ink);
- margin-bottom: 0.5rem;
- margin-top: 1.5rem;
+ margin-bottom: 0.4rem;
+ margin-top: 1.25rem;
  letter-spacing: -0.01em;
 }
 
 .doc-editor h3 {
- font-size: 1.1rem;
+ font-size: 1rem;
  font-weight: 600;
  color: var(--ink);
  margin-bottom: 0.4rem;
@@ -3835,8 +3885,15 @@ body {
 
 .doc-editor p {
  color: var(--ink);
- margin-bottom: 0.6rem;
- line-height: 1.7;
+ margin-bottom: 0.35rem;
+ line-height: 1.55;
+}
+
+.doc-editor p:empty,
+.doc-editor p:has(> br:only-child) {
+ min-height: 0.75em;
+ margin-bottom: 0;
+ line-height: 0.75;
 }
 
 .doc-editor ul,
@@ -3880,10 +3937,17 @@ body {
  margin: 0.75rem 0;
 }
 
-.doc-editor [contenteditable]:empty:before {
+.doc-editor:empty::before {
  content: attr(data-placeholder);
  color: var(--ink-muted);
  pointer-events: none;
+}
+
+.inbox-detail-markdown .chat-markdown {
+ gap: 0.4rem;
+ font-size: 0.875rem;
+ font-weight: 400;
+ line-height: 1.5;
 }
 
 /* Document images + sketches - full width, vertical resize */
@@ -4857,7 +4921,7 @@ code {
 }
 
 html {
- font-size: var(--agensis-ui-font-size, 17px);
+ font-size: var(--agensis-ui-font-size, 16px);
  /* Unitless, so every element multiplies it against its OWN font-size and
     inherits a proportional line box rather than one absolute height. A value
     with units here would give a 10px chip the same leading as a heading. */
@@ -4876,6 +4940,32 @@ select {
     Bricolage and Geist are variable faces with a 200-800 wght axis, so a value
     like 350 interpolates rather than snapping to the nearest static cut. */
  font-weight: var(--agensis-ui-font-weight, 400);
+}
+
+/* Shared information hierarchy. Window content may arrange these differently,
+   but it should not invent a new type scale for the same semantic job. */
+.ui-panel-title {
+ font-size: 0.875rem;
+ font-weight: 600;
+ line-height: 1.25;
+ letter-spacing: -0.01em;
+ color: var(--foreground);
+}
+
+.ui-section-label {
+ font-size: 0.6875rem;
+ font-weight: 500;
+ line-height: 1.25;
+ letter-spacing: 0.025em;
+ text-transform: uppercase;
+ color: var(--muted-foreground);
+}
+
+.ui-meta {
+ font-size: 0.75rem;
+ font-weight: 400;
+ line-height: 1.35;
+ color: var(--muted-foreground);
 }
 
 /* .sidebar-section-trigger is deliberately NOT in this list any more. This rule
@@ -5091,11 +5181,29 @@ select {
  box-shadow: 1px 1px 0 color-mix(in srgb, var(--foreground) 12%, transparent);
 }
 
-/* A few legacy surfaces carry their own literal blurred shadow instead of a
-   Tailwind utility. Keep those surfaces in the same hard-offset system. */
-:root[data-ui-theme="default"] .home-workspace-composer,
+/* A few legacy surfaces carry their own literal shadow instead of a Tailwind
+   utility. Settings stays on the Default elevation ladder. The home composer
+   is the calm focal surface used by Legion, so it gets a soft ambient shadow
+   below rather than looking like another stamped control. */
 :root[data-ui-theme="default"] .settings-dialog {
  box-shadow: var(--shadow-xl) !important;
+}
+
+:root[data-ui-theme="default"][data-theme="light"] .home-workspace-composer {
+ box-shadow: 0 8px 28px rgba(17, 17, 17, 0.12) !important;
+}
+
+:root[data-ui-theme="default"][data-theme="dark"] .home-workspace-composer {
+ box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45) !important;
+}
+
+/* Starter prompts are suggestions, not raised actions. Neo and Paper keep
+   their own explicit treatments; Default follows Legion's flat outline chips. */
+:root[data-ui-theme="default"] .home-suggestion-pill,
+:root[data-ui-theme="default"] .home-suggestion-pill:hover,
+:root[data-ui-theme="default"] .home-suggestion-pill:active {
+ transform: none !important;
+ box-shadow: none !important;
 }
 
 :root[data-ui-theme="default"] .task-card-expanded,

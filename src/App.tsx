@@ -527,7 +527,7 @@ function KnowledgeContextControl({
           {activeTotal}
         </Badge>
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="w-72 p-0">
+      <DropdownMenuSubContent className="max-h-[calc(100vh-1rem)] w-[min(18rem,calc(100vw-1rem))] overflow-y-auto p-0">
         <div className="flex items-center justify-between gap-3 px-3 py-2.5">
           <div className="flex min-w-0 flex-col gap-0.5">
             <span className="text-sm font-semibold leading-none">Knowledge</span>
@@ -542,7 +542,7 @@ function KnowledgeContextControl({
           />
         </div>
         <DropdownMenuSeparator className="my-0" />
-        <DropdownMenuLabel className="px-3 pb-1 pt-2 text-3xs font-medium uppercase tracking-wider text-muted-foreground">
+        <DropdownMenuLabel className="ui-section-label px-3 pb-1 pt-2">
           Sources
         </DropdownMenuLabel>
         <div className="px-1 pb-1">
@@ -4299,7 +4299,7 @@ function WorkspaceDesktopOverlay({
             grows with the list and starts scrolling at the cap, so an account
             with a dozen workspaces still cannot push the desktops off-screen. */}
         <section aria-label="Workspaces" className="flex max-h-[33%] min-h-0 shrink-0 flex-col gap-2">
-          <h3 className="shrink-0 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Workspaces</h3>
+          <h3 className="ui-section-label shrink-0">Workspaces</h3>
           <ScrollArea className="min-h-0">
             <div className="grid grid-cols-1 gap-2 pb-1 pr-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {model.workspaces.map(renderWorkspaceTile)}
@@ -4321,7 +4321,7 @@ function WorkspaceDesktopOverlay({
         <div aria-hidden="true" className="h-px shrink-0 bg-border" />
 
         <section aria-label="Desktops" className="flex min-h-0 flex-1 flex-col gap-2">
-          <h3 className="shrink-0 truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          <h3 className="ui-section-label shrink-0 truncate">
             Desktops in {model.selectedWorkspaceName}
           </h3>
           {model.desktopTier !== 'ready' ? (

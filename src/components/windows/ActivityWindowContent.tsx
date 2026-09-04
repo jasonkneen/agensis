@@ -259,7 +259,7 @@ function ActivityEventComments({ eventId, workspaceId, currentUserId }: { eventI
 
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      <div className="text-3xs font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="ui-section-label">
         Comments{topLevel.length > 0 ? ` (${topLevel.length})` : ''}
       </div>
       {loading ? (
@@ -379,7 +379,7 @@ function ActivityDetailTabs({
           </span>
           <span className="text-xs text-muted-foreground">{formatFullDate(event.created_at)}</span>
         </div>
-        <p className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-foreground">
+        <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
           {activityEntryText(event)}
         </p>
         <dl className="mt-3 grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
@@ -574,7 +574,7 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
           {days.map(group => (
             <section key={group.label} className="flex flex-col">
               <Marker variant="separator" className="px-1.5 py-1">
-                <MarkerContent className="text-2xs uppercase tracking-wide text-muted-foreground">{group.label}</MarkerContent>
+                <MarkerContent className="ui-section-label">{group.label}</MarkerContent>
               </Marker>
               <div className="flex flex-col">
                 {group.items.map(event => {
@@ -600,7 +600,7 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
                       onClick={() => setSelectedId(selected ? null : event.id)}
                       title={`${full}\n${formatFullDate(event.created_at)}`}
                       className={cn(
-                        'group flex w-full items-center gap-2 rounded-md border-l-2 border-transparent px-1.5 py-1 text-left text-[14px] transition-colors',
+                        'group flex w-full items-center gap-2 rounded-md border-l-2 border-transparent px-1.5 py-1 text-left text-sm transition-colors',
                         selected ? 'border-l-primary bg-primary/10' : 'hover:bg-muted/50',
                       )}
                     >

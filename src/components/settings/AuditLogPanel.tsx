@@ -158,7 +158,7 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
               <col className="w-[9rem]" />
             </colgroup>
             <thead>
-              <tr className="border-b border-border bg-muted/30 text-left text-[9px] uppercase tracking-wide text-muted-foreground">
+              <tr className="ui-section-label border-b border-border bg-muted/30 text-left">
                 <th className="px-2 py-1.5 font-medium">Time</th>
                 <th className="px-2 py-1.5 font-medium">Actor</th>
                 <th className="px-2 py-1.5 font-medium">Action</th>
@@ -175,7 +175,7 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
                   >
                     {row.time}
                     {count > 1 && (
-                      <div className="text-[9px] opacity-70">to {oldestTime}</div>
+                      <div className="text-3xs opacity-70">to {oldestTime}</div>
                     )}
                   </td>
                   <td className="truncate px-2 py-1.5 text-3xs" title={row.actor}>
@@ -187,20 +187,20 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
                       {count > 1 && (
                         <Badge
                           variant="secondary"
-                          className="h-3.5 px-1 text-[8px] font-normal leading-none tabular-nums"
+                          className="h-4 px-1 text-3xs font-normal leading-none tabular-nums"
                           title={`${count} identical entries between ${oldestTime} and ${row.time}`}
                         >
                           x{count}
                         </Badge>
                       )}
                       {row.unrestricted && (
-                        <Badge variant="destructive" className="h-3.5 gap-0.5 px-1 text-[8px] font-normal leading-none" title="Unrestricted shell on the daemon host">
+                        <Badge variant="destructive" className="h-4 gap-0.5 px-1 text-3xs font-normal leading-none" title="Unrestricted shell on the daemon host">
                           <ShieldAlert className="size-2" />
                           Unrestricted
                         </Badge>
                       )}
                       {!row.unrestricted && row.escalation && (
-                        <Badge variant="secondary" className="h-3.5 px-1 text-[8px] font-normal leading-none" title="This widened someone's access">
+                        <Badge variant="secondary" className="h-4 px-1 text-3xs font-normal leading-none" title="This widened someone's access">
                           Escalation
                         </Badge>
                       )}
@@ -211,7 +211,7 @@ export function AuditLogPanel({ workspaceId }: { workspaceId: string | null }) {
                         second line that breaks the table's vertical rhythm.
                         The full value stays reachable on hover. */}
                     {row.detail && (
-                      <div className="mt-0.5 truncate border-l border-border/60 pl-1.5 text-[9px] text-muted-foreground" title={row.detail}>
+                      <div className="mt-0.5 truncate border-l border-border/60 pl-1.5 text-3xs text-muted-foreground" title={row.detail}>
                         {row.detail}
                       </div>
                     )}

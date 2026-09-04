@@ -141,7 +141,7 @@ export const FOCUS_RING =
 
 /** Section headers and micro-labels — chrome, deliberately below row type size. */
 export const MICRO_LABEL =
-  `${TEXT_MICRO} font-semibold uppercase tracking-[0.08em] text-muted-foreground`;
+  'ui-section-label';
 
 /**
  * The two panes' headers are the same band so they line up pixel-for-pixel

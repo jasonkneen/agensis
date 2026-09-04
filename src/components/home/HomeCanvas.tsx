@@ -364,17 +364,17 @@ export function HomeCanvas({
             </div>
           )}
 
-          <InputGroup className="home-workspace-composer h-auto flex-col items-stretch overflow-hidden border bg-card/95 shadow-xl has-disabled:opacity-100">
+          <InputGroup className="home-workspace-composer h-auto flex-col items-stretch overflow-hidden border bg-card/95 has-disabled:opacity-100">
             <InputGroupTextarea
               ref={inputRef}
               value={input}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               placeholder="Message the workspace..."
-              rows={2}
-              className="max-h-36 min-h-[4.5rem] px-4 py-3 text-sm leading-relaxed placeholder:text-muted-foreground/85"
+              rows={1}
+              className="max-h-36 min-h-[2.75rem] px-3 py-2.5 text-sm leading-relaxed placeholder:text-muted-foreground/85"
             />
-            <InputGroupAddon align="block-end" className="min-h-9 justify-end gap-2 border-t px-2 py-1.5">
+            <InputGroupAddon align="block-end" className="min-h-10 justify-end gap-1 px-2 pb-2 pt-0">
               <InputGroupButton
                 onClick={handleSend}
                 disabled={!canSend || sending}
@@ -396,7 +396,7 @@ export function HomeCanvas({
               type="button"
               variant="outline"
               size="sm"
-              className={cn('home-suggestion-pill rounded-lg bg-card/90 text-muted-foreground backdrop-blur')}
+              className={cn('home-suggestion-pill rounded-full bg-card/90 text-muted-foreground backdrop-blur')}
               onClick={() => {
                 setInput(suggestion);
                 inputRef.current?.focus();

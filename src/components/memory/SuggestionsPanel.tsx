@@ -66,21 +66,15 @@ export function SuggestionsPanel({ workspaceId, facts, documents }: SuggestionsP
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="shrink-0 border-b border-border bg-card p-4">
-        <div className="flex items-start gap-4">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
-            <Lightbulb className="size-5" />
-          </div>
+      <div className="shrink-0 border-b border-border bg-card px-3 py-2.5">
+        <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold">Suggestions</h2>
-            <p className="text-sm text-muted-foreground">
+            <h2 className="ui-panel-title">Suggestions</h2>
+            <p className="ui-meta mt-0.5">
               {pendingCount === 0
                 ? 'Nothing waiting on you.'
                 : `${pendingCount} suggestion${pendingCount === 1 ? '' : 's'} waiting on you.`}
-              {' '}
-              A model reads a conversation once it is finished with — deleted, or
-              simply gone quiet — and suggests what to keep. Nothing is saved until
-              you accept it.
+              {' '}Nothing is saved until you accept it.
             </p>
           </div>
         </div>
@@ -97,7 +91,7 @@ export function SuggestionsPanel({ workspaceId, facts, documents }: SuggestionsP
       )}
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-4 p-4">
+        <div className="flex flex-col gap-3 p-3">
           {loading ? (
             <p className="px-1 py-8 text-center text-sm text-muted-foreground">Loading suggestions…</p>
           ) : suggestionSets.length === 0 ? (
@@ -151,8 +145,8 @@ function SuggestionSetCard({
   const pending = set.suggestions.filter(suggestion => !suggestion.decision);
 
   return (
-    <section className="overflow-hidden rounded-lg border border-border bg-card">
-      <header className="border-b border-border px-4 py-3">
+    <section className="overflow-hidden rounded-md border border-border bg-card">
+      <header className="border-b border-border px-3 py-2.5">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <h3 className="truncate text-sm font-semibold">
@@ -163,7 +157,7 @@ function SuggestionSetCard({
                 All three, up front. */}
             <p className="mt-0.5 text-xs text-muted-foreground">{suggestionProvenance(set)}</p>
           </div>
-          <Badge variant={counts.pending > 0 ? 'default' : 'outline'} className="shrink-0">
+          <Badge data-flat-control variant={counts.pending > 0 ? 'secondary' : 'ghost'} className="shrink-0 rounded-md shadow-none">
             {counts.pending > 0 ? `${counts.pending} to review` : 'Reviewed'}
           </Badge>
         </div>
@@ -218,15 +212,15 @@ function SuggestionRow({
   const settled = decisionSummary(suggestion);
 
   return (
-    <article className={`px-4 py-3 ${suggestion.decision ? 'opacity-60' : ''}`}>
+    <article className={`px-3 py-2.5 ${suggestion.decision ? 'opacity-60' : ''}`}>
       <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted">
-          <Icon className="size-4" />
+        <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+          <Icon className="size-3.5" />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h4 className="min-w-0 text-sm font-medium">{suggestion.title}</h4>
-            <Badge variant="outline" className="shrink-0">{kindLabel(suggestion.kind)}</Badge>
+            <Badge data-flat-control variant="secondary" className="shrink-0 rounded-md shadow-none">{kindLabel(suggestion.kind)}</Badge>
           </div>
           <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{suggestion.body}</p>
           {suggestion.why && (

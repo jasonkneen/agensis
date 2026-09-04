@@ -72,7 +72,7 @@ export function InlineRename({ value, onCommit, onCancel, className, ariaLabel }
         onClick={event => event.stopPropagation()}
         onPointerDown={event => event.stopPropagation()}
         className={cn(
-          'min-w-0 flex-1 rounded border bg-background px-1.5 py-0.5 text-[13px] text-foreground outline-none',
+          'min-w-0 flex-1 rounded border bg-background px-1.5 py-0.5 text-sm text-foreground outline-none',
           error ? 'border-destructive' : 'border-ring',
         )}
       />

@@ -326,7 +326,7 @@ export function DocumentLibraryWindowContent({
         <div className="space-y-3 py-2">
           {groups.map(group => (
             <section key={group.domain}>
-              <h3 className="flex items-center gap-1.5 px-3 pb-1.5 pt-1 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
+              <h3 className="ui-section-label flex items-center gap-1.5 px-3 pb-1.5 pt-1">
                 <FolderTree className="size-3" />
                 {group.domain}
                 <span className="font-normal normal-case">({group.entries.length})</span>
@@ -432,7 +432,7 @@ export function DocumentLibraryWindowContent({
         <ScrollArea className="min-h-0 flex-1">
           <div className="space-y-4 p-3">
             <div>
-              <h4 className="mb-1.5 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
+              <h4 className="ui-section-label mb-1.5">
                 Where this lives
               </h4>
               <div className="border-y border-border/70 bg-card/20">
@@ -493,7 +493,7 @@ export function DocumentLibraryWindowContent({
             {comparing && diff ? (
               <div>
                 <div className="mb-1.5 flex items-center gap-2">
-                  <h4 className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
+                  <h4 className="ui-section-label">
                     {comparing.agent?.name || 'This workspace'} vs latest
                   </h4>
                   <Badge variant="secondary" className="text-3xs">{describeDiff(diff)}</Badge>
@@ -515,7 +515,7 @@ export function DocumentLibraryWindowContent({
             ) : (
               <div>
                 <div className="mb-1.5 flex items-center gap-2">
-                  <h4 className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">Latest version</h4>
+                  <h4 className="ui-section-label">Latest version</h4>
                   <span className="text-2xs text-muted-foreground">{describeSource(selected.primary)}</span>
                   {selected.primary.kind === 'workspace' && onOpenWorkspaceDocument && (
                     <Button

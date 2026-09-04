@@ -2894,7 +2894,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
               if (candidates.length === 0) return null;
               return (
                 <div key={kind} className="space-y-2">
-                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  <div className="ui-section-label">
                     {kind === 'user' ? 'People' : 'Agents'}
                   </div>
                   <div className="space-y-1">
@@ -3635,7 +3635,7 @@ function SubThreadListPanel({
             )}
             {otherMyThreads.length > 0 && (
               <div>
-                <div className="sticky top-0 z-10 border-y border-border bg-card/85 px-3 py-1.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-md">
+                <div className="ui-section-label sticky top-0 z-10 border-y border-border bg-card/85 px-3 py-1.5 backdrop-blur-md">
                   Involving you · other channels
                 </div>
                 <div className="divide-y divide-border">
@@ -4363,7 +4363,7 @@ function normalizeStringList(value: unknown): string[] {
 function AgentProfileSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="agent-profile-card rounded-lg border bg-muted/30 p-3">
-      <div className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">{title}</div>
+      <div className="ui-section-label mb-2">{title}</div>
       <div className="space-y-2">{children}</div>
     </section>
   );
@@ -4379,7 +4379,7 @@ function AgentProfileTextSection({ title, value, tall = false }: { title: string
   // matters because an agent writes its own soul.
   return (
     <section className="agent-profile-card rounded-lg border bg-muted/30 p-3">
-      <div className="mb-1 text-xs font-bold uppercase tracking-wide text-muted-foreground">{title}</div>
+      <div className="ui-section-label mb-1">{title}</div>
       {/* min-w-0: .chat-markdown is a grid, and grid children default to
           min-width:auto, so a fenced code block would widen this card rather
           than scroll inside it. */}
@@ -4393,7 +4393,7 @@ function AgentProfileTextSection({ title, value, tall = false }: { title: string
 function AgentProfileChipSection({ title, empty, items }: { title: string; empty: string; items: string[] }) {
   return (
     <section className="agent-profile-card rounded-lg border bg-muted/30 p-3">
-      <div className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">{title}</div>
+      <div className="ui-section-label mb-2">{title}</div>
       {items.length > 0 ? (
         <div className="agent-token-row flex flex-wrap gap-1.5">
           {items.map(item => (
@@ -4412,7 +4412,7 @@ function AgentProfileChipSection({ title, empty, items }: { title: string; empty
 function AgentProfileStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="agent-profile-stat min-w-0 rounded-lg border bg-muted/30 p-2">
-      <div className="text-3xs font-bold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="ui-section-label">{label}</div>
       <div className="mt-1 truncate text-sm font-semibold" title={value}>{value}</div>
     </div>
   );

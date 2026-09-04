@@ -22,6 +22,7 @@ import {
 } from './inboxModel';
 import { inboxOpenTarget } from './inboxSources';
 import { PermissionRequestCard } from '../chat/PermissionRequestCard';
+import { MarkdownContent } from '../chat/MarkdownContent';
 import type { InboxOpenSession } from './inboxNavigation';
 import type { PermissionRequest, PermissionScope } from '../../types';
 
@@ -163,9 +164,9 @@ export function InboxDetail({
               Suppressed for an approval, whose card below restates the same
               summary in full and with the rules attached. */}
           {body && !approval && (
-            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
-              {body}
-            </p>
+            <div className="inbox-detail-markdown min-w-0 break-words text-sm leading-relaxed text-foreground">
+              <MarkdownContent content={body} compact />
+            </div>
           )}
 
           {/* An agent is holding a tool call open on the other end of a socket,

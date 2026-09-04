@@ -297,7 +297,7 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   if (!value) return null;
   return (
     <div className="flex min-w-0 items-baseline justify-between gap-3 py-1">
-      <span className="shrink-0 text-[0.68rem] uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className="ui-section-label shrink-0">{label}</span>
       <span className="min-w-0 truncate text-right text-xs text-foreground" title={value}>{value}</span>
     </div>
   );
@@ -410,7 +410,7 @@ export function FileDetailPanel({
       </div>
 
       <div className="space-y-2">
-        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Assign agent</label>
+        <label className="ui-section-label">Assign agent</label>
         <NativeSelect value={agentId} onChange={event => setAgentId(event.target.value)} className="w-full">
           <NativeSelectOption value="">Unassigned</NativeSelectOption>
           {agents.map(agent => (
@@ -422,7 +422,7 @@ export function FileDetailPanel({
       </div>
 
       <div className="space-y-2">
-        <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Instruction</label>
+        <label className="ui-section-label">Instruction</label>
         <Textarea
           value={instructions}
           onChange={event => setInstructions(event.target.value)}

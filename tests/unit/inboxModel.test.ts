@@ -21,6 +21,7 @@ import {
   applyReadPlan,
   buildInboxRows,
   groupInboxItems,
+  inboxDisplayText,
   inboxEmptyState,
   inboxPreview,
   inboxTimestamp,
@@ -232,6 +233,29 @@ describe('row copy', () => {
     expect(senderInitials('scout')).toBe('S');
     expect(senderInitials('agent-code-review')).toBe('AC');
     expect(senderInitials('!!!')).toBe('');
+  });
+
+  it('treats wire and cache sentinel text as missing display data', () => {
+    expect(inboxDisplayText(undefined)).toBe('');
+    expect(inboxDisplayText(' null ')).toBe('');
+    expect(inboxDisplayText('  Scout  ')).toBe('Scout');
+
+    const blocker = group({
+      id: 'sentinel',
+      category: 'blocker',
+      actorName: 'undefined',
+      title: 'Should this ship?',
+    });
+    expect(senderLabel(blocker)).toBe('An agent');
+    expect(buildInboxRows([blocker], Date.now())[0].sender).not.toBe('undefined');
+    expect(blocker.items[0].actorName).toBe('');
+
+    const thread = groupInboxItems([
+      item({ id: 'new', createdAt: T(1), contextKey: 'thread:sentinel', title: 'A real reply' }),
+      item({ id: 'old', createdAt: T(2), contextKey: 'thread:sentinel', title: 'null', body: 'undefined' }),
+    ])[0];
+    expect(thread.items[1].title).toBe('');
+    expect(thread.items[1].body).toBe('');
   });
 });
 

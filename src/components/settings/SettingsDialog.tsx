@@ -664,7 +664,7 @@ function AppearancePanel({
             </ToggleGroup>
 
             <div className="space-y-2">
-              <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Colour</div>
+              <div className="ui-section-label">Colour</div>
               <ToggleGroup
                 type="single"
                 value={themePreset}
@@ -688,7 +688,7 @@ function AppearancePanel({
 
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-3">
-                <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Corners</div>
+                <div className="ui-section-label">Corners</div>
                 <Badge variant="secondary">
                   {radiusScale === 0 ? 'Square' : radiusScale >= RADIUS_PILL_THRESHOLD ? 'Pill' : `${radiusMaxPxFrom(radiusScale)}px max`}
                 </Badge>
@@ -754,7 +754,7 @@ function AppearancePanel({
             {/* Accent color (only when no custom normal theme) */}
             {!isNormalFamily && (
               <div className="space-y-2">
-                <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Accent color</div>
+                <div className="ui-section-label">Accent color</div>
                 <ToggleGroup
                   type="single"
                   value={themePreset}
@@ -781,7 +781,7 @@ function AppearancePanel({
                 accent preset above (world paper + your picked accent). */}
             {isPaper && (
               <div className="space-y-1.5">
-                <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Paper</div>
+                <div className="ui-section-label">Paper</div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {TW_WORLDS.map(w => {
                     const active = twTheme === w.id;
@@ -823,7 +823,7 @@ function AppearancePanel({
             <div className="space-y-3">
               {NORMAL_GROUPS.map(group => (
                 <div key={group} className="space-y-1.5">
-                  <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
+                  <div className="ui-section-label">{group}</div>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                     {NORMAL_THEMES.filter(t => t.group === group).map(t => {
                       const active = normalTheme === t.id && isNormalFamily;
@@ -899,7 +899,7 @@ function AppearancePanel({
             <div className="space-y-3">
               {NEO_GROUPS.map(group => (
                 <div key={group} className="space-y-1.5">
-                  <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">{group}</div>
+                  <div className="ui-section-label">{group}</div>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                     {NEO_THEMES.filter(t => t.group === group).map(t => {
                       const active = neoTheme === t.id;

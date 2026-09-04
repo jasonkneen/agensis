@@ -83,7 +83,7 @@ export function DocumentVersionHistory({
                     v{version.version_number}
                   </Badge>
                   <ItemTitle className="min-w-0 flex-1 truncate text-2xs">{version.title}</ItemTitle>
-                  <span className="shrink-0 text-[9px] text-muted-foreground">{formatTime(version.created_at)}</span>
+                  <span className="shrink-0 text-3xs text-muted-foreground">{formatTime(version.created_at)}</span>
                 </ItemHeader>
                 {version.content && (
                   <ItemContent>

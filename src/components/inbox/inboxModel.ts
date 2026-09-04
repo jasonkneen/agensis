@@ -71,6 +71,19 @@ function timeOf(iso: string): number {
 }
 
 /**
+ * Text from the inbox route is display data, even when TypeScript says it is a
+ * string. Old cached rows and third-party producers can still omit a field or
+ * serialise JavaScript's sentinel values. Treat those as absent at the model
+ * boundary so the UI can use its honest category fallback instead of printing
+ * `undefined` as somebody's name.
+ */
+export function inboxDisplayText(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const text = value.trim();
+  return /^(?:undefined|null)$/i.test(text) ? '' : text;
+}
+
+/**
  * Collapse items into per-context groups, blockers pinned to the top and
  * everything else by recency. Items with no contextKey fall back to their own
  * id so a malformed row still shows up as its own row instead of merging into
@@ -79,10 +92,18 @@ function timeOf(iso: string): number {
 export function groupInboxItems(items: InboxItem[]): InboxGroup[] {
   const buckets = new Map<string, InboxItem[]>();
   for (const item of items) {
-    const key = item.contextKey || item.id;
+    // Keep the whole bucket safe, not only its lead row: earlier thread items
+    // are rendered in the detail pane too and used to leak the same sentinels.
+    const normalizedItem: InboxItem = {
+      ...item,
+      title: inboxDisplayText(item.title),
+      body: inboxDisplayText(item.body),
+      actorName: inboxDisplayText(item.actorName),
+    };
+    const key = normalizedItem.contextKey || normalizedItem.id;
     const bucket = buckets.get(key);
-    if (bucket) bucket.push(item);
-    else buckets.set(key, [item]);
+    if (bucket) bucket.push(normalizedItem);
+    else buckets.set(key, [normalizedItem]);
   }
 
   const groups: InboxGroup[] = [];
@@ -98,9 +119,9 @@ export function groupInboxItems(items: InboxItem[]): InboxGroup[] {
     groups.push({
       key,
       category,
-      title: lead.title,
-      body: lead.body,
-      actorName: lead.actorName,
+      title: inboxDisplayText(lead.title),
+      body: inboxDisplayText(lead.body),
+      actorName: inboxDisplayText(lead.actorName),
       items: sorted,
       latestAt: sorted[0].createdAt,
       unreadCount: sorted.filter(item => item.unread).length,
@@ -353,7 +374,7 @@ export function inboxTypeLabel(group: InboxGroup): InboxTypeLabel {
       // Same shape as a comment: what happened, then WHERE. The thread's own
       // name is the chip because it is the only thing separating two replies
       // from the same agent in the same channel.
-      const name = group.title.trim();
+      const name = inboxDisplayText(group.title);
       return name
         ? { text: 'Replied in', chip: name, tone: 'muted' }
         : { text: 'New reply', chip: null, tone: 'muted' };
@@ -362,12 +383,13 @@ export function inboxTypeLabel(group: InboxGroup): InboxTypeLabel {
       // The server literally builds `'Comment on ' || <name>`, so this split is
       // deterministic — but it falls back to the whole title if that ever stops
       // being true, rather than rendering a mangled chip.
-      const target = group.title.startsWith(COMMENT_PREFIX)
-        ? group.title.slice(COMMENT_PREFIX.length).trim()
+      const title = inboxDisplayText(group.title);
+      const target = title.startsWith(COMMENT_PREFIX)
+        ? title.slice(COMMENT_PREFIX.length).trim()
         : '';
       return target
         ? { text: 'Comment on', chip: target, tone: 'muted' }
-        : { text: group.title || 'Comment', chip: null, tone: 'muted' };
+        : { text: title || 'Comment', chip: null, tone: 'muted' };
     }
     default:
       return { text: 'Mentioned you', chip: null, tone: 'muted' };
@@ -379,22 +401,23 @@ export function inboxTypeLabel(group: InboxGroup): InboxTypeLabel {
  * whichever field actually carries the words wins.
  */
 export function inboxPreview(group: InboxGroup): string {
+  const title = inboxDisplayText(group.title);
   // For these two the TITLE is the thing being asked; the body is a reason or
   // an answer-on-file, which is detail-pane material.
-  if (group.category === 'blocker' || group.category === 'approval') return group.title.trim();
-  const body = group.body.trim();
+  if (group.category === 'blocker' || group.category === 'approval') return title;
+  const body = inboxDisplayText(group.body);
   if (body) return body;
   if (group.category === 'mention') {
     // "Jane: hey @you can you look at…" — the sender is already line 1.
-    const split = group.title.indexOf(': ');
-    if (split > 0) return group.title.slice(split + 2).trim();
+    const split = title.indexOf(': ');
+    if (split > 0) return title.slice(split + 2).trim();
   }
-  return group.title.trim();
+  return title;
 }
 
 /** Line 1. Never blank — an unnamed row still has to say who it is from. */
 export function senderLabel(group: InboxGroup): string {
-  const name = group.actorName.trim();
+  const name = inboxDisplayText(group.actorName);
   if (name) return name;
   const fromAnAgent = group.category === 'approval'
     || group.category === 'blocker'

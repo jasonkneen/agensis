@@ -334,7 +334,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
         <div className="space-y-4 p-3">
           {filteredSkills.length > 0 && (
             <section>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Agent skills</h3>
+              <h3 className="ui-section-label mb-2">Agent skills</h3>
               <div className="space-y-1.5">
                 {filteredSkills.map(skill => {
                   const active = isSelected(selection, { kind: 'skill', name: skill.name });
@@ -392,7 +392,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
 
           {filteredLibraries.length > 0 && (
             <section>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Skill libraries</h3>
+              <h3 className="ui-section-label mb-2">Skill libraries</h3>
               <div className="space-y-1.5">
                 {filteredLibraries.map(lib => {
                   const active = isSelected(selection, { kind: 'library', id: lib.id });
@@ -526,7 +526,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                 )}
 
                 <div>
-                  <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Skill content</h4>
+                  <h4 className="ui-section-label mb-1.5">Skill content</h4>
                   {renderContentBlock(selectedSkill.name)}
                 </div>
 
@@ -576,7 +576,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                 )}
 
                 <div>
-                  <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Where this comes from</h4>
+                  <h4 className="ui-section-label mb-1.5">Where this comes from</h4>
                   {/* ORDER MATTERS, and `stored` comes before the advertised /
                       configured split rather than after it. A skill written here
                       that an agent ALSO lists used to fall through to
@@ -610,7 +610,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
 
                 {selectedSkill.agents.length > 0 && (
                   <div>
-                    <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Agents with this skill</h4>
+                    <h4 className="ui-section-label mb-1.5">Agents with this skill</h4>
                     <div className="space-y-1.5">
                       {selectedSkill.agents.map(agent => (
                         <div key={`${agent.id}:${agent.source}`} className="flex items-center gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5">
@@ -659,30 +659,30 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                   All entries
                 </Button>
                 <div>
-                  <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{openEntry}</h4>
+                  <h4 className="ui-section-label mb-1.5">{openEntry}</h4>
                   {renderContentBlock(openEntry)}
                 </div>
               </>
             ) : (
               <>
                 <div>
-                  <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Location</h4>
+                  <h4 className="ui-section-label mb-1.5">Location</h4>
                   <p className="break-all font-mono text-xs text-foreground">{selectedLibrary.path || '(no path reported)'}</p>
                 </div>
                 <div className="flex gap-6">
                   <div>
-                    <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Entries</h4>
+                    <h4 className="ui-section-label mb-1">Entries</h4>
                     <p className="text-sm text-foreground">{selectedLibrary.count}</p>
                   </div>
                   <div>
-                    <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Type</h4>
+                    <h4 className="ui-section-label mb-1">Type</h4>
                     <p className="text-sm text-foreground">{selectedLibrary.type}</p>
                   </div>
                 </div>
 
                 {listing?.available && listing.entries.length > 0 && (
                   <div>
-                    <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Open one</h4>
+                    <h4 className="ui-section-label mb-1.5">Open one</h4>
                     <div className="space-y-1">
                       {listing.entries.map(entry => (
                         <button

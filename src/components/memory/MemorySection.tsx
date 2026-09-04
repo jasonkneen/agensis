@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Brain, Check, FileText, Lightbulb, Pencil, Plus, Tag, Trash2, X } from 'lucide-react';
+import { Brain, Check, FileText, Lightbulb, Pencil, Plus, Trash2, X } from 'lucide-react';
 import type { Document, MemoryFact, WorkspaceAgent } from '../../types';
 import { AgentMemoryBrowser } from './AgentMemoryBrowser';
 import { SuggestionsPanel } from './SuggestionsPanel';
@@ -23,7 +23,6 @@ import {
   ItemContent,
   ItemDescription,
   ItemGroup,
-  ItemMedia,
   ItemTitle,
 } from '@agensis/ui/components/item';
 import {
@@ -107,11 +106,11 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
-      <div className="flex shrink-0 gap-1 border-b border-border bg-card px-2 pt-2">
+      <div className="flex h-9 shrink-0 gap-1 border-b border-border bg-card px-2">
         <button
           type="button"
           onClick={() => setTab('facts')}
-          className={`inline-flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-sm font-medium ${tab === 'facts' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+          className={`inline-flex items-center gap-1.5 border-b-2 px-2.5 text-xs font-medium ${tab === 'facts' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
         >
           <Brain className="size-4" />
           Team facts
@@ -119,7 +118,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
         <button
           type="button"
           onClick={() => setTab('files')}
-          className={`inline-flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-sm font-medium ${tab === 'files' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+          className={`inline-flex items-center gap-1.5 border-b-2 px-2.5 text-xs font-medium ${tab === 'files' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
         >
           <FileText className="size-4" />
           Agent files
@@ -127,7 +126,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
         <button
           type="button"
           onClick={() => setTab('suggestions')}
-          className={`inline-flex items-center gap-1.5 rounded-t-md border-b-2 px-3 py-2 text-sm font-medium ${tab === 'suggestions' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+          className={`inline-flex items-center gap-1.5 border-b-2 px-2.5 text-xs font-medium ${tab === 'suggestions' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
         >
           <Lightbulb className="size-4" />
           Suggestions
@@ -144,26 +143,23 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
         </div>
       ) : (
       <>
-      <div className="shrink-0 border-b border-border bg-card p-4">
-        <div className="flex items-start gap-4">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
-            <Brain className="size-5" />
-          </div>
+      <div className="shrink-0 border-b border-border bg-card px-3 py-2.5">
+        <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold">Memory</h2>
-            <p className="text-sm text-muted-foreground">
+            <h2 className="ui-panel-title">Memory</h2>
+            <p className="ui-meta">
               {facts.length} persistent fact{facts.length === 1 ? '' : 's'} stored
             </p>
           </div>
-          <Button type="button" size="sm" onClick={() => setAddingNew(true)}>
+          <Button type="button" size="xs" onClick={() => setAddingNew(true)}>
             <Plus data-icon="inline-start" />
             Add Memory
           </Button>
         </div>
 
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Badge asChild variant={!activeCategory ? 'default' : 'outline'} className="memory-filter-chip cursor-pointer">
-            <button type="button" onClick={() => setFilterCategory(null)}>
+        <div className="mt-2 flex flex-wrap gap-1">
+          <Badge asChild variant={!activeCategory ? 'secondary' : 'ghost'} className="memory-filter-chip cursor-pointer">
+            <button data-flat-control type="button" aria-pressed={!activeCategory} onClick={() => setFilterCategory(null)}>
               All
             </button>
           </Badge>
@@ -171,14 +167,15 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
             <Badge
               key={category}
               asChild
-              variant={activeCategory === category ? 'default' : 'outline'}
+              variant={activeCategory === category ? 'secondary' : 'ghost'}
               className="memory-filter-chip cursor-pointer"
             >
               <button
+                data-flat-control
                 type="button"
+                aria-pressed={activeCategory === category}
                 onClick={() => setFilterCategory(activeCategory === category ? null : category)}
               >
-                <Tag data-icon="inline-start" />
                 {category}
               </button>
             </Badge>
@@ -187,18 +184,20 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-3 p-4">
+        <div className="flex flex-col">
           {addingNew && (
-            <MemoryForm
-              fact={newFact}
-              category={newCategory}
-              categories={allCategories}
-              onFactChange={setNewFact}
-              onCategoryChange={setNewCategory}
-              onCancel={() => setAddingNew(false)}
-              onSubmit={handleAdd}
-              submitLabel="Save"
-            />
+            <div className="border-b border-border/60 p-3">
+              <MemoryForm
+                fact={newFact}
+                category={newCategory}
+                categories={allCategories}
+                onFactChange={setNewFact}
+                onCategoryChange={setNewCategory}
+                onCancel={() => setAddingNew(false)}
+                onSubmit={handleAdd}
+                submitLabel="Save"
+              />
+            </div>
           )}
 
           {filteredFacts.length === 0 ? (
@@ -222,10 +221,10 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
               )}
             </Empty>
           ) : (
-            <ItemGroup className="gap-2">
+            <ItemGroup className="gap-0 border-b border-border/60">
               {filteredFacts.map(fact => (
                 editingId === fact.id ? (
-                  <Item key={fact.id} variant="outline" className="items-stretch">
+                  <Item key={fact.id} data-flat-control variant="default" size="xs" className="memory-list-row items-stretch rounded-none border-x-0 border-t-0 border-b border-border/60 p-3">
                     <ItemContent>
                       <MemoryForm
                         fact={editFact}
@@ -240,18 +239,15 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
                     </ItemContent>
                   </Item>
                 ) : (
-                  <Item key={fact.id} variant="outline">
-                    <ItemMedia variant="icon" className="size-9 rounded-xl bg-muted [&_svg]:size-5">
-                      <Brain />
-                    </ItemMedia>
+                  <Item key={fact.id} data-flat-control variant="default" size="xs" className="memory-list-row rounded-none border-x-0 border-t-0 border-b border-border/60 px-3 py-2.5">
                     <ItemContent className="min-w-0">
-                      <ItemTitle className="max-w-full whitespace-normal">{fact.fact}</ItemTitle>
-                      <ItemDescription>
+                      <ItemTitle className="max-w-full whitespace-normal text-sm font-normal leading-relaxed">{fact.fact}</ItemTitle>
+                      <ItemDescription className="text-xs">
                         {new Date(fact.updated_at).toLocaleDateString()}
                       </ItemDescription>
                     </ItemContent>
-                    <Badge variant="outline">{fact.category}</Badge>
-                    <ItemActions>
+                    <Badge data-flat-control variant="secondary" className="h-5 rounded-md px-1.5 text-xs font-medium normal-case tracking-normal shadow-none">{fact.category}</Badge>
+                    <ItemActions className="gap-0.5 opacity-60 transition-opacity group-hover/item:opacity-100 group-focus-within/item:opacity-100">
                       <Button type="button" variant="ghost" size="icon-sm" onClick={() => handleEdit(fact)} aria-label="Edit memory">
                         <Pencil className="size-4" />
                       </Button>

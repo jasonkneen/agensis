@@ -245,7 +245,7 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
               <p className="p-4 text-xs text-muted-foreground">Loading…</p>
             ) : viewMode === 'preview' ? (
               selectedContent ? (
-                <div className="p-4">
+                <div className="memory-file-body p-4">
                   <MarkdownContent content={selectedContent} />
                 </div>
               ) : (
@@ -279,34 +279,33 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
   // padding for the narrow left column when a detail panel sits beside it.
   const renderList = (compact: boolean) => (
     <>
-      <div className={`shrink-0 border-b border-border bg-card ${compact ? 'p-3' : 'p-4'}`}>
-        <div className={`flex items-start ${compact ? 'gap-3' : 'gap-4'}`}>
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
-            <FileText className="size-5" />
-          </div>
+      <div className="shrink-0 border-b border-border bg-card px-3 py-2.5">
+        <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold">Agent file memory</h2>
-            <p className="truncate text-sm text-muted-foreground">
+            <h2 className="ui-panel-title">Agent file memory</h2>
+            <p className="ui-meta truncate">
               {agentFiles.length} file{agentFiles.length === 1 ? '' : 's'} from {agentName(effectiveAgentId)}
             </p>
           </div>
-          <Button type="button" size="sm" variant="outline" onClick={handleRefresh} disabled={!effectiveAgentId || refreshing}>
+          <Button type="button" size="xs" variant="ghost" onClick={handleRefresh} disabled={!effectiveAgentId || refreshing}>
             <RefreshCw data-icon="inline-start" className={refreshing ? 'animate-spin' : ''} />
             {!compact && 'Refresh'}
           </Button>
         </div>
 
         {agentsWithFiles.length > 1 && (
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-1">
             {agentsWithFiles.map(agent => (
               <Badge
                 key={agent.id}
                 asChild
-                variant={effectiveAgentId === agent.id ? 'default' : 'outline'}
-                className="cursor-pointer"
+                variant={effectiveAgentId === agent.id ? 'secondary' : 'ghost'}
+                className="memory-filter-chip cursor-pointer"
               >
                 <button
+                  data-flat-control
                   type="button"
+                  aria-pressed={effectiveAgentId === agent.id}
                   onClick={() => { setSelectedAgentId(agent.id); setSelectedPath(null); }}
                 >
                   {agent.name}
@@ -318,7 +317,7 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className={`flex flex-col gap-3 ${compact ? 'p-3' : 'p-4'}`}>
+        <div className="flex flex-col">
           {agentFiles.length === 0 ? (
             <Empty className="min-h-60 border-0">
               <EmptyHeader>
@@ -330,16 +329,18 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
               </EmptyHeader>
             </Empty>
           ) : (
-            <ItemGroup className="gap-2">
+            <ItemGroup className="gap-0 border-b border-border/60">
               {agentFiles.map(file => (
                 <Item
                   key={file.id}
-                  variant="outline"
+                  data-flat-control
+                  variant="default"
+                  size="xs"
                   asChild
-                  className={selectedPath === file.path ? 'border-primary bg-primary/5' : undefined}
+                  className="memory-file-row rounded-none border-x-0 border-t-0 border-b border-border/60"
                 >
-                  <button type="button" className="w-full text-left" onClick={() => setSelectedPath(file.path)}>
-                    <ItemMedia variant="icon" className="size-9 rounded-xl bg-muted [&_svg]:size-5">
+                  <button type="button" aria-pressed={selectedPath === file.path} className="w-full px-3 py-2.5 text-left" onClick={() => setSelectedPath(file.path)}>
+                    <ItemMedia variant="icon" className="size-7 rounded-md bg-muted text-muted-foreground [&_svg]:size-3.5">
                       <FileText />
                     </ItemMedia>
                     <ItemContent className="min-w-0">
@@ -357,7 +358,7 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
                     </ItemContent>
                     <ItemActions>
                       {file.editable && (
-                        <Badge variant="outline" className="gap-1"><Pencil className="size-3" />Editable</Badge>
+                        <Badge data-flat-control variant="secondary" className="gap-1 rounded-md shadow-none"><Pencil className="size-3" />Editable</Badge>
                       )}
                       <MessageCircle className="size-4 text-muted-foreground" />
                     </ItemActions>
@@ -394,7 +395,7 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
 
           {suggestions.length > 0 && (
             <div className="flex flex-col gap-2">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <p className="ui-section-label">
                 Start here
               </p>
               <div className="flex flex-wrap gap-2">
@@ -412,7 +413,7 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
 
           {tips.length > 0 && (
             <div className="flex flex-col gap-2">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <p className="ui-section-label">
                 Tips
               </p>
               <div className="flex flex-wrap gap-2">

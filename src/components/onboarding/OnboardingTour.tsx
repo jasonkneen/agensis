@@ -392,7 +392,7 @@ export function OnboardingTour({
             <Icon className="size-7" />
           </div>
 
-          <span className="mb-2 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <span className="ui-section-label mb-2">
             {current.eyebrow}
           </span>
           <DialogTitle className="text-balance text-xl font-semibold leading-snug text-foreground">
