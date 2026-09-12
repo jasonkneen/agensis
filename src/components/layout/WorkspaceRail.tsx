@@ -1,7 +1,22 @@
 import React, { useState } from 'react';
 import { InlineRename } from '@/components/common/InlineRename';
-import { Building2, Plus } from 'lucide-react';
+import { ArrowDown, ArrowUp, Building2, EyeOff, Pencil, Plus, RotateCcw } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@agensis/ui/components/tooltip';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@agensis/ui/components/context-menu';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@agensis/ui/components/dropdown-menu';
 import { cn } from '@/lib/utils';
 import {
   buildWorkspaceRail,
@@ -87,6 +102,24 @@ interface WorkspaceRailProps {
   onWidthChange?: (width: number) => void;
   /** Phone: the rail rides inside the off-canvas drawer, where resizing is noise. */
   resizable?: boolean;
+  /**
+   * Reorder an ordinary workspace tile by one step. Omit to make the rail
+   * unorderable. `up` moves it toward the top of the list.
+   */
+  onReorderWorkspace?: (workspaceId: string, direction: 'up' | 'down') => void;
+  /**
+   * Hide a workspace from THIS user's rail (a reversible view preference, not a
+   * delete — the workspace and its content are untouched). Omit to hide the
+   * action. Never offered for the active tile or the System workspace.
+   */
+  onHideWorkspace?: (workspaceId: string) => void;
+  /**
+   * Workspaces the user has hidden, surfaced in a "Hidden" menu so they can be
+   * added back. Empty/omitted → no restore affordance is shown.
+   */
+  hiddenWorkspaces?: readonly WorkspaceRailSource[];
+  /** Add a hidden workspace back to the rail. Required for the Hidden menu to act. */
+  onRestoreWorkspace?: (workspaceId: string) => void;
 }
 
 export const WorkspaceRail = React.memo(function WorkspaceRail({
@@ -103,6 +136,10 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
   width = WORKSPACE_RAIL_COLLAPSED_WIDTH,
   onWidthChange,
   resizable = true,
+  onReorderWorkspace,
+  onHideWorkspace,
+  hiddenWorkspaces,
+  onRestoreWorkspace,
 }: WorkspaceRailProps) {
   const model = React.useMemo(
     () => buildWorkspaceRail(workspaces, activeWorkspaceId),
@@ -217,7 +254,11 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
   const showLoading = loading && !hasTiles;
   const showError = !loading && !hasTiles && Boolean(loadError);
 
-  const renderRow = (tile: WorkspaceRailTile) => (
+  // Reorder/hide are only meaningful for ordinary tiles: `position` carries the
+  // row's place among them so the menu can grey out "Move up" on the first tile
+  // and "Move down" on the last. System tiles pass null — they sit below the
+  // divider and are neither reorderable nor hideable.
+  const renderRow = (tile: WorkspaceRailTile, position: { index: number; total: number } | null) => (
     <WorkspaceRow
       key={tile.id}
       tile={tile}
@@ -226,6 +267,9 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
       onSelect={onSelectWorkspace}
       registerRef={registerTile}
       onRename={onRenameWorkspace}
+      position={tile.isSystem ? null : position}
+      onReorder={tile.isSystem ? undefined : onReorderWorkspace}
+      onHide={tile.isSystem ? undefined : onHideWorkspace}
     />
   );
 
@@ -298,7 +342,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
           </div>
         ) : (
           <>
-            {model.tiles.map(renderRow)}
+            {model.tiles.map((tile, index) => renderRow(tile, { index, total: model.tiles.length }))}
 
             {model.systemTiles.length > 0 && (
              <>
@@ -317,7 +361,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
                 expanded ? 'mx-2' : 'mx-auto w-6',
               )}
             />
-              {model.systemTiles.map(renderRow)}
+              {model.systemTiles.map(tile => renderRow(tile, null))}
              </>
             )}
           </>
@@ -354,6 +398,55 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
             {!expanded && <TooltipContent side="right">Create workspace</TooltipContent>}
           </Tooltip>
         </div>
+
+        {/* Restore list for workspaces the user removed from their sidebar. It
+            appears only when there is something to add back — an empty menu
+            would be a permanent dead control. This is the "workspace screen" the
+            hide action promises: a menu of hidden tiles, each re-added on click.
+            Placed with the "+" (inside the scroll body) because both are
+            list-management, not the admin footer below. */}
+        {hiddenWorkspaces && hiddenWorkspaces.length > 0 && onRestoreWorkspace && (
+          <div className="w-full shrink-0 px-2 pt-0.5">
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      data-workspace-rail-hidden
+                      aria-label={`Hidden workspaces (${hiddenWorkspaces.length})`}
+                      className={cn(
+                        'flex h-9 items-center rounded-[11px] border border-transparent text-muted-foreground transition-colors',
+                        'hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        expanded ? 'w-full gap-2 px-2.5' : 'mx-auto w-9 justify-center',
+                      )}
+                    >
+                      <EyeOff className="size-4 shrink-0" />
+                      {expanded && (
+                        <span className="truncate text-[13px]">Hidden · {hiddenWorkspaces.length}</span>
+                      )}
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                {!expanded && (
+                  <TooltipContent side="right">Hidden workspaces · {hiddenWorkspaces.length}</TooltipContent>
+                )}
+              </Tooltip>
+              <DropdownMenuContent side="right" align="end" className="max-h-80 overflow-y-auto">
+                <DropdownMenuLabel>Add back to sidebar</DropdownMenuLabel>
+                {hiddenWorkspaces.map(workspace => (
+                  <DropdownMenuItem
+                    key={workspace.id}
+                    onSelect={() => onRestoreWorkspace(workspace.id)}
+                  >
+                    <RotateCcw data-icon="inline-start" />
+                    {String(workspace.name ?? '').trim() || 'Untitled workspace'}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
       </div>
 
       {/* Tenants — the owner-only admin surface, above "+". Rendering is gated
@@ -414,6 +507,9 @@ function WorkspaceRow({
   onSelect,
   registerRef,
   onRename,
+  position,
+  onReorder,
+  onHide,
 }: {
   tile: WorkspaceRailTile;
   expanded: boolean;
@@ -421,6 +517,10 @@ function WorkspaceRow({
   onSelect: (workspaceId: string) => void;
   registerRef: (id: string, node: HTMLButtonElement | null) => void;
   onRename?: (workspaceId: string, name: string) => Promise<boolean> | boolean;
+  /** Place among the ORDINARY tiles; null for a system tile (no reorder/hide). */
+  position?: { index: number; total: number } | null;
+  onReorder?: (workspaceId: string, direction: 'up' | 'down') => void;
+  onHide?: (workspaceId: string) => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const button = (
@@ -517,7 +617,7 @@ function WorkspaceRow({
     );
   }
 
-  return (
+  const row = (
     <div className={cn('flex w-full shrink-0 items-center px-2', !expanded && 'justify-center')}>
       {expanded ? button : (
         <Tooltip>
@@ -529,5 +629,62 @@ function WorkspaceRow({
         </Tooltip>
       )}
     </div>
+  );
+
+  // Right-click menu. The move items stay VISIBLE-but-disabled at the ends of
+  // the list rather than disappearing, so the menu keeps the same shape on
+  // every tile and "why did that option move" never happens. "Remove from
+  // sidebar" is disabled for the tile you are currently in — hiding your active
+  // workspace would leave the rail marking a tile that is not there.
+  const canMoveUp = Boolean(onReorder && position && position.index > 0);
+  const canMoveDown = Boolean(onReorder && position && position.index < position.total - 1);
+  const canHide = Boolean(onHide && !tile.active);
+  const hasMenu = Boolean(onRename || onReorder || onHide);
+  if (!hasMenu) return row;
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent className="w-52">
+        <ContextMenuLabel className="truncate">
+          {tile.name}
+          {tile.isSystem ? ' · System' : ''}
+        </ContextMenuLabel>
+        <ContextMenuSeparator />
+        {onRename && (
+          <ContextMenuItem
+            disabled={!expanded}
+            onSelect={() => setRenaming(true)}
+          >
+            <Pencil data-icon="inline-start" />
+            Rename{!expanded ? ' (widen rail)' : ''}
+          </ContextMenuItem>
+        )}
+        {onReorder && (
+          <>
+            <ContextMenuItem disabled={!canMoveUp} onSelect={() => onReorder(tile.id, 'up')}>
+              <ArrowUp data-icon="inline-start" />
+              Move up
+            </ContextMenuItem>
+            <ContextMenuItem disabled={!canMoveDown} onSelect={() => onReorder(tile.id, 'down')}>
+              <ArrowDown data-icon="inline-start" />
+              Move down
+            </ContextMenuItem>
+          </>
+        )}
+        {onHide && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              disabled={!canHide}
+              onSelect={() => onHide(tile.id)}
+            >
+              <EyeOff data-icon="inline-start" />
+              Remove from sidebar
+            </ContextMenuItem>
+          </>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

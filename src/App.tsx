@@ -112,6 +112,7 @@ import { useTenantAccess } from './hooks/useTenants';
 import { writeFailureNotice, type SendOutcome, type WriteFailure } from './lib/writeFeedback';
 import { useAuth } from './hooks/useAuth';
 import { useWorkspaces } from './hooks/useWorkspaces';
+import { useWorkspaceRailPrefs } from './hooks/useWorkspaceRailPrefs';
 import { useDocuments } from './hooks/useDocuments';
 import { useChat, type SendMessageResult } from './hooks/useChat';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
@@ -768,6 +769,17 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     [workspaces],
   );
   const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId) || defaultWorkspace;
+  // The rail's per-user view: which workspaces this browser hides and the order
+  // it shows them in. Purely visual — `workspaces` above (and everything that
+  // resolves the active workspace from it) stays the full server list, so
+  // hiding a tile never changes what data loads, only what the rail paints.
+  const {
+    railWorkspaces,
+    hiddenWorkspaces,
+    hideWorkspace,
+    restoreWorkspace,
+    moveWorkspace,
+  } = useWorkspaceRailPrefs(workspaces);
   const {
     connections: nostrConnections,
     resolved: nostrConnectionsResolved,
@@ -2425,10 +2437,14 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
               off-canvas drawer beside the sidebar rather than eating screen
               width the canvas needs. */}
           <WorkspaceRail
-            workspaces={workspaces}
+            workspaces={railWorkspaces}
             activeWorkspaceId={activeWorkspaceId}
             onSelectWorkspace={setActiveWorkspaceId}
             onRenameWorkspace={handleRenameWorkspace}
+            onReorderWorkspace={moveWorkspace}
+            onHideWorkspace={hideWorkspace}
+            hiddenWorkspaces={hiddenWorkspaces}
+            onRestoreWorkspace={restoreWorkspace}
             onOpenTenants={isSystemOwner ? handleOpenTenants : undefined}
             onCreateWorkspace={handleCreateWorkspace}
             loading={wsLoading || workspaceReadiness.status === 'pending' || workspaceReadiness.status === 'missing' || workspaceReadiness.status === 'preparing'}
