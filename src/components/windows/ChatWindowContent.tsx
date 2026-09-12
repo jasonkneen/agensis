@@ -30,6 +30,7 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  SquareDashedMousePointer,
   Terminal,
   Trash2,
   UserPlus,
@@ -50,6 +51,8 @@ import {
   type ProjectFileEntry,
   type ProjectFileSource,
 } from '../chat/ComposerAddContent';
+import { ComponentPickerOverlay } from '../chat/ComponentPickerOverlay';
+import { buildPickContext, type ElementPick } from '../../lib/componentPicker';
 import { FileDetailPanel, ProjectFileRow, UploadedFileRow } from '../files/FilePanelItems';
 import { panelFileName, type SelectedPanelFile } from '../../lib/uploadedFiles';
 import { ThreadWidgetRail } from './ThreadWidgetRail';
@@ -413,6 +416,9 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const [linkedDocs, setLinkedDocs] = useState<Document[]>([]);
   const [linkedGroups, setLinkedGroups] = useState<CanvasGroup[]>([]);
   const [linkedFiles, setLinkedFiles] = useState<LinkedFile[]>([]);
+  const [pickerActive, setPickerActive] = useState(false);
+  const [picks, setPicks] = useState<ElementPick[]>([]);
+  const pickSeqRef = useRef(0);
   const [showDocPicker, setShowDocPicker] = useState(false);
   const [showGroupPicker, setShowGroupPicker] = useState(false);
   const [showSlashPicker, setShowSlashPicker] = useState(false);
@@ -583,15 +589,20 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     if (linkedGroups.length > 0) {
       content = `${buildGroupContext(linkedGroups)}\n\n${content}`;
     }
+    if (picks.length > 0) {
+      content = `${buildPickContext(picks)}\n\n${content}`;
+    }
     // Stay optimistic — the message appears in the transcript immediately and
     // the box clears — but keep the draft until the write is confirmed. A
     // rejected send rolls its row back, and without this the user's text went
     // with it.
-    const draft = { input, linkedDocs, linkedGroups, linkedFiles };
+    const draft = { input, linkedDocs, linkedGroups, linkedFiles, picks };
     setInput('');
     setLinkedDocs([]);
     setLinkedGroups([]);
     setLinkedFiles([]);
+    setPicks([]);
+    setPickerActive(false);
     inputRef.current?.focus();
 
     // Structured attachment references for the uploaded files, so the bubble can
@@ -610,6 +621,7 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
       setLinkedDocs(draft.linkedDocs);
       setLinkedGroups(draft.linkedGroups);
       setLinkedFiles(draft.linkedFiles);
+      setPicks(draft.picks);
       inputRef.current?.focus();
     }
   };
@@ -634,6 +646,17 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     setLinkedFiles(prev => prev.find(item => item.id === file.id) ? prev : [...prev, file]);
     setAddContextOpen(false);
     inputRef.current?.focus();
+  };
+
+  const addPick = (pick: Omit<ElementPick, 'id' | 'index'>) => {
+    pickSeqRef.current += 1;
+    const id = `pick-${pickSeqRef.current}`;
+    setPicks(prev => [...prev, { ...pick, id, index: prev.length + 1 }]);
+  };
+
+  const removePick = (id: string) => {
+    // Renumber so the circled markers and chips stay 1..n contiguous.
+    setPicks(prev => prev.filter(p => p.id !== id).map((p, i) => ({ ...p, index: i + 1 })));
   };
 
   const addLinkedDoc = (doc: Document) => {
@@ -2432,11 +2455,38 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 two 800px columns on the same centre line. Same `0.5rem` the
                 scroll viewport above uses, for the same reason. */}
             <div
+              data-picker-ignore
               className={cn(COMPOSER_SHELL_CLASS, 'transition-[padding] ease-out motion-reduce:transition-none')}
               style={{ paddingRight: railReserve ? `calc(0.5rem + ${railReserve}px)` : undefined, transitionDuration: `${RAIL_ANIMATION_MS}ms` }}
             >
-              {(linkedDocs.length > 0 || linkedGroups.length > 0 || linkedFiles.length > 0) && (
+              <ComponentPickerOverlay
+                active={pickerActive}
+                picks={picks}
+                onAddPick={addPick}
+                onDeactivate={() => setPickerActive(false)}
+              />
+              {(linkedDocs.length > 0 || linkedGroups.length > 0 || linkedFiles.length > 0 || picks.length > 0) && (
                 <div className={cn('mb-2 flex flex-wrap gap-1.5', CHAT_COLUMN_CLASS)}>
+                  {picks.map(pick => (
+                    <span
+                      key={pick.id}
+                      className="inline-flex max-w-[220px] shrink-0 items-center gap-1 rounded-md border border-border bg-muted/60 px-1.5 py-0.5 text-xs text-foreground"
+                      title={pick.note || pick.selector}
+                    >
+                      <span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-primary text-3xs font-bold leading-none text-primary-foreground">
+                        {pick.index}
+                      </span>
+                      <span className="min-w-0 truncate">{pick.note.trim() || pick.label}</span>
+                      <button
+                        type="button"
+                        className="ml-0.5 shrink-0 rounded p-0.5 hover:bg-muted-foreground/20"
+                        aria-label={`Remove element #${pick.index}`}
+                        onClick={() => removePick(pick.id)}
+                      >
+                        <X className="size-2.5" />
+                      </button>
+                    </span>
+                  ))}
                   {linkedFiles.map(file => (
                     <FileChip
                       key={file.id}
@@ -2743,6 +2793,16 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           />
                         </PopoverContent>
                       </Popover>
+                      <InputGroupButton
+                        size="icon-xs"
+                        aria-label={pickerActive ? 'Stop selecting elements' : 'Select an element to reference'}
+                        aria-pressed={pickerActive}
+                        data-active={pickerActive || undefined}
+                        className={cn(pickerActive && 'bg-primary text-primary-foreground hover:bg-primary/90')}
+                        onClick={() => setPickerActive(v => !v)}
+                      >
+                        <SquareDashedMousePointer />
+                      </InputGroupButton>
                     </div>
 
                     <div className="flex min-w-0 items-center gap-1">
