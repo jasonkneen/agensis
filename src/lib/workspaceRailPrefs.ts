@@ -180,6 +180,34 @@ export function moveInOrder(orderedIds: readonly string[], id: string, direction
   return ids;
 }
 
+/**
+ * Move one id so it sits immediately before or after another id, returning a
+ * new list. This is the drag-and-drop counterpart to `moveInOrder` (which is the
+ * one-step keyboard/menu move): a drag can jump a tile across the whole rail in
+ * a single gesture, so the drop is expressed relative to the tile it landed on
+ * rather than as a series of swaps.
+ *
+ * `draggedId === targetId`, an unknown dragged id, or an unknown target is a
+ * no-op returning a copy — the caller can persist the result unconditionally.
+ * The dragged id is removed BEFORE the target's index is read, so "after the
+ * last tile" and "before the first tile" both land correctly regardless of where
+ * the dragged tile started.
+ */
+export function moveRelativeTo(
+  orderedIds: readonly string[],
+  draggedId: string,
+  targetId: string,
+  place: 'before' | 'after',
+): string[] {
+  if (draggedId === targetId || orderedIds.indexOf(draggedId) < 0) return [...orderedIds];
+  const without = orderedIds.filter(id => id !== draggedId);
+  const targetIndex = without.indexOf(targetId);
+  if (targetIndex < 0) return [...orderedIds];
+  const insertAt = place === 'before' ? targetIndex : targetIndex + 1;
+  without.splice(insertAt, 0, draggedId);
+  return without;
+}
+
 /** Add an id to the hidden set (idempotent), returning a new list. */
 export function addHidden(hiddenIds: readonly string[], id: string): string[] {
   return hiddenIds.includes(id) ? [...hiddenIds] : [...hiddenIds, id];

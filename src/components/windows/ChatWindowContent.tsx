@@ -266,7 +266,7 @@ interface ChatWindowContentProps {
   onCloseThread?: () => void;
   // broadcastToChannel = the thread composer's "Send to channel" switch: post the
   // reply in the thread AND show it in the channel (messages.broadcast_to_channel).
-  onSendThreadReply?: (content: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
+  onSendThreadReply?: (content: string, broadcastToChannel?: boolean, attachments?: MessageAttachment[]) => void | Promise<SendOutcome | void>;
   /**
    * Tell the app a channel's own row changed (title, icon, description,
    * intent, participants). The window keeps its own copy of the channel for
@@ -2966,6 +2966,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
               streaming={streaming}
               resolveMessageAccent={(message) => resolveMessageAccent(message, agentAccentLookup)}
               onSendReply={onSendThreadReply}
+              onUploadFiles={onUploadFiles}
               readOnly={readOnly}
               agents={agents}
               workspaceId={workspaceId}

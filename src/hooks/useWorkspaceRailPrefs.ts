@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import {
   addHidden,
   moveInOrder,
+  moveRelativeTo,
   partitionWorkspaceRail,
   readHiddenWorkspaceIds,
   readWorkspaceOrder,
@@ -54,5 +55,19 @@ export function useWorkspaceRailPrefs<T extends RailOrderable>(workspaces: reado
     writeWorkspaceOrder(next);
   }, [rail]);
 
-  return { railWorkspaces: rail, hiddenWorkspaces: hidden, hideWorkspace, restoreWorkspace, moveWorkspace };
+  // Drag-and-drop reorder: drop the dragged tile immediately before/after the
+  // tile it landed on. Like `moveWorkspace`, it bases the sequence on what the
+  // rail is CURRENTLY showing so any workspace created since the last reorder is
+  // folded into an explicit, complete order the moment the user drags.
+  const reorderWorkspace = useCallback(
+    (draggedId: string, targetId: string, place: 'before' | 'after') => {
+      const currentOrdinaryIds = rail.filter(w => w.is_system !== true).map(w => w.id);
+      const next = moveRelativeTo(currentOrdinaryIds, draggedId, targetId, place);
+      setOrder(next);
+      writeWorkspaceOrder(next);
+    },
+    [rail],
+  );
+
+  return { railWorkspaces: rail, hiddenWorkspaces: hidden, hideWorkspace, restoreWorkspace, moveWorkspace, reorderWorkspace };
 }

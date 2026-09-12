@@ -104,6 +104,13 @@ interface WorkspaceRailProps {
    */
   onReorderWorkspace?: (workspaceId: string, direction: 'up' | 'down') => void;
   /**
+   * Reorder by drag-and-drop: drop the dragged tile immediately before or after
+   * the tile it landed on. Omit to disable dragging — the menu's Move up/down
+   * still works. Ordinary tiles only; the System tile below the divider never
+   * moves (a spatial switcher's triage destination stays put).
+   */
+  onReorderWorkspaceTo?: (draggedId: string, targetId: string, place: 'before' | 'after') => void;
+  /**
    * Hide a workspace from THIS user's rail (a reversible view preference, not a
    * delete — the workspace and its content are untouched). Omit to hide the
    * action. Never offered for the active tile or the System workspace.
@@ -133,6 +140,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
   onWidthChange,
   resizable = true,
   onReorderWorkspace,
+  onReorderWorkspaceTo,
   onHideWorkspace,
   hiddenWorkspaces,
   onRestoreWorkspace,
@@ -153,6 +161,41 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
   const teardownRef = React.useRef<(() => void) | null>(null);
   const [dragExpanded, setDragExpanded] = React.useState<boolean | null>(null);
   const expanded = dragExpanded ?? isWorkspaceRailExpanded(width);
+
+  // Drag-and-drop reorder. The dragged id is carried in a ref (the drop handler
+  // needs it synchronously and must not close over a stale render), while
+  // `draggingId`/`dropTarget` drive the paint (the source tile dims, the target
+  // shows a before/after insertion bar). Native HTML5 drag, so a plain
+  // left-drag reorders and right-click still opens the tile's menu.
+  const reorderable = Boolean(onReorderWorkspaceTo);
+  const dragIdRef = React.useRef<string | null>(null);
+  const [draggingId, setDraggingId] = React.useState<string | null>(null);
+  const [dropTarget, setDropTarget] = React.useState<{ id: string; place: 'before' | 'after' } | null>(null);
+
+  const handleTileDragStart = React.useCallback((id: string) => {
+    dragIdRef.current = id;
+    setDraggingId(id);
+    setDropTarget(null);
+  }, []);
+  const handleTileDragOver = React.useCallback((id: string, place: 'before' | 'after') => {
+    if (!dragIdRef.current || dragIdRef.current === id) {
+      setDropTarget(null);
+      return;
+    }
+    setDropTarget(prev => (prev && prev.id === id && prev.place === place ? prev : { id, place }));
+  }, []);
+  const handleTileDrop = React.useCallback((id: string, place: 'before' | 'after') => {
+    const dragged = dragIdRef.current;
+    dragIdRef.current = null;
+    setDraggingId(null);
+    setDropTarget(null);
+    if (dragged && dragged !== id) onReorderWorkspaceTo?.(dragged, id, place);
+  }, [onReorderWorkspaceTo]);
+  const handleTileDragEnd = React.useCallback(() => {
+    dragIdRef.current = null;
+    setDraggingId(null);
+    setDropTarget(null);
+  }, []);
 
   const applyWidth = React.useCallback((next: number) => {
     navRef.current?.style.setProperty('--workspace-rail-width', `${next}px`);
@@ -268,6 +311,15 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
       onHide={tile.isSystem ? undefined : onHideWorkspace}
       hiddenWorkspaces={hiddenWorkspaces}
       onRestore={onRestoreWorkspace}
+      // System tiles never drag: they are partitioned below the divider and
+      // reordering them would fight that partition.
+      reorderable={tile.isSystem ? false : reorderable}
+      isDragging={draggingId === tile.id}
+      dropIndicator={dropTarget && dropTarget.id === tile.id ? dropTarget.place : null}
+      onTileDragStart={handleTileDragStart}
+      onTileDragOver={handleTileDragOver}
+      onTileDrop={handleTileDrop}
+      onTileDragEnd={handleTileDragEnd}
     />
   );
 
@@ -315,10 +367,10 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
           non-interactive, out of flow — not a flex item. */}
       <div aria-hidden="true" className="sidebar-accent-wash" />
 
-      {/* Tiles AND "+" scroll together: "+" is the last row of the list rather
-          than a pinned footer, so it sits directly under the last workspace.
-          Tenants stays pinned below — it is an admin surface, not a workspace,
-          and does not belong in the list it would otherwise appear to join. */}
+      {/* Only the workspace tiles scroll. "+" and Tenants are pinned to the
+          bottom of the rail (below this container) so both are always reachable
+          without scrolling to the end of a long list — the tiles overflow past
+          them rather than pushing them off-screen. */}
       <div className="flex min-h-0 w-full flex-1 flex-col gap-1.5 overflow-y-auto overflow-x-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {showLoading ? (
           <div role="status" className="flex min-h-24 flex-col items-center justify-center gap-2 px-2 text-center text-xs text-muted-foreground">
@@ -365,53 +417,52 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
           </>
         )}
 
-        {/* "+" is the last row OF THE LIST, not a pinned footer: it reads as
-            "add one more of these" directly under the last workspace, which is
-            what it does. It therefore scrolls with the tiles — on an account
-            with enough workspaces to overflow, reaching it means scrolling to
-            the end of the list. That is the accepted trade for having it sit
-            with the things it creates rather than floating below them. */}
-        <div className="w-full shrink-0 px-2 pt-0.5">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                data-workspace-rail-create
-                onClick={onCreateWorkspace}
-                disabled={loading}
-                aria-label="Add new workspace"
-                className={cn(
-                  // Mirrors a WorkspaceRow — a tile-shaped glyph then a label — so
-                  // "add one of these" reads as one more entry in the same list
-                  // rather than a differently-shaped control bolted underneath.
-                  'group relative flex h-9 shrink-0 items-center rounded-lg text-muted-foreground transition-colors',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                  expanded ? 'min-w-0 flex-1 gap-2 pr-2 text-left hover:bg-muted/40 hover:text-foreground' : 'mx-auto w-9 justify-center',
-                )}
-              >
-                {/* The "+" sits in the same 36px rounded square a workspace tile
-                    uses (WorkspaceRow's swatch), dashed so it reads as an empty
-                    slot to fill rather than an existing workspace's identity. */}
-                <span
-                  aria-hidden="true"
-                  className="flex size-9 shrink-0 items-center justify-center rounded-[11px] border border-dashed border-border transition-all duration-150 group-hover:rounded-[7px] group-hover:border-foreground/40"
-                >
-                  <Plus className="size-4" />
-                </span>
-                {expanded && <span className="min-w-0 flex-1 truncate text-[13px] tracking-tight">Add new</span>}
-              </button>
-            </TooltipTrigger>
-            {/* Redundant once the button says what it does. */}
-            {!expanded && <TooltipContent side="right">Create workspace</TooltipContent>}
-          </Tooltip>
-        </div>
         {/* The restore list for hidden workspaces now lives in the right-click
             menu on any workspace tile (see WorkspaceRow) rather than as a
             standing button here — hiding is a right-click action, so unhiding
             belongs on the same menu instead of a permanent row in the rail. */}
       </div>
 
-      {/* Tenants — the owner-only admin surface, above "+". Rendering is gated
+      {/* "+" — pinned to the bottom of the rail, next to Tenants, rather than
+          scrolling as the last row of the tile list. On an account with enough
+          workspaces to overflow it stays put and reachable instead of hiding
+          below the fold. It still mirrors a WorkspaceRow (tile-shaped glyph then
+          label) so it reads as "add one more of these". It is NOT a drop target
+          for reordering — dragging a tile past the last one lands it at the end. */}
+      <div className="w-full shrink-0 px-2 pt-0.5">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              data-workspace-rail-create
+              onClick={onCreateWorkspace}
+              disabled={loading}
+              aria-label="Add new workspace"
+              className={cn(
+                'group relative flex h-9 shrink-0 items-center rounded-lg text-muted-foreground transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                expanded ? 'min-w-0 flex-1 gap-2 pr-2 text-left hover:bg-muted/40 hover:text-foreground' : 'mx-auto w-9 justify-center',
+              )}
+            >
+              {/* The "+" sits in the same 36px rounded square a workspace tile
+                  uses (WorkspaceRow's swatch), dashed so it reads as an empty
+                  slot to fill rather than an existing workspace's identity. */}
+              <span
+                aria-hidden="true"
+                className="flex size-9 shrink-0 items-center justify-center rounded-[11px] border border-dashed border-border transition-all duration-150 group-hover:rounded-[7px] group-hover:border-foreground/40"
+              >
+                <Plus className="size-4" />
+              </span>
+              {expanded && <span className="min-w-0 flex-1 truncate text-[13px] tracking-tight">Add new</span>}
+            </button>
+          </TooltipTrigger>
+          {/* Redundant once the button says what it does. */}
+          {!expanded && <TooltipContent side="right">Create workspace</TooltipContent>}
+        </Tooltip>
+      </div>
+
+      {/* Tenants — the owner-only admin surface, pinned below "+" at the very
+          bottom of the rail. Rendering is gated
           on the SERVER's answer (useTenantAccess), never on a client-side email
           comparison. Hiding it is cosmetic anyway: every /backend/tenants route
           re-checks, so a hidden button is a tidiness measure and the route is
@@ -474,6 +525,13 @@ function WorkspaceRow({
   onHide,
   hiddenWorkspaces,
   onRestore,
+  reorderable = false,
+  isDragging = false,
+  dropIndicator = null,
+  onTileDragStart,
+  onTileDragOver,
+  onTileDrop,
+  onTileDragEnd,
 }: {
   tile: WorkspaceRailTile;
   expanded: boolean;
@@ -488,8 +546,47 @@ function WorkspaceRow({
   /** Rail-global hidden list, surfaced as a restore submenu on every tile's menu. */
   hiddenWorkspaces?: readonly WorkspaceRailSource[];
   onRestore?: (workspaceId: string) => void;
+  /** True when this tile may be picked up and dropped to reorder. */
+  reorderable?: boolean;
+  /** True while THIS tile is the one being dragged (dims it). */
+  isDragging?: boolean;
+  /** Which edge of this tile the drop would land on, or null for no indicator. */
+  dropIndicator?: 'before' | 'after' | null;
+  onTileDragStart?: (id: string) => void;
+  onTileDragOver?: (id: string, place: 'before' | 'after') => void;
+  onTileDrop?: (id: string, place: 'before' | 'after') => void;
+  onTileDragEnd?: () => void;
 }) {
   const [renaming, setRenaming] = useState(false);
+  // The rail is a vertical list, so before/after is decided by the pointer's Y
+  // against the row's midpoint. During an inline rename the row swaps to a text
+  // field, so dragging is suppressed there (renaming is truthy on that branch).
+  const dropPlaceFromEvent = (event: React.DragEvent): 'before' | 'after' => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+  };
+  const dragProps = reorderable && !renaming
+    ? {
+      draggable: true,
+      onDragStart: (event: React.DragEvent) => {
+        event.dataTransfer.effectAllowed = 'move';
+        // Some browsers refuse a drag with no payload; the id is also our own
+        // source of truth (carried in the rail's ref), so this is belt-and-braces.
+        try { event.dataTransfer.setData('text/plain', tile.id); } catch { /* ignore */ }
+        onTileDragStart?.(tile.id);
+      },
+      onDragOver: (event: React.DragEvent) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        onTileDragOver?.(tile.id, dropPlaceFromEvent(event));
+      },
+      onDrop: (event: React.DragEvent) => {
+        event.preventDefault();
+        onTileDrop?.(tile.id, dropPlaceFromEvent(event));
+      },
+      onDragEnd: () => onTileDragEnd?.(),
+    }
+    : {};
   const button = (
     <button
       ref={node => registerRef(tile.id, node)}
@@ -585,7 +682,27 @@ function WorkspaceRow({
   }
 
   const row = (
-    <div className={cn('flex w-full shrink-0 items-center px-2', !expanded && 'justify-center')}>
+    <div
+      className={cn(
+        'relative flex w-full shrink-0 items-center px-2 transition-opacity',
+        !expanded && 'justify-center',
+        reorderable && !renaming && 'cursor-grab active:cursor-grabbing',
+        isDragging && 'opacity-40',
+      )}
+      {...dragProps}
+    >
+      {/* Insertion bar showing where a drop would land, on the pointer-nearest
+          edge of this tile. Sits in the 1.5-unit row inset so it reads as a gap
+          between tiles rather than a mark on one. */}
+      {dropIndicator && (
+        <span
+          aria-hidden="true"
+          className={cn(
+            'pointer-events-none absolute inset-x-1.5 h-0.5 rounded-full bg-primary',
+            dropIndicator === 'before' ? '-top-0.5' : '-bottom-0.5',
+          )}
+        />
+      )}
       {expanded ? button : (
         <Tooltip>
           <TooltipTrigger asChild>{button}</TooltipTrigger>
