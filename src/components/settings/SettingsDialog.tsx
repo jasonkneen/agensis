@@ -529,7 +529,7 @@ function AppearancePanel({
   const isDefaultFamily = themeMode === 'default-light' || themeMode === 'default-dark' || themeMode === 'default-system';
   const isNeoFamily = themeMode === 'neo-light' || themeMode === 'neo-dark';
   const isNormalFamily = themeMode === 'normal-light' || themeMode === 'normal-dark';
-  const isPaper = themeMode === 'paper-light' || themeMode === 'paper-dark';
+  const isPaper = themeMode === 'paper-light';
   // Derive which style tab is active from the current mode
   const themeStyleTab: 'default' | 'classic' | 'brutal' = isDefaultFamily ? 'default' : isNeoFamily ? 'brutal' : 'classic';
   const [panelTranslucency, setPanelTranslucency] = useState(initialSettings.ui_panel_translucency);
@@ -543,7 +543,6 @@ function AppearancePanel({
     { id: 'dark', label: 'Dark' },
     { id: 'system', label: 'System' },
     { id: 'paper-light', label: 'Paper Light' },
-    { id: 'paper-dark', label: 'Paper Dark' },
   ];
   // Active scheme value for normal tab: map normal-* back to plain light/dark
   const normalSchemeValue: ThemeMode = themeMode === 'normal-light' ? 'light' : themeMode === 'normal-dark' ? 'dark' : themeMode;
@@ -742,7 +741,7 @@ function AppearancePanel({
                 }
               }}
               variant="outline"
-              className="grid w-full grid-cols-3 sm:grid-cols-5"
+              className="grid w-full grid-cols-2 sm:grid-cols-4"
             >
               {normalSchemeModes.map(mode => (
                 <ToggleGroupItem key={mode.id} value={mode.id}>

@@ -61,6 +61,17 @@ afterEach(() => {
 });
 
 describe('useTheme family application order', () => {
+  it('migrates the removed Paper Dark mode to regular Dark', () => {
+    window.localStorage.setItem('agensis_theme', 'paper-dark');
+
+    render();
+
+    expect(container.textContent).toBe('dark');
+    expect(window.localStorage.getItem('agensis_theme')).toBe('dark');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    expect(document.documentElement.getAttribute('data-ui-theme')).toBe('classic');
+  });
+
   it('keeps the active palette after switching between shared-token families', () => {
     window.localStorage.setItem('agensis_theme', 'neo-light');
     window.localStorage.setItem('agensis_neo_theme', 'blueprint');

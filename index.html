@@ -31,9 +31,13 @@
     <script>
       (function(){
         var mode=localStorage.getItem('agensis_theme')||'default-light';
+        if(mode==='paper-dark'){
+          mode='dark';
+          localStorage.setItem('agensis_theme',mode);
+        }
         var t=mode==='system'||mode==='default-system'
           ?(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light')
-          :(mode==='dark'||mode==='neo-dark'||mode==='paper-dark'||mode==='normal-dark'||mode==='default-dark'?'dark':'light');
+          :(mode==='dark'||mode==='neo-dark'||mode==='normal-dark'||mode==='default-dark'?'dark':'light');
         var family=mode.indexOf('neo-')===0?'neo':mode.indexOf('paper-')===0?'paper':mode.indexOf('normal-')===0||mode==='light'||mode==='dark'||mode==='system'?'classic':mode.indexOf('default-')===0?'default':'default';
         document.documentElement.setAttribute('data-theme',t);
         document.documentElement.setAttribute('data-ui-theme',family);

@@ -5,7 +5,7 @@ import { syncTwTheme, clearTwTheme, findTwTheme, getStoredTwTheme } from '../sho
 import { applyThemePreset, getStoredPreset } from '../showcase/themePresets';
 import { applyRadiusScale, getStoredRadiusScale } from '../showcase/defaultTheme';
 
-export type ThemeMode = 'light' | 'dark' | 'system' | 'default-light' | 'default-dark' | 'default-system' | 'paper-light' | 'paper-dark' | 'neo-light' | 'neo-dark' | 'normal-light' | 'normal-dark';
+export type ThemeMode = 'light' | 'dark' | 'system' | 'default-light' | 'default-dark' | 'default-system' | 'paper-light' | 'neo-light' | 'neo-dark' | 'normal-light' | 'normal-dark';
 
 const STORAGE_KEY = 'agensis_theme';
 
@@ -19,7 +19,6 @@ function resolveTheme(mode: ThemeMode): { scheme: 'light' | 'dark'; family: 'def
   if (mode === 'default-light') return { scheme: 'light', family: 'default' };
   if (mode === 'default-dark') return { scheme: 'dark', family: 'default' };
   if (mode === 'paper-light') return { scheme: 'light', family: 'paper' };
-  if (mode === 'paper-dark') return { scheme: 'dark', family: 'paper' };
   if (mode === 'neo-light') return { scheme: 'light', family: 'neo' };
   if (mode === 'neo-dark') return { scheme: 'dark', family: 'neo' };
   if (mode === 'normal-light') return { scheme: 'light', family: 'classic' };
@@ -83,10 +82,14 @@ function applyTheme(mode: ThemeMode) {
 export function useTheme() {
   const [mode, setMode] = useState<ThemeMode>(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored === 'paper-dark') {
+      localStorage.setItem(STORAGE_KEY, 'dark');
+      return 'dark';
+    }
     if (
       stored === 'light' || stored === 'dark' || stored === 'system'
       || stored === 'default-light' || stored === 'default-dark' || stored === 'default-system'
-      || stored === 'paper-light' || stored === 'paper-dark'
+      || stored === 'paper-light'
       || stored === 'neo-light' || stored === 'neo-dark'
       || stored === 'normal-light' || stored === 'normal-dark'
     ) return stored;

@@ -4726,12 +4726,16 @@ body {
  transition: margin-inline-start 150ms ease, transform 150ms ease, box-shadow 150ms ease;
 }
 
-/* The stack still overlaps, but by no more than the initials can spare. At
-   -0.35rem the neighbour's 2px ring pushed the cut to 7.6px of a 24px circle,
-   which clipped the first letter and made "CH CO HE" read as one run-on blob. */
+/* A tighter resting stack than before (-0.2rem → -0.3rem) so the cluster reads
+   as one overlapping pile rather than a near-spaced row. The status dot is
+   unaffected: it sits bottom-right and the first avatar carries the highest
+   z-index (z-5, descending), so each disc's dot always paints on top of its
+   right-hand neighbour. We stop short of -0.35rem, where the neighbour's 2px
+   ring pushed the cut to 7.6px of a 24px circle and clipped the first letter,
+   making "CH CO HE" read as one run-on blob. */
 .presence-avatar-group [data-slot="avatar"]+[data-slot="avatar"],
 .presence-avatar-group [data-slot="avatar"]+[data-slot="avatar-group-count"] {
- margin-inline-start: -0.2rem;
+ margin-inline-start: -0.3rem;
 }
 
 .presence-avatar-group [data-slot="avatar"]:nth-child(1) {
@@ -5135,6 +5139,78 @@ select {
 :root[data-ui-theme="default"] button:not([data-slot="button"]):not([data-flat-control])[class~="border"]:not([data-variant="ghost"]):active {
  transform: translate(2px, 2px);
  box-shadow: none !important;
+}
+
+/* Default LIGHT — crisp control edges.
+   The default theme leans on --default-hard-shadow (a low-contrast offset)
+   plus a pale #e0e0e0 border, so on white its rounded controls (search box,
+   count pills, bordered buttons, selects, inputs) read as
+   edgeless — no proper border shows. Give exactly those controls a single
+   near-black line so the border is legible, while the theme's tactile offset
+   shadow stays. Scoped to [data-theme="light"] so default-dark (which already
+   has crisp borders on near-black) is untouched, and to the named controls so
+   hairline list dividers keep the quiet --border. */
+:root[data-ui-theme="default"][data-theme="light"] {
+ --control-edge: #1a1a1a;
+}
+
+:root[data-ui-theme="default"][data-theme="light"] :is(
+ [data-slot="button"][data-bordered="true"],
+ [data-slot="select-trigger"],
+ [data-slot="toggle-group-item"],
+ [data-slot="input"],
+ .sidebar-search
+) {
+ border-color: var(--control-edge) !important;
+}
+
+/* The workspace bar (.sidebar-workspace-pill) is deliberately edgeless — its
+   base rule above forces a transparent border/background, and Jason does not
+   want a line drawn around it. It stays OUT of the list above. Workspace-rail
+   tiles keep their own mode-aware edge (see .workspace-tile-swatch), which
+   already draws darker in light and carries the active/inactive selection cue
+   — a flat near-black override here would erase that, so it's excluded too. */
+
+/* The workspace-rail management buttons — Create ("+"), Hidden workspaces
+   (EyeOff), and Tenants — sit right beside the tile swatches but drew their
+   edge from the pale --border (Create, dashed) or a transparent border (Hidden
+   / Tenants), so in light mode they read as edgeless while the tiles next to
+   them show a crisp line. Repoint them to the SAME mode-aware edge as
+   .workspace-tile-swatch so the rail reads as one system. Create keeps its
+   dashed "add" affordance — only its colour darkens. */
+:root[data-ui-theme="default"][data-theme="light"] :is(
+ [data-workspace-rail-create],
+ [data-workspace-rail-hidden],
+ [data-workspace-rail-tenants]
+) {
+ border-color: color-mix(in srgb, var(--foreground) 55%, transparent) !important;
+}
+
+/* Avatars in the sidebar chrome (DM rows + the workspace/channel indicator in
+   the titlebar) draw their edge from the shared avatar ::after, which reads off
+   the pale --border and so shows no ring on white. Repoint just those to the
+   near-black control edge so each avatar gains a full, subtle line all the way
+   around — matching the agents pill. Scoped to [data-sidebar-panel] so message
+   and presence avatars elsewhere are untouched; mix-blend-darken keeps the line
+   from punching through a light identity fill. */
+:root[data-ui-theme="default"][data-theme="light"] [data-sidebar-panel] [data-slot="avatar"]::after {
+ border-color: var(--control-edge);
+}
+
+/* Count pills carry no border width of their own — add a hairline so the
+   dark edge has something to paint, matching the other controls. */
+:root[data-ui-theme="default"][data-theme="light"] :is(
+ .sidebar-action-count,
+ .sidebar-section-count
+) {
+ border: 1px solid var(--control-edge) !important;
+}
+
+/* …but a section-HEADER count is a bare tracked numeral (transparent, no
+   pill — see the .sidebar-section-header rule above), so it must NOT gain a
+   box around the digits. */
+:root[data-ui-theme="default"][data-theme="light"] .sidebar-section-header .sidebar-section-trigger .sidebar-section-count {
+ border-color: transparent !important;
 }
 
 /* Tailwind's shadow utilities bake blurred values into --tw-shadow instead of

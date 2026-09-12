@@ -321,7 +321,7 @@ export function applyTwTheme(id: string) {
  * Re-applying on scheme change is what swaps a world's light/dark paper.
  */
 export function syncTwTheme(mode: string) {
-  if (mode === 'paper-light' || mode === 'paper-dark') {
+  if (mode === 'paper-light') {
     applyTwThemeVars(findTwTheme(getStoredTwTheme()), currentScheme());
   } else {
     clearTwTheme();
