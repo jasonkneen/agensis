@@ -779,6 +779,7 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     hideWorkspace,
     restoreWorkspace,
     moveWorkspace,
+    reorderWorkspace,
   } = useWorkspaceRailPrefs(workspaces);
   const {
     connections: nostrConnections,
@@ -2442,6 +2443,7 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
             onSelectWorkspace={setActiveWorkspaceId}
             onRenameWorkspace={handleRenameWorkspace}
             onReorderWorkspace={moveWorkspace}
+            onReorderWorkspaceTo={reorderWorkspace}
             onHideWorkspace={hideWorkspace}
             hiddenWorkspaces={hiddenWorkspaces}
             onRestoreWorkspace={restoreWorkspace}

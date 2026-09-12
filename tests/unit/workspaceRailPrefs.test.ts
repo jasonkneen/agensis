@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addHidden,
   moveInOrder,
+  moveRelativeTo,
   orderWorkspaces,
   parseIdList,
   partitionWorkspaceRail,
@@ -115,6 +116,50 @@ describe('moveInOrder', () => {
   it('returns a new array, not the input', () => {
     const input = ['a', 'b'];
     expect(moveInOrder(input, 'a', 'up')).not.toBe(input);
+  });
+});
+
+describe('moveRelativeTo (drag-and-drop)', () => {
+  it('drops before a later tile', () => {
+    expect(moveRelativeTo(['a', 'b', 'c', 'd'], 'a', 'c', 'before')).toEqual(['b', 'a', 'c', 'd']);
+  });
+
+  it('drops after a later tile', () => {
+    expect(moveRelativeTo(['a', 'b', 'c', 'd'], 'a', 'c', 'after')).toEqual(['b', 'c', 'a', 'd']);
+  });
+
+  it('drops after the last tile (moves to the end)', () => {
+    expect(moveRelativeTo(['a', 'b', 'c'], 'a', 'c', 'after')).toEqual(['b', 'c', 'a']);
+  });
+
+  it('drops before the first tile (moves to the front)', () => {
+    expect(moveRelativeTo(['a', 'b', 'c'], 'c', 'a', 'before')).toEqual(['c', 'a', 'b']);
+  });
+
+  it('drags a later tile up, before an earlier one', () => {
+    expect(moveRelativeTo(['a', 'b', 'c', 'd'], 'd', 'b', 'before')).toEqual(['a', 'd', 'b', 'c']);
+  });
+
+  it('is a no-op when dropped on itself', () => {
+    expect(moveRelativeTo(['a', 'b', 'c'], 'b', 'b', 'before')).toEqual(['a', 'b', 'c']);
+  });
+
+  it('is a no-op for an unknown dragged id', () => {
+    expect(moveRelativeTo(['a', 'b'], 'zz', 'a', 'before')).toEqual(['a', 'b']);
+  });
+
+  it('is a no-op for an unknown target id', () => {
+    expect(moveRelativeTo(['a', 'b'], 'a', 'zz', 'before')).toEqual(['a', 'b']);
+  });
+
+  it('returns a new array, not the input', () => {
+    const input = ['a', 'b', 'c'];
+    expect(moveRelativeTo(input, 'a', 'c', 'after')).not.toBe(input);
+  });
+
+  it('preserves length and membership (no drop/dupe)', () => {
+    const out = moveRelativeTo(['a', 'b', 'c', 'd'], 'b', 'd', 'after');
+    expect([...out].sort()).toEqual(['a', 'b', 'c', 'd']);
   });
 });
 

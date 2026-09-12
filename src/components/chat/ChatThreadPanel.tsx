@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Bot, Check, CornerDownRight, Pencil, Send, Trash2, User, X } from 'lucide-react';
+import { Bot, Check, CornerDownRight, Paperclip, Pencil, Send, Trash2, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { ThreadWorkBadge } from './AgentWorkBadge';
 import { AgentAvatar } from '../agents/AgentAvatar';
@@ -21,10 +21,12 @@ import { usePermissionRequests } from '../../hooks/usePermissionRequests';
 import { resolvePermissionRequest } from './permissionRequests';
 import { EMPTY_STREAM_RESPONSE } from '../../lib/chatStream';
 import { validAgentAccentColor } from '../../lib/agentAccent';
-import type { Document, Message as ChatMessage, WorkspaceAgent } from '../../types';
+import type { Document, Message as ChatMessage, MessageAttachment, UploadedFile, WorkspaceAgent } from '../../types';
 import { Button } from '@agensis/ui/components/button';
 import { Checkbox } from '@agensis/ui/components/checkbox';
 import { clipToBlockBoundary } from '../../lib/threadParentPreview';
+import { FileChip, buildFileContext, linkedUploadedFile, type LinkedFile } from './ComposerAddContent';
+import { buildMessageAttachments } from '../../lib/messageAttachments';
 
 /** Roughly how much of the thread parent to show before offering "Show more". */
 const PARENT_PREVIEW_CHARS = 220;
@@ -38,6 +40,7 @@ import {
 import {
   InputGroup,
   InputGroupAddon,
+  InputGroupButton,
   InputGroupTextarea,
 } from '@agensis/ui/components/input-group';
 import {
@@ -73,7 +76,13 @@ interface ChatThreadPanelProps {
  streaming: boolean;
   resolveMessageAccent?: (message: ChatMessage) => string;
   // May resolve `{ delivered: false }` — the reply was rejected and rolled back.
-  onSendReply?: (content: string, broadcastToChannel?: boolean) => void | Promise<SendOutcome | void>;
+  onSendReply?: (content: string, broadcastToChannel?: boolean, attachments?: MessageAttachment[]) => void | Promise<SendOutcome | void>;
+  /**
+   * Uploads picked/dropped files and returns their stored rows. Omit to hide the
+   * attach affordance entirely — same contract as the main and sub-thread
+   * composers, whose upload path this reuses.
+   */
+  onUploadFiles?: (files: File[]) => Promise<UploadedFile[]>;
   onAgentProfile?: (agentIdOrHandle: string) => void;
   onClose: () => void;
   embedded?: boolean;
@@ -93,6 +102,7 @@ export function ChatThreadPanel({
  streaming,
   resolveMessageAccent,
   onSendReply,
+  onUploadFiles,
   onAgentProfile,
   onClose,
   embedded = false,
@@ -103,7 +113,14 @@ export function ChatThreadPanel({
   readOnly = false,
 }: ChatThreadPanelProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const m = useComposerMentions({ agents, documents, workspaceId, inputRef });
+  // Uploaded-file references pending on this reply. Mirrors the sub-thread and
+  // main composers exactly — upload on pick/drop, carry the returned rows here,
+  // then fold them into the reply as a [Linked files] block + structured
+  // `attachments` so the thread renders the same thumbnails the channel does.
+  const [linkedFiles, setLinkedFiles] = useState<LinkedFile[]>([]);
+  const [uploadStatus, setUploadStatus] = useState('');
   const [autoScroll, setAutoScroll] = useState(true);
   // "Send to channel": a thread reply stays in the thread but is ALSO shown in
   // the channel. Off by default — a thread exists
@@ -190,22 +207,77 @@ export function ChatThreadPanel({
   // a turn running in the channel does not mark thread replies as queued.
   const panelWork = useThreadWork(parentMessage.id || null);
 
+  const uploadAndLink = async (files: File[]) => {
+    if (!files.length || !onUploadFiles) return;
+    setUploadStatus('Uploading…');
+    try {
+      const uploaded = await onUploadFiles(files);
+      setLinkedFiles(prev => {
+        const existing = new Set(prev.map(f => f.id));
+        const next = [...prev];
+        for (const f of uploaded) {
+          const linked = linkedUploadedFile(f);
+          if (!existing.has(linked.id)) next.push(linked);
+        }
+        return next;
+      });
+      setUploadStatus(uploaded.length > 0
+        ? `${uploaded.length} file${uploaded.length === 1 ? '' : 's'} attached`
+        : 'Upload failed');
+    } catch {
+      setUploadStatus('Upload failed');
+    } finally {
+      inputRef.current?.focus();
+    }
+  };
+
+  const handleUploadSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    await uploadAndLink(files);
+  };
+
+  const handleComposerDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (!files.length || !onUploadFiles) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void uploadAndLink(files);
+  };
+
+  const handleComposerDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!onUploadFiles || !event.dataTransfer?.types.includes('Files')) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   const handleSend = async () => {
     if (readOnly || streaming || !onSendReply) return;
-    const content = m.buildContent();
-    if (!content) return;
+    let content = m.buildContent();
+    // A reply that is nothing but attachments is legitimate — the file context
+    // block below becomes the body — so only bail when there is truly nothing.
+    if (!content && linkedFiles.length === 0) return;
+    if (linkedFiles.length > 0) {
+      const fileContext = buildFileContext(linkedFiles);
+      content = content ? `${fileContext}\n\n${content}` : fileContext;
+    }
     // Same contract as the channel composer: clear now, but keep the draft so a
     // rejected reply can be handed back rather than lost.
     const draft = m.snapshot();
     const previousBroadcast = broadcastToChannel;
+    const previousFiles = linkedFiles;
+    const attachments = buildMessageAttachments(linkedFiles);
     m.clear();
     setBroadcastToChannel(false);
+    setLinkedFiles([]);
+    setUploadStatus('');
     inputRef.current?.focus();
 
-    const outcome = await onSendReply(content, previousBroadcast);
+    const outcome = await onSendReply(content, previousBroadcast, attachments);
     if (outcome && outcome.delivered === false) {
       m.restore(draft);
       setBroadcastToChannel(previousBroadcast);
+      setLinkedFiles(previousFiles);
       inputRef.current?.focus();
     }
   };
@@ -320,7 +392,18 @@ export function ChatThreadPanel({
       </MessageScrollerProvider>
 
       {!readOnly && <div className={`${COMPOSER_SHELL_CLASS} shrink-0`}>
-        <div className="relative">
+        {linkedFiles.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {linkedFiles.map(file => (
+              <FileChip
+                key={file.id}
+                name={file.name}
+                onRemove={() => setLinkedFiles(prev => prev.filter(item => item.id !== file.id))}
+              />
+            ))}
+          </div>
+        )}
+        <div className="relative" onDrop={handleComposerDrop} onDragOver={handleComposerDragOver}>
           <ComposerMentionPicker m={m} />
           <ComposerMentionChips m={m} />
           <InputGroup className="h-auto flex-col items-stretch">
@@ -346,6 +429,17 @@ export function ChatThreadPanel({
             />
             <InputGroupAddon align="block-end" className={COMPOSER_ADDON_CLASS}>
               <div className="flex min-w-0 items-center gap-2">
+                {onUploadFiles && (
+                  <InputGroupButton
+                    size="icon-xs"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={streaming}
+                    aria-label="Attach images or files"
+                    title="Attach images or files"
+                  >
+                    <Paperclip />
+                  </InputGroupButton>
+                )}
                 <label className="flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
                   <Checkbox
                     checked={broadcastToChannel}
@@ -355,18 +449,30 @@ export function ChatThreadPanel({
                   />
                   <span className="truncate">Send to channel</span>
                 </label>
+                {uploadStatus && (
+                  <span className="truncate text-2xs text-muted-foreground" role="status">{uploadStatus}</span>
+                )}
               </div>
               <Button
                 type="button"
                 size="icon-sm"
                 onClick={handleSend}
-                disabled={(!m.input.trim() && m.mentionedAgents.length === 0) || streaming}
+                disabled={(!m.input.trim() && m.mentionedAgents.length === 0 && linkedFiles.length === 0) || streaming}
                 aria-label="Send reply"
               >
                 {streaming ? <Spinner /> : <Send />}
               </Button>
             </InputGroupAddon>
           </InputGroup>
+          {onUploadFiles && (
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleUploadSelection}
+            />
+          )}
         </div>
       </div>}
     </aside>

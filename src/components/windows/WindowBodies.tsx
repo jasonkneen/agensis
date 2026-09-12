@@ -102,9 +102,9 @@ export function ChatWindowBody({
   );
 
   const handleSendThreadReply = useCallback(
-    (content: string, broadcastToChannel?: boolean) => {
+    (content: string, broadcastToChannel?: boolean, attachments?: MessageAttachment[]) => {
       if (winSession && !isActiveSession) onSetActiveSession(winSession);
-      return onAppSendMessage(content, 'auto', memoryFacts, undefined, activeThreadId, winSession || null, broadcastToChannel);
+      return onAppSendMessage(content, 'auto', memoryFacts, undefined, activeThreadId, winSession || null, broadcastToChannel, attachments);
     },
     [winSession, isActiveSession, onSetActiveSession, onAppSendMessage, memoryFacts, activeThreadId],
   );
