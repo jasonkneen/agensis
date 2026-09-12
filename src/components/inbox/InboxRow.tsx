@@ -221,7 +221,7 @@ export const InboxRow = React.memo(function InboxRow({
                 // of running past the pane edge and being cut off mid-token.
                 'mt-1.5 line-clamp-2 break-words leading-snug',
                 TEXT_BODY,
-                unread ? 'font-semibold text-foreground' : 'font-normal text-muted-foreground',
+                unread ? 'font-normal text-foreground' : 'font-normal text-muted-foreground',
               )}
             >
               {preview}

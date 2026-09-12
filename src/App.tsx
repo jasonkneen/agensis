@@ -116,6 +116,9 @@ import { useWorkspaceRailPrefs } from './hooks/useWorkspaceRailPrefs';
 import { useDocuments } from './hooks/useDocuments';
 import { useChat, type SendMessageResult } from './hooks/useChat';
 import { useWorkspaceBootstrap } from './hooks/useWorkspaceBootstrap';
+import { PickerProvider } from './providers/PickerProvider';
+import type { MarkupAgent } from './components/chat/MarkupToolbarControl';
+import { buildPickContext, type ElementPick } from './lib/componentPicker';
 import { useSubThreads } from './hooks/useSubThreads';
 import { useSessionMessages } from './hooks/useSessionMessages';
 import { useUserProfile } from './hooks/useUserProfile';
@@ -2032,6 +2035,74 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     });
   }, [sessions, createSession, escalateSessionToChannel, sendMessage, handleSessionOpen, openWindow, activeLayerId, user?.id, logEvent]);
 
+  // The global (title-bar) element picker's send target. Out here there is no
+  // channel in context, so — like the hand-off flow above — open or reuse the
+  // chosen agent's DM and post the pick context into it (which also wakes the
+  // agent to respond). Throws on failure so the picker restores the marks.
+  const globalPickerAgents = useMemo<MarkupAgent[]>(() => agents
+    .filter(a => (a.handle || '').trim())
+    .map(a => ({ id: a.id, handle: (a.handle || '').replace(/^@+/, ''), name: a.name, avatar: a.avatar })),
+  [agents]);
+
+  const handleSendGlobalPicks = useCallback(async (handle: string, picks: ElementPick[]) => {
+    const normalized = handle.trim().replace(/^@+/, '');
+    if (!normalized || picks.length === 0) return;
+    const agent = agents.find(a => (a.handle || '').replace(/^@+/, '') === normalized);
+    const title = agent?.name?.trim() || `@${normalized}`;
+    const agentId = agent?.id || null;
+
+    let target = sessions.find(session => !session.archived_at && isDirectSessionForAgent(session, agentId, normalized));
+    if (!target) {
+      const participant: ChannelParticipant = {
+        id: agentId ? `agent:${agentId}` : `agent:${normalized}`,
+        kind: 'agent',
+        name: title,
+        handle: normalized,
+        agent_id: agentId,
+        user_id: null,
+        status: null,
+        direct: true,
+        added_at: new Date().toISOString(),
+      };
+      const { session, failure } = await createSession('auto', {
+        title,
+        folder: 'Direct messages',
+        conversation_mode: 'auto',
+        participants: [participant],
+      });
+      if (!session) {
+        reportWriteFailure(`open a conversation with ${title}`, failure);
+        throw new Error('picker-session-create-failed');
+      }
+      target = session;
+    }
+
+    const outcome = await sendMessage(
+      buildPickContext(picks),
+      'auto',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      null,
+      target,
+    );
+
+    // A queued/offline or workspace-unavailable write returns `delivered: false`
+    // WITHOUT throwing. Surface it (so the failure is observable, not silent)
+    // and hand the outcome back so the picker restores the marks instead of
+    // losing them.
+    if (!outcome.delivered) {
+      reportWriteFailure(`send the picked elements to ${title}`, outcome.failure);
+      return outcome;
+    }
+
+    setActiveSession(target);
+    handleSessionOpen(target);
+    openWindow('chat', { title, sessionId: target.id, canvasId: activeLayerId, ownerUserId: user?.id });
+    return outcome;
+  }, [agents, sessions, createSession, sendMessage, setActiveSession, handleSessionOpen, openWindow, activeLayerId, user?.id]);
+
   const handleMergeThread = useCallback(async (fork: ChatSession) => {
     const pending = toast.loading(`Merging “${fork.title || 'split'}” into its parent…`);
     const result = await mergeSession(fork);
@@ -2412,6 +2483,7 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
           signed-in branch because the messages are addressed to this account —
           there is nothing to fetch for a logged-out visitor. */}
       <OwnerMessageProvider userId={user.id}>
+      <PickerProvider agents={globalPickerAgents} onSendToAgent={handleSendGlobalPicks}>
       <div className="relative flex h-screen overflow-hidden bg-background">
         <img
           src={workspaceBackdropImage}
@@ -3009,6 +3081,7 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
           waiting; closing it is the server-side dismissal. */}
       <OwnerMessageDialog />
       <Toaster />
+      </PickerProvider>
       </OwnerMessageProvider>
     </TooltipProvider>
   );

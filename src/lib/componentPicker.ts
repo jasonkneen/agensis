@@ -131,6 +131,9 @@ export function describeElement(el: Element): Pick<ElementPick, 'label' | 'selec
   };
 }
 
+/** The label line marker at the top of the block and each pick. */
+const PICK_BLOCK_HEADER = '[Picked elements]';
+
 /** Fold picks into the message body — the only way the agent learns about them. */
 export function buildPickContext(picks: ElementPick[]): string {
   if (picks.length === 0) return '';
@@ -140,8 +143,102 @@ export function buildPickContext(picks: ElementPick[]): string {
     let line = bits.join(' ');
     if (p.text) line += ` — "${p.text}"`;
     line += `\n    selector: ${p.selector}`;
-    if (p.note.trim()) line += `\n    note: ${p.note.trim()}`;
+    if (p.note.trim()) {
+      // The note comes from a multi-row textarea and may span several lines.
+      // Emit the first line after `note:` and indent EVERY continuation line by
+      // the same 4 spaces — including blank ones, which become a 4-space line.
+      // That guarantees the block never contains a "\n\n", so the block/body
+      // seam below stays unambiguous and parsePickContext can rejoin the note.
+      const noteLines = p.note.trim().split('\n');
+      line += `\n    note: ${noteLines[0]}`;
+      for (const cont of noteLines.slice(1)) line += `\n    ${cont}`;
+    }
     return line;
   });
-  return ['[Picked elements]', ...lines].join('\n');
+  return [PICK_BLOCK_HEADER, ...lines].join('\n');
+}
+
+/** A pick recovered from a stored message body — the display counterpart to the
+ *  full ElementPick the composer holds. Only the fields we render survive the
+ *  round-trip through text (no id, rect or React fiber). */
+export type ParsedPick = {
+  index: number;
+  label: string;
+  component?: string;
+  text?: string;
+  selector?: string;
+  note?: string;
+};
+
+/**
+ * The inverse of buildPickContext, for the message renderer. A picked-element
+ * message is stored as the labelled block, then a blank line, then whatever the
+ * human actually typed:
+ *
+ *   [Picked elements]
+ *   [#1] SendButton (Button) — "Send"
+ *       selector: [data-testid="send"]
+ *       note: make this bigger
+ *
+ *   the actual message text
+ *
+ * Returns the parsed picks and the remaining body so the renderer can draw the
+ * picks as cards and hand the rest to markdown. When the content is not a picked
+ * block at all, `picks` is empty and `body` is the content unchanged — every
+ * ordinary message flows through untouched.
+ */
+export function parsePickContext(content: string): { picks: ParsedPick[]; body: string } {
+  if (!content.startsWith(PICK_BLOCK_HEADER)) return { picks: [], body: content };
+
+  // The composer joins the block to the body with exactly one blank line; the
+  // block itself only ever uses single newlines, so the first "\n\n" is the
+  // seam. Absent a body (a message that is only picks), everything is block.
+  const seam = content.indexOf('\n\n');
+  const blockText = seam === -1 ? content : content.slice(0, seam);
+  const body = seam === -1 ? '' : content.slice(seam + 2);
+
+  const picks: ParsedPick[] = [];
+  let current: ParsedPick | null = null;
+  // Once a `note:` field opens, following indented lines that are not another
+  // recognised field are continuation lines of that (multiline) note.
+  let noteOpen = false;
+  for (const line of blockText.split('\n')) {
+    const head = /^\[#(\d+)\]\s+(.*)$/.exec(line);
+    if (head) {
+      current = { index: Number(head[1]), ...parsePickLabel(head[2]) };
+      picks.push(current);
+      noteOpen = false;
+      continue;
+    }
+    if (!current) continue; // the [Picked elements] header line, or stray text
+    const selector = /^\s+selector:\s*(.*)$/.exec(line);
+    if (selector) { current.selector = selector[1]; noteOpen = false; continue; }
+    const note = /^\s+note:\s*(.*)$/.exec(line);
+    if (note) { current.note = note[1]; noteOpen = true; continue; }
+    if (noteOpen) {
+      // Continuation of a multiline note — strip the 4-space indent that
+      // buildPickContext added and rejoin with the newline it replaced.
+      current.note = `${current.note ?? ''}\n${line.replace(/^ {4}/, '')}`;
+      continue;
+    }
+  }
+  return { picks, body };
+}
+
+/** Split a pick's label line — `Label (Component) — "text"` — into its parts. */
+function parsePickLabel(rest: string): { label: string; component?: string; text?: string } {
+  let working = rest;
+  let text: string | undefined;
+  const textMatch = / — "(.*)"$/.exec(working);
+  if (textMatch) {
+    text = textMatch[1];
+    working = working.slice(0, textMatch.index);
+  }
+  let component: string | undefined;
+  const compMatch = /\s+\(([^)]*)\)$/.exec(working);
+  if (compMatch) {
+    component = compMatch[1];
+    working = working.slice(0, compMatch.index);
+  }
+  return { label: working.trim(), component, text };
 }

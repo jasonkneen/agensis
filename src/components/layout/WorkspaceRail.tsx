@@ -8,15 +8,11 @@ import {
   ContextMenuItem,
   ContextMenuLabel,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@agensis/ui/components/context-menu';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from '@agensis/ui/components/dropdown-menu';
 import { cn } from '@/lib/utils';
 import {
   buildWorkspaceRail,
@@ -270,6 +266,8 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
       position={tile.isSystem ? null : position}
       onReorder={tile.isSystem ? undefined : onReorderWorkspace}
       onHide={tile.isSystem ? undefined : onHideWorkspace}
+      hiddenWorkspaces={hiddenWorkspaces}
+      onRestore={onRestoreWorkspace}
     />
   );
 
@@ -381,72 +379,36 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
                 data-workspace-rail-create
                 onClick={onCreateWorkspace}
                 disabled={loading}
-                aria-label="Create workspace"
+                aria-label="Add new workspace"
                 className={cn(
-                  // Same literal radius as a tile — see WorkspaceRow — so the
-                  // "add one of these" button is the same shape as the things it adds.
-                  'flex h-9 items-center rounded-[11px] border border-dashed border-border text-muted-foreground transition-colors',
-                  'hover:border-foreground/40 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                  expanded ? 'w-full gap-2 px-2.5' : 'mx-auto w-9 justify-center',
+                  // Mirrors a WorkspaceRow — a tile-shaped glyph then a label — so
+                  // "add one of these" reads as one more entry in the same list
+                  // rather than a differently-shaped control bolted underneath.
+                  'group relative flex h-9 shrink-0 items-center rounded-lg text-muted-foreground transition-colors',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  expanded ? 'min-w-0 flex-1 gap-2 pr-2 text-left hover:bg-muted/40 hover:text-foreground' : 'mx-auto w-9 justify-center',
                 )}
               >
-                <Plus className="size-4 shrink-0" />
-                {expanded && <span className="truncate text-[13px]">New workspace</span>}
+                {/* The "+" sits in the same 36px rounded square a workspace tile
+                    uses (WorkspaceRow's swatch), dashed so it reads as an empty
+                    slot to fill rather than an existing workspace's identity. */}
+                <span
+                  aria-hidden="true"
+                  className="flex size-9 shrink-0 items-center justify-center rounded-[11px] border border-dashed border-border transition-all duration-150 group-hover:rounded-[7px] group-hover:border-foreground/40"
+                >
+                  <Plus className="size-4" />
+                </span>
+                {expanded && <span className="min-w-0 flex-1 truncate text-[13px] tracking-tight">Add new</span>}
               </button>
             </TooltipTrigger>
             {/* Redundant once the button says what it does. */}
             {!expanded && <TooltipContent side="right">Create workspace</TooltipContent>}
           </Tooltip>
         </div>
-
-        {/* Restore list for workspaces the user removed from their sidebar. It
-            appears only when there is something to add back — an empty menu
-            would be a permanent dead control. This is the "workspace screen" the
-            hide action promises: a menu of hidden tiles, each re-added on click.
-            Placed with the "+" (inside the scroll body) because both are
-            list-management, not the admin footer below. */}
-        {hiddenWorkspaces && hiddenWorkspaces.length > 0 && onRestoreWorkspace && (
-          <div className="w-full shrink-0 px-2 pt-0.5">
-            <DropdownMenu>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      data-workspace-rail-hidden
-                      aria-label={`Hidden workspaces (${hiddenWorkspaces.length})`}
-                      className={cn(
-                        'flex h-9 items-center rounded-[11px] border border-transparent text-muted-foreground transition-colors',
-                        'hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                        expanded ? 'w-full gap-2 px-2.5' : 'mx-auto w-9 justify-center',
-                      )}
-                    >
-                      <EyeOff className="size-4 shrink-0" />
-                      {expanded && (
-                        <span className="truncate text-[13px]">Hidden · {hiddenWorkspaces.length}</span>
-                      )}
-                    </button>
-                  </DropdownMenuTrigger>
-                </TooltipTrigger>
-                {!expanded && (
-                  <TooltipContent side="right">Hidden workspaces · {hiddenWorkspaces.length}</TooltipContent>
-                )}
-              </Tooltip>
-              <DropdownMenuContent side="right" align="end" className="max-h-80 overflow-y-auto">
-                <DropdownMenuLabel>Add back to sidebar</DropdownMenuLabel>
-                {hiddenWorkspaces.map(workspace => (
-                  <DropdownMenuItem
-                    key={workspace.id}
-                    onSelect={() => onRestoreWorkspace(workspace.id)}
-                  >
-                    <RotateCcw data-icon="inline-start" />
-                    {String(workspace.name ?? '').trim() || 'Untitled workspace'}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        )}
+        {/* The restore list for hidden workspaces now lives in the right-click
+            menu on any workspace tile (see WorkspaceRow) rather than as a
+            standing button here — hiding is a right-click action, so unhiding
+            belongs on the same menu instead of a permanent row in the rail. */}
       </div>
 
       {/* Tenants — the owner-only admin surface, above "+". Rendering is gated
@@ -510,6 +472,8 @@ function WorkspaceRow({
   position,
   onReorder,
   onHide,
+  hiddenWorkspaces,
+  onRestore,
 }: {
   tile: WorkspaceRailTile;
   expanded: boolean;
@@ -521,6 +485,9 @@ function WorkspaceRow({
   position?: { index: number; total: number } | null;
   onReorder?: (workspaceId: string, direction: 'up' | 'down') => void;
   onHide?: (workspaceId: string) => void;
+  /** Rail-global hidden list, surfaced as a restore submenu on every tile's menu. */
+  hiddenWorkspaces?: readonly WorkspaceRailSource[];
+  onRestore?: (workspaceId: string) => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const button = (
@@ -639,7 +606,8 @@ function WorkspaceRow({
   const canMoveUp = Boolean(onReorder && position && position.index > 0);
   const canMoveDown = Boolean(onReorder && position && position.index < position.total - 1);
   const canHide = Boolean(onHide && !tile.active);
-  const hasMenu = Boolean(onRename || onReorder || onHide);
+  const canRestore = Boolean(onRestore && hiddenWorkspaces && hiddenWorkspaces.length > 0);
+  const hasMenu = Boolean(onRename || onReorder || onHide || canRestore);
   if (!hasMenu) return row;
 
   return (
@@ -682,6 +650,32 @@ function WorkspaceRow({
               <EyeOff data-icon="inline-start" />
               Remove from sidebar
             </ContextMenuItem>
+          </>
+        )}
+        {/* The former "Hidden · N" rail button, moved here: a submenu of every
+            workspace the user has hidden, each re-added to the sidebar on click.
+            Rail-global, so it shows the same list on whichever tile is clicked. */}
+        {canRestore && onRestore && hiddenWorkspaces && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <RotateCcw data-icon="inline-start" />
+                Hidden workspaces · {hiddenWorkspaces.length}
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="max-h-80 w-52 overflow-y-auto">
+                <ContextMenuLabel>Add back to sidebar</ContextMenuLabel>
+                {hiddenWorkspaces.map(workspace => (
+                  <ContextMenuItem
+                    key={workspace.id}
+                    onSelect={() => onRestore(workspace.id)}
+                  >
+                    <RotateCcw data-icon="inline-start" />
+                    {String(workspace.name ?? '').trim() || 'Untitled workspace'}
+                  </ContextMenuItem>
+                ))}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
           </>
         )}
       </ContextMenuContent>

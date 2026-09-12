@@ -9,6 +9,10 @@ import {
 import { cn } from '@/lib/utils';
 import type { FloatingWindow } from '../../types';
 import { GROUP_FRAME_PADDING, GROUP_HEADER_HEIGHT, type GroupBounds } from '../../lib/windowGroups';
+// A grouped window has no per-pane title bar — the group frame owns the only
+// header — so the element picker's trigger must live here too, or it is missing
+// on every tiled window. Renders null unless a PickerProvider is mounted.
+import { GlobalPickerTitlebarControl } from '../../providers/PickerProvider';
 
 interface WindowGroupFrameProps {
   groupId: string;
@@ -77,6 +81,10 @@ export function WindowGroupFrame({
         </span>
 
         <div className="flex shrink-0 flex-nowrap items-center gap-1">
+          {/* Element picker — same control the ungrouped shell renders, so a
+              tiled group is not the one place you cannot point at the screen.
+              Sits left of the "..." menu. */}
+          <GlobalPickerTitlebarControl className="mr-0.5" />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button type="button" variant="outline" size="icon-xs" aria-label="Group actions">

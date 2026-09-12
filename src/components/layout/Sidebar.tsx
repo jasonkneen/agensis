@@ -1780,7 +1780,7 @@ function ActionTile({
    <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">{icon}</span>
    <span className="sidebar-action-label min-w-0 truncate text-left">{label}</span>
    {typeof count === 'number' && count > 0 && (
-    <span className="sidebar-action-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-3xs font-bold leading-none text-primary-foreground">
+    <span className="sidebar-action-count min-w-[1.25rem] rounded-md bg-primary px-1.5 py-0.5 text-center text-3xs font-bold leading-none text-primary-foreground">
      {formatCount(count)}
     </span>
    )}
@@ -1837,7 +1837,7 @@ function SidebarSection({
       <ChevronRight className={`sidebar-section-chevron size-3 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
       <span className="sidebar-section-label min-w-0 truncate text-left">{label}</span>
       {!hasAction && count > 0 && (
-       <span className="sidebar-section-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-3xs font-bold leading-none text-primary-foreground">
+       <span className="sidebar-section-count min-w-[1.25rem] rounded-md bg-primary px-1.5 py-0.5 text-center text-3xs font-bold leading-none text-primary-foreground">
         {formatCount(count)}
        </span>
       )}
@@ -1909,7 +1909,7 @@ function SidebarFolderGroup({
       <span className="size-4 shrink-0">{icon || <Folder className="size-4" />}</span>
       <span className="sidebar-section-label min-w-0 flex-1 truncate text-left">{label}</span>
       {count > 0 && (
-       <span className="sidebar-section-count min-w-[1.25rem] rounded-full bg-primary px-1.5 py-0.5 text-center text-3xs font-bold leading-none text-primary-foreground">
+       <span className="sidebar-section-count min-w-[1.25rem] rounded-md bg-primary px-1.5 py-0.5 text-center text-3xs font-bold leading-none text-primary-foreground">
         {formatCount(count)}
        </span>
       )}
