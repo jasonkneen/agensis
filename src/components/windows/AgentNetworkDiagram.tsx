@@ -399,38 +399,41 @@ export function AgentNetworkDiagram({
       onKeyDown={onKeyDown}
       className="relative flex h-full flex-col outline-none"
     >
-      {/* Breadcrumb — the path, and the way back out of it. */}
-      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5 text-3xs"
-        style={{ fontFamily: MONO }}>
-        {path.length > 0 && (
+      {/* Breadcrumb — the path, and the way back out of it. Hidden at the top
+          level (path.length === 0), where it would only echo the workspace name
+          and an "AGENTS" hint: no navigation to offer, just wasted height. It
+          returns the moment you drill in, carrying the back button and path. */}
+      {path.length > 0 && (
+        <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5 text-3xs"
+          style={{ fontFamily: MONO }}>
           <Button type="button" size="icon-sm" variant="ghost" onClick={() => goTo(drillOut(path))}
             aria-label="Back one level" title="Back one level (Esc)">
             <CornerLeftUp size={13} />
           </Button>
-        )}
-        <nav aria-label="Network path" className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5">
-          {view.breadcrumb.map((crumb, index) => (
-            <span key={crumb.id} className="flex items-center gap-0.5">
-              {index > 0 && <ChevronRight size={11} className="shrink-0 text-muted-foreground/40" />}
-              <button
-                type="button"
-                onClick={() => goTo(crumbPath(path, crumb.depth))}
-                disabled={crumb.depth === path.length}
-                className="max-w-[160px] truncate rounded px-1 py-0.5 tracking-wide text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-default disabled:font-semibold disabled:text-foreground disabled:hover:bg-transparent"
-              >
-                {crumb.label}
-              </button>
-            </span>
-          ))}
-        </nav>
-        <span className="shrink-0 tracking-widest text-muted-foreground/50">{LEVEL_HINT[view.level]}</span>
-        {centerAgentId && onSelectAgent && (
-          <Button type="button" size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-3xs"
-            onClick={() => onSelectAgent(centerAgentId)}>
-            Open agent
-          </Button>
-        )}
-      </div>
+          <nav aria-label="Network path" className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5">
+            {view.breadcrumb.map((crumb, index) => (
+              <span key={crumb.id} className="flex items-center gap-0.5">
+                {index > 0 && <ChevronRight size={11} className="shrink-0 text-muted-foreground/40" />}
+                <button
+                  type="button"
+                  onClick={() => goTo(crumbPath(path, crumb.depth))}
+                  disabled={crumb.depth === path.length}
+                  className="max-w-[160px] truncate rounded px-1 py-0.5 tracking-wide text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-default disabled:font-semibold disabled:text-foreground disabled:hover:bg-transparent"
+                >
+                  {crumb.label}
+                </button>
+              </span>
+            ))}
+          </nav>
+          <span className="shrink-0 tracking-widest text-muted-foreground/50">{LEVEL_HINT[view.level]}</span>
+          {centerAgentId && onSelectAgent && (
+            <Button type="button" size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-3xs"
+              onClick={() => onSelectAgent(centerAgentId)}>
+              Open agent
+            </Button>
+          )}
+        </div>
+      )}
 
       <div ref={attachPane} className="min-h-0 flex-1 overflow-hidden">
         <svg viewBox={`${box.x} ${box.y} ${box.width} ${box.height}`} className="size-full" role="img"
