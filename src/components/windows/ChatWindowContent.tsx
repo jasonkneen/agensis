@@ -1881,6 +1881,13 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
     if (sidePanel === 'sub-thread') onCloseSubThread?.();
     setSidePanel(null);
   };
+
+  // Below this shell width the channel-nav labels (Messages / Files / Threads /
+  // Huddle) collapse to their icons so the row fits without horizontal
+  // scrolling in a narrow floating window or a grouped pane. The text becomes a
+  // tooltip + aria-label, so the controls stay named for screen readers and on
+  // hover. 0 means "not measured yet" — don't collapse on the first paint.
+  const compactNav = shellWidth > 0 && shellWidth < 560;
   const beginPanelResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     const isThread = sidePanel === 'thread';
@@ -1963,13 +1970,13 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            <Button type="button" variant={sidePanel === null || sidePanel === 'thread' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel(null)}>
-              <MessageSquare data-icon="inline-start" />
-              Messages
+            <Button type="button" variant={sidePanel === null || sidePanel === 'thread' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel(null)} aria-label={compactNav ? 'Messages' : undefined} title={compactNav ? 'Messages' : undefined}>
+              <MessageSquare data-icon={compactNav ? undefined : 'inline-start'} />
+              {!compactNav && 'Messages'}
             </Button>
-            <Button type="button" variant={sidePanel === 'files' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel('files')}>
-              <Paperclip data-icon="inline-start" />
-              Files
+            <Button type="button" variant={sidePanel === 'files' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel('files')} aria-label={compactNav ? 'Files' : undefined} title={compactNav ? 'Files' : undefined}>
+              <Paperclip data-icon={compactNav ? undefined : 'inline-start'} />
+              {!compactNav && 'Files'}
             </Button>
             <Button
               type="button"
@@ -1977,11 +1984,13 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
               size="sm"
               className="h-8 px-2"
               onClick={() => setSidePanel(sidePanel === 'sub-threads' ? null : 'sub-threads')}
+              aria-label={compactNav ? 'Threads' : undefined}
+              title={compactNav ? 'Threads' : undefined}
             >
-              <GitBranch data-icon="inline-start" />
-              Threads
+              <GitBranch data-icon={compactNav ? undefined : 'inline-start'} />
+              {!compactNav && 'Threads'}
               {subThreadCount > 0 && (
-                <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium leading-none text-muted-foreground">
+                <span className={cn('rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium leading-none text-muted-foreground', !compactNav && 'ml-1')}>
                   {subThreadCount}
                 </span>
               )}
@@ -1992,6 +2001,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 sessionId={sessionId}
                 title={channelTitle}
                 agents={huddleAgents}
+                compact={compactNav}
               />
             )}
             <div className="min-w-2 flex-1" />
@@ -2002,11 +2012,36 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                     type="button"
                     variant="secondary"
                     size="sm"
-                    className="participant-count-chip h-8 gap-1 px-2"
+                    className="participant-count-chip h-8 gap-1.5 pr-2 pl-1"
                     title={`${participants.length} participant${participants.length === 1 ? '' : 's'}`}
                   >
-                    <Users data-icon="inline-start" />
-                    {participants.length}
+                    {/* Avatar stack instead of a generic person icon: show who is
+                        actually here (first few faces), then the total count. The
+                        full roster still lives in the dropdown below. Empty stack
+                        falls back to the count alone, so the chip never collapses. */}
+                    {participants.length > 0 && (
+                      <span className="flex -space-x-1.5">
+                        {participants.slice(0, 3).map(participant => (
+                          <span
+                            key={participant.id}
+                            className="relative grid size-5 shrink-0 place-items-center overflow-hidden rounded-md bg-muted text-3xs font-semibold ring-2 ring-secondary"
+                          >
+                            {participant.kind === 'agent' ? (
+                              <AgentAvatar
+                                avatar={agents.find(agent => agent.id === participant.agent_id || agent.handle === participant.handle)?.avatar}
+                                name={participant.name}
+                                initials={participant.name.slice(0, 2).toUpperCase()}
+                                className="size-5 rounded-md"
+                                fallbackClassName="bg-transparent text-3xs text-muted-foreground"
+                              />
+                            ) : (
+                              participant.name.slice(0, 2).toUpperCase()
+                            )}
+                          </span>
+                        ))}
+                      </span>
+                    )}
+                    <span className="text-xs font-medium tabular-nums">{participants.length}</span>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-64">

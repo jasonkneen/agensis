@@ -24,7 +24,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
-import type { AgentConnection, Task, TaskComment, TaskPriority, TaskStatus, UploadedFile, WorkspaceAgent } from '../../types';
+import type { AgentConnection, MessageAttachment, Task, TaskComment, TaskPriority, TaskStatus, UploadedFile, WorkspaceAgent } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { TASK_PANEL_WIDTH_KEY, clampTaskPanelWidth, readStoredTaskPanelWidth } from '../../lib/taskPanelWidth';
@@ -229,6 +229,11 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   const [newTitle, setNewTitle] = useState('');
   const [newPriority, setNewPriority] = useState<TaskPriority>('normal');
   const [newAssignee, setNewAssignee] = useState<string>('');
+  const [newAttachments, setNewAttachments] = useState<MessageAttachment[]>([]);
+  const [newAttachmentDragActive, setNewAttachmentDragActive] = useState(false);
+  const [newAttachmentUploading, setNewAttachmentUploading] = useState(false);
+  const newAttachmentInputRef = useRef<HTMLInputElement>(null);
+  const newAttachmentDragDepth = useRef(0);
   const [filter, setFilter] = usePersistedPreference(
     viewPreferenceKey('tasks.filter', workspaceId), ASSIGNMENT_FILTER_PREF, 'all' as AssignmentFilter,
   );
@@ -299,16 +304,72 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   }, [filteredTopLevel]);
 
   const handleAdd = () => {
-    if (!newTitle.trim()) return;
+    if (!newTitle.trim() || newAttachmentUploading) return;
     onCreateTask({
       title: newTitle.trim(),
       priority: newPriority,
       assignee_id: newAssignee || null,
       source_type: 'manual',
+      attachments: newAttachments.length > 0 ? newAttachments : null,
     });
     setNewTitle('');
     setNewPriority('normal');
     setNewAssignee('');
+    setNewAttachments([]);
+  };
+
+  const uploadNewAttachments = async (files: File[]) => {
+    if (!files.length || !onUploadFiles) return;
+    setNewAttachmentUploading(true);
+    try {
+      const uploaded = await onUploadFiles(files);
+      if (uploaded.length === 0) return;
+      setNewAttachments(current => parseMessageAttachments([
+        ...current,
+        ...uploaded.map(file => ({ id: file.id, name: file.name, type: file.type, size: file.size })),
+      ]));
+    } finally {
+      setNewAttachmentUploading(false);
+    }
+  };
+
+  const handleNewAttachmentDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+    if ((event.target as Element).closest('[data-testid="task-attachment-dropzone"]')) return;
+    if (!onUploadFiles || !event.dataTransfer?.types.includes('Files')) return;
+    event.preventDefault();
+    newAttachmentDragDepth.current += 1;
+    setNewAttachmentDragActive(true);
+  };
+
+  const handleNewAttachmentDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if ((event.target as Element).closest('[data-testid="task-attachment-dropzone"]')) return;
+    if (!onUploadFiles || !event.dataTransfer?.types.includes('Files')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleNewAttachmentDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    if ((event.target as Element).closest('[data-testid="task-attachment-dropzone"]')) return;
+    if (!onUploadFiles || !event.dataTransfer?.types.includes('Files')) return;
+    newAttachmentDragDepth.current = Math.max(0, newAttachmentDragDepth.current - 1);
+    if (newAttachmentDragDepth.current === 0) setNewAttachmentDragActive(false);
+  };
+
+  const handleNewAttachmentDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    if ((event.target as Element).closest('[data-testid="task-attachment-dropzone"]')) return;
+    if (!onUploadFiles) return;
+    const files = Array.from(event.dataTransfer?.files || []);
+    newAttachmentDragDepth.current = 0;
+    setNewAttachmentDragActive(false);
+    if (!files.length) return;
+    event.preventDefault();
+    void uploadNewAttachments(files);
+  };
+
+  const handleNewAttachmentFilePick = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    await uploadNewAttachments(files);
   };
 
   const memberLabel = (assigneeId: string | null) => {
@@ -397,7 +458,14 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   }, [focusRowId, effectiveFilter, effectiveHideDone, filteredTopLevel, onFocusTaskConsumed]);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
+    <div
+      className="relative flex h-full flex-col overflow-hidden bg-transparent text-foreground"
+      data-testid={onUploadFiles ? 'task-window-dropzone' : undefined}
+      onDragEnter={handleNewAttachmentDragEnter}
+      onDragOver={handleNewAttachmentDragOver}
+      onDragLeave={handleNewAttachmentDragLeave}
+      onDrop={handleNewAttachmentDrop}
+    >
       <div className="task-window-toolbar flex h-11 shrink-0 items-center gap-2 border-b border-border px-3 backdrop-blur-md">
         <ToggleGroup
           type="single"
@@ -440,7 +508,10 @@ export const TasksWindowContent = memo(function TasksWindowContent({
         <Badge variant="secondary">{openCount} open</Badge>
       </div>
 
-      <div className="shrink-0 border-b border-border bg-card/55 p-3 backdrop-blur-md">
+      <div className={cn(
+        'shrink-0 border-b border-border bg-card/55 p-3 backdrop-blur-md transition-colors',
+        newAttachmentDragActive && 'bg-primary/10 ring-1 ring-inset ring-primary',
+      )}>
         <div className="task-add-row gap-2">
           <div className="min-w-0">
             <Input
@@ -473,11 +544,48 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           >
             <AssigneeOptions members={members} agents={agents} />
           </NativeSelect>
-          <Button type="button" size="sm" onClick={handleAdd} disabled={!newTitle.trim()}>
+          {onUploadFiles && (
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              onClick={() => newAttachmentInputRef.current?.click()}
+              disabled={newAttachmentUploading}
+              aria-label="Attach files to new task"
+              title="Attach files to new task"
+            >
+              <Paperclip />
+            </Button>
+          )}
+          <Button type="button" size="sm" onClick={handleAdd} disabled={!newTitle.trim() || newAttachmentUploading}>
             <Plus data-icon="inline-start" />
             Add
           </Button>
         </div>
+        {onUploadFiles && (
+          <input
+            ref={newAttachmentInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={handleNewAttachmentFilePick}
+          />
+        )}
+        {(newAttachmentDragActive || newAttachmentUploading || newAttachments.length > 0) && (
+          <div className="mt-2 flex flex-col gap-1.5" data-testid="new-task-attachments">
+            {newAttachmentDragActive && (
+              <p className="text-xs font-medium text-primary">Drop to attach to the new task</p>
+            )}
+            {newAttachmentUploading && (
+              <p className="text-xs text-muted-foreground">Uploading attachments…</p>
+            )}
+            <MessageAttachmentList
+              attachments={newAttachments}
+              onRemove={attachment => setNewAttachments(current => current.filter(item => item.id !== attachment.id))}
+              className="mt-0"
+            />
+          </div>
+        )}
       </div>
 
       {view === 'list' ? (

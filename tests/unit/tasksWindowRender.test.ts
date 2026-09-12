@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { Task, UploadedFile } from '../../src/types';
 import { TasksWindowContent } from '../../src/components/windows/TasksWindowContent';
 import { countOpenTasks } from '../../src/components/windows/taskSchedule';
+import type { CreateTaskInput } from '../../src/hooks/useTasks';
 
 // The task window is the part of this feature a human has to LOOK at to judge,
 // so this file asserts what it actually renders in a DOM:
@@ -78,6 +79,7 @@ type RenderOptions = {
   onFocusTaskConsumed?: () => void;
   workspaceId?: string;
   onUploadFiles?: (files: File[]) => Promise<UploadedFile[]>;
+  onCreateTask?: (input: CreateTaskInput) => void;
 };
 
 function render(tasks: Task[], updates: Update[] = [], options: RenderOptions = {}) {
@@ -732,7 +734,7 @@ describe('task editor: attachments', () => {
   }
 
   function fileInput() {
-    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    const input = container.querySelector<HTMLInputElement>('[data-testid="task-attachment-dropzone"] input[type="file"]');
     if (!input) throw new Error('no attachment file input');
     return input;
   }
@@ -853,6 +855,81 @@ describe('task editor: attachments', () => {
     expandFirstRow();
     expect(container.querySelectorAll('[onerror]')).toHaveLength(0);
     expect(container.textContent).toContain('<img src=x onerror=alert(1)>.pdf');
+  });
+});
+
+describe('new task composer: attachments', () => {
+  function dropEvent(files: File[]) {
+    const event = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: { files, types: ['Files'] } });
+    return event;
+  }
+
+  it('accepts a file dropped anywhere in the Tasks window and shows it on the add bar', async () => {
+    const uploaded: UploadedFile = {
+      id: 'new-file-1',
+      workspace_id: 'ws-1',
+      name: 'brief.pdf',
+      type: 'application/pdf',
+      size: 42,
+      storage_path: 'uploads/new-file-1',
+      created_at: localIso(2026, 9, 12),
+    };
+    render([], [], { onUploadFiles: async () => [uploaded] });
+
+    const toolbar = container.querySelector('.task-window-toolbar');
+    if (!toolbar) throw new Error('no task toolbar');
+    await act(async () => {
+      toolbar.dispatchEvent(dropEvent([new File(['brief'], 'brief.pdf', { type: 'application/pdf' })]));
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('[data-testid="task-window-dropzone"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="new-task-attachments"]')?.textContent).toContain('brief.pdf');
+  });
+
+  it('creates the task with pending attachments, then clears the composer tray', async () => {
+    const creates: CreateTaskInput[] = [];
+    const uploaded: UploadedFile = {
+      id: 'new-file-2',
+      workspace_id: 'ws-1',
+      name: 'design.png',
+      type: 'image/png',
+      size: 84,
+      storage_path: 'uploads/new-file-2',
+      created_at: localIso(2026, 9, 12),
+    };
+    render([], [], {
+      onUploadFiles: async () => [uploaded],
+      onCreateTask: input => creates.push(input),
+    });
+
+    const windowDropzone = container.querySelector('[data-testid="task-window-dropzone"]');
+    if (!windowDropzone) throw new Error('no Tasks window drop zone');
+    await act(async () => {
+      windowDropzone.dispatchEvent(dropEvent([new File(['design'], 'design.png', { type: 'image/png' })]));
+      await Promise.resolve();
+    });
+
+    const title = container.querySelector<HTMLInputElement>('.task-title-input');
+    if (!title) throw new Error('no new task title input');
+    setInputValue(title, 'Review design');
+    clickText('Add');
+
+    expect(creates).toEqual([{
+      title: 'Review design',
+      priority: 'normal',
+      assignee_id: null,
+      source_type: 'manual',
+      attachments: [{ id: 'new-file-2', name: 'design.png', type: 'image/png', size: 84 }],
+    }]);
+    expect(container.querySelector('[data-testid="new-task-attachments"]')).toBeNull();
+  });
+
+  it('does not expose an inert whole-window drop target when uploading is unavailable', () => {
+    render([]);
+    expect(container.querySelector('[data-testid="task-window-dropzone"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Attach files to new task"]')).toBeNull();
   });
 });
 

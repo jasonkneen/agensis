@@ -3,7 +3,7 @@ import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import { useWorkspaceListState, useWorkspaceState } from './useWorkspaceState';
-import type { Task, TaskStatus, TaskPriority, TaskSourceType } from '../types';
+import type { MessageAttachment, Task, TaskStatus, TaskPriority, TaskSourceType } from '../types';
 
 export interface CreateTaskInput {
   title: string;
@@ -15,6 +15,7 @@ export interface CreateTaskInput {
   parent_id?: string | null;
   source_type?: TaskSourceType;
   source_id?: string | null;
+  attachments?: MessageAttachment[] | null;
 }
 
 export function useTasks(workspaceId: string | null, userId?: string, seed?: Task[] | null) {
@@ -101,6 +102,7 @@ export function useTasks(workspaceId: string | null, userId?: string, seed?: Tas
       due_date: input.due_date ?? null,
       source_type: input.source_type ?? 'manual',
       source_id: input.source_id ?? null,
+      attachments: input.attachments ?? null,
     }, `tasks_${workspaceId}`);
     if (data) {
       const task = data as unknown as Task;

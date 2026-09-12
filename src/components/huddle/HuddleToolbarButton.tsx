@@ -25,6 +25,7 @@ export function HuddleToolbarButton({
   sessionId,
   title,
   agents = NO_AGENTS,
+  compact = false,
 }: {
   className?: string;
   workspaceId?: string | null;
@@ -32,6 +33,8 @@ export function HuddleToolbarButton({
   title?: string;
   /** The channel's agents, in roster order. Empty in a DM. */
   agents?: HuddleAgentOption[];
+  /** Collapse the label to the icon alone when the channel nav is narrow. */
+  compact?: boolean;
 }) {
   const huddle = useHuddleSession();
   const dock = useHuddleDock();
@@ -62,9 +65,10 @@ export function HuddleToolbarButton({
       <span
         className={cn('flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-emerald-500', className)}
         title="You are in this huddle"
+        aria-label={compact ? 'In huddle' : undefined}
       >
         <Radio className="size-4 animate-pulse" aria-hidden />
-        In huddle
+        {!compact && 'In huddle'}
       </span>
     );
   }
@@ -76,6 +80,7 @@ export function HuddleToolbarButton({
       size="sm"
       className={cn('h-8 shrink-0 px-2', className)}
       disabled={busy}
+      aria-label={compact ? (live ? 'Join' : 'Huddle') : undefined}
       onClick={() => {
         // The app-level dock owns the connection from here: it is mounted
         // above every view, so navigating away no longer ends the call. The
@@ -88,8 +93,8 @@ export function HuddleToolbarButton({
       }}
       title={live ? 'Join the huddle in this channel' : 'Start a voice huddle in this channel'}
     >
-      <Headphones data-icon="inline-start" />
-      {live ? 'Join' : 'Huddle'}
+      <Headphones data-icon={compact ? undefined : 'inline-start'} />
+      {!compact && (live ? 'Join' : 'Huddle')}
     </Button>
   );
 }

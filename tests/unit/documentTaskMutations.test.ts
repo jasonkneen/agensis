@@ -102,6 +102,25 @@ afterEach(() => {
 });
 
 describe('document and task mutations', () => {
+  it('persists attachment references when creating a task', async () => {
+    const attachments = [{ id: 'file-1', name: 'brief.pdf', type: 'application/pdf', size: 42 }];
+    mocks.offlineInsert.mockResolvedValue({ ...task('task-new'), attachments });
+    await act(async () => {
+      root.render(createElement(TasksProbe, { seed: [] }));
+      await settle();
+    });
+
+    await act(async () => {
+      await latestTasks.createTask({ title: 'Review brief', attachments });
+    });
+
+    expect(mocks.offlineInsert).toHaveBeenCalledWith(
+      'tasks',
+      expect.objectContaining({ title: 'Review brief', attachments }),
+      'tasks_workspace-1',
+    );
+  });
+
   it('debounces each document independently and merges its pending fields', async () => {
     await act(async () => {
       root.render(createElement(DocumentsProbe, { seed: [doc('doc-a'), doc('doc-b')] }));
