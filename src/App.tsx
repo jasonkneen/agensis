@@ -2485,7 +2485,10 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
           there is nothing to fetch for a logged-out visitor. */}
       <OwnerMessageProvider userId={user.id}>
       <PickerProvider agents={globalPickerAgents} onSendToAgent={handleSendGlobalPicks}>
-      <div className="relative flex h-screen overflow-hidden bg-background">
+      <div
+        className="relative flex h-screen overflow-hidden bg-background"
+        data-desktop-shell={IS_DESKTOP_SHELL ? 'true' : undefined}
+      >
         <img
           src={workspaceBackdropImage}
           alt=""

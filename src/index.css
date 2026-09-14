@@ -1603,18 +1603,11 @@
  opacity: 1;
 }
 
-/* A filled primary pill next to a quiet label reads as an alert, and every
-   section has one, so the sidebar became a column of badges all shouting
-   equally. At section level the count is reference information: plain tracked
-   numerals in the label's own colour. Item- and folder-level counts keep the
-   pill, where a number genuinely is news. */
-.sidebar-section-header .sidebar-section-trigger .sidebar-section-count {
- background: transparent;
- color: inherit;
- font-weight: 600;
- font-size: 0.6875rem !important;
- opacity: 0.75;
-}
+/* Section counts (Threads / Direct messages / Archive) render as the SAME
+   filled primary pill the top-level action rows use (Inbox, Agents) so the two
+   count treatments read as one system — the JSX already carries the pill
+   classes, so this just leaves them in force at section level rather than
+   overriding them to a bare numeral. */
 
 /* All count badges share one absolute column (left of the menu gutter) so they
    line up vertically down the panel regardless of label width. */
@@ -1893,6 +1886,15 @@
 
 .task-title-input {
  max-width: 100%;
+}
+
+/* The add-task row's controls (title input, priority + assignee selects,
+   attach + Add buttons) carried the default control radius while the task
+   cards below use a larger one, so the two rows of corners never matched.
+   Round the add-row controls to the SAME radius as the cards so the whole
+   Tasks surface shares one rounding. */
+.task-add-row :is(input, select, button, [data-slot="input"], [data-slot="native-select"], [data-slot="button"]) {
+ border-radius: calc(var(--radius) + 0.375rem);
 }
 
 .task-card {
@@ -2534,6 +2536,18 @@
    event). Killed here rather than in the component so the shell keeps its single
    className for every window kind. */
 [data-window-titlebar] {
+ backdrop-filter: none !important;
+ -webkit-backdrop-filter: none !important;
+}
+
+/* Electron's macOS compositor can briefly drop a backdrop-filter texture when
+   the renderer is saturated by message/realtime work. A translucent window
+   surface then exposes the workspace canvas for a frame, which reads as the
+   desktop flashing through every panel. Keep browser glass configurable, but
+   make desktop window surfaces a stable opaque paint layer with no backdrop
+   dependency. Descendant surfaces retain their normal theme treatment. */
+[data-desktop-shell="true"] [data-window-surface] {
+ background: var(--card) !important;
  backdrop-filter: none !important;
  -webkit-backdrop-filter: none !important;
 }
@@ -5204,13 +5218,6 @@ select {
  .sidebar-section-count
 ) {
  border: 1px solid var(--control-edge) !important;
-}
-
-/* …but a section-HEADER count is a bare tracked numeral (transparent, no
-   pill — see the .sidebar-section-header rule above), so it must NOT gain a
-   box around the digits. */
-:root[data-ui-theme="default"][data-theme="light"] .sidebar-section-header .sidebar-section-trigger .sidebar-section-count {
- border-color: transparent !important;
 }
 
 /* Tailwind's shadow utilities bake blurred values into --tw-shadow instead of

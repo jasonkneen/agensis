@@ -1,5 +1,41 @@
 import type { Task } from '../types';
 
+type AppletMessageHandler = (event: MessageEvent) => void;
+
+// Every iframe message is delivered to every `window.message` listener. A
+// listener per applet therefore turns M bridge messages across N applets into
+// M*N handler invocations, including N-1 handlers that only reject the source.
+// Keep one listener at the host boundary and route by WindowProxy identity.
+const appletMessageTargets = new Map<MessageEventSource, AppletMessageHandler>();
+let appletMessageListenerInstalled = false;
+
+function routeAppletMessage(event: MessageEvent) {
+ const message = event.data;
+ if (!message || typeof message !== 'object' || message.source !== 'agensis-applet') return;
+ if (!event.source) return;
+ appletMessageTargets.get(event.source)?.(event);
+}
+
+/** Register one sandboxed applet with the shared host message bridge. */
+export function registerAppletMessageTarget(
+ source: MessageEventSource,
+ handler: AppletMessageHandler,
+): () => void {
+ appletMessageTargets.set(source, handler);
+ if (!appletMessageListenerInstalled) {
+  window.addEventListener('message', routeAppletMessage);
+  appletMessageListenerInstalled = true;
+ }
+
+ return () => {
+  if (appletMessageTargets.get(source) === handler) appletMessageTargets.delete(source);
+  if (appletMessageTargets.size === 0 && appletMessageListenerInstalled) {
+   window.removeEventListener('message', routeAppletMessage);
+   appletMessageListenerInstalled = false;
+  }
+ };
+}
+
 // Allowlist: only user-editable Task fields may be set by a sandboxed applet via
 // the `agensis:updateTask` bridge message. Excludes ids, workspace_id,
 // created_by, assignee_id, source_*, timestamps, version, and completed_at to

@@ -4,7 +4,7 @@ import type { CanvasObject, Task, WorkspaceAgent, Document } from '../../types';
 import type { CreateTaskInput } from '../../hooks/useTasks';
 import { CANVAS_APPS, parseAppletState, extractHtmlFromDocContent, makeAppletState, makeDocAppletState } from '../../lib/canvasApps';
 import { apiAuthHeaders, backendClient } from '../../lib/backendClient';
-import { filterAppletTaskUpdates } from '../../lib/appletBridge';
+import { filterAppletTaskUpdates, registerAppletMessageTarget } from '../../lib/appletBridge';
 import { shouldFetchWithApiAuth, useAuthenticatedObjectUrl } from '../../hooks/useAuthenticatedObjectUrl';
 import { Button } from '@agensis/ui/components/button';
 
@@ -253,60 +253,64 @@ function AppletObject({
     return () => observer.disconnect();
   }, []);
 
+  // Keep changing render inputs in a ref so each iframe registers with the
+  // shared global bridge once. Realtime task/agent updates must update handler
+  // behaviour without tearing down and re-adding a browser message listener.
+  const handleMessageRef = useRef<(event: MessageEvent) => void>(() => {});
+  handleMessageRef.current = (event: MessageEvent) => {
+    const message = event.data || {};
+    const payload = message.payload || {};
+    if (message.type === 'agensis:ready') {
+      setCrash(null);
+      sendInit();
+      return;
+    }
+    if (message.type === 'agensis:setState') {
+      // BUGFIX: a doc-backed applet's obj.text_content carries { appId, docId, state }.
+      // Rebuilding it as { appId, state } here (dropping docId) made docBackedHtml's
+      // effect bail on the very next render, falling through to the "Empty applet"
+      // placeholder — i.e. every doc-backed applet blanked itself out the moment it
+      // called agensis:setState, which the SDK contract asks every applet to do.
+      // Preserve docId when present so the doc body stays the source of truth.
+      onAppletStateChange?.(
+        parsed.docId
+          ? makeDocAppletState(parsed.docId, appId, payload.state || {})
+          : makeAppletState(appId, payload.state || {})
+      );
+      return;
+    }
+    if (message.type === 'agensis:createTask') {
+      const title = String(payload.title || '').trim();
+      if (title) {
+        onAppletCreateTask?.({
+          title,
+          priority: payload.priority || 'normal',
+          source_type: 'canvas',
+          source_id: obj.id,
+        });
+      }
+      return;
+    }
+    if (message.type === 'agensis:updateTask') {
+      if (payload.id && payload.updates && typeof payload.updates === 'object') {
+        // Allowlist only user-editable Task fields (shared guard — see appletBridge.ts).
+        const safeUpdates = filterAppletTaskUpdates(payload.updates as Record<string, unknown>);
+        if (Object.keys(safeUpdates).length > 0) {
+          onAppletUpdateTask?.(String(payload.id), safeUpdates);
+        }
+      }
+      return;
+    }
+    if (message.type === 'agensis:crash') {
+      setCrash(String(payload.message || 'Applet crashed'));
+    }
+  };
+
   useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      if (event.source !== iframeRef.current?.contentWindow) return;
-      const message = event.data || {};
-      if (message.source !== 'agensis-applet') return;
-      const payload = message.payload || {};
-      if (message.type === 'agensis:ready') {
-        setCrash(null);
-        sendInit();
-        return;
-      }
-      if (message.type === 'agensis:setState') {
-        // BUGFIX: a doc-backed applet's obj.text_content carries { appId, docId, state }.
-        // Rebuilding it as { appId, state } here (dropping docId) made docBackedHtml's
-        // effect bail on the very next render, falling through to the "Empty applet"
-        // placeholder — i.e. every doc-backed applet blanked itself out the moment it
-        // called agensis:setState, which the SDK contract asks every applet to do.
-        // Preserve docId when present so the doc body stays the source of truth.
-        onAppletStateChange?.(
-          parsed.docId
-            ? makeDocAppletState(parsed.docId, appId, payload.state || {})
-            : makeAppletState(appId, payload.state || {})
-        );
-        return;
-      }
-      if (message.type === 'agensis:createTask') {
-        const title = String(payload.title || '').trim();
-        if (title) {
-          onAppletCreateTask?.({
-            title,
-            priority: payload.priority || 'normal',
-            source_type: 'canvas',
-            source_id: obj.id,
-          });
-        }
-        return;
-      }
-      if (message.type === 'agensis:updateTask') {
-        if (payload.id && payload.updates && typeof payload.updates === 'object') {
-          // Allowlist only user-editable Task fields (shared guard — see appletBridge.ts).
-          const safeUpdates = filterAppletTaskUpdates(payload.updates as Record<string, unknown>);
-          if (Object.keys(safeUpdates).length > 0) {
-            onAppletUpdateTask?.(String(payload.id), safeUpdates);
-          }
-        }
-        return;
-      }
-      if (message.type === 'agensis:crash') {
-        setCrash(String(payload.message || 'Applet crashed'));
-      }
-    };
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, [appId, obj.id, onAppletCreateTask, onAppletStateChange, onAppletUpdateTask, parsed.docId, parsed.state, sendInit]);
+    const source = iframeRef.current?.contentWindow;
+    if (!source) return;
+    return registerAppletMessageTarget(source, event => handleMessageRef.current(event));
+  }, [reloadKey]);
 
   return (
     <div

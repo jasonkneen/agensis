@@ -159,6 +159,13 @@ const TASK_COMMENT_AVATAR_COLORS = [
   'bg-pink-500',
 ];
 
+// Selected filter/view toggle in the Tasks toolbar: a solid WHITE pill with
+// primary-coloured text, in both light and dark themes, so the active choice
+// reads as a bright chip against the translucent toolbar (the default
+// data-[state=on]:bg-muted was too low-contrast on the dark surface).
+const TASK_TOGGLE_ACTIVE =
+  'data-[state=on]:bg-white data-[state=on]:text-primary data-[state=on]:hover:bg-white data-[state=on]:hover:text-primary';
+
 type AssignmentFilter = TaskAssignmentFilter;
 
 type TaskView = 'list' | 'kanban' | 'gantt';
@@ -476,9 +483,9 @@ export const TasksWindowContent = memo(function TasksWindowContent({
             if (value) setFilter(value as AssignmentFilter);
           }}
         >
-          <ToggleGroupItem value="all">All</ToggleGroupItem>
-          <ToggleGroupItem value="mine">Mine</ToggleGroupItem>
-          <ToggleGroupItem value="others" title="Assigned to other workspace members">Others</ToggleGroupItem>
+          <ToggleGroupItem value="all" className={TASK_TOGGLE_ACTIVE}>All</ToggleGroupItem>
+          <ToggleGroupItem value="mine" className={TASK_TOGGLE_ACTIVE}>Mine</ToggleGroupItem>
+          <ToggleGroupItem value="others" title="Assigned to other workspace members" className={TASK_TOGGLE_ACTIVE}>Others</ToggleGroupItem>
         </ToggleGroup>
         <Button
           type="button"
@@ -500,9 +507,9 @@ export const TasksWindowContent = memo(function TasksWindowContent({
             if (value) setView(value as 'list' | 'kanban' | 'gantt');
           }}
         >
-          <ToggleGroupItem value="list" title="List view"><List />List</ToggleGroupItem>
-          <ToggleGroupItem value="kanban" title="Kanban board"><Columns3 />Board</ToggleGroupItem>
-          <ToggleGroupItem value="gantt" title="Gantt timeline"><GanttChart />Timeline</ToggleGroupItem>
+          <ToggleGroupItem value="list" title="List view" className={TASK_TOGGLE_ACTIVE}><List />List</ToggleGroupItem>
+          <ToggleGroupItem value="kanban" title="Kanban board" className={TASK_TOGGLE_ACTIVE}><Columns3 />Board</ToggleGroupItem>
+          <ToggleGroupItem value="gantt" title="Gantt timeline" className={TASK_TOGGLE_ACTIVE}><GanttChart />Timeline</ToggleGroupItem>
         </ToggleGroup>
         <div className="flex-1" />
         <Badge variant="secondary">{openCount} open</Badge>

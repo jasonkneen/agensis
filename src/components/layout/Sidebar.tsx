@@ -6,7 +6,6 @@ import {
  type LibrarySource,
 } from '../../lib/documentLibrary';
 import React from 'react';
-import { createPortal } from 'react-dom';
 import {
  Archive,
  AtSign,
@@ -77,96 +76,11 @@ import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Separator } from '@agensis/ui/components/separator';
 import { AccountDialog } from '../account/AccountDialog';
 import { AgentAvatar } from '../agents/AgentAvatar';
-import { AgentStatusFeed } from './AgentStatusFeed';
 import { SessionWorkBadge } from '../chat/AgentWorkBadge';
 import { APP_VERSION, BUILD_ID } from '../../lib/appVersion';
 import { useAgentWorkFeed } from '../../hooks/useAgentWork';
 import type { AgentStatusFeedState } from '../../hooks/useAgentStatusFeed';
 
-/**
- * The sidebar panel clips its own content (`overflow-hidden`, for the rounded
- * neo-brutal corners) so the status bubble can't render inline — anything wide
- * enough to reach the edge gets cut off instead of "sticking out" onto the
- * canvas like a real speech bubble. Portal it to `document.body` and position
- * it with a measured rect off the sidebar's own ref instead.
- */
-// Breathing room between the feed's bottom edge and the top of the sidebar
-// footer (account / theme / settings row) so the bubble's shadow doesn't kiss
-// the footer border.
-const FEED_FOOTER_GAP = 6;
-
-function AgentStatusFeedOverlay({
- anchorRef,
- footerRef,
- feed,
-}: {
- anchorRef: React.RefObject<HTMLElement | null>;
- footerRef: React.RefObject<HTMLDivElement | null>;
- feed: AgentStatusFeedState;
-}) {
- const [rect, setRect] = React.useState<{ left: number; bottom: number; width: number } | null>(null);
-
- // Keep the overlay mounted whenever there's something to show OR the feed is
- // muted — the muted state renders a restore pill (not a bubble), so we still
- // need a measured anchor rect even with no current update.
- const visible = !!feed.current || feed.muted;
-
- React.useEffect(() => {
-  const el = anchorRef.current;
-  if (!el || !visible) {
-   setRect(null);
-   return;
-  }
-  const measure = () => {
-   const box = el.getBoundingClientRect();
-   // Anchor the feed's BOTTOM edge to the TOP of the sidebar footer (the
-   // account / theme / settings row), not the sidebar's own bottom. The
-   // feed grows upward, so pinning it here keeps that control row fully
-   // clear at every feed height. Anchoring to the sidebar bottom laid the
-   // overlay — even the tiny muted "restore" pill — directly over those
-   // controls, and its full-width pointer-events surface silently ate their
-   // clicks. Fall back to the sidebar bottom if the footer isn't measured.
-   const footer = footerRef.current;
-   const bottom = footer
-    ? window.innerHeight - footer.getBoundingClientRect().top + FEED_FOOTER_GAP
-    : window.innerHeight - box.bottom;
-   setRect({ left: box.left, bottom, width: box.width });
-  };
-  measure();
-  const observer = new ResizeObserver(measure);
-  observer.observe(el);
-  if (footerRef.current) observer.observe(footerRef.current);
-  window.addEventListener('resize', measure);
-  return () => {
-   observer.disconnect();
-   window.removeEventListener('resize', measure);
-  };
- }, [anchorRef, footerRef, visible]);
-
- if (!visible || !rect) return null;
-
- // Fixed width regardless of message length — it used to size to content
- // ("max-content"), which made the bubble jump wider/narrower on every
- // update. A constant width (sidebar width + a modest stick-out) keeps the
- // box stable; text wraps and clamps inside it instead.
- const bubbleWidth = Math.min(rect.width + 40, window.innerWidth - rect.left - 16);
-
- return createPortal(
-  <div
-   className="pointer-events-none fixed z-[var(--z-agent-feed)]"
-   style={{
-    left: rect.left,
-    bottom: rect.bottom,
-    width: bubbleWidth,
-   }}
-  >
-   <div className="pointer-events-auto">
-    <AgentStatusFeed feed={feed} />
-   </div>
-  </div>,
-  document.body,
- );
-}
 import { WORKSPACE_CHROME_GAP } from '../../lib/workspaceLayout';
 import { partitionSidebarSessions } from '../../lib/sidebarSessions';
 import { splitNostrChannelGroups } from '../../lib/nostrChannelGroups';
@@ -317,6 +231,11 @@ interface SidebarProps {
  floatingWindows: FloatingWindow[];
  documentPresence?: Record<string, ItemPresenceUser[]>;
  chatPresence?: Record<string, ItemPresenceUser[]>;
+ /**
+  * Deprecated: the pixel agent-status bubble was removed from the sidebar. The
+  * prop is retained (unused) so the existing App wiring keeps compiling; the
+  * feed hook can be unwired from App separately.
+  */
  agentStatusFeed?: AgentStatusFeedState;
  themeMode: ThemeMode;
  onThemeChange: (mode: ThemeMode) => void;
@@ -390,7 +309,6 @@ export const Sidebar = React.memo(function Sidebar({
  floatingWindows,
  documentPresence = {},
  chatPresence = {},
- agentStatusFeed,
  themeMode,
  onThemeChange,
  onOpenSettings,
@@ -1291,7 +1209,6 @@ export const Sidebar = React.memo(function Sidebar({
      onPointerDown={handleResizeStart}
     />
    </aside>
-   {agentStatusFeed && <AgentStatusFeedOverlay anchorRef={sidebarRef} footerRef={footerRef} feed={agentStatusFeed} />}
   </>
  );
 });

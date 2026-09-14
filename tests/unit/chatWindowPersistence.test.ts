@@ -80,6 +80,14 @@ afterEach(async () => {
 });
 
 describe('persistent chat window mounting', () => {
+  it('keeps desktop panel paint independent of the live backdrop compositor', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8');
+    expect(appSource).toContain("data-desktop-shell={IS_DESKTOP_SHELL ? 'true' : undefined}");
+    expect(css).toMatch(
+      /\[data-desktop-shell="true"\]\s+\[data-window-surface\]\s*\{[^}]*background:\s*var\(--card\)\s*!important;[^}]*backdrop-filter:\s*none\s*!important;/s,
+    );
+  });
+
   it('keeps one draft subtree across hidden and minimized visibility changes', async () => {
     const container = document.createElement('div');
     container.setAttribute('data-workspace-viewport', '');

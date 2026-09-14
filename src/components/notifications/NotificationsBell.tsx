@@ -268,19 +268,14 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
           }
         >
           <Bell className="size-4" />
-          {hasUnseen && (
-            <>
-              <span
-                aria-hidden
-                className="pointer-events-none absolute inset-0 rounded-full ring-2 ring-emerald-400/60"
-              />
-              {badgeCount === 0 && (
-                <span
-                  aria-hidden
-                  className="absolute bottom-0 right-0 size-2.5 rounded-full border-2 border-background bg-emerald-500"
-                />
-              )}
-            </>
+          {/* New-activity cue: a small emerald indicator dot only. The
+              full-circle emerald ring around the whole button was removed —
+              the dot alone reads as "new" without haloing the icon. */}
+          {hasUnseen && badgeCount === 0 && (
+            <span
+              aria-hidden
+              className="absolute bottom-0 right-0 size-2.5 rounded-full border-2 border-background bg-emerald-500"
+            />
           )}
           {badgeCount > 0 && (
             <span

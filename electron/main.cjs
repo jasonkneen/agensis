@@ -5,6 +5,13 @@ const path = require('path');
 const { fileURLToPath } = require('url');
 const { AGENT_BUNDLE_MAX_COMPRESSED_BYTES } = require('../shared/agentBundles.cjs');
 
+// Diagnostic A/B for desktop paint corruption. Electron requires this before
+// app readiness; leave normal launches accelerated until the cause is verified.
+if (process.env.AGENSIS_DISABLE_GPU === '1') {
+  app.disableHardwareAcceleration();
+  console.info('[agensis] Hardware acceleration disabled for rendering diagnosis');
+}
+
 const isDev = !app.isPackaged;
 let backendServer = null;
 let mainWindow = null;
@@ -144,7 +151,7 @@ function createWindow() {
     // ONLY thing that can move the window: it carries -webkit-app-region: drag
     // in the rail and the collapsed sidebar. Reserving the space without the
     // drag region leaves the window immovable.
-    trafficLightPosition: process.platform === 'darwin' ? { x: 12, y: 14 } : undefined,
+    trafficLightPosition: process.platform === 'darwin' ? { x: 12, y: 18 } : undefined,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
