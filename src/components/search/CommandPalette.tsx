@@ -170,6 +170,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   );
 
   const catalog = useMemo(() => {
+    if (!open) return [];
     const docs = documents.map(doc => {
       const plainContent = stripHtml(docBodies[doc.id] ?? doc.content ?? '');
       return {
@@ -239,7 +240,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
     const actionItems = actions.map(a => ({ item: a, haystack: a.label }));
 
     return [...docs, ...chats, ...memories, ...taskItems, ...actionItems];
-  }, [documents, docBodies, sessions, facts, tasks, actions, onDocumentOpen, onSessionOpen, onTaskOpen, onViewChange, onClose]);
+  }, [open, documents, docBodies, sessions, facts, tasks, actions, onDocumentOpen, onSessionOpen, onTaskOpen, onViewChange, onClose]);
 
   const filteredResults = useMemo(() => {
     const q = query.trim();

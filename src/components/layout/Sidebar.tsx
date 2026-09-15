@@ -79,7 +79,6 @@ import { AgentAvatar } from '../agents/AgentAvatar';
 import { SessionWorkBadge } from '../chat/AgentWorkBadge';
 import { APP_VERSION, BUILD_ID } from '../../lib/appVersion';
 import { useAgentWorkFeed } from '../../hooks/useAgentWork';
-import type { AgentStatusFeedState } from '../../hooks/useAgentStatusFeed';
 
 import { WORKSPACE_CHROME_GAP } from '../../lib/workspaceLayout';
 import { partitionSidebarSessions } from '../../lib/sidebarSessions';
@@ -231,12 +230,6 @@ interface SidebarProps {
  floatingWindows: FloatingWindow[];
  documentPresence?: Record<string, ItemPresenceUser[]>;
  chatPresence?: Record<string, ItemPresenceUser[]>;
- /**
-  * Deprecated: the pixel agent-status bubble was removed from the sidebar. The
-  * prop is retained (unused) so the existing App wiring keeps compiling; the
-  * feed hook can be unwired from App separately.
-  */
- agentStatusFeed?: AgentStatusFeedState;
  themeMode: ThemeMode;
  onThemeChange: (mode: ThemeMode) => void;
  userEmail: string;
@@ -783,6 +776,7 @@ export const Sidebar = React.memo(function Sidebar({
        open={openSections.has('threads')}
        onOpenChange={open => toggleSection('threads', open)}
       >
+       {openSections.has('threads') && (<>
        {/* Threads a person FOLLOWS, unread first — the section exists so a
            reply you have not seen is the top row. An empty list is a real,
            good state and says so rather than rendering nothing. */}
@@ -835,6 +829,7 @@ export const Sidebar = React.memo(function Sidebar({
          </button>
         ))
        )}
+       </>)}
       </SidebarSection>
       <SidebarSection
        id="channels"
@@ -846,6 +841,7 @@ export const Sidebar = React.memo(function Sidebar({
        open={openSections.has('channels')}
        onOpenChange={open => toggleSection('channels', open)}
       >
+       {openSections.has('channels') && (<>
        {!nostrConnectionsResolved ? (
         <div className="rounded-md px-2 py-1.5 text-xs text-muted-foreground">
          <span>{nostrConnectionsError ? 'Could not verify imported channel sources.' : 'Checking imported channel sources…'}</span>
@@ -953,6 +949,7 @@ export const Sidebar = React.memo(function Sidebar({
          </SidebarFolderGroup>
         );
        })}
+       </>)}
       </SidebarSection>
       <SidebarSection
        id="documents"
@@ -994,6 +991,7 @@ export const Sidebar = React.memo(function Sidebar({
        open={openSections.has('documents')}
        onOpenChange={open => toggleSection('documents', open)}
       >
+       {openSections.has('documents') && (<>
        {/* The LIBRARY when there is one — documents from here and from every
            connected agent, deduped into one row each and grouped by folder or
            domain. The workspace-only list stays as the fallback so the section
@@ -1071,6 +1069,7 @@ export const Sidebar = React.memo(function Sidebar({
          )
         ))
        )}
+       </>)}
       </SidebarSection>
       <SidebarSection
        id="direct-messages"
@@ -1081,6 +1080,7 @@ export const Sidebar = React.memo(function Sidebar({
        onOpenChange={open => toggleSection('direct-messages', open)}
        headerActions={<DmFilterButton filter={dmFilter} onChange={setDmFilter} />}
       >
+       {openSections.has('direct-messages') && (<>
        {filteredDmTargets.map(agent => (
         <React.Fragment key={getAgentKey(agent)}>
          <DirectAgentRow
@@ -1102,6 +1102,7 @@ export const Sidebar = React.memo(function Sidebar({
          {agent.session && renderDmForks(agent.session.id, 1)}
         </React.Fragment>
        ))}
+       </>)}
       </SidebarSection>
       <SidebarSection
        id="archive"
@@ -1111,6 +1112,7 @@ export const Sidebar = React.memo(function Sidebar({
        open={openSections.has('archive')}
        onOpenChange={open => toggleSection('archive', open)}
       >
+       {openSections.has('archive') && (<>
        {archivedSessions.slice(0, 8).map(session => (
         <SessionRow
          key={session.id}
@@ -1124,6 +1126,7 @@ export const Sidebar = React.memo(function Sidebar({
          presenceUsers={chatPresence[session.id] || []}
         />
        ))}
+       </>)}
       </SidebarSection>
       {/* Closes the band of collapsible sections. Everything below is a
           top-level destination, not a member of the section above it: flush

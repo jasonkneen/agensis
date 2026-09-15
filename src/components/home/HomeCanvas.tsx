@@ -14,6 +14,7 @@ import { getSlashCommands } from '../../lib/backendClient';
 import { matchSlashItems, slashInsertText, type SlashItem } from '../../lib/slashCommands';
 
 interface HomeCanvasProps {
+  hidden?: boolean;
   documents: Document[];
   agents?: WorkspaceAgent[];
   workspaceId?: string;
@@ -39,6 +40,7 @@ const suggestions = [
 ];
 
 export function HomeCanvas({
+  hidden = false,
   documents,
   agents = [],
   workspaceId,
@@ -257,7 +259,13 @@ export function HomeCanvas({
   };
 
   return (
-    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center overflow-hidden px-6">
+    <div
+      data-home-canvas
+      hidden={hidden}
+      inert={hidden || undefined}
+      style={{ display: hidden ? 'none' : undefined }}
+      className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center overflow-hidden px-6"
+    >
       {visibleBackgroundImage ? (
         <>
           <img

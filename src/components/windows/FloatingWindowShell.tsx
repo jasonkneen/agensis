@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Expand, Eye, EyeOff, Lock, Maximize2, Minimize2, Minus, MoreHorizontal, Share2, Shrink, Trash2, Unlock, X } from 'lucide-react';
 import type { FloatingWindow, PresenceVisibilityMode } from '../../types';
 import { Button } from '@agensis/ui/components/button';
@@ -114,8 +114,7 @@ function clampWindowBounds(
   };
 }
 
-function getFullWindowBounds(shell: HTMLElement | null): WindowBounds {
-  const viewport = getShellViewport(shell);
+function getFullWindowBounds(shell: HTMLElement | null, viewport = getShellViewport(shell)): WindowBounds {
   return {
     x: MAXIMIZED_EDGE_INSET,
     y: MAXIMIZED_TOP_RESERVE,
@@ -124,8 +123,8 @@ function getFullWindowBounds(shell: HTMLElement | null): WindowBounds {
   };
 }
 
-function isFullWindowBounds(bounds: WindowBounds, shell: HTMLElement | null): boolean {
-  const full = getFullWindowBounds(shell);
+function isFullWindowBounds(bounds: WindowBounds, shell: HTMLElement | null, viewport = getShellViewport(shell)): boolean {
+  const full = getFullWindowBounds(shell, viewport);
   const tolerance = 2;
   return Math.abs(bounds.x - full.x) <= tolerance
     && Math.abs(bounds.y - full.y) <= tolerance
@@ -133,13 +132,13 @@ function isFullWindowBounds(bounds: WindowBounds, shell: HTMLElement | null): bo
     && Math.abs(bounds.height - full.height) <= tolerance;
 }
 
-function getCurrentWindowBounds(shell: HTMLElement | null, win: FloatingWindow): WindowBounds {
+function getCurrentWindowBounds(shell: HTMLElement | null, win: FloatingWindow, viewport = getShellViewport(shell)): WindowBounds {
   return clampWindowBounds({
     x: win.x,
     y: win.y,
     width: win.width,
     height: win.height,
-  }, shell);
+  }, shell, viewport);
 }
 
 /**
@@ -404,12 +403,32 @@ export function FloatingWindowShell({
   // and skip the floating bounds-sync + drag/resize paths (single-window mode).
   const fullViewport = isMaximized || isMobile || isFullExpand;
 
+  const [viewportSize, setViewportSize] = useState(() => getShellViewport(null));
+  useLayoutEffect(() => {
+    const measure = () => {
+      const next = getShellViewport(shellRef.current);
+      setViewportSize(previous => previous.width === next.width && previous.height === next.height
+        ? previous : next);
+    };
+    measure();
+    const viewport = shellRef.current?.closest('[data-workspace-viewport]') || shellRef.current?.offsetParent;
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    if (viewport instanceof Element) observer?.observe(viewport);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
+
   // Painted-box geometry. Hoisted above the drag/resize callbacks on purpose:
   // syncShellBounds writes straight to element.style and must apply the SAME
   // bleed/gutter offsets as shellStyle, or every drag, drop and resize repaints
   // the window at its raw stored bounds and the gutter flickers away.
-  const displayBounds = getCurrentWindowBounds(shellRef.current, win);
-  const isFullView = fullViewport || isFullWindowBounds(displayBounds, shellRef.current);
+  const displayBounds = useMemo(() => clampWindowBounds({
+    x: win.x, y: win.y, width: win.width, height: win.height,
+  }, null, viewportSize), [win.x, win.y, win.width, win.height, viewportSize]);
+  const isFullView = fullViewport || isFullWindowBounds(displayBounds, shellRef.current, viewportSize);
 
   // Full bleed: a window that fills the whole panel (maximized, or a tiled group
   // whose tiles collectively fill it) drops its corners + chrome gap and paints
@@ -417,7 +436,6 @@ export function FloatingWindowShell({
   // boundary-flush edge to cover the padding; <main> un-clips (see App.tsx) so the
   // extension reaches the true panel edge. A maximized window fills the viewport
   // by construction, so use all four edges; otherwise measure which edges are flush.
-  const viewportSize = getShellViewport(shellRef.current);
   const flushEdges = fullViewport
     ? new Set<WindowEdge>(ALL_WINDOW_EDGES)
     : computeFlushEdges(displayBounds, viewportSize);
@@ -469,23 +487,10 @@ export function FloatingWindowShell({
   }), [bleedLeft, bleedRight, bleedTop, bleedBottom, gutterLeft, gutterRight, gutterTop, gutterBottom]);
 
   useEffect(() => {
-    const syncBounds = () => {
-      const shell = shellRef.current;
-      if (!shell || fullViewport || isDragging || isResizing) return;
-      syncShellBounds(shell, getCurrentWindowBounds(shell, win), paintOffsets);
-    };
-
-    syncBounds();
-
-    if (typeof ResizeObserver === 'undefined') return undefined;
-    const viewport = shellRef.current?.closest('[data-workspace-viewport]')
-      || (typeof document !== 'undefined' ? document.querySelector('[data-workspace-viewport]') : null);
-    if (!viewport) return undefined;
-
-    const observer = new ResizeObserver(syncBounds);
-    observer.observe(viewport);
-    return () => observer.disconnect();
-  }, [win, fullViewport, isDragging, isResizing, paintOffsets]);
+    const shell = shellRef.current;
+    if (!shell || fullViewport || isDragging || isResizing) return;
+    syncShellBounds(shell, displayBounds, paintOffsets);
+  }, [displayBounds, fullViewport, isDragging, isResizing, paintOffsets]);
 
   // CSS-hidden descendants can otherwise retain DOM focus in some browsers and
   // continue consuming keyboard events despite not being visible. Explicitly

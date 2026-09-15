@@ -145,7 +145,6 @@ import { useAgentWebhooks } from './hooks/useAgentWebhooks';
 import { useAgentConnections } from './hooks/useAgentConnections';
 import { useDockAttention } from './hooks/useDockAttention';
 import { useWorkspacePresence, windowLabel, type WorkspacePresenceUser } from './hooks/useWorkspacePresence';
-import { useAgentStatusFeed } from './hooks/useAgentStatusFeed';
 import { useWorkspaceKnowledge, type WorkspaceContextCounts } from './hooks/useWorkspaceKnowledge';
 import type { CanvasAppDefinition } from './lib/canvasApps';
 import { makeAppletState, makeDocAppletState } from './lib/canvasApps';
@@ -1021,7 +1020,6 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     return true;
   }, [createAgent]);
 
-  const agentStatusFeed = useAgentStatusFeed(workspacePresenceUsers, agents, activeWorkspaceId || null);
   const getPresenceMode = useCallback((id?: string | null): PresenceVisibilityMode => {
     if (!id) return 'visible';
     const baseMode = id === user?.id ? 'visible' : presenceVisibility[id] || 'visible';
@@ -2615,7 +2613,6 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
             floatingWindows={windows}
             documentPresence={itemPresence.documentPresence}
             chatPresence={itemPresence.chatPresence}
-            agentStatusFeed={agentStatusFeed}
             themeMode={themeMode}
             onThemeChange={setTheme}
             userEmail={user.email || ''}
@@ -3345,6 +3342,11 @@ function CanvasLayerScene({
     () => new Set(renderedWindows.map(win => win.id)),
     [renderedWindows],
   );
+  // Keep the home draft mounted, but remove its backdrop-filter surfaces from
+  // painting while an opaque full-viewport window covers the desktop.
+  const homeCovered = renderedWindows.some(win =>
+    (isFullExpandMode || isMobile || win.maximized) && getPresenceMode(win.ownerUserId) === 'visible',
+  );
   // A chat composer owns draft state inside ChatWindowContent. Removing a chat
   // from this map on minimise, mobile switching, or full-expand used to unmount
   // that subtree and silently discard the draft. Keep every open chat mounted;
@@ -3401,6 +3403,7 @@ function CanvasLayerScene({
   return (
     <>
       <HomeCanvas
+        hidden={homeCovered}
         documents={documents}
         agents={agents}
         workspaceId={workspaceId}

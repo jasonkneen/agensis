@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react';
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, type ReactNode } from 'react';
 import { CanvasToolbar } from './CanvasToolbar';
 import { CanvasObjectRenderer } from './CanvasObjectRenderer';
 import { Trash2, Group, Ungroup, Link2, Unlink, ListTodo } from 'lucide-react';
@@ -106,6 +106,24 @@ export function DrawingLayer({
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [attachMode, setAttachMode] = useState(false);
   const layerRef = useRef<HTMLDivElement>(null);
+  const [canvasSize, setCanvasSize] = useState({ w: 1, h: 1 });
+  useLayoutEffect(() => {
+    const layer = layerRef.current;
+    if (!layer) return;
+    const measure = () => {
+      const rect = layer.getBoundingClientRect();
+      setCanvasSize(previous => previous.w === rect.width && previous.h === rect.height
+        ? previous : { w: rect.width, h: rect.height });
+    };
+    measure();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(layer);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
   const penPointsRef = useRef<Array<{ x: number; y: number }>>([]);
   const dragSnapshotRef = useRef<DragSnapshot | null>(null);
   const resizeSnapshotRef = useRef<ResizeSnapshot | null>(null);
@@ -361,12 +379,6 @@ export function DrawingLayer({
       x: ((clientX - r.left) / r.width) * 100,
       y: ((clientY - r.top) / r.height) * 100,
     };
-  }, []);
-
-  const getSize = useCallback(() => {
-    if (!layerRef.current) return { w: 1, h: 1 };
-    const r = layerRef.current.getBoundingClientRect();
-    return { w: r.width, h: r.height };
   }, []);
 
   const getObjectBounds = useCallback((obj: CanvasObject) => {
@@ -859,7 +871,7 @@ export function DrawingLayer({
     onFocusObjectHandled?.();
   }, [focusObjectId, objects, onBringToFront, onFocusObjectHandled]);
 
-  const { w: canvasW, h: canvasH } = getSize();
+  const { w: canvasW, h: canvasH } = canvasSize;
   const objectById = new Map(objects.map(obj => [obj.id, obj]));
   const displayZIndexOf = (obj: CanvasObject) => {
     const parent = obj.attached_to ? objectById.get(obj.attached_to) : null;

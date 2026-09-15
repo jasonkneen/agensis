@@ -234,6 +234,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
   );
 
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
+  const [open, setOpen] = useState(false);
   const filteredItems = showUnreadOnly
     ? visibleItems.filter(
         (item) => item.kind === 'approval' || item.kind === 'update' || new Date(item.at).getTime() > unreadBaselineRef.current,
@@ -247,7 +248,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
   };
 
   return (
-    <Popover onOpenChange={(open) => { if (open) markSeen(); }}>
+    <Popover open={open} onOpenChange={nextOpen => { setOpen(nextOpen); if (nextOpen) markSeen(); }}>
       <PopoverTrigger asChild>
         <Button
           type="button"
@@ -288,6 +289,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-80 p-0">
+        {open && (<>
         <PopoverHeader className="flex flex-row items-center justify-between gap-2 px-3 py-2.5">
           <PopoverTitle className="text-sm">Notifications</PopoverTitle>
           <div className="flex items-center gap-1.5">
@@ -413,6 +415,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
             ))
           )}
         </div>
+        </>)}
       </PopoverContent>
     </Popover>
   );
