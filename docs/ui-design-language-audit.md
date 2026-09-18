@@ -53,10 +53,10 @@ already had this exactly right and was the only one of the thirteen that did.
 `HTMLElement`. The three sites with no hook (Sidebar, Tasks, Chat) each gained a
 ~10-line arrow-key handler so the tab stop actually does something.
 
-Result: 13 of 13 migrated; `WorkspaceRail` keeps its own markup because it
-already is the canonical form (and carries extra data-attrs the rail's drag
-code depends on). `grep cursor-col-resize src` now matches only the component
-and the rail.
+Result: 13 of 13 migrated, `WorkspaceRail` included — it passes its
+`data-workspace-rail-*` attributes and its own `aria-value*` straight through,
+so nothing its drag code depends on moved. `grep cursor-col-resize src` now
+matches the component and nothing else.
 
 ## Finding 2 — px type sizes (AGENTS.md convention, nearly done)
 
