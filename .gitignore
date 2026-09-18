@@ -57,3 +57,4 @@ SCRATCHPAD.md
 /.grok
 # Cascade pipeline artifacts (analysis scratch, not source of truth).
 /cascade/
+.cube
