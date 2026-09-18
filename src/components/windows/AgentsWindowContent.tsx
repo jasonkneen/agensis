@@ -180,6 +180,7 @@ import {
   toggleAgentSelection,
   type AgentLayoutView,
 } from '../../lib/agentsView';
+import { ResizeHandle } from '@/components/common/ResizeHandle';
 
 // Remembered per workspace: how the roster is sliced and drawn (the layout
 // view codec lives in lib/agentsView with the rest of the view decisions).
@@ -1563,18 +1564,14 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                         {/* The same invisible grab strip the account list uses,
                             turned on its side: a hairline that only appears
                             under the pointer or focus. */}
-                        <button
+                        <ResizeHandle
                           type="button"
                           aria-label="Resize agent grid"
                           title="Drag to resize. Double-click to reset."
                           {...splitHandlers}
-                          className="group/split absolute inset-x-0 bottom-0 z-30 flex h-2 cursor-row-resize items-center rounded-none outline-none"
-                        >
-                          <span
-                            aria-hidden="true"
-                            className="h-px w-full bg-transparent transition-colors group-hover/split:bg-border group-focus-visible/split:bg-primary/70"
-                          />
-                        </button>
+                          orientation="horizontal"
+                          className="inset-x-0 bottom-0 h-2 rounded-none"
+                        />
                       </div>
                       <div className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-card/40">
                         <div className="min-h-0 min-w-0 flex-1">{diagram}</div>
@@ -1587,16 +1584,12 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
             })()}
             </section>
             {showAgentDetailSplit && (
-              <button
+              <ResizeHandle
                 {...agentDetailSplit.dividerProps}
+                orientation="vertical"
                 style={{ left: `${agentDetailSplit.size}px` }}
-                className="group/split absolute inset-y-0 z-30 -ml-1.5 w-3 touch-none cursor-col-resize outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-              >
-                <span
-                  aria-hidden="true"
-                  className="mx-auto block h-full w-px bg-transparent transition-colors group-hover/split:bg-border group-focus-visible/split:bg-primary/70"
-                />
-              </button>
+                className="inset-y-0 -ml-1.5"
+              />
             )}
             {sessionChat ? (
               <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden pl-3 @max-2xl/agentswin:w-full @max-2xl/agentswin:pl-0">

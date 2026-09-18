@@ -45,6 +45,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@agensis/ui/components/empty';
+import { ResizeHandle } from '@/components/common/ResizeHandle';
 
 // One agent on a skill row. The selected avatar (automatic Blobatar by
 // default) carries identity; initials remain only as a fallback for old or
@@ -750,16 +751,12 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
             {renderList(showSplitDetail)}
           </div>
           {showSplitDetail && (
-            <button
+            <ResizeHandle
               {...skillsSplit.dividerProps}
+              orientation="vertical"
               style={{ left: `${skillsSplit.size}px` }}
-              className="group/split absolute inset-y-0 z-30 -ml-1.5 w-3 touch-none cursor-col-resize outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-            >
-              <span
-                aria-hidden="true"
-                className="mx-auto block h-full w-px bg-transparent transition-colors group-hover/split:bg-border group-focus-visible/split:bg-primary/70"
-              />
-            </button>
+              className="inset-y-0 -ml-1.5"
+            />
           )}
           {showSplitDetail && renderDetail(false)}
         </>

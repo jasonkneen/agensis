@@ -41,6 +41,7 @@ import {
   type WorkspaceResourceOperation,
   type WorkspaceResourceOperationKind,
 } from '@/features/workspace-resources';
+import { ResizeHandle } from '@/components/common/ResizeHandle';
 
 interface ResourcesWindowContentProps {
   workspaceId: string;
@@ -462,16 +463,12 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
         </div>
 
         {splitWide && (
-          <button
+          <ResizeHandle
             {...resourcesSplit.dividerProps}
+            orientation="vertical"
             style={{ left: `${resourcesSplit.size}px` }}
-            className="group/split absolute inset-y-0 z-30 -ml-1.5 w-3 touch-none cursor-col-resize outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-          >
-            <span
-              aria-hidden="true"
-              className="mx-auto block h-full w-px bg-transparent transition-colors group-hover/split:bg-border group-focus-visible/split:bg-primary/70"
-            />
-          </button>
+            className="inset-y-0 -ml-1.5"
+          />
         )}
 
         <div
