@@ -12,6 +12,8 @@ import { Input } from '@agensis/ui/components/input';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Separator } from '@agensis/ui/components/separator';
 import { sanitizeHtml, sanitizeClipboardHtml } from '@/lib/sanitize';
+import { WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { cn } from '@/lib/utils';
 
 interface DocWindowContentProps {
   document: Document;
@@ -720,7 +722,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
-      <div className="doc-toolbar flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card/65 px-2 backdrop-blur-md">
+      <div className={cn(WINDOW_TOOLBAR, 'doc-toolbar h-10 gap-1 overflow-x-auto bg-card/65 px-2 backdrop-blur-md')}>
         {TOOLBAR.map((item, idx) => (
           item.divider ? (
             <Separator key={idx} orientation="vertical" className="mx-1 h-5" />

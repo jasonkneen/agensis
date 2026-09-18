@@ -49,6 +49,8 @@ import {
 } from '@agensis/ui/components/item';
 import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
 import { Spinner } from '@agensis/ui/components/spinner';
+import { WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { cn } from '@/lib/utils';
 
 interface UsersWindowContentProps {
   workspaceName: string;
@@ -221,7 +223,7 @@ export const UsersWindowContent = memo(function UsersWindowContent({
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-card/65 px-3 backdrop-blur-md">
+      <div className={cn(WINDOW_TOOLBAR, 'bg-card/65 backdrop-blur-md')}>
         <Users className="size-4 text-primary" />
         <span className="text-sm font-semibold">People & connections</span>
         <Badge variant="secondary">{members.length}</Badge>

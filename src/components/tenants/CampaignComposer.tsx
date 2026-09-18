@@ -19,7 +19,7 @@ import { Label } from '@agensis/ui/components/label';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
-import { PANE_HEADER, SCROLL_VIEWPORT_BLOCK, TEXT_BODY, TEXT_META } from '../inbox/inboxPresentation';
+import { PANE_HEADER, SCROLL_VIEWPORT_BLOCK, TEXT_BODY, TEXT_META } from '@/components/common/presentation';
 import { useTenantCampaigns } from '../../hooks/useTenantCampaigns';
 import {
   CAMPAIGN_SURFACE_INFO,
@@ -276,13 +276,13 @@ export const CampaignComposer = React.memo(function CampaignComposer({ accounts,
                 ))}
               </div>
             )}
-            <input
+            <Input
               type="search"
               value={pickQuery}
               onChange={event => setPickQuery(event.target.value)}
               placeholder="Search accounts by name or email"
               aria-label="Search accounts to send to"
-              className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-ring"
+              className="text-sm"
             />
             {pickQuery.trim() && (
               <ul className="mt-1.5 max-h-48 overflow-y-auto rounded-lg border border-border bg-card">

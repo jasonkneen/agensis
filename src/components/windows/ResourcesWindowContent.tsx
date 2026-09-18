@@ -653,7 +653,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                           {activeProgress && (
                             <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
                               <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div className="text-2xs font-semibold uppercase tracking-wide text-primary">
+                                <div className="ui-section-label font-semibold text-primary">
                                   {isLiveResourceOperation(activeOperation) ? 'Live progress' : 'Last checkpoint'} · {activeProgress.phase}
                                 </div>
                                 {activeProgress.percent !== null && (

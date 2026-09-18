@@ -27,7 +27,7 @@ import {
 import type { AgentConnection, MessageAttachment, Task, TaskComment, TaskPriority, TaskStatus, UploadedFile, WorkspaceAgent } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
 import type { CreateTaskInput } from '../../hooks/useTasks';
-import { TASK_PANEL_WIDTH_KEY, clampTaskPanelWidth, readStoredTaskPanelWidth } from '../../lib/taskPanelWidth';
+import { TASK_PANEL_MAX_WIDTH, TASK_PANEL_MIN_WIDTH, TASK_PANEL_WIDTH_KEY, clampTaskPanelWidth, readStoredTaskPanelWidth } from '../../lib/taskPanelWidth';
 import { booleanPreference, oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useTaskComments } from '../../hooks/useTaskComments';
@@ -104,6 +104,7 @@ import { Textarea } from '@agensis/ui/components/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 import { cn } from '@/lib/utils';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
+import { WINDOW_TOOLBAR } from '@/components/common/presentation';
 
 interface TasksWindowContentProps {
   tasks: Task[];
@@ -474,7 +475,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
       onDragLeave={handleNewAttachmentDragLeave}
       onDrop={handleNewAttachmentDrop}
     >
-      <div className="task-window-toolbar flex h-11 shrink-0 items-center gap-2 border-b border-border px-3 backdrop-blur-md">
+      <div className={cn(WINDOW_TOOLBAR, 'task-window-toolbar backdrop-blur-md')}>
         <ToggleGroup
           type="single"
           size="sm"
@@ -1730,10 +1731,12 @@ function TaskEditPanel({
         dragging={panel.dragging}
         aria-label="Resize task editor"
         aria-valuenow={Math.round(panel.width)}
+        aria-valuemin={TASK_PANEL_MIN_WIDTH}
+        aria-valuemax={TASK_PANEL_MAX_WIDTH}
         title="Drag to resize."
-        className="inset-y-0 -left-1 z-10"
+        className="inset-y-0 -left-1.5 z-10"
       />
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
+      <div className={cn(WINDOW_TOOLBAR, 'justify-between')}>
         <span className="text-xs font-semibold tracking-tight text-muted-foreground">Edit task</span>
         <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close editor">
           <X />

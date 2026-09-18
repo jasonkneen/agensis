@@ -1,13 +1,7 @@
 import React from 'react';
 import { cn } from '@/lib/utils';
-import {
-  FOCUS_RING,
-  ROW_PADDING,
-  ROW_WASH_HOVER,
-  ROW_WASH_SELECTED,
-  TEXT_BODY,
-  TEXT_META,
-} from '../inbox/inboxPresentation';
+import { ROW_PADDING } from '@/components/common/presentation';
+import { FOCUS_RING, ROW_WASH_HOVER, ROW_WASH_SELECTED, TEXT_BODY, TEXT_META } from '@/components/common/presentation';
 import type { TenantRowModel } from '../../lib/tenants';
 
 // ---------------------------------------------------------------------------

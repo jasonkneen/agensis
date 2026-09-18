@@ -12,7 +12,7 @@ import {
   AlertDialogTrigger,
 } from '@agensis/ui/components/alert-dialog';
 import { cn } from '@/lib/utils';
-import { FOCUS_RING, PANE_HEADER } from './inboxPresentation';
+import { FOCUS_RING, PANE_HEADER } from '@/components/common/presentation';
 import type { InboxBulkAction, InboxBulkActionId } from './inboxSelection';
 
 // ---------------------------------------------------------------------------

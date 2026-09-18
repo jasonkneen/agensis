@@ -16,13 +16,8 @@ import { useInbox } from '../../hooks/useInbox';
 import { InboxDetail } from './InboxDetailPane';
 import { InboxRow } from './InboxRow';
 import { InboxSelectionBar } from './InboxSelectionBar';
-import {
-  FOCUS_RING,
-  LIST_COLUMN_CLASS,
-  PANE_HEADER,
-  ROW_PADDING,
-  SCROLL_VIEWPORT_BLOCK,
-} from './inboxPresentation';
+import { ROW_PADDING } from '@/components/common/presentation';
+import { FOCUS_RING, LIST_COLUMN_CLASS, PANE_HEADER, SCROLL_VIEWPORT_BLOCK } from '@/components/common/presentation';
 import { booleanPreference, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useSplitResize } from '../../hooks/useSplitResize';

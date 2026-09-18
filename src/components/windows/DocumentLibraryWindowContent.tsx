@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, FileText, FolderTree, Info, Library, RefreshCw, Search, Users } from 'lucide-react';
+import { ChevronLeft, FileText, FolderTree, Info, Library, RefreshCw, Users } from 'lucide-react';
 import {
   LIBRARY_SOURCE_LABELS,
   LIBRARY_SPLIT_MIN_WIDTH,
@@ -19,7 +19,6 @@ import { AgentAvatar } from '../agents/AgentAvatar';
 import { viewPreferenceKey } from '../../lib/viewPreferences';
 import { Badge } from '@agensis/ui/components/badge';
 import { Button } from '@agensis/ui/components/button';
-import { Input } from '@agensis/ui/components/input';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import {
   Empty,
@@ -29,6 +28,7 @@ import {
   EmptyTitle,
 } from '@agensis/ui/components/empty';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
+import { SearchField } from '@/components/common/SearchField';
 
 // ---------------------------------------------------------------------------
 // THE LIBRARY — every document the workspace can reach, in one place.
@@ -306,15 +306,7 @@ export function DocumentLibraryWindowContent({
   const renderList = (compact: boolean) => (
     <>
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-        <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder="Search documents, folders or agents…"
-            className="h-8 pl-8 text-sm"
-          />
-        </div>
+        <SearchField className="flex-1" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search documents, folders or agents…" />
         {!compact && (
           <span className="shrink-0 text-xs text-muted-foreground">
             {entries.length} document{entries.length === 1 ? '' : 's'}

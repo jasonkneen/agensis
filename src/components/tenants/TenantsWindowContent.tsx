@@ -4,14 +4,8 @@ import { Button } from '@agensis/ui/components/button';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Skeleton } from '@agensis/ui/components/skeleton';
 import { cn } from '@/lib/utils';
-import {
-  LIST_COLUMN_CLASS,
-  PANE_HEADER,
-  ROW_PADDING,
-  SCROLL_VIEWPORT_BLOCK,
-  TEXT_BODY,
-  TEXT_META,
-} from '../inbox/inboxPresentation';
+import { ROW_PADDING } from '@/components/common/presentation';
+import { LIST_COLUMN_CLASS, PANE_HEADER, SCROLL_VIEWPORT_BLOCK, TEXT_BODY, TEXT_META } from '@/components/common/presentation';
 import { useSplitResize } from '../../hooks/useSplitResize';
 import { useTenants } from '../../hooks/useTenants';
 import {

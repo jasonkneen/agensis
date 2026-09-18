@@ -11,7 +11,7 @@ import {
   guideSubmissionOwner,
   type CursorBuddyGuideSubmission,
 } from '../../lib/cursorbuddyGuides';
-import { PANE_HEADER, TEXT_BODY, TEXT_META } from '../inbox/inboxPresentation';
+import { PANE_HEADER, TEXT_BODY, TEXT_META } from '@/components/common/presentation';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
 
 type ReviewFilter = 'pending' | 'all';

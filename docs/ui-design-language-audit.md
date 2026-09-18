@@ -71,7 +71,34 @@ and 2 are the `text-[0px]` badge trick. Ten real sites remain:
 
 AGENTS.md's count corrected in the same change.
 
-## Finding 3 — file size
+## Finding 3 — the same five shapes, hand-drawn per window (done)
+
+A second sweep over every `className` repeated across three or more files
+turned up compound patterns (a layout plus an icon plus a control), which are
+components; single-atom repeats like `text-xs text-muted-foreground` x85 are not.
+
+| Pattern | Before | After |
+| --- | --- | --- |
+| Search input with the glyph inside | 5 sites, 4 files, hand-positioned icon + `h-8 pl-8` | `common/SearchField` |
+| Window toolbar band | 14 sites, 8 files, drifting h-10/h-11 and `border-b` with or without `border-border` | `WINDOW_TOOLBAR` token in `common/presentation.ts`; per-site extras via `cn()` |
+| Onboarding card collapse/dismiss pair | 3 files, byte-identical apart from labels | `onboarding/CardActions` |
+| Uppercase micro-label | 4 hand-rolls beside 59 uses of `.ui-section-label` | all on `.ui-section-label` |
+| Hand-rolled `<input>` styled like `Input` | ReactionBar, CampaignComposer | `@agensis/ui` `Input` |
+
+**Organise:** the app's type scale (`TEXT_BODY`/`TEXT_META`/`TEXT_MICRO`),
+`PANE_HEADER`, `FOCUS_RING`, `PILL_BUTTON`, `LIST_COLUMN_CLASS`,
+`SCROLL_VIEWPORT_BLOCK` and the row washes lived in
+`inbox/inboxPresentation.ts` and were imported by five `tenants/` files via
+`../inbox/…` — a feature-local file that had quietly become the app's design
+tokens. Moved to `common/presentation.ts`; inbox keeps only its own
+(`CATEGORY_ICON`, `categoryAccent`, `ROW_PADDING`, `ROW_AVATAR`).
+
+Raw `<input>` left alone, on purpose: hidden/`sr-only` file pickers,
+checkboxes/radios/colour, `ActivityWindowContent` (semantic
+`.activity-tray-search`), `SkillChipsInput` (a combobox inside a chip
+container), `InlineRename` and `ThreadWidgetRail` (bespoke inline editors).
+
+## Finding 4 — file size
 
 Six files carry 22,063 lines between them: `ChatWindowContent` 5179,
 `AgentsWindowContent` 4729, `App.tsx` 4564, `TasksWindowContent` 2576,

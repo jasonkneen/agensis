@@ -7,6 +7,8 @@ import { viewPreferenceKey } from '../../lib/viewPreferences';
 import { Button } from '@agensis/ui/components/button';
 import { Input } from '@agensis/ui/components/input';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
+import { WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { cn } from '@/lib/utils';
 
 // Lazy: CodeMirror and its grammars stay out of the main bundle. The
 // service-worker precache size is a known sore point, and most sessions never
@@ -140,7 +142,7 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
-      <div className="doc-toolbar flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card/65 px-2 backdrop-blur-md">
+      <div className={cn(WINDOW_TOOLBAR, 'doc-toolbar h-10 gap-1 overflow-x-auto bg-card/65 px-2 backdrop-blur-md')}>
         <Button
           type="button"
           onClick={() => setView('preview')}

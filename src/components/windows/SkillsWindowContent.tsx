@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Sparkles, Search, ChevronLeft, FileText, FolderTree, Info, Pencil, Plus, Radio, Trash2, X } from 'lucide-react';
+import { Sparkles, ChevronLeft, FileText, FolderTree, Info, Pencil, Plus, Radio, Trash2, X } from 'lucide-react';
 import type { WorkspaceAgent, AgentConnection } from '../../types';
 import type { SystemCapabilities } from '../../lib/backendClient';
 import {
@@ -36,7 +36,6 @@ import { AgentAvatar } from '../agents/AgentAvatar';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { Badge } from '@agensis/ui/components/badge';
 import { Button } from '@agensis/ui/components/button';
-import { Input } from '@agensis/ui/components/input';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import {
   Empty,
@@ -46,6 +45,7 @@ import {
   EmptyTitle,
 } from '@agensis/ui/components/empty';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
+import { SearchField } from '@/components/common/SearchField';
 
 // One agent on a skill row. The selected avatar (automatic Blobatar by
 // default) carries identity; initials remain only as a fallback for old or
@@ -301,15 +301,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
   const renderList = (compact: boolean) => (
     <>
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-        <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder="Search skills or agents…"
-            className="h-8 pl-8 text-sm"
-          />
-        </div>
+        <SearchField className="flex-1" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search skills or agents…" />
         {!compact && (
           <span className="shrink-0 text-xs text-muted-foreground">
             {totalSkills} skill{totalSkills === 1 ? '' : 's'}

@@ -39,7 +39,7 @@ export function Example({
 }) {
   return (
     <div className={`flex flex-col gap-3 ${full ? 'sm:col-span-2 lg:col-span-3' : ''}`}>
-      <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
+      <span className="ui-section-label">{label}</span>
       <div className="flex flex-wrap items-center gap-3">{children}</div>
     </div>
   );

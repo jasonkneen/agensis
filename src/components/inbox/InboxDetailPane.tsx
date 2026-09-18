@@ -4,13 +4,8 @@ import { Button } from '@agensis/ui/components/button';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
-import {
-  CATEGORY_ICON,
-  MICRO_LABEL,
-  PANE_HEADER,
-  SCROLL_VIEWPORT_BLOCK,
-  categoryAccent,
-} from './inboxPresentation';
+import { CATEGORY_ICON, categoryAccent } from './inboxPresentation';
+import { MICRO_LABEL, PANE_HEADER, SCROLL_VIEWPORT_BLOCK } from '@/components/common/presentation';
 import {
   absoluteTime,
   inboxPreview,

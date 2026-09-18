@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { BriefcaseBusiness, Check, Copy, Search, Store } from 'lucide-react';
+import { BriefcaseBusiness, Check, Copy, Store } from 'lucide-react';
 import { Button } from '@agensis/ui/components/button';
 import {
   Dialog,
@@ -23,6 +23,7 @@ import {
   type MarketplaceListingType,
 } from '../../lib/marketplace';
 import type { GalleryTemplate } from '../../lib/agentTemplates';
+import { SearchField } from '@/components/common/SearchField';
 
 // The marketplace surfaces inside the Agents window.
 //
@@ -137,15 +138,7 @@ export function AgentMarketplaceSection({
           {message.text}
         </div>
       )}
-      <div className="relative mb-3">
-        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          placeholder="Search the marketplace"
-          className="h-8 pl-8 text-sm"
-        />
-      </div>
+      <SearchField className="mb-3" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search the marketplace" />
       {filtered.length === 0 ? (
         <div className="py-6 text-center text-sm text-muted-foreground">No marketplace listings match.</div>
       ) : (

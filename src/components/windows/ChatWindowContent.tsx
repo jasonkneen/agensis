@@ -232,6 +232,7 @@ import { useComposerAutosize } from '@/hooks/useComposerAutosize';
 import { useNostrMembers } from '@/hooks/useNostrMembers';
 import type { SendOutcome } from '@/lib/writeFeedback';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
+import { WINDOW_TOOLBAR } from '@/components/common/presentation';
 
 /** How far one arrow-key press moves the side-panel seam, px. Matches usePaneSplit. */
 const PANEL_RESIZE_KEY_STEP = 24;
@@ -2962,7 +2963,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
           {!overlaySidePanel && (
             <ResizeHandle
               orientation="vertical"
-              className="inset-y-0 left-0 z-10 -translate-x-1"
+              className="inset-y-0 left-0 z-10 -translate-x-1.5"
               onPointerDown={beginPanelResize}
               onKeyDown={handlePanelResizeKey}
               aria-label="Resize side panel"
@@ -3818,7 +3819,7 @@ function SubThreadListPanel({
   );
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
+      <div className={cn(WINDOW_TOOLBAR, 'justify-between')}>
         <span className="flex items-center gap-1.5 text-sm font-medium">
           <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />
           Sub-threads
@@ -3955,7 +3956,7 @@ function ChannelSidePanel({
       onDragLeave={handlePanelDragLeave}
       onDrop={handlePanelDrop}
     >
-      <div className="channel-header flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
+      <div className={cn(WINDOW_TOOLBAR, 'channel-header')}>
         {!isPins && selectedFile ? (
           <Button type="button" variant="ghost" size="icon-xs" onClick={() => setSelectedFile(null)} aria-label="Back to files">
             <ArrowLeft />
@@ -4408,7 +4409,7 @@ function AgentProfileSidePanel({
 
   return (
     <div className="flex h-full min-w-0 flex-col" style={agent ? agentAccentStyle(agent) : undefined}>
-      <div className="channel-header flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
+      <div className={cn(WINDOW_TOOLBAR, 'channel-header')}>
         <Bot className="size-4 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">Profile</span>
         <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close profile">

@@ -26,7 +26,6 @@ import {
   Save,
   ShieldCheck,
   Share2,
-  Search,
   Sparkles,
   Terminal,
   Trash2,
@@ -181,6 +180,8 @@ import {
   type AgentLayoutView,
 } from '../../lib/agentsView';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
+import { WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { SearchField } from '@/components/common/SearchField';
 
 // Remembered per workspace: how the roster is sliced and drawn (the layout
 // view codec lives in lib/agentsView with the rest of the view decisions).
@@ -932,16 +933,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-card/65 px-3 py-2 backdrop-blur-md">
-        <div className="relative min-w-0 max-w-xs flex-1">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            type="search"
-            value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
-            placeholder="Search agents"
-            className="h-8 pl-8 text-sm"
-          />
-        </div>
+        <SearchField className="min-w-0 max-w-xs flex-1" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search agents" />
         <div className="flex shrink-0 items-center gap-2">
           {!createStep && agents.length > 0 && (
             <div className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-card/40 p-0.5">
@@ -1023,7 +1015,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 Drop a compressed .agn bundle to review it
               </div>
             )}
-            <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+            <div className={cn(WINDOW_TOOLBAR)}>
               <Button type="button" variant="ghost" size="icon-xs" onClick={() => setCreateStep(null)} aria-label="Back to agents">
                 <ArrowLeft />
               </Button>
@@ -1158,10 +1150,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   </div>
                 </div>
               )}
-              <div className="relative mb-2">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input value={templateQuery} onChange={e => setTemplateQuery(e.target.value)} placeholder="Search templates" className="h-8 pl-8 text-sm" />
-              </div>
+              <SearchField className="mb-2" value={templateQuery} onChange={e => setTemplateQuery(e.target.value)} placeholder="Search templates" />
               <div className="mb-3 flex flex-wrap gap-1.5">
                 {TEMPLATE_CATEGORIES.map(cat => (
                   <button
@@ -1248,7 +1237,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
           </div>
         ) : createStep === 'form' ? (
           <div className="flex h-full min-h-0 flex-col rounded-lg border bg-card/55 backdrop-blur-md">
-            <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+            <div className={cn(WINDOW_TOOLBAR)}>
               <Button type="button" variant="ghost" size="icon-xs" onClick={() => setCreateStep('choose')} aria-label="Back to templates">
                 <ArrowLeft />
               </Button>
@@ -2618,7 +2607,7 @@ function AgentDetailPane({
   if (isEditing) {
     return (
       <div className="flex min-h-0 flex-1 flex-col" style={agentAccentStyle(agent)}>
-        <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+        <div className={cn(WINDOW_TOOLBAR)}>
           <Pencil className="size-4 text-primary" />
           <span className="min-w-0 flex-1 truncate text-sm font-semibold">Edit {agent.name}</span>
           <Button type="button" variant="ghost" size="icon-xs" onClick={onCancelEdit} aria-label="Close editor">
@@ -2708,7 +2697,7 @@ function AgentDetailPane({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" style={agentAccentStyle(agent)}>
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+      <div className={cn(WINDOW_TOOLBAR)}>
         {onClose && backButtonClass && (
           <Button type="button" variant="ghost" size="icon-xs" className={cn('shrink-0', backButtonClass)} onClick={onClose} aria-label="Back to all agents">
             <ArrowLeft />
