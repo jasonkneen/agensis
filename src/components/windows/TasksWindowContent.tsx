@@ -27,7 +27,7 @@ import {
 import type { AgentConnection, MessageAttachment, Task, TaskComment, TaskPriority, TaskStatus, UploadedFile, WorkspaceAgent } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
 import type { CreateTaskInput } from '../../hooks/useTasks';
-import { TASK_PANEL_WIDTH_KEY, clampTaskPanelWidth, readStoredTaskPanelWidth } from '../../lib/taskPanelWidth';
+import { TASK_PANEL_MAX_WIDTH, TASK_PANEL_MIN_WIDTH, TASK_PANEL_WIDTH_KEY, clampTaskPanelWidth, readStoredTaskPanelWidth } from '../../lib/taskPanelWidth';
 import { booleanPreference, oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useTaskComments } from '../../hooks/useTaskComments';
@@ -1730,8 +1730,10 @@ function TaskEditPanel({
         dragging={panel.dragging}
         aria-label="Resize task editor"
         aria-valuenow={Math.round(panel.width)}
+        aria-valuemin={TASK_PANEL_MIN_WIDTH}
+        aria-valuemax={TASK_PANEL_MAX_WIDTH}
         title="Drag to resize."
-        className="inset-y-0 -left-1 z-10"
+        className="inset-y-0 -left-1.5 z-10"
       />
       <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
         <span className="text-xs font-semibold tracking-tight text-muted-foreground">Edit task</span>

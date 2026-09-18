@@ -2962,7 +2962,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
           {!overlaySidePanel && (
             <ResizeHandle
               orientation="vertical"
-              className="inset-y-0 left-0 z-10 -translate-x-1"
+              className="inset-y-0 left-0 z-10 -translate-x-1.5"
               onPointerDown={beginPanelResize}
               onKeyDown={handlePanelResizeKey}
               aria-label="Resize side panel"
