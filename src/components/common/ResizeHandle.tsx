@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils';
 // could not reach at all.
 //
 // THE ELEMENT IS A SEPARATOR, NOT A BUTTON. This is the WAI-ARIA window
-// splitter: `type="button"` with `tabIndex={0}`, an orientation, and the
+// splitter: `role="separator"` with `tabIndex={0}`, an orientation, and the
 // `aria-value*` triple the hook supplies. The difference is not pedantry — a
 // button announces as "Resize file list, button", so the natural thing to try
 // is Enter, and Enter does nothing. A separator announces as "Resize file
@@ -49,8 +49,8 @@ interface ResizeHandleProps extends React.ComponentPropsWithoutRef<'div'> {
 export function ResizeHandle({ orientation, dragging = false, className, ...props }: ResizeHandleProps) {
   const vertical = orientation === 'vertical';
   return (
-    <button
-      type="button"
+    <div
+      role="separator"
       tabIndex={0}
       aria-orientation={vertical ? 'vertical' : 'horizontal'}
       {...props}
@@ -68,6 +68,6 @@ export function ResizeHandle({ orientation, dragging = false, className, ...prop
           dragging && 'bg-border',
         )}
       />
-    </button>
+    </div>
   );
 }
