@@ -124,7 +124,64 @@ Deliberately NOT candidates: `text-xs text-muted-foreground` (x85) and the
 other bare utility repeats. They are atoms. Wrapping them would touch 85 sites
 and buy nothing.
 
-## Scope note
+## Second pass: the deferred list, worked
+
+The blocker in the section above cleared (the other agent's refactor merged;
+`main` went green), so the deferred items were re-measured on current `main`
+and taken as far as the evidence supports.
+
+**Native controls -> primitives (done).** Two sites rendered bare OS-default
+controls in an app that ships `Checkbox` and `RadioGroup`:
+`UsersWindowContent`'s controller-scope checkboxes and `AgentsWindowContent`'s
+permission-mode radios. Both converted. `grep 'type="checkbox"|type="radio"'`
+now matches only the HTML string `DocWindowContent` builds for the document
+task list, which is generated markup, not JSX.
+
+**`MENTION_TILE` (done).** The 28px leading tile on mention/command-picker
+rows, drawn inline at 7 sites across `ChatWindowContent` (5) and
+`TasksWindowContent` (2). A constant rather than a component because two of
+the seven apply it to `AgentAvatar`'s `className` rather than wrapping.
+
+**`WINDOW_SHELL` (done).** The root element of a window's content, byte-
+identical at 6 sites. Only the roots: 4 near-misses drop `bg-transparent
+text-foreground`, and on inspection 2 of those are early-return branches
+rendering a different state and 2 are inner containers carrying `min-w-0` /
+`flex-1` for nested flex. Different jobs, not drift. Left alone.
+
+**Raw `<input>` x21: almost all legitimate.** 12 are `type="file"` behind
+`hidden`/`sr-only` (a file trigger is not a styled control; `<Input>` would
+style an invisible element), 1 is `type="color"` (the native picker IS the
+control), 1 is inside an HTML string. The 2 `type="search"` are transparent
+fields inside `PANE_HEADER` / `.activity-tray-search` semantic surfaces —
+the same reason `SearchField`'s own header excludes the sidebar. Converting
+them would nest a bordered input inside a header that already is the field.
+
+**Raw `<button>` x191: NOT sweepable, and this is the finding.** Profiling
+every raw button's `className` gives an almost perfectly flat distribution —
+the most common shape occurs 3 times, and nearly every site is unique. There
+is no dominant drift pattern. They fall into four groups, and only the last
+is drift:
+
+1. targets of semantic selectors (`sidebar-section-action`, `pixel-btn`,
+   `file-tree-heading`, `sidebar-agent-primary`) — CSS-driven by design, and
+   converting them re-adds the row frame the owner rejected twice;
+2. link-style buttons (`hover:underline`, `text-primary underline`);
+3. one-off ghost buttons that approximate `variant="ghost"`;
+4. a handful that hand-roll the primary recipe outright
+   (`rounded-md bg-primary px-2.5 py-1 text-xs font-medium
+   text-primary-foreground hover:bg-primary/90`).
+
+Groups 2-4 are ~191 individual variant-and-size judgements, each a real
+visual change (`Button` brings its own height, padding and focus ring), spread
+across the six largest files in the repo. That is a sequence of small reviewed
+changes, not one commit, and not one an agent should land unsupervised without
+a human looking at each surface. **Recommend doing group 4 first** — it is
+small, unambiguous, and currently the only case where a button that should be
+`<Button>` is provably a hand-drawn copy of it.
+
+Still deferred: the six files over 2,400 lines (unchanged reasoning).
+
+
 
 taste-skill Section 13 puts dashboards, dense product UI and realtime collab
 UIs (presence, cursors) out of scope. agensis is all three. Its *locks* (one

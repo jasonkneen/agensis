@@ -11,6 +11,26 @@
  */
 export const WINDOW_TOOLBAR = 'flex h-11 shrink-0 items-center gap-2 border-b border-border px-3';
 
+/**
+ * The root element of a window's content: fills the frame, stacks its bands,
+ * clips its own overflow, and paints NOTHING — the window shell behind it owns
+ * the surface, which is why this is `bg-transparent` rather than `bg-card`.
+ * Six windows agreed on it by hand. Inner containers are deliberately NOT this
+ * (they carry `min-w-0` / `flex-1` for nested flex, and a branch that renders
+ * an empty or editing state is doing a different job) — this is the ROOT only.
+ */
+export const WINDOW_SHELL = 'flex h-full flex-col overflow-hidden bg-transparent text-foreground';
+
+/**
+ * The 28px leading tile on a mention / command-picker row: an icon on a muted
+ * square, or an agent's face at the same size. Seven rows across the chat and
+ * task composers drew it inline, which is seven places for the size, the
+ * radius and the muted pair to drift — and they must not, because the rows
+ * interleave in one popover. Faces pass it to `AgentAvatar`'s `className`
+ * rather than wrapping, so it stays a string and not a component.
+ */
+export const MENTION_TILE = 'grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground';
+
 // --- Shared with every list/detail window (was inbox/inboxPresentation.ts;
 // tenants imported it from there, which is how a feature-local file became
 // the app's type scale) -------------------------------------------------

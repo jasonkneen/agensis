@@ -9,6 +9,7 @@ import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@agensis/ui/components/empty';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { WINDOW_SHELL } from '@/components/common/presentation';
 
 interface SchedulesWindowProps {
   workspaceId: string;
@@ -103,7 +104,7 @@ export function SchedulesWindow({ workspaceId, agents, sessions }: SchedulesWind
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
+    <div className={WINDOW_SHELL}>
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-card/65 px-4 py-3 backdrop-blur-md">
         <div>
           <h2 className="text-base font-semibold">Schedules</h2>

@@ -104,7 +104,7 @@ import { Textarea } from '@agensis/ui/components/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 import { cn } from '@/lib/utils';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
-import { WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { MENTION_TILE, WINDOW_TOOLBAR } from '@/components/common/presentation';
 
 interface TasksWindowContentProps {
   tasks: Task[];
@@ -1494,7 +1494,7 @@ function TaskDetail({
                             avatar={agent.avatar}
                             name={agent.name}
                             initials={agent.name.slice(0, 2).toUpperCase()}
-                            className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"
+                            className={MENTION_TILE}
                             fallbackClassName="bg-transparent text-3xs text-muted-foreground"
                           />
                           <span className="min-w-0 flex-1">
@@ -1518,7 +1518,7 @@ function TaskDetail({
                         className="rounded-lg px-2 py-1.5"
                         onSelect={() => selectMentionMember(member)}
                       >
-                        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                        <span className={MENTION_TILE}>
                           <User className="size-4" />
                         </span>
                         <span className="min-w-0 flex-1">

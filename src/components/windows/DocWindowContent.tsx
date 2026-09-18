@@ -12,7 +12,7 @@ import { Input } from '@agensis/ui/components/input';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Separator } from '@agensis/ui/components/separator';
 import { sanitizeHtml, sanitizeClipboardHtml } from '@/lib/sanitize';
-import { WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { WINDOW_SHELL, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { cn } from '@/lib/utils';
 
 interface DocWindowContentProps {
@@ -721,7 +721,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
   const canShowComments = Boolean(workspaceId && currentUserEmail);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
+    <div className={WINDOW_SHELL}>
       <div className={cn(WINDOW_TOOLBAR, 'doc-toolbar h-10 gap-1 overflow-x-auto bg-card/65 px-2 backdrop-blur-md')}>
         {TOOLBAR.map((item, idx) => (
           item.divider ? (

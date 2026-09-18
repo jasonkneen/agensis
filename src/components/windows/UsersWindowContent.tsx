@@ -49,8 +49,9 @@ import {
 } from '@agensis/ui/components/item';
 import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
 import { Spinner } from '@agensis/ui/components/spinner';
-import { WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { WINDOW_SHELL, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { cn } from '@/lib/utils';
+import { Checkbox } from '@agensis/ui/components/checkbox';
 
 interface UsersWindowContentProps {
   workspaceName: string;
@@ -222,7 +223,7 @@ export const UsersWindowContent = memo(function UsersWindowContent({
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
+    <div className={WINDOW_SHELL}>
       <div className={cn(WINDOW_TOOLBAR, 'bg-card/65 backdrop-blur-md')}>
         <Users className="size-4 text-primary" />
         <span className="text-sm font-semibold">People & connections</span>
@@ -472,11 +473,10 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                       <div className="grid gap-2 sm:grid-cols-2">
                         {WORKSPACE_CONTROLLER_SCOPES.map(scope => (
                           <label key={scope} className="flex items-center gap-2 text-xs">
-                            <input
-                              type="checkbox"
+                            <Checkbox
                               checked={controllerScopes.includes(scope)}
-                              onChange={(event) => {
-                                setControllerScopes(previous => event.target.checked
+                              onCheckedChange={(checked) => {
+                                setControllerScopes(previous => checked === true
                                   ? [...previous, scope]
                                   : previous.filter(value => value !== scope));
                                 setCopiedCreate(false);

@@ -33,6 +33,7 @@ import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Textarea } from '@agensis/ui/components/textarea';
 import { viewPreferenceKey, type PreferenceCodec } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+import { WINDOW_SHELL } from '@/components/common/presentation';
 
 // The one filter here whose options are user-defined, so there is no closed set
 // to validate against on read: anything non-empty parses, and `activeCategory`
@@ -105,7 +106,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
+    <div className={WINDOW_SHELL}>
       <div className="flex h-9 shrink-0 gap-1 border-b border-border bg-card px-2">
         <button
           type="button"

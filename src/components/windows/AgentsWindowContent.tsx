@@ -180,8 +180,10 @@ import {
   type AgentLayoutView,
 } from '../../lib/agentsView';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
-import { WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { WINDOW_SHELL, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { SearchField } from '@/components/common/SearchField';
+import { Label } from '@agensis/ui/components/label';
+import { RadioGroup, RadioGroupItem } from '@agensis/ui/components/radio-group';
 
 // Remembered per workspace: how the roster is sliced and drawn (the layout
 // view codec lives in lib/agentsView with the rest of the view decisions).
@@ -931,7 +933,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
+    <div className={WINDOW_SHELL}>
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-card/65 px-3 py-2 backdrop-blur-md">
         <SearchField className="min-w-0 max-w-xs flex-1" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search agents" />
         <div className="flex shrink-0 items-center gap-2">
@@ -4278,30 +4280,28 @@ function AccessSection({
         directory needs a <strong>host folder</strong> above — no permission mode or grant
         can reach one.
       </p>
-      <div className="mb-3 grid gap-1.5">
+      <RadioGroup
+        className="mb-3 grid gap-1.5"
+        value={mode}
+        disabled={saving}
+        onValueChange={value => void setMode(value as AgentPermissionMode)}
+      >
         {PERMISSION_MODE_OPTIONS.map(option => (
-          <label
+          <Label
             key={option.value}
             className={cn(
               'flex cursor-pointer items-start gap-2 rounded-md border px-2 py-1.5 text-sm transition-colors',
               mode === option.value ? 'border-ring bg-muted/50' : 'border-border hover:bg-muted/30',
             )}
           >
-            <input
-              type="radio"
-              className="mt-1"
-              name={`permission-mode-${agent.id}`}
-              checked={mode === option.value}
-              disabled={saving}
-              onChange={() => void setMode(option.value)}
-            />
+            <RadioGroupItem value={option.value} className="mt-1" />
             <span className="min-w-0">
               <span className="block font-semibold">{option.label}</span>
               <span className="block text-xs text-muted-foreground">{option.hint}</span>
             </span>
-          </label>
+          </Label>
         ))}
-      </div>
+      </RadioGroup>
 
       <div className="ui-section-label mb-1">
         Always allowed

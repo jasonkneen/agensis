@@ -232,7 +232,7 @@ import { useComposerAutosize } from '@/hooks/useComposerAutosize';
 import { useNostrMembers } from '@/hooks/useNostrMembers';
 import type { SendOutcome } from '@/lib/writeFeedback';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
-import { WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { MENTION_TILE, WINDOW_TOOLBAR } from '@/components/common/presentation';
 
 /** How far one arrow-key press moves the side-panel seam, px. Matches usePaneSplit. */
 const PANEL_RESIZE_KEY_STEP = 24;
@@ -2691,7 +2691,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                                 avatar={agent.avatar}
                                 name={agent.name}
                                 initials={agent.name.slice(0, 2).toUpperCase()}
-                                className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground"
+                                className={MENTION_TILE}
                                 fallbackClassName="bg-transparent text-3xs text-muted-foreground"
                               />
                               <span className="min-w-0 flex-1">
@@ -2714,7 +2714,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                               className="rounded-lg px-2 py-2.5"
                               onSelect={() => handleNostrMemberSelect(member)}
                             >
-                              <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                              <span className={MENTION_TILE}>
                                 <Globe className="size-4" />
                               </span>
                               <span className="min-w-0 flex-1">
@@ -2743,7 +2743,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                             className="rounded-lg px-2 py-1.5"
                             onSelect={() => insertMentionHandle(CHANNEL_MENTION_HANDLE)}
                           >
-                            <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                            <span className={MENTION_TILE}>
                               <Users className="size-4" />
                             </span>
                             <span className="min-w-0 flex-1">
@@ -2766,7 +2766,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                             className="rounded-lg px-2 py-1.5"
                             onSelect={() => handleDocSelect(doc)}
                           >
-                            <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                            <span className={MENTION_TILE}>
                               <FileText className="size-4" />
                             </span>
                             <span className="min-w-0 flex-1">
@@ -5191,7 +5191,7 @@ function SlashRow({
       className={`rounded-lg px-2 py-2.5${indented ? ' ml-3' : ''}`}
       onSelect={onSelect}
     >
-      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+      <span className={MENTION_TILE}>
         {children}
       </span>
       <span className="min-w-0 flex-1">
