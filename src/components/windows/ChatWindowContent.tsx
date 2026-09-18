@@ -231,6 +231,10 @@ import { channelComposerPlaceholder, directMessageComposerPlaceholder } from '@/
 import { useComposerAutosize } from '@/hooks/useComposerAutosize';
 import { useNostrMembers } from '@/hooks/useNostrMembers';
 import type { SendOutcome } from '@/lib/writeFeedback';
+import { ResizeHandle } from '@/components/common/ResizeHandle';
+
+/** How far one arrow-key press moves the side-panel seam, px. Matches usePaneSplit. */
+const PANEL_RESIZE_KEY_STEP = 24;
 
 interface ChatWindowContentProps {
   /** Authoritative conversation identity, including when the transcript is empty. */
@@ -2003,6 +2007,23 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
     window.addEventListener('pointerup', onUp, { once: true });
   };
 
+  // Arrow-key parity for the side-panel seam. This divider used to be a bare
+  // `<div aria-hidden>`: no role, no tab stop, unreachable without a pointer.
+  // It is a separator now, so it has to answer the arrows. The seam is the
+  // panel's LEFT edge and the panel is on the right, so Left grows it — the
+  // same inversion `beginPanelResize` applies to the pointer delta.
+  const handlePanelResizeKey = (event: React.KeyboardEvent<HTMLElement>) => {
+    const step = event.key === 'ArrowLeft' ? PANEL_RESIZE_KEY_STEP : event.key === 'ArrowRight' ? -PANEL_RESIZE_KEY_STEP : 0;
+    if (!step) return;
+    event.preventDefault();
+    const isThread = sidePanel === 'thread';
+    const current = sidePanelRef.current?.getBoundingClientRect().width
+      ?? (isThread ? threadPanelWidth ?? 360 : panelWidth);
+    const next = Math.min(isThread ? 900 : 680, Math.max(280, current + step));
+    if (isThread) setThreadPanelWidth(next);
+    else setPanelWidth(next);
+  };
+
   return (
     <div ref={shellRef} className="channel-shell flex h-full min-w-0 overflow-hidden text-card-foreground">
       {/* Wraps the message column AND the side panel, because the huddle panel
@@ -2939,10 +2960,13 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
           {/* No drag handle when the panel owns the whole shell: there is no
               split left to drag, and the handle sat on the window's own edge. */}
           {!overlaySidePanel && (
-            <div
-              className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1 cursor-col-resize"
+            <ResizeHandle
+              orientation="vertical"
+              className="inset-y-0 left-0 z-10 -translate-x-1"
               onPointerDown={beginPanelResize}
-              aria-hidden
+              onKeyDown={handlePanelResizeKey}
+              aria-label="Resize side panel"
+              title="Drag to resize."
             />
           )}
           {sidePanel === 'profile' ? (

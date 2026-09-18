@@ -1565,7 +1565,6 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                             turned on its side: a hairline that only appears
                             under the pointer or focus. */}
                         <ResizeHandle
-                          type="button"
                           aria-label="Resize agent grid"
                           title="Drag to resize. Double-click to reset."
                           {...splitHandlers}

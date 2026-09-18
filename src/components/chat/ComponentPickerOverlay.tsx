@@ -128,7 +128,7 @@ export function ComponentPickerOverlay({
       <div
         key={p.id}
         {...{ [IGNORE_ATTR]: '' }}
-        className="pointer-events-none fixed z-[9997] flex size-5 items-center justify-center rounded-full bg-primary text-[11px] font-bold leading-none text-primary-foreground shadow ring-2 ring-background"
+        className="pointer-events-none fixed z-[9997] flex size-5 items-center justify-center rounded-full bg-primary text-2xs font-bold leading-none text-primary-foreground shadow ring-2 ring-background"
         style={{ left: Math.max(2, r.x - 8), top: Math.max(2, r.y - 8) }}
         title={p.note || p.label}
       >

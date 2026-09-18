@@ -1302,5 +1302,6 @@ Pinned by `tests/desktop-local-runtime.test.cjs`.
   did not, so the swap silently reflows; write `text-[0.75rem]` /
   `text-[0.875rem]` instead. (2) 7px, 8px and 9px are **exempt** — they are the
   Press Start 2P retro face and avatar initials, which are deliberately fixed.
-  `src/components/layout/Sidebar.tsx` is the converted reference; roughly 300
-  px sites elsewhere are still waiting.
+  `src/components/layout/Sidebar.tsx` is the converted reference. As of
+  2026-09-18 every non-exempt site is converted; the only `text-[Npx]` left are
+  the 7/8/9px exemptions and Sidebar's `text-[0px]` collapsed-badge trick.
