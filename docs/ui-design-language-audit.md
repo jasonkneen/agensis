@@ -194,7 +194,37 @@ The 2 primary-recipe buttons left are deliberately sub-primitive:
 `Button`'s smallest icon size is 24px, and `InboxSelectionBar`'s is a
 select-all affordance drawn as a filled square. Both would get visibly larger.
 
-Still deferred: the six files over 2,400 lines (unchanged reasoning).
+### Splitting the giant files
+
+Six files held 22,063 lines. Two are now split, by pure move: the extracted
+body is diffed byte-for-byte against the lines it replaced, and the only edits
+are the import lists, pruned by following `tsc` until it goes quiet.
+
+| File | Before | After | Extracted |
+| --- | --- | --- | --- |
+| `SettingsDialog` | 2,524 | 1,860 | `AppearancePanel.tsx` (689) |
+| `TasksWindowContent` | 2,595 | 1,936 | `TaskBoardViews.tsx` (674), `taskPresentation.ts` (23) |
+
+`SettingsDialog` was the easy one: nine independent tab panels sharing nothing
+but props, so the move needed no new module. `TasksWindowContent` was not —
+the Kanban and Gantt views use `STATUS_LABELS` and `taskChatSessionId`, which
+lived in the file they were leaving. Neither file may import the other without
+a cycle, so the shared pair moved down into `taskPresentation.ts`.
+
+**One caution for whoever does the next one.** Pruning imports by regex after a
+move can silently corrupt an ALIASED import: mine rewrote
+`dueDateFromExclusiveEnd, dependencyCandidates` into
+`dependencyCandidates as dueDateFromExclusiveEnd`, which is valid TypeScript
+calling entirely the wrong function. `tsc` caught it only because the two
+signatures disagreed — had they matched, it would have compiled and shipped.
+Grep the new file for ` as ` after any such prune, and diff the moved body
+against the original rather than trusting a green typecheck.
+
+Still deferred: `ChatWindowContent` (5,204), `AgentsWindowContent` (4,718),
+`App.tsx` (4,564) and `Sidebar` (2,513). The first two are the most contended
+files in the repo (17 live worktrees) and `App.tsx` is the router and provider
+tree rather than a component with seams. Each wants its own branch and a human
+looking at the surface afterwards.
 
 
 
