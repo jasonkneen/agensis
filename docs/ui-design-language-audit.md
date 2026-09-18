@@ -43,9 +43,20 @@ Four variants, on three tiers of accessibility:
 role="separator">` three are announced but not focusable, which is arguably
 worse than the honest `aria-hidden` one.
 
-**Fix:** one `<ResizeHandle>` in `src/components/common/`, owning the markup and
-classes, spreading the hook's `dividerProps`. Canonicalise on the `group/split`
-button variant — it is already the plurality (6 uses) and the most accessible.
+**Fix (done):** one `<ResizeHandle>` in `src/components/common/`, owning the
+markup and classes. It renders the WAI-ARIA window-splitter element —
+`role="separator"`, `tabIndex={0}`, `aria-orientation`, `aria-value*` — not a
+`<button>`: a button announces "button" and invites Enter, which does nothing; a
+separator announces its position and implies the arrow keys. `WorkspaceRail`
+already had this exactly right and was the only one of the thirteen that did.
+`usePaneSplit.dividerProps` now emits the `aria-value*` triple and is typed for
+`HTMLElement`. The three sites with no hook (Sidebar, Tasks, Chat) each gained a
+~10-line arrow-key handler so the tab stop actually does something.
+
+Result: 13 of 13 migrated; `WorkspaceRail` keeps its own markup because it
+already is the canonical form (and carries extra data-attrs the rail's drag
+code depends on). `grep cursor-col-resize src` now matches only the component
+and the rail.
 
 ## Finding 2 — px type sizes (AGENTS.md convention, nearly done)
 
@@ -53,11 +64,12 @@ AGENTS.md says "roughly 300 px sites elsewhere are still waiting". **That is
 stale.** Actual count is 44, of which 32 are the documented 7/8/9px exemption
 and 2 are the `text-[0px]` badge trick. Ten real sites remain:
 
-- `text-[13px]` x7 -> `text-[0.8125rem]` (App, WorkspaceRail x4, and 2 more)
-- `text-[11px]` x2 -> `text-2xs`
-- `text-[11.5px]` x1 -> nearest rung
+- `text-[13px]` x6 -> `text-[0.8125rem]` (App x1, WorkspaceRail x5) — done
+- `text-[11px]` x2 -> `text-2xs` — done (all three carry an explicit `leading-*`,
+  so the paired-line-height trap in AGENTS.md does not bite)
+- `text-[11.5px]` x1 -> `text-2xs` — done
 
-AGENTS.md needs its number corrected in the same change.
+AGENTS.md's count corrected in the same change.
 
 ## Finding 3 — file size
 

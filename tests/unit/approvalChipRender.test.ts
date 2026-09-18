@@ -151,7 +151,7 @@ describe('the live thinking chip matches normal tool-call typography', () => {
     expect(label.classList).toContain('font-medium');
     expect(label.classList).toContain('text-foreground/70');
     expect(label.classList).not.toContain('text-shimmer');
-    expect(chip.classList).toContain('text-[11px]');
+    expect(chip.classList).toContain('text-2xs');
     expect(chip.classList).toContain('bg-[color:var(--accent-subtle)]');
     expect(chip.querySelector('svg')).not.toBeNull();
   });
