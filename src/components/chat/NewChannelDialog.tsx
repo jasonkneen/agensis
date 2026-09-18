@@ -30,6 +30,7 @@ import { apiUrl, apiAuthHeaders } from '@/lib/backendClient';
 import type { AgentConnection, ChatSession, WorkspaceAgent } from '@/types';
 import { NostrCommunitySetup } from './NostrCommunitySetup';
 import type { NostrConnection } from '@/lib/nostrCommunities';
+import { FILTER_CHIP_OFF, FILTER_CHIP_ON } from '@/components/common/presentation';
 
 // ---------------------------------------------------------------------------
 // The "+" beside Channels opens this instead of silently creating "New Channel".
@@ -216,8 +217,8 @@ export function NewChannelDialog({
                       className={cn(
                         'control-outer-ring flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition',
                         active
-                          ? 'border-primary/60 bg-primary/15 text-foreground'
-                          : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                          ? FILTER_CHIP_ON
+                          : FILTER_CHIP_OFF,
                       )}
                     >
                       <Icon className="size-3.5" />

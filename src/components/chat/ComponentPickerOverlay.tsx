@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { describeElement, type ElementPick } from '../../lib/componentPicker';
+import { Button } from '@agensis/ui/components/button';
 
 // Anything tagged data-picker-ignore is invisible to the picker — the composer,
 // this overlay's own popup, etc. — so pointing the inspector at the chat input
@@ -231,20 +232,12 @@ function NotePopup({
         className="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
       <div className="mt-2 flex justify-end gap-1.5">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
-        >
+        <Button type="button" variant="ghost" size="xs" onClick={onCancel}>
           Cancel
-        </button>
-        <button
-          type="button"
-          onClick={onSubmit}
-          className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-        >
+        </Button>
+        <Button type="button" size="xs" onClick={onSubmit}>
           Add
-        </button>
+        </Button>
       </div>
     </div>
   );

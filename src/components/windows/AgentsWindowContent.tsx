@@ -180,10 +180,11 @@ import {
   type AgentLayoutView,
 } from '../../lib/agentsView';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
-import { WINDOW_SHELL, WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { FILTER_CHIP_OFF, FILTER_CHIP_ON, WINDOW_SHELL, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { SearchField } from '@/components/common/SearchField';
 import { Label } from '@agensis/ui/components/label';
 import { RadioGroup, RadioGroupItem } from '@agensis/ui/components/radio-group';
+import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 
 // Remembered per workspace: how the roster is sliced and drawn (the layout
 // view codec lives in lib/agentsView with the rest of the view decisions).
@@ -1162,8 +1163,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                     className={cn(
                       'control-outer-ring rounded-lg border px-2.5 py-1 text-xs font-medium transition',
                       templateCategory === cat
-                        ? 'border-primary/60 bg-primary/15 text-foreground'
-                        : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                        ? FILTER_CHIP_ON
+                        : FILTER_CHIP_OFF,
                     )}
                   >
                     {cat}
@@ -1330,30 +1331,22 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 already engaged — otherwise an active filter can hide its own
                 control. */}
             {agents.length > 0 && (mineCount > 0 || ownerFilter === 'mine') && (
-              <div className="mb-2 inline-flex shrink-0 items-center gap-0.5 self-start rounded-lg border border-border bg-card/40 p-0.5 text-xs font-medium">
-                <button
-                  type="button"
-                  onClick={() => setOwnerFilter('mine')}
-                  aria-pressed={ownerFilter === 'mine'}
-                  className={cn(
-                    'rounded-md px-3 py-1 transition',
-                    ownerFilter === 'mine' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
+              <ToggleGroup
+                type="single"
+                value={ownerFilter}
+                // Radix clears the value when you press the item that is already
+                // on. This filter has no "neither" state, so an empty value is
+                // the user pressing the current tab: keep what they had.
+                onValueChange={value => { if (value) setOwnerFilter(value as typeof ownerFilter); }}
+                className="mb-2 inline-flex w-auto shrink-0 items-center gap-0.5 self-start rounded-lg border border-border bg-card/40 p-0.5 text-xs font-medium"
+              >
+                <ToggleGroupItem value="mine" className={OWNER_FILTER_ITEM}>
                   Yours <span className="tabular-nums opacity-70">{mineCount}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setOwnerFilter('all')}
-                  aria-pressed={ownerFilter === 'all'}
-                  className={cn(
-                    'rounded-md px-3 py-1 transition',
-                    ownerFilter === 'all' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
+                </ToggleGroupItem>
+                <ToggleGroupItem value="all" className={OWNER_FILTER_ITEM}>
                   All <span className="tabular-nums opacity-70">{agents.length}</span>
-                </button>
-              </div>
+                </ToggleGroupItem>
+              </ToggleGroup>
             )}
             {agents.length > 0 && (
               <div className="agents-status-filter mb-3 flex flex-wrap items-center gap-1.5">
@@ -1362,10 +1355,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   onClick={() => setStatusFilter(new Set())}
                   aria-pressed={statusFilter.size === 0}
                   className={cn(
-                    'control-outer-ring inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
+                    STATUS_CHIP,
                     statusFilter.size === 0
-                      ? 'border-primary/60 bg-primary/15 text-foreground'
-                      : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                      ? FILTER_CHIP_ON
+                      : FILTER_CHIP_OFF,
                   )}
                 >
                   All
@@ -1380,10 +1373,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                       onClick={() => setStatusFilter(new Set(['busy', 'idle']))}
                       aria-pressed={isActiveFilter}
                       className={cn(
-                        'control-outer-ring inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
+                        STATUS_CHIP,
                         isActiveFilter
-                          ? 'border-primary/60 bg-primary/15 text-foreground'
-                          : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                          ? FILTER_CHIP_ON
+                          : FILTER_CHIP_OFF,
                       )}
                     >
                       <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden />
@@ -1401,10 +1394,10 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                       onClick={() => toggleStatusFilter(filter.key)}
                       aria-pressed={active}
                       className={cn(
-                        'control-outer-ring inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition',
+                        STATUS_CHIP,
                         active
-                          ? 'border-primary/60 bg-primary/15 text-foreground'
-                          : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                          ? FILTER_CHIP_ON
+                          : FILTER_CHIP_OFF,
                       )}
                     >
                       <span className={cn('size-1.5 rounded-full', filter.tone)} aria-hidden />
@@ -4156,6 +4149,21 @@ function HostFoldersSection({
 // at all before this — it was settable only through the connect command or the
 // API, which is why the practical answer to "the agent is blocked" had become
 // "run it in yolo".
+/**
+ * The Yours/All segment's item. Spelled out rather than taking the toggle
+ * variant's default because the selected segment here is the PRIMARY fill, not
+ * the accent wash a stock toggle gives — and this control is the one the
+ * trap-state smoke gate recovers through, so its appearance is deliberately
+ * unchanged by the move onto the primitive.
+ */
+const OWNER_FILTER_ITEM = 'rounded-md px-3 py-1 text-muted-foreground transition hover:text-foreground data-[state=on]:bg-primary data-[state=on]:text-primary-foreground';
+
+/** The status/presence filter row's chip. Three chips, three different
+ *  selection rules (clear all, set both active states, toggle one) but one
+ *  shape — the colours come from FILTER_CHIP_ON/OFF, shared with the channel
+ *  template picker and the marketplace. */
+const STATUS_CHIP = 'control-outer-ring inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition';
+
 const PERMISSION_MODE_OPTIONS: { value: AgentPermissionMode; label: string; hint: string }[] = [
   {
     value: 'default',

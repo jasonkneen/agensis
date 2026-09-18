@@ -156,28 +156,43 @@ fields inside `PANE_HEADER` / `.activity-tray-search` semantic surfaces —
 the same reason `SearchField`'s own header excludes the sidebar. Converting
 them would nest a bordered input inside a header that already is the field.
 
-**Raw `<button>` x191: NOT sweepable, and this is the finding.** Profiling
-every raw button's `className` gives an almost perfectly flat distribution —
-the most common shape occurs 3 times, and nearly every site is unique. There
-is no dominant drift pattern. They fall into four groups, and only the last
-is drift:
+**Raw `<button>` x191, worked through by classification.** Profiling every
+raw button's `className` gives an almost flat distribution (most common shape:
+3 occurrences), so there was never a sweep to do. Classified, all 191:
 
-1. targets of semantic selectors (`sidebar-section-action`, `pixel-btn`,
-   `file-tree-heading`, `sidebar-agent-primary`) — CSS-driven by design, and
-   converting them re-adds the row frame the owner rejected twice;
-2. link-style buttons (`hover:underline`, `text-primary underline`);
-3. one-off ghost buttons that approximate `variant="ghost"`;
-4. a handful that hand-roll the primary recipe outright
-   (`rounded-md bg-primary px-2.5 py-1 text-xs font-medium
-   text-primary-foreground hover:bg-primary/90`).
+| Bucket | n | Verdict |
+| --- | --- | --- |
+| semantic-CSS targets | 27 | **Leave.** `sidebar-*`, `pixel-btn`, `file-tree-*`. CSS-driven by design; converting re-adds the row frame the owner rejected twice. |
+| primary recipe | 6 | **5 fixed.** 1 was a hand-drawn `<Button>`; 3 were segmented controls; 2 are sub-primitive (below). |
+| ghost recipe | 59 | **Leave — they are not buttons.** `w-full ... text-left` with full-width layout: these are list rows and menu items. `Button` is inline-flex, centred and fixed-height; it is the wrong control. The right target is the `Item` primitive, which is a separate and much larger semantic change. |
+| link style | 12 | Candidates for `variant="link"`; each is a real visual change, unreviewed. |
+| no className / other | 87 | One-offs and icon affordances; no shared recipe to extract. |
 
-Groups 2-4 are ~191 individual variant-and-size judgements, each a real
-visual change (`Button` brings its own height, padding and focus ring), spread
-across the six largest files in the repo. That is a sequence of small reviewed
-changes, not one commit, and not one an agent should land unsupervised without
-a human looking at each surface. **Recommend doing group 4 first** — it is
-small, unambiguous, and currently the only case where a button that should be
-`<Button>` is provably a hand-drawn copy of it.
+What that yielded:
+
+- **`ComponentPickerOverlay`'s Cancel/Add pair** was a hand-drawn `<Button>`:
+  `rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground`.
+  Now `<Button size="xs">` + `variant="ghost"`. `size="xs"` is h-6/px-2/text-xs,
+  so the conversion is near pixel-identical.
+- **Three hand-rolled segmented controls became `ToggleGroup`**: the agents
+  Yours/All owner filter, and the campaign composer's Match all/Match any.
+  Both keep their exact appearance via `data-[state=on]:bg-primary` rather
+  than taking the stock toggle's accent wash, and they gain roving focus and
+  real single-select semantics. **The owner filter is the control the
+  trap-state smoke gate recovers through** (the 2026-07-27 incident); the gate
+  passes because `ToggleGroupItem` renders a `<button>`, which is the first
+  entry in the harness's `CONTROL_SELECTOR`. Re-run and verified, not assumed.
+- **`FILTER_CHIP_ON` / `FILTER_CHIP_OFF`**: the selectable filter chip's two
+  states, six byte-identical copies across agents, the channel-template picker
+  and the marketplace. The base stays with the caller (padding legitimately
+  differs); the states do not.
+- **`STATUS_CHIP`**: the agents status/presence chip shape, 3 copies in one
+  file with 3 different selection rules.
+
+The 2 primary-recipe buttons left are deliberately sub-primitive:
+`ThreadWidgetRail`'s 20px send button sits in a `text-3xs` inline field and
+`Button`'s smallest icon size is 24px, and `InboxSelectionBar`'s is a
+select-all affordance drawn as a filled square. Both would get visibly larger.
 
 Still deferred: the six files over 2,400 lines (unchanged reasoning).
 

@@ -9,6 +9,18 @@
  * Extras — a frosted `bg-card/65 backdrop-blur-md`, `justify-between`, a
  * semantic hook class — are appended by the caller through cn().
  */
+/**
+ * A selectable filter chip: the pill row above a list that narrows it. Three
+ * surfaces drew the same pair of states by hand — agents (status and presence),
+ * the channel-template picker, the marketplace type filter — six copies of two
+ * strings that have to stay identical, because a user moving between those
+ * surfaces is looking at the same control. The BASE is the caller's, because
+ * the padding legitimately differs (a chip with a dot and a count is taller
+ * than a bare label); the two STATES are not.
+ */
+export const FILTER_CHIP_ON = 'border-primary/60 bg-primary/15 text-foreground';
+export const FILTER_CHIP_OFF = 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground';
+
 export const WINDOW_TOOLBAR = 'flex h-11 shrink-0 items-center gap-2 border-b border-border px-3';
 
 /**

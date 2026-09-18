@@ -37,6 +37,7 @@ import {
   type CampaignSurface,
 } from '../../lib/tenantCampaigns';
 import { tenantDisplayName, type TenantAccount } from '../../lib/tenants';
+import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 
 // ---------------------------------------------------------------------------
 // MESSAGE ACCOUNTS — segment, then send.
@@ -159,23 +160,27 @@ export const CampaignComposer = React.memo(function CampaignComposer({ accounts,
           <section className="flex flex-col gap-3">
             <div className="flex items-center gap-2">
               <h3 className={cn('font-semibold text-foreground', TEXT_BODY)}>Who gets it</h3>
-              <div className="ml-auto flex items-center gap-1 rounded-lg border border-border p-0.5">
+              <ToggleGroup
+                type="single"
+                value={segment.match}
+                // Empty means they pressed the segment already on; there is no
+                // "match neither", so hold the current value.
+                onValueChange={value => {
+                  if (!value) return;
+                  setSegment(current => ({ ...current, match: value as typeof current.match }));
+                }}
+                className="ml-auto flex w-auto items-center gap-1 rounded-lg border border-border p-0.5"
+              >
                 {(['all', 'any'] as const).map(mode => (
-                  <button
+                  <ToggleGroupItem
                     key={mode}
-                    type="button"
-                    onClick={() => setSegment(current => ({ ...current, match: mode }))}
-                    className={cn(
-                      'rounded-md px-2 py-1 text-xs transition',
-                      segment.match === mode
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:text-foreground',
-                    )}
+                    value={mode}
+                    className="rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:text-foreground data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
                   >
                     {mode === 'all' ? 'Match all' : 'Match any'}
-                  </button>
+                  </ToggleGroupItem>
                 ))}
-              </div>
+              </ToggleGroup>
             </div>
             <p className={cn('text-muted-foreground', TEXT_META)}>
               {segment.match === 'all'

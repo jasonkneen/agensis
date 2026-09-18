@@ -24,6 +24,7 @@ import {
 } from '../../lib/marketplace';
 import type { GalleryTemplate } from '../../lib/agentTemplates';
 import { SearchField } from '@/components/common/SearchField';
+import { FILTER_CHIP_OFF, FILTER_CHIP_ON } from '@/components/common/presentation';
 
 // The marketplace surfaces inside the Agents window.
 //
@@ -110,8 +111,8 @@ export function AgentMarketplaceSection({
               className={cn(
                 'control-outer-ring rounded-lg border px-2.5 py-1 text-xs font-medium transition',
                 typeFilter === filter.id
-                  ? 'border-primary/60 bg-primary/15 text-foreground'
-                  : 'border-border bg-card/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+                  ? FILTER_CHIP_ON
+                  : FILTER_CHIP_OFF,
               )}
             >
               {filter.label}
