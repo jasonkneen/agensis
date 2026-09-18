@@ -79,6 +79,24 @@ Six files carry 22,063 lines between them: `ChatWindowContent` 5179,
 refactoring with real merge-conflict risk against the other 17 live worktrees.
 **Deferred, not done** — logged here so it is not rediscovered.
 
+## Not done in this pass, and why
+
+Everything below is real and measured. None of it was attempted, because a
+second agent was writing to this same worktree while the work was in flight
+(see the note at the end of Finding 1) and each of these touches more shared
+files than the resize seam did.
+
+| Item | Count | Note |
+| --- | --- | --- |
+| Raw `<input>` -> `Input`/`Textarea`/`NativeSelect` | 23 lines | Lowest risk of the remaining set; start here. |
+| Raw `<button>` -> `Button` | 203 lines | **Needs discrimination, not a sweep.** A raw `<button>` is drift only where it hand-rolls `variant="ghost" size="icon"`. Many are the targets of semantic selectors (`.sidebar-rail-button`, `.sidebar-agent-row>button`), and swapping those re-adds the frame the owner rejected twice. Hotspots: AgentsWindowContent 22, Sidebar 18, ChatWindowContent 12. |
+| Icon tile (`grid size-7 place-items-center rounded-md bg-muted`) | 7 uses | Compound and behavioural; a real component. ChatWindowContent 5, Tasks 2. |
+| Six files over 2,400 lines | 22,063 lines | `ChatWindowContent` 5179, `AgentsWindowContent` 4729, `App.tsx` 4564, `Tasks` 2576, `SettingsDialog` 2524, `Sidebar` 2491. Pure-move splits along the tab/section seams already visible in each. High conflict risk against the 17 other live worktrees. |
+
+Deliberately NOT candidates: `text-xs text-muted-foreground` (x85) and the
+other bare utility repeats. They are atoms. Wrapping them would touch 85 sites
+and buy nothing.
+
 ## Scope note
 
 taste-skill Section 13 puts dashboards, dense product UI and realtime collab
