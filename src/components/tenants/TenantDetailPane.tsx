@@ -3,7 +3,7 @@ import { Button } from '@agensis/ui/components/button';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Skeleton } from '@agensis/ui/components/skeleton';
 import { cn } from '@/lib/utils';
-import { MICRO_LABEL, PANE_HEADER, SCROLL_VIEWPORT_BLOCK, TEXT_BODY, TEXT_META } from '../inbox/inboxPresentation';
+import { MICRO_LABEL, PANE_HEADER, SCROLL_VIEWPORT_BLOCK, TEXT_BODY, TEXT_META } from '@/components/common/presentation';
 import {
   buildTenantInventorySections,
   buildTenantWorkspaceRow,

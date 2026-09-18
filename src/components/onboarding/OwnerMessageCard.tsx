@@ -1,6 +1,7 @@
-import { ChevronDown, ChevronUp, Megaphone, X } from 'lucide-react';
+import { Megaphone } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { OwnerMessage } from '@/lib/tenantCampaigns';
+import { CardActions } from './CardActions';
 
 interface OwnerMessageCardProps {
   message: OwnerMessage;
@@ -42,23 +43,14 @@ export function OwnerMessageCard({
         <span className="min-w-0 flex-1 truncate text-xs font-semibold tracking-wide text-primary">
           FOR YOU
         </span>
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          className="grid size-5 place-items-center rounded text-muted-foreground transition hover:text-foreground"
-          aria-label={collapsed ? 'Expand message' : 'Collapse message'}
-        >
-          {collapsed ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
-        </button>
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="grid size-5 place-items-center rounded text-muted-foreground transition hover:text-foreground"
-          aria-label="Dismiss this message"
-          title="Dismiss this message"
-        >
-          <X className="size-4" />
-        </button>
+        <CardActions
+          collapsed={collapsed}
+          onToggleCollapse={onToggleCollapse}
+          onDismiss={onDismiss}
+          expandLabel="Expand message"
+          collapseLabel="Collapse message"
+          dismissLabel="Dismiss this message"
+        />
       </div>
 
       {!collapsed && (

@@ -1,5 +1,6 @@
-import { ChevronDown, ChevronUp, Lightbulb, X } from 'lucide-react';
+import { Lightbulb } from 'lucide-react';
 import { TIP_SURFACE_LABEL, type PageTip } from '@/lib/pageTips';
+import { CardActions } from './CardActions';
 
 interface PageTipCardProps {
   tip: PageTip;
@@ -26,23 +27,14 @@ export function PageTipCard({ tip, collapsed, onToggleCollapse, onDismiss }: Pag
         <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
           {TIP_SURFACE_LABEL[tip.surface]}
         </span>
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          className="grid size-5 place-items-center rounded text-muted-foreground transition hover:text-foreground"
-          aria-label={collapsed ? 'Expand tip' : 'Collapse tips'}
-        >
-          {collapsed ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
-        </button>
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="grid size-5 place-items-center rounded text-muted-foreground transition hover:text-foreground"
-          aria-label="Dismiss this tip"
-          title="Dismiss this tip"
-        >
-          <X className="size-4" />
-        </button>
+        <CardActions
+          collapsed={collapsed}
+          onToggleCollapse={onToggleCollapse}
+          onDismiss={onDismiss}
+          expandLabel="Expand tip"
+          collapseLabel="Collapse tips"
+          dismissLabel="Dismiss this tip"
+        />
       </div>
 
       {!collapsed && (

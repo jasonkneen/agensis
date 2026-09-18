@@ -4374,7 +4374,7 @@ function WorkspaceDesktopOverlay({
           this workspace. Never the `icon` column — see workspaceGlyph. */}
       <span
         aria-hidden="true"
-        className="flex size-9 shrink-0 items-center justify-center rounded-lg text-[13px] font-semibold tracking-tight text-white"
+        className="flex size-9 shrink-0 items-center justify-center rounded-lg text-[0.8125rem] font-semibold tracking-tight text-white"
         style={{ backgroundColor: tile.color }}
       >
         {tile.initials}

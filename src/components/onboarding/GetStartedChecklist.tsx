@@ -1,6 +1,7 @@
-import { Check, ChevronDown, ChevronUp, X } from 'lucide-react';
+import { Check } from 'lucide-react';
 import type { ChecklistStep, ChecklistStepId } from '@/lib/onboardingChecklist';
 import { cn } from '@/lib/utils';
+import { CardActions } from './CardActions';
 
 interface GetStartedChecklistProps {
   /** From computeChecklistSteps — the panel owns the computation now. */
@@ -53,22 +54,14 @@ export function GetStartedChecklist({
             style={{ width: `${total ? (doneCount / total) * 100 : 0}%` }}
           />
         </div>
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          className="grid size-5 place-items-center rounded text-muted-foreground transition hover:text-foreground"
-          aria-label={collapsed ? 'Expand checklist' : 'Collapse checklist'}
-        >
-          {collapsed ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
-        </button>
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="grid size-5 place-items-center rounded text-muted-foreground transition hover:text-foreground"
-          aria-label="Dismiss checklist"
-        >
-          <X className="size-4" />
-        </button>
+        <CardActions
+          collapsed={collapsed}
+          onToggleCollapse={onToggleCollapse}
+          onDismiss={onDismiss}
+          expandLabel="Expand checklist"
+          collapseLabel="Collapse checklist"
+          dismissLabel="Dismiss checklist"
+        />
       </div>
 
       {!collapsed && (

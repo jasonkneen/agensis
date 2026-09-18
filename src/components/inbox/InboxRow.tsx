@@ -1,17 +1,9 @@
 import React from 'react';
 import { Check, ExternalLink, MailOpen } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import {
-  CATEGORY_ICON,
-  FOCUS_RING,
-  PILL_BUTTON,
-  ROW_AVATAR,
-  ROW_PADDING,
-  ROW_WASH_HOVER,
-  ROW_WASH_SELECTED,
-  TEXT_BODY,
-  TEXT_META,
-} from './inboxPresentation';
+import { CATEGORY_ICON, ROW_AVATAR, } from './inboxPresentation';
+import { ROW_PADDING } from '@/components/common/presentation';
+import { FOCUS_RING, PILL_BUTTON, ROW_WASH_HOVER, ROW_WASH_SELECTED, TEXT_BODY, TEXT_META } from '@/components/common/presentation';
 import { inboxOpenTarget } from './inboxSources';
 import type { InboxRowModel } from './inboxModel';
 import type { InboxOpenSession } from './inboxNavigation';

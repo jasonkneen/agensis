@@ -61,7 +61,7 @@ const COMPACT_INDENT = 'pl-11 pr-2';
 // themes --muted is oklch(97%) and --sh-border oklch(92.2%); knocking those back to
 // 40%/60% over a white surface leaves a chip about 1% off the background — i.e.
 // invisible. Full strength reads as a quiet chip in light and dark alike.
-const CHIP_BASE = 'inline-flex max-w-full items-center gap-1 rounded-full border py-0.5 font-mono text-[11px] font-semibold leading-4';
+const CHIP_BASE = 'inline-flex max-w-full items-center gap-1 rounded-full border py-0.5 font-mono text-2xs font-semibold leading-4';
 const CHIP_IDLE = 'border-border bg-muted text-muted-foreground';
 const CHIP_LABEL = 'font-medium text-foreground/70';
 // Hover lights up the EDGE (--ring is mid-grey in every theme), so it reads the same

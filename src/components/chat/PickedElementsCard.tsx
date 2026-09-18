@@ -29,7 +29,7 @@ export function PickedElementsCard({ picks, className }: { picks: ParsedPick[]; 
         type="button"
         onClick={() => setExpanded(e => !e)}
         aria-expanded={expanded}
-        className="flex w-full items-center gap-1.5 px-0.5 text-2xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+        className="flex w-full items-center gap-1.5 px-0.5 ui-section-label transition-colors hover:text-foreground"
       >
         <Crosshair className="size-3 shrink-0" aria-hidden />
         <span>{picks.length === 1 ? 'Referenced element' : `Referenced elements · ${picks.length}`}</span>

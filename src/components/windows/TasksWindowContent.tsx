@@ -27,7 +27,7 @@ import {
 import type { AgentConnection, MessageAttachment, Task, TaskComment, TaskPriority, TaskStatus, UploadedFile, WorkspaceAgent } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
 import type { CreateTaskInput } from '../../hooks/useTasks';
-import { TASK_PANEL_WIDTH_KEY, clampTaskPanelWidth, readStoredTaskPanelWidth } from '../../lib/taskPanelWidth';
+import { TASK_PANEL_MAX_WIDTH, TASK_PANEL_MIN_WIDTH, TASK_PANEL_WIDTH_KEY, clampTaskPanelWidth, readStoredTaskPanelWidth } from '../../lib/taskPanelWidth';
 import { booleanPreference, oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useTaskComments } from '../../hooks/useTaskComments';
@@ -103,6 +103,8 @@ import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Textarea } from '@agensis/ui/components/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 import { cn } from '@/lib/utils';
+import { ResizeHandle } from '@/components/common/ResizeHandle';
+import { WINDOW_TOOLBAR } from '@/components/common/presentation';
 
 interface TasksWindowContentProps {
   tasks: Task[];
@@ -473,7 +475,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
       onDragLeave={handleNewAttachmentDragLeave}
       onDrop={handleNewAttachmentDrop}
     >
-      <div className="task-window-toolbar flex h-11 shrink-0 items-center gap-2 border-b border-border px-3 backdrop-blur-md">
+      <div className={cn(WINDOW_TOOLBAR, 'task-window-toolbar backdrop-blur-md')}>
         <ToggleGroup
           type="single"
           size="sm"
@@ -1577,6 +1579,9 @@ function TaskDetail({
 // task's core fields (title/description/status/priority/assignee) and then
 // reuses <TaskDetail> for depends_on / subtasks / comments.
 // ---------------------------------------------------------------------------
+/** How far one arrow-key press moves the resize seam, px. Matches usePaneSplit. */
+const RESIZE_KEY_STEP = 24;
+
 // Drag-to-resize for the task editor. Width rules live in lib/taskPanelWidth.
 function useTaskPanelWidth() {
   const [width, setWidth] = useState(readStoredTaskPanelWidth);
@@ -1619,7 +1624,21 @@ function useTaskPanelWidth() {
     document.addEventListener('pointerup', onUp);
   };
 
-  return { width, asideRef, startResize, dragging };
+  // Arrow-key parity. The seam is a focusable separator, so it needs to do
+  // something when focused. Left grows the panel, matching the drag above:
+  // this is the panel's LEFT edge, so moving it left makes the panel wider.
+  const keyResize = (event: React.KeyboardEvent) => {
+    const step = event.key === 'ArrowLeft' ? RESIZE_KEY_STEP : event.key === 'ArrowRight' ? -RESIZE_KEY_STEP : 0;
+    if (!step) return;
+    event.preventDefault();
+    setWidth(current => {
+      const next = clamp(current + step);
+      try { window.localStorage.setItem(TASK_PANEL_WIDTH_KEY, String(next)); } catch { /* private mode */ }
+      return next;
+    });
+  };
+
+  return { width, asideRef, startResize, keyResize, dragging };
 }
 
 function TaskEditPanel({
@@ -1705,19 +1724,19 @@ function TaskEditPanel({
       className="task-edit-panel relative flex min-w-0 shrink-0 flex-col border-l border-border bg-card/55 backdrop-blur-md"
       style={{ width: panel.width }}
     >
-      <div
+      <ResizeHandle
+        orientation="vertical"
         onPointerDown={panel.startResize}
-        role="separator"
-        aria-orientation="vertical"
+        onKeyDown={panel.keyResize}
+        dragging={panel.dragging}
         aria-label="Resize task editor"
-        className={cn(
-          'absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none',
-          'after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-primary/0 after:transition-colors',
-          'hover:after:bg-primary/40',
-          panel.dragging && 'after:bg-primary/60',
-        )}
+        aria-valuenow={Math.round(panel.width)}
+        aria-valuemin={TASK_PANEL_MIN_WIDTH}
+        aria-valuemax={TASK_PANEL_MAX_WIDTH}
+        title="Drag to resize."
+        className="inset-y-0 -left-1.5 z-10"
       />
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
+      <div className={cn(WINDOW_TOOLBAR, 'justify-between')}>
         <span className="text-xs font-semibold tracking-tight text-muted-foreground">Edit task</span>
         <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close editor">
           <X />

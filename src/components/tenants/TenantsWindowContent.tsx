@@ -4,15 +4,8 @@ import { Button } from '@agensis/ui/components/button';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Skeleton } from '@agensis/ui/components/skeleton';
 import { cn } from '@/lib/utils';
-import {
-  FOCUS_RING,
-  LIST_COLUMN_CLASS,
-  PANE_HEADER,
-  ROW_PADDING,
-  SCROLL_VIEWPORT_BLOCK,
-  TEXT_BODY,
-  TEXT_META,
-} from '../inbox/inboxPresentation';
+import { ROW_PADDING } from '@/components/common/presentation';
+import { LIST_COLUMN_CLASS, PANE_HEADER, SCROLL_VIEWPORT_BLOCK, TEXT_BODY, TEXT_META } from '@/components/common/presentation';
 import { useSplitResize } from '../../hooks/useSplitResize';
 import { useTenants } from '../../hooks/useTenants';
 import {
@@ -32,6 +25,7 @@ import { CampaignComposer } from './CampaignComposer';
 import { GuideReviewPanel } from './GuideReviewPanel';
 import { TenantDetailPane } from './TenantDetailPane';
 import { TenantRow } from './TenantRow';
+import { ResizeHandle } from '@/components/common/ResizeHandle';
 
 // ---------------------------------------------------------------------------
 // TENANTS — every registered account, and what each one has.
@@ -259,22 +253,13 @@ export const TenantsWindowContent = React.memo(function TenantsWindowContent() {
             pointer — the divider is the pane border, not this. Present whenever
             both panes are, which is now every width above the single-column
             breakpoint, selection or not. */}
-        <button
-          type="button"
+        <ResizeHandle
+          orientation="vertical"
           aria-label="Resize account list"
           title="Drag to resize. Double-click to reset."
           {...resizeHandlers}
-          className={cn(
-            'group/resize absolute inset-y-0 -right-1.5 z-30 w-3 cursor-col-resize',
-            SINGLE_COLUMN_HIDE,
-            FOCUS_RING,
-          )}
-        >
-          <span
-            aria-hidden="true"
-            className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover/resize:bg-border group-focus-visible/resize:bg-border"
-          />
-        </button>
+          className={cn('inset-y-0 -right-1.5', SINGLE_COLUMN_HIDE)}
+        />
       </section>
 
       {selected ? (

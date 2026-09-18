@@ -34,8 +34,7 @@ import {
   ItemTitle,
 } from '@agensis/ui/components/item';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
-import { FOCUS_RING } from '../inbox/inboxPresentation';
-import { cn } from '@/lib/utils';
+import { ResizeHandle } from '@/components/common/ResizeHandle';
 
 interface AgentMemoryBrowserProps {
   workspaceId: string;
@@ -475,25 +474,15 @@ export function AgentMemoryBrowser({ workspaceId, agents, userId, userEmail }: A
               border. Sits in the OUTER box rather than hanging off the list
               pane's edge, which overflow-hidden would clip. */}
           {split && (
-            <button
-              type="button"
+            <ResizeHandle
+              orientation="vertical"
               aria-label="Resize file list"
               title="Drag to resize. Double-click to reset."
               style={{ left: `${listWidth}px` }}
+              dragging={dragging}
               {...splitHandlers}
-              className={cn(
-                'group/resize absolute inset-y-0 z-30 -ml-1.5 w-3 cursor-col-resize',
-                FOCUS_RING,
-              )}
-            >
-              <span
-                aria-hidden="true"
-                className={cn(
-                  'absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors',
-                  dragging ? 'bg-primary/70' : 'bg-transparent group-hover/resize:bg-border group-focus-visible/resize:bg-border',
-                )}
-              />
-            </button>
+              className="inset-y-0 -ml-1.5"
+            />
           )}
         </>
       )}

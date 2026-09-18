@@ -231,6 +231,11 @@ import { channelComposerPlaceholder, directMessageComposerPlaceholder } from '@/
 import { useComposerAutosize } from '@/hooks/useComposerAutosize';
 import { useNostrMembers } from '@/hooks/useNostrMembers';
 import type { SendOutcome } from '@/lib/writeFeedback';
+import { ResizeHandle } from '@/components/common/ResizeHandle';
+import { WINDOW_TOOLBAR } from '@/components/common/presentation';
+
+/** How far one arrow-key press moves the side-panel seam, px. Matches usePaneSplit. */
+const PANEL_RESIZE_KEY_STEP = 24;
 
 interface ChatWindowContentProps {
   /** Authoritative conversation identity, including when the transcript is empty. */
@@ -2003,6 +2008,23 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
     window.addEventListener('pointerup', onUp, { once: true });
   };
 
+  // Arrow-key parity for the side-panel seam. This divider used to be a bare
+  // `<div aria-hidden>`: no role, no tab stop, unreachable without a pointer.
+  // It is a separator now, so it has to answer the arrows. The seam is the
+  // panel's LEFT edge and the panel is on the right, so Left grows it — the
+  // same inversion `beginPanelResize` applies to the pointer delta.
+  const handlePanelResizeKey = (event: React.KeyboardEvent<HTMLElement>) => {
+    const step = event.key === 'ArrowLeft' ? PANEL_RESIZE_KEY_STEP : event.key === 'ArrowRight' ? -PANEL_RESIZE_KEY_STEP : 0;
+    if (!step) return;
+    event.preventDefault();
+    const isThread = sidePanel === 'thread';
+    const current = sidePanelRef.current?.getBoundingClientRect().width
+      ?? (isThread ? threadPanelWidth ?? 360 : panelWidth);
+    const next = Math.min(isThread ? 900 : 680, Math.max(280, current + step));
+    if (isThread) setThreadPanelWidth(next);
+    else setPanelWidth(next);
+  };
+
   return (
     <div ref={shellRef} className="channel-shell flex h-full min-w-0 overflow-hidden text-card-foreground">
       {/* Wraps the message column AND the side panel, because the huddle panel
@@ -2939,10 +2961,13 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
           {/* No drag handle when the panel owns the whole shell: there is no
               split left to drag, and the handle sat on the window's own edge. */}
           {!overlaySidePanel && (
-            <div
-              className="absolute inset-y-0 left-0 z-10 w-2 -translate-x-1 cursor-col-resize"
+            <ResizeHandle
+              orientation="vertical"
+              className="inset-y-0 left-0 z-10 -translate-x-1.5"
               onPointerDown={beginPanelResize}
-              aria-hidden
+              onKeyDown={handlePanelResizeKey}
+              aria-label="Resize side panel"
+              title="Drag to resize."
             />
           )}
           {sidePanel === 'profile' ? (
@@ -3794,7 +3819,7 @@ function SubThreadListPanel({
   );
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
+      <div className={cn(WINDOW_TOOLBAR, 'justify-between')}>
         <span className="flex items-center gap-1.5 text-sm font-medium">
           <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />
           Sub-threads
@@ -3931,7 +3956,7 @@ function ChannelSidePanel({
       onDragLeave={handlePanelDragLeave}
       onDrop={handlePanelDrop}
     >
-      <div className="channel-header flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
+      <div className={cn(WINDOW_TOOLBAR, 'channel-header')}>
         {!isPins && selectedFile ? (
           <Button type="button" variant="ghost" size="icon-xs" onClick={() => setSelectedFile(null)} aria-label="Back to files">
             <ArrowLeft />
@@ -4384,7 +4409,7 @@ function AgentProfileSidePanel({
 
   return (
     <div className="flex h-full min-w-0 flex-col" style={agent ? agentAccentStyle(agent) : undefined}>
-      <div className="channel-header flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
+      <div className={cn(WINDOW_TOOLBAR, 'channel-header')}>
         <Bot className="size-4 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">Profile</span>
         <Button type="button" variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close profile">

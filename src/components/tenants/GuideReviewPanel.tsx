@@ -11,7 +11,8 @@ import {
   guideSubmissionOwner,
   type CursorBuddyGuideSubmission,
 } from '../../lib/cursorbuddyGuides';
-import { PANE_HEADER, TEXT_BODY, TEXT_META } from '../inbox/inboxPresentation';
+import { PANE_HEADER, TEXT_BODY, TEXT_META } from '@/components/common/presentation';
+import { ResizeHandle } from '@/components/common/ResizeHandle';
 
 type ReviewFilter = 'pending' | 'all';
 
@@ -151,16 +152,12 @@ export function GuideReviewPanel() {
         </ScrollArea>
 
         {wide && (
-          <button
+          <ResizeHandle
             {...guideSplit.dividerProps}
+            orientation="vertical"
             style={{ left: `${guideSplit.size}px` }}
-            className="group/split absolute inset-y-0 z-30 -ml-1.5 w-3 touch-none cursor-col-resize outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-          >
-            <span
-              aria-hidden="true"
-              className="mx-auto block h-full w-px bg-transparent transition-colors group-hover/split:bg-border group-focus-visible/split:bg-primary/70"
-            />
-          </button>
+            className="inset-y-0 -ml-1.5"
+          />
         )}
 
         <div

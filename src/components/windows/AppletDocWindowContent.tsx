@@ -6,6 +6,9 @@ import { usePaneSplit } from '../../hooks/usePaneSplit';
 import { viewPreferenceKey } from '../../lib/viewPreferences';
 import { Button } from '@agensis/ui/components/button';
 import { Input } from '@agensis/ui/components/input';
+import { ResizeHandle } from '@/components/common/ResizeHandle';
+import { WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { cn } from '@/lib/utils';
 
 // Lazy: CodeMirror and its grammars stay out of the main bundle. The
 // service-worker precache size is a known sore point, and most sessions never
@@ -139,7 +142,7 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent text-foreground">
-      <div className="doc-toolbar flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card/65 px-2 backdrop-blur-md">
+      <div className={cn(WINDOW_TOOLBAR, 'doc-toolbar h-10 gap-1 overflow-x-auto bg-card/65 px-2 backdrop-blur-md')}>
         <Button
           type="button"
           onClick={() => setView('preview')}
@@ -248,16 +251,12 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
               </div>
             )}
             {view === 'split' && splitWide && (
-              <button
+              <ResizeHandle
                 {...appletSplit.dividerProps}
+                orientation="vertical"
                 style={{ left: `${appletSplit.size + 6}px` }}
-                className="group/split absolute inset-y-0 z-30 -ml-1.5 w-3 touch-none cursor-col-resize outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-              >
-                <span
-                  aria-hidden="true"
-                  className="mx-auto block h-full w-px bg-transparent transition-colors group-hover/split:bg-border group-focus-visible/split:bg-primary/70"
-                />
-              </button>
+                className="inset-y-0 -ml-1.5"
+              />
             )}
             {view !== 'code' && (
               <div

@@ -27,6 +27,7 @@ import {
   type WorkspaceRailSource,
   type WorkspaceRailTile,
 } from '../../lib/workspaceRail';
+import { ResizeHandle } from '@/components/common/ResizeHandle';
 
 /**
  * The workspace switcher: a vertical strip pinned to the far left,
@@ -453,7 +454,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
               >
                 <Plus className="size-4" />
               </span>
-              {expanded && <span className="min-w-0 flex-1 truncate text-[13px] tracking-tight">Add new</span>}
+              {expanded && <span className="min-w-0 flex-1 truncate text-[0.8125rem] tracking-tight">Add new</span>}
             </button>
           </TooltipTrigger>
           {/* Redundant once the button says what it does. */}
@@ -483,7 +484,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
                 )}
               >
                 <Building2 className="size-4 shrink-0" />
-                {expanded && <span className="truncate text-[13px]">Tenants</span>}
+                {expanded && <span className="truncate text-[0.8125rem]">Tenants</span>}
               </button>
             </TooltipTrigger>
             {!expanded && <TooltipContent side="right">Tenants</TooltipContent>}
@@ -492,18 +493,16 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
       )}
 
       {resizable && (
-        <div
+        <ResizeHandle
+          orientation="vertical"
           data-workspace-rail-nested
           data-workspace-rail-resizer
-          role="separator"
-          tabIndex={0}
-          aria-orientation="vertical"
           aria-label="Resize workspace rail"
           aria-valuenow={clampWorkspaceRailWidth(width)}
           aria-valuemin={WORKSPACE_RAIL_COLLAPSED_WIDTH}
           aria-valuemax={WORKSPACE_RAIL_MAX_WIDTH}
           title={`Drag to resize · double-click to ${expanded ? 'collapse' : 'expand'}`}
-          className="absolute inset-y-0 right-0 z-20 w-1.5 cursor-col-resize touch-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          className="inset-y-0 right-0 z-20 w-1.5"
           onPointerDown={handleResizeStart}
           onDoubleClick={() => commitWidth(toggleWorkspaceRailWidth(clampWorkspaceRailWidth(width)))}
           onKeyDown={handleResizeKeyDown}
@@ -634,7 +633,7 @@ function WorkspaceRow({
           // light, lighter in dark) and stay visible against an arbitrary
           // identity fill, which is a relationship to a theme token, not a
           // literal. The transparent border stays so gaining one costs no shift.
-          'workspace-tile-swatch flex size-9 shrink-0 items-center justify-center border border-transparent text-[13px] font-semibold tracking-tight text-white transition-all duration-150',
+          'workspace-tile-swatch flex size-9 shrink-0 items-center justify-center border border-transparent text-[0.8125rem] font-semibold tracking-tight text-white transition-all duration-150',
           tile.active
             ? 'rounded-[7px] shadow-sm'
             : 'rounded-[11px] opacity-60 group-hover:rounded-[7px] group-hover:opacity-100',
@@ -651,7 +650,7 @@ function WorkspaceRow({
           onDoubleClick={onRename ? (event => { event.preventDefault(); event.stopPropagation(); setRenaming(true); }) : undefined}
           title={onRename ? 'Double-click to rename' : undefined}
           className={cn(
-            'min-w-0 flex-1 truncate text-[13px] tracking-tight',
+            'min-w-0 flex-1 truncate text-[0.8125rem] tracking-tight',
             tile.active ? 'font-medium text-foreground' : 'text-muted-foreground group-hover:text-foreground',
           )}
         >
@@ -666,7 +665,7 @@ function WorkspaceRow({
       <div className="flex w-full shrink-0 items-center gap-2 px-2">
         <span
           aria-hidden="true"
-          className="flex size-9 shrink-0 items-center justify-center rounded-[7px] text-[13px] font-semibold tracking-tight text-white"
+          className="flex size-9 shrink-0 items-center justify-center rounded-[7px] text-[0.8125rem] font-semibold tracking-tight text-white"
           style={{ backgroundColor: tile.color }}
         >
           {tile.glyph}

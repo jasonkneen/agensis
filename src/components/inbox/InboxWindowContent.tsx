@@ -16,13 +16,8 @@ import { useInbox } from '../../hooks/useInbox';
 import { InboxDetail } from './InboxDetailPane';
 import { InboxRow } from './InboxRow';
 import { InboxSelectionBar } from './InboxSelectionBar';
-import {
-  FOCUS_RING,
-  LIST_COLUMN_CLASS,
-  PANE_HEADER,
-  ROW_PADDING,
-  SCROLL_VIEWPORT_BLOCK,
-} from './inboxPresentation';
+import { ROW_PADDING } from '@/components/common/presentation';
+import { FOCUS_RING, LIST_COLUMN_CLASS, PANE_HEADER, SCROLL_VIEWPORT_BLOCK } from '@/components/common/presentation';
 import { booleanPreference, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useSplitResize } from '../../hooks/useSplitResize';
@@ -47,6 +42,7 @@ import {
   unreadGroupKeys,
   type InboxBulkActionId,
 } from './inboxSelection';
+import { ResizeHandle } from '@/components/common/ResizeHandle';
 
 // ---------------------------------------------------------------------------
 // The triage surface. Work that needs a HUMAN collects here instead of being
@@ -410,22 +406,13 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
         {/* An invisible 12px grab strip whose hairline only appears under the
             pointer — the divider is the pane border, not this. */}
         {selected && (
-          <button
-            type="button"
+          <ResizeHandle
+            orientation="vertical"
             aria-label="Resize inbox list"
             title="Drag to resize. Double-click to reset."
             {...resizeHandlers}
-            className={cn(
-              'group/resize absolute inset-y-0 -right-1.5 z-30 w-3 cursor-col-resize',
-              SINGLE_COLUMN_HIDE,
-              FOCUS_RING,
-            )}
-          >
-            <span
-              aria-hidden="true"
-              className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover/resize:bg-border group-focus-visible/resize:bg-border"
-            />
-          </button>
+            className={cn('inset-y-0 -right-1.5', SINGLE_COLUMN_HIDE)}
+          />
         )}
       </section>
 

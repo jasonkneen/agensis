@@ -91,6 +91,7 @@ import { useThreadInbox } from '../../hooks/useThreadInbox';
 import { threadReplyLabel, threadRowSource, threadRowTitle } from '../../lib/threadInbox';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { APPLETS_FOLDER } from '../../lib/canvasApps';
+import { ResizeHandle } from '@/components/common/ResizeHandle';
 
 // Which agents the DM section lists, remembered per workspace alongside the
 // other view preferences (see src/lib/viewPreferences.ts).
@@ -101,6 +102,8 @@ const AGENT_FAVORITES_KEY = 'agensis_sidebar_agent_favorites';
 const COLLAPSED_SIDEBAR_WIDTH = 52;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 380;
+/** How far one arrow-key press moves the resize seam, px. Matches usePaneSplit. */
+const RESIZE_KEY_STEP = 24;
 // Full-height rail: the sidebar spans the entire viewport, flush to the left
 // edge. Traffic-light clearance on desktop is handled with internal padding
 // (see titlebarInset) rather than a top margin.
@@ -630,6 +633,21 @@ export const Sidebar = React.memo(function Sidebar({
    </aside>
   );
  }
+
+ // Arrow-key parity for the resize seam. The separator is a tab stop, so
+ // without this it would be a stop that does nothing — the APG treats that as
+ // a defect in its own right. Commits the same three things handleUp does:
+ // the live width, the viewport offset, and the stored preference.
+ const handleResizeKeyDown = (e: React.KeyboardEvent) => {
+  const step = e.key === 'ArrowLeft' ? -RESIZE_KEY_STEP : e.key === 'ArrowRight' ? RESIZE_KEY_STEP : 0;
+  if (!step) return;
+  e.preventDefault();
+  const next = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, sidebarWidth + step));
+  sidebarRef.current?.style.setProperty('width', `${next}px`);
+  setWorkspaceViewportLeft(next, false);
+  setSidebarWidth(next);
+  localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(next)));
+ };
 
  const handleResizeStart = (e: React.PointerEvent) => {
   e.preventDefault();
@@ -1204,12 +1222,16 @@ export const Sidebar = React.memo(function Sidebar({
       defaultTab={accountDialogTab}
      />
     </div>
-    <div
-     role="separator"
-     aria-orientation="vertical"
+    <ResizeHandle
+     orientation="vertical"
      aria-label="Resize sidebar"
-     className="absolute top-0 right-0 bottom-0 z-10 w-3 cursor-col-resize touch-none"
+     aria-valuenow={Math.round(sidebarWidth)}
+     aria-valuemin={MIN_SIDEBAR_WIDTH}
+     aria-valuemax={MAX_SIDEBAR_WIDTH}
+     title="Drag to resize."
+     className="top-0 right-0 bottom-0 z-10"
      onPointerDown={handleResizeStart}
+     onKeyDown={handleResizeKeyDown}
     />
    </aside>
   </>

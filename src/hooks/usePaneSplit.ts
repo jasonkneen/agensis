@@ -56,16 +56,23 @@ export interface PaneSplit {
   dragging: boolean;
   /** Attach to the element the two panes share. Measured, not guessed. */
   containerRef: (node: HTMLElement | null) => void;
-  /** Spread onto a `<button>` sitting on the seam. Styling stays with the caller. */
+  /**
+   * Spread onto `<ResizeHandle>`, which renders the WAI-ARIA window-splitter
+   * element (`role="separator"`, focusable, arrow-key driven). These used to be
+   * typed for `<button>` and every caller drew its own seam; the markup now
+   * lives in the component, so the element type widens to `HTMLElement`.
+   */
   dividerProps: {
-    type: 'button';
     'aria-label': string;
+    'aria-valuenow': number;
+    'aria-valuemin': number;
+    'aria-valuemax': number;
     title: string;
-    onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => void;
-    onPointerMove: (event: React.PointerEvent<HTMLButtonElement>) => void;
-    onPointerUp: (event: React.PointerEvent<HTMLButtonElement>) => void;
-    onPointerCancel: (event: React.PointerEvent<HTMLButtonElement>) => void;
-    onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => void;
+    onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
+    onPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
+    onPointerUp: (event: React.PointerEvent<HTMLElement>) => void;
+    onPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
+    onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
     onDoubleClick: () => void;
   };
 }
@@ -103,7 +110,7 @@ export function usePaneSplit({ preferenceKey, direction, bounds, label }: PaneSp
   // the first frame, would make the list appear to own the whole surface.
   const size = clampPaneSplit(containerSize > 0 ? draft ?? stored : null, containerSize, bounds);
 
-  const onPointerDown = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+  const onPointerDown = useCallback((event: React.PointerEvent<HTMLElement>) => {
     // A right-click on the seam should still open the context menu normally.
     if (event.button !== 0) return;
     event.preventDefault();
@@ -117,7 +124,7 @@ export function usePaneSplit({ preferenceKey, direction, bounds, label }: PaneSp
     setDraft(size);
   }, [direction, size]);
 
-  const onPointerMove = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+  const onPointerMove = useCallback((event: React.PointerEvent<HTMLElement>) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     // Unclamped on the way in: the clamp is applied on the way OUT, so dragging
@@ -126,7 +133,7 @@ export function usePaneSplit({ preferenceKey, direction, bounds, label }: PaneSp
     setDraft(drag.size + (position - drag.origin));
   }, [direction]);
 
-  const onPointerUp = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+  const onPointerUp = useCallback((event: React.PointerEvent<HTMLElement>) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     dragRef.current = null;
@@ -142,7 +149,7 @@ export function usePaneSplit({ preferenceKey, direction, bounds, label }: PaneSp
   }, [size, setStored]);
 
   // Keyboard parity: a drag-only control is unreachable without a pointer.
-  const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
+  const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
     const back = direction === 'column' ? 'ArrowUp' : 'ArrowLeft';
     const forward = direction === 'column' ? 'ArrowDown' : 'ArrowRight';
     const step = event.key === back ? -KEY_STEP_PX : event.key === forward ? KEY_STEP_PX : 0;
@@ -164,8 +171,13 @@ export function usePaneSplit({ preferenceKey, direction, bounds, label }: PaneSp
     containerRef,
     dragging,
     dividerProps: {
-      type: 'button',
       'aria-label': label,
+      // The splitter's position, announced. `containerSize` is 0 until the
+      // pane is measured, and a max below the min reads as broken, so the
+      // unmeasured frame reports the floor for both.
+      'aria-valuenow': size,
+      'aria-valuemin': bounds.minLeading,
+      'aria-valuemax': Math.max(bounds.minLeading, containerSize - bounds.minTrailing),
       title: 'Drag to resize. Double-click to reset.',
       onPointerDown,
       onPointerMove,

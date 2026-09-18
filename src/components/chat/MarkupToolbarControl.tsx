@@ -85,7 +85,7 @@ export function MarkupToolbarControl({
 
   const agentList = (
     <PopoverContent align="end" className="w-56 p-1">
-      <div className="px-2 py-1.5 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="px-2 py-1.5 ui-section-label">
         Send markup to
       </div>
       <div className="max-h-56 space-y-0.5 overflow-y-auto">

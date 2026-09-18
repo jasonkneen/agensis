@@ -17,6 +17,7 @@ import {
 } from '../../lib/reactionBar';
 import { FaceStack } from './FaceStack';
 import type { ReaderFace } from '../../lib/readerFaces';
+import { Input } from '@agensis/ui/components/input';
 
 // The reactions bar: the pills under a message, and the picker that adds one.
 //
@@ -238,13 +239,13 @@ export function ReactionPicker({ onPick, reactionUses = [], trigger }: ReactionP
         )}
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-[268px] p-2">
-        <input
+        <Input
           type="search"
           value={query}
           onChange={event => { setQuery(event.target.value); setActiveIndex(0); }}
           placeholder="Search reactions"
           aria-label="Search reactions"
-          className="mb-2 h-7 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="mb-2 h-7 text-xs"
         />
         <div
           ref={gridRef}
