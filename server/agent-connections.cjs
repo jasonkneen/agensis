@@ -332,8 +332,14 @@ function createAgentConnections(deps = {}) {
   if (existing) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
    pendingJobFailures.delete(connectionId);
-   void failConnectionJobs(connectionId, 'the daemon disconnected');
-   void expireConnectionPermissionRequests(connectionId);
+   // Bare `void fn()` was the audit SM-1 pattern: a throw becomes an
+   // unhandledRejection and is silently swallowed. Attach .catch so a
+   // failed job-failure or permission-expire (interrupted DB, missing
+   // table) leaves a log line that names the connection.
+   void failConnectionJobs(connectionId, 'the daemon disconnected')
+    .catch((error) => console.error(`[agent-connection] failConnectionJobs(${connectionId}) grace-failure failed:`, error?.message || error));
+   void expireConnectionPermissionRequests(connectionId)
+    .catch((error) => console.error(`[agent-connection] expireConnectionPermissionRequests(${connectionId}) grace-failure failed:`, error?.message || error));
   }, JOB_RECONNECT_GRACE_MS);
   timer.unref?.();
   pendingJobFailures.set(connectionId, { timer, agentKey });
@@ -358,13 +364,15 @@ function createAgentConnections(deps = {}) {
   if (evicted) {
    // Told to stop: nothing is coming back, so don't make the human wait out the
    // grace window for an answer that cannot arrive.
-   void failConnectionJobs(connectionId, 'the daemon disconnected');
+   void failConnectionJobs(connectionId, 'the daemon disconnected')
+    .catch((error) => console.error(`[agent-connection] failConnectionJobs(${connectionId}) failed:`, error?.message || error));
    // `keepPermissionRequests` is the SUPERSEDE case only: a registration is in
    // flight for this same agent right now, and it is about to re-home whatever
    // that daemon re-asserted and expire the rest. Expiring here would run first
    // and there would be nothing left for it to save. Every other eviction
    // (deactivated, runtime_mismatch) really is terminal, so it expires now.
-   if (!keepPermissionRequests) void expireConnectionPermissionRequests(connectionId);
+   if (!keepPermissionRequests) void expireConnectionPermissionRequests(connectionId)
+    .catch((error) => console.error(`[agent-connection] expireConnectionPermissionRequests(${connectionId}) failed:`, error?.message || error));
   } else {
    // An unexplained socket loss is NOT proof the work stopped — see
    // JOB_RECONNECT_GRACE_MS. A daemon that reconnects inside the window keeps its

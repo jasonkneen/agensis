@@ -2711,6 +2711,80 @@ function buildTools() {
   },
  });
 
+ // -- Operator queue controls --------------------------------------------
+ //
+ // The agent queues — the task FIFO and the parked chat-turn map — drain on
+ // their own when jobs finish, but there was no door a person could open if a
+ // drain got missed. These tools give an operator a way to FORCE a drain now,
+ // bypassing the in-process debounce. They mirror the
+ // POST /backend/workspaces/:id/agents/:aid/queue/drain route and write the
+ // same `agent.queue_force_drained` audit row, so a forced drain through MCP
+ // and through the HTTP route are answerable by the same query.
+
+ add({
+  name: 'force_drain_agent_queue',
+  kinds: ['workspace', 'user'],
+  description: 'Operator-forced drain of one agent\'s queues right now. `kind` is "all" (default), "tasks", or "chat". Idempotent — firing twice is the same as firing once; each call audits one `agent.queue_force_drained` row. Use this when a queue is wedged behind a missed fire; an ordinary "agent finishes a job" drain is still preferred and runs automatically. Requires workspace manage authority.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    agent_id: { type: 'string', description: 'Agent id (from list_agents).' },
+    kind: { type: 'string', enum: ['all', 'tasks', 'chat'], description: 'Which queue to drain. Default "all".' },
+   },
+   required: ['agent_id'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   if (!deps.forceDrainAgentQueue) {
+    throw new ToolError('This server does not support operator queue drains.');
+   }
+   const agentId = requireString(args, 'agent_id');
+   const kind = String(args?.kind || 'all').trim().toLowerCase();
+   if (!['all', 'tasks', 'chat'].includes(kind)) {
+    throw new ToolError('kind must be one of: tasks, chat, all');
+   }
+   try {
+    return await deps.forceDrainAgentQueue({
+     workspaceId: identity.workspaceId,
+     agentId,
+     kind,
+     actor: identity,
+    });
+   } catch (err) {
+    throw new ToolError(err && err.message ? err.message : 'force_drain_agent_queue failed');
+   }
+  },
+ });
+
+ add({
+  name: 'get_agent_queue_status',
+  kinds: ['workspace', 'user', 'agent'],
+  description: 'Snapshot of one agent\'s queues: assigned todo task count, parked chat turn count, the active job if any, and the last operator-forced drain (if any). Read-only; safe to poll.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    agent_id: { type: 'string', description: 'Agent id (from list_agents).' },
+   },
+   required: ['agent_id'],
+   additionalProperties: false,
+  },
+  async run(args, { identity, deps }) {
+   if (!deps.getAgentQueueStatus) {
+    throw new ToolError('This server does not expose queue status.');
+   }
+   const agentId = requireString(args, 'agent_id');
+   try {
+    return await deps.getAgentQueueStatus({
+     workspaceId: identity.workspaceId,
+     agentId,
+     actor: identity,
+    });
+   } catch (err) {
+    throw new ToolError(err && err.message ? err.message : 'get_agent_queue_status failed');
+   }
+  },
+ });
+
  return tools;
 }
 

@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { ADVANCE_AGENT_READ_MARKER_SQL } = require('../shared/read-receipts.cjs');
+const { createAgentQueueService } = require('./agent-queue-routes.cjs');
 
 // The builtin agent turn: the tool-use loop, the Anthropic stream, and the
 // toolset an in-process agent reaches.
@@ -54,6 +55,7 @@ function createBuiltinTurn(deps = {}) {
   // captured binding would be undefined.
   claimMcpJob, submitMcpJobResult, agentStepParts, agentStepContent,
   dispatchTaskAssignment, scheduleTaskQueueDrain, hasMcpPresence,
+  drainAgentTaskQueue, drainPendingChatTurn, recordAudit,
   findConnectedAgent, updateAgentHeartbeat,
   grantAgentPermissionRule, listAgentPermissionRules, revokeAgentPermissionRule,
   isAgentEnabled,
@@ -292,6 +294,20 @@ function createBuiltinTurn(deps = {}) {
  // it. Single-sourced so the MCP endpoint and the builtin loop cannot end up
  // handing the same tool two different sets of primitives — the transport-only
  // deps (token verification, rate limiting) are added at the MCP call site.
+
+// Operator queue controls (force_drain_agent_queue, get_agent_queue_status) are
+// wrapped by createAgentQueueService so the MCP door and the HTTP route cannot
+// drift. Both doors call the same forceDrain / getStatus functions and audit
+// the same `agent.queue_force_drained` row. See server/agent-queue-routes.cjs
+// for the transport-free logic.
+const queueService = createAgentQueueService({
+ getDb,
+ recordAudit,
+ drainAgentTaskQueue,
+ drainPendingChatTurn,
+ enforceWorkspaceRole,
+});
+
  function mcpToolDeps() {
   return {
    getDb,
@@ -326,8 +342,15 @@ function createBuiltinTurn(deps = {}) {
     listConfiguredCredentialKeys: listConfiguredSandboxCredentialKeys,
    }),
    fenceSkillContent,
-  };
- }
+  // Operator queue controls — see the queueService block above.
+  forceDrainAgentQueue: ({ workspaceId, agentId, kind, actor }) => queueService.forceDrain({
+   workspaceId, agentId, kind, actor: { userId: actor?.userId || null },
+  }),
+  getAgentQueueStatus: ({ workspaceId, agentId, actor }) => queueService.getStatus({
+   workspaceId, agentId, actor: { userId: actor?.userId || null },
+  }),
+ };
+}
 
  function getBuiltinToolset() {
   if (!builtinToolsetInstance) builtinToolsetInstance = createBuiltinToolset(mcpToolDeps());

@@ -3319,6 +3319,11 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  'marketplace.agent_hired',
  'marketplace.listing_hired',
  'marketplace.hire_ended',
+ // Operator-forced queue drain (POST /backend/workspaces/:id/agents/:aid/queue/drain
+ // and the MCP `force_drain_agent_queue` tool). Distinguishes from a normal drain
+ // (no row) so "I had to nudge this" is auditable; detail.kind carries which
+ // queue was forced ('tasks' | 'chat' | 'all').
+ 'agent.queue_force_drained',
 ]));
 
 /** What an unrecognised action records as, rather than throwing in production. */

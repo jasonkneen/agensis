@@ -45,6 +45,12 @@ function createAgentJobs(deps = {}) {
   // Every other cross-module dep here is a thunk for the same reason.
   getConnectedAgents,
   scheduleTaskQueueDrain,
+  // drainAgentTaskQueue is the non-fire-and-forget counterpart of
+  // scheduleTaskQueueDrain. After-job-finalize drains run inside
+  // afterDurableWrite (SM-2 fix); there we want to AWAIT the task drain before
+  // starting the chat drain so the chat drain sees the final agent_jobs state
+  // and doesn't re-park a turn that the task drain is about to dispatch.
+  drainAgentTaskQueue = () => {},
   // Replays a human turn parked because this agent was already mid-turn. Paired
   // with scheduleTaskQueueDrain at every terminal-status site: the two answer the
   // same question — "the one active-job slot just freed, what was waiting on
@@ -833,13 +839,33 @@ function createAgentJobs(deps = {}) {
   await recordDaemonJobUsage(job, resultStop, jobDb);
 
   // The agent just freed its one active-job slot: give it the next task waiting on
-  // it. Fire-and-forget, before the early returns below so farm/sessionless jobs
-  // drain too — a job finishing is a job finishing.
-  afterDurableWrite(() => scheduleTaskQueueDrain(job.workspace_id, job.agent_id, `job_${status}`));
-  // Same moment, the other queue: a human message that arrived mid-turn is
-  // waiting on this exact slot. Inside afterDurableWrite so the replay cannot see
-  // the job still 'running' and immediately re-park itself.
-  afterDurableWrite(() => drainPendingChatTurn(job.session_id, job.agent_id, `job_${status}`));
+  // it, then drain the parked-chat-turn queue. Both are wrapped in ONE
+  // afterDurableWrite callback so the chat drain cannot start until the task
+  // drain has either dispatched or reported 'empty' — without this ordering,
+  // a busy chat drain would re-park before the task drain's INSERT into
+  // agent_jobs committed, leaving a queued task stranded behind a chat turn
+  // that thinks the agent is free. (See docs/queue-plumbing-audit-2026-09-21.md
+  // SM-2.) Fire-and-forget at the outer level is preserved so job-finalize
+  // cannot be slowed by a slow drain; both drains run on the post-commit path
+  // anyway.
+  afterDurableWrite(() => {
+   void (async () => {
+    try {
+     await drainAgentTaskQueue({
+      workspaceId: job.workspace_id,
+      agentId: job.agent_id,
+      cause: `job_${status}`,
+     });
+    } catch (error) {
+     console.error('post-commit task-queue drain failed', error);
+    }
+    try {
+     await drainPendingChatTurn(job.session_id, job.agent_id, `job_${status}`);
+    } catch (error) {
+     console.error('post-commit chat-turn drain failed', error);
+    }
+   })();
+  });
   // And the third thing this moment settles: if the turn ran long enough to have
   // been captured as a task, that task is still sitting in progress. Same
   // afterDurableWrite queue so it cannot commit ahead of the terminal row.

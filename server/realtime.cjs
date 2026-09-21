@@ -1097,7 +1097,13 @@ function createRealtime(deps = {}) {
     websocketClients.delete(ws);
     // A leaked upstream keeps billing Deepgram for a browser that is gone.
     voiceRelay.teardown(ws);
-    void markAgentConnectionOffline(ws);
+    // markAgentConnectionOffline is what fails the agent's queued jobs and
+    // parks any parked chat turn behind a deadline. Without the .catch here, a
+    // throw (interrupted DB write, lost connection during shutdown) becomes an
+    // unhandledRejection that the process-level guard swallows — silently
+    // leaving the agent's queue undrained with no log line. (See audit SM-1.)
+    void markAgentConnectionOffline(ws)
+     .catch((error) => console.error(`[realtime] markAgentConnectionOffline failed for ws:`, error?.message || error));
    });
   });
 

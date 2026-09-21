@@ -1,0 +1,23 @@
+/* No full-screen intercepting overlay. Navigation and broadcast buttons remain usable. */
+html[data-stream-mode] [data-stream-private-text],
+html[data-stream-mode] [data-stream-private-input],
+html[data-stream-mode] input[type="password"] {
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  text-shadow: none !important;
+  caret-color: transparent !important;
+  background-color: var(--muted) !important;
+}
+html[data-stream-mode] [data-stream-private-text]::selection,
+html[data-stream-mode] [data-stream-private-input]::selection { color: transparent; background: var(--muted); }
+html[data-stream-mode] :is(pre, code, iframe, webview, canvas, .xterm-screen) {
+  visibility: hidden !important;
+}
+html[data-stream-mode] [data-stream-sensitive] > * { visibility: hidden !important; }
+html[data-stream-mode] [data-stream-sensitive]::before {
+  content: "Sensitive settings hidden while broadcasting. Use Streaming to stop the broadcast before viewing these details.";
+  display: block;
+  pointer-events: none;
+}
+/* The broadcast banner must not sit above a modal and intercept its controls. */
+body:has([role="dialog"]) [data-broadcast-banner] { display: none; }

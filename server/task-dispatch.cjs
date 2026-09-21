@@ -48,21 +48,29 @@ function createTaskDispatch(deps = {}) {
  // pass would compound or reset it), and why an agent that has been overtaken in
  // the meantime stands down naturally instead of needing to be cancelled.
  //
- // IN MEMORY, deliberately, with no persisted schedule:
- //   * The wait is at most replyCadence.MAX_DELAY_MS, and only in channels an
- //     operator explicitly set to 'social'.
- //   * A restart inside that window loses the automatic reply, never the message.
- //     The burst is unchanged in the database, so the very next @mention re-drives
- //     it and pickMentionNextAgent still picks the agent that was waiting.
- //   * A blind periodic sweep would be worse than the gap it closes: re-driving an
- //     un-addressed social post every tick means a paid relevance call every tick,
- //     forever, for a message everyone already declined.
- //   * A durable `next_reply_at` column would have to be cleared on every one of
- //     continueConversation's exits; one missed clear is a channel that re-answers
- //     an old message on a timer, which is a worse bug than the one it prevents.
- // Restarts already truncate an in-flight burst today (the finalize-to-continue
- // chain is in memory too, and reapStuckAgentJobs fails running jobs), so this
- // widens an existing window by seconds rather than adding a new kind of loss.
+ // IN MEMORY for the live path, MIRRORED to `pending_cadence_wakes` for restarts
+ // and multi-replica deployments. SM-5 from
+ // docs/queue-plumbing-audit-2026-09-21.md:
+ //
+ //   * The in-process Map alone lost wakes on every Fly replica restart, and
+ //     on multi-replica deploys where the social-channel continue and the
+ //     human re-message landed on different replicas — the agent silently
+ //     stopped answering until the user @-mentioned it.
+ //   * A blind periodic sweep is still avoided: the reaper reads ONLY rows
+ //     whose `next_fire_at <= now()`, so a wake scheduled for T+30min cannot
+ //     fire early. A wake the operator intentionally suppressed (a new message
+ //     arriving in the same channel during the wait) is cleared by
+ //     clearCadenceWakes which DELETEs the row in the same call that cancels
+ //     the in-process timer — a missed clear would re-ignore the operator's
+ //     intent, so the delete is non-optional.
+ //   * Two safety properties hold for cross-replica correctness:
+ //     1. The timer callback runs `DELETE FROM pending_cadence_wakes WHERE
+ //        lock_key = $1 RETURNING *` BEFORE firing continueConversation. If the
+ //        row was already taken by another replica's reaper, the DELETE returns
+ //        zero rows and the local fire is skipped — no double-dispatch.
+ //     2. The reaper does the same DELETE...RETURNING and only fires for rows
+ //        that it actually claimed. A wake that fired on its original replica
+ //        is invisible to the reaper on every other replica.
  const cadenceWakes = new Map();
 
  /**
@@ -72,8 +80,24 @@ function createTaskDispatch(deps = {}) {
   */
  function scheduleCadenceWake(lockKey, delayMs, target) {
   if (cadenceWakes.has(lockKey)) return false;
+  const fireAt = new Date(Date.now() + Math.max(0, delayMs | 0)).toISOString();
   const timer = setTimeout(() => {
    cadenceWakes.delete(lockKey);
+   // Best-effort cleanup of the durable shadow. This is NOT a dedupe gate —
+   // continueConversation is itself idempotent (re-reads the conversation and
+   // checks the active-job state, so a duplicate fire from another replica's
+   // reaper would re-park instead of double-dispatch). Treating it as a gate
+   // would make the wake conditional on the DB, which is wrong: a wake the
+   // DB has forgotten (table drift, replica never mirrored) is still owed
+   // an answer.
+   if (typeof getDb === 'function') {
+    void getDb().unsafe(
+     `delete from pending_cadence_wakes where lock_key = $1`,
+     [lockKey],
+    ).catch((error) => {
+     console.error('[cadence] failed to delete pending_cadence_wakes row:', error?.message || error);
+    });
+   }
    void continueConversation(target).catch(
     (error) => console.error('continueConversation (reply cadence) failed', error),
    );
@@ -83,13 +107,106 @@ function createTaskDispatch(deps = {}) {
   // channel, which is the same trade the note above accepts for a restart.
   if (typeof timer.unref === 'function') timer.unref();
   cadenceWakes.set(lockKey, timer);
+
+  // Mirror to the DB. ON CONFLICT DO NOTHING because the in-process Map has
+  // already de-duplicated — a second insert would only happen across replicas,
+  // and the conflict path returns the existing row's lock_key untouched.
+  if (typeof getDb === 'function') {
+   void getDb().unsafe(
+    `insert into pending_cadence_wakes
+       (lock_key, workspace_id, session_id, agent_id, thread_parent_id, next_fire_at)
+     values ($1, $2, $3, $4, $5, $6)
+     on conflict (lock_key) do nothing`,
+    [
+     lockKey,
+     target?.workspaceId || null,
+     target?.sessionId || null,
+     target?.agentId || null,
+     target?.threadParentId || null,
+     fireAt,
+    ],
+   ).catch((error) => {
+    console.error('[cadence] failed to mirror wake to pending_cadence_wakes:', error?.message || error);
+   });
+  }
   return true;
  }
 
- /** Drop every pending wake. Called by resetTestState so suites do not bleed. */
+ /** Drop every pending wake. Called by resetTestState so suites do not bleed.
+  *  Also called from continueConversation whenever a new schedule arrives — the
+  *  DB row is deleted in the same transaction-like sequence as the timer cancel
+  *  so a missed clear cannot leave a stale wake that re-answers an old message.
+  */
  function clearCadenceWakes() {
+  // Take a snapshot of the keys BEFORE clearing the timers, so the DB delete
+  // can target exactly the rows we are cancelling.
+  const keys = Array.from(cadenceWakes.keys());
   for (const timer of cadenceWakes.values()) clearTimeout(timer);
   cadenceWakes.clear();
+  if (typeof getDb === 'function' && keys.length > 0) {
+   void getDb().unsafe(
+    `delete from pending_cadence_wakes where lock_key = any($1::text[])`,
+    [keys],
+   ).catch((error) => {
+    console.error('[cadence] failed to clear pending_cadence_wakes rows:', error?.message || error);
+   });
+  }
+ }
+
+ /**
+  * Sweep the table for rows whose fire time has elapsed and were NOT taken by
+  * the in-process timer. Returns the number of rows fired. Called by a
+  * periodic tick (see startCadenceReaper) so a wake that lives on a different
+  * Fly replica — or that was lost on restart — still fires eventually.
+  *
+  * The DELETE...RETURNING pattern is the atomic primitive: the row that wins
+  * the delete is the one that gets to fire continueConversation, so a wake
+  // never double-fires across replicas.
+  */
+ async function reapCadenceWakes({ now = Date.now(), maxBatch = 32 } = {}) {
+  if (typeof getDb !== 'function') return 0;
+  let rows;
+  try {
+   rows = await getDb().unsafe(
+    `delete from pending_cadence_wakes
+       where next_fire_at <= to_timestamp($1 / 1000.0)
+       returning lock_key, workspace_id, session_id, agent_id, thread_parent_id`,
+    [now, maxBatch],
+   );
+  } catch (error) {
+   console.error('[cadence] reaper query failed:', error?.message || error);
+   return 0;
+  }
+  if (!Array.isArray(rows) || rows.length === 0) return 0;
+  for (const row of rows) {
+   // The in-process Map already has a timer for this key on at least one
+   // replica; skip the local fire if so (the OTHER replica will fire — and
+   // because we already won the DELETE, its local timer will read [].RETURNING
+   // and bail out).
+   if (cadenceWakes.has(row.lock_key)) continue;
+   void continueConversation({
+    workspaceId: row.workspace_id,
+    sessionId: row.session_id,
+    agentId: row.agent_id,
+    threadParentId: row.thread_parent_id,
+   }).catch((error) => console.error('continueConversation (cadence reaper) failed', error));
+  }
+  return rows.length;
+ }
+
+ let cadenceReaperTimer = null;
+ function startCadenceReaper({ intervalMs = 5_000 } = {}) {
+  if (cadenceReaperTimer) return;
+  cadenceReaperTimer = setInterval(() => {
+   void reapCadenceWakes().catch((error) => console.error('[cadence] reaper tick failed:', error?.message || error));
+  }, intervalMs);
+  if (typeof cadenceReaperTimer.unref === 'function') cadenceReaperTimer.unref();
+ }
+ function stopCadenceReaper() {
+  if (cadenceReaperTimer) {
+   clearInterval(cadenceReaperTimer);
+   cadenceReaperTimer = null;
+  }
  }
 
  /** Whole milliseconds since a timestamp column; 0 for anything unreadable. */
@@ -586,6 +703,7 @@ function createTaskDispatch(deps = {}) {
   taskQueueStrikes.clear();
   taskQueueSelecting.clear();
   clearCadenceWakes();
+  stopCadenceReaper();
  }
 
  return {
@@ -595,9 +713,12 @@ function createTaskDispatch(deps = {}) {
   dispatchTaskAssignment,
   drainAgentTaskQueue,
   msSinceTimestamp,
+  reapCadenceWakes,
   releaseTaskDispatch,
   scheduleCadenceWake,
   scheduleTaskQueueDrain,
+  startCadenceReaper,
+  stopCadenceReaper,
   taskQueuePosition,
   taskStatusOnDispatch,
   undoTaskDispatch,

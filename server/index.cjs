@@ -165,6 +165,7 @@ const { mountWorkspacesRoutes } = require('./workspaces-routes.cjs');
 const { mountWorkspaceMcpRoutes } = require('./workspace-mcp-routes.cjs');
 const { mountInboxRoutes } = require('./inbox-routes.cjs');
 const { mountAgentJobCancelRoutes } = require('./agent-job-cancel-routes.cjs');
+const { mountAgentQueueRoutes } = require('./agent-queue-routes.cjs');
 const { mountReactionsRoutes } = require('./reactions-routes.cjs');
 const { mountReadReceiptsRoutes } = require('./read-receipts-routes.cjs');
 const { mountSessionAccessRoutes } = require('./session-access-routes.cjs');
@@ -1620,6 +1621,20 @@ async function ensureRuntimeSchema() {
       parked_at timestamptz NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_pending_chat_turns_parked_at ON pending_chat_turns(parked_at);
+    // SM-5 — durable cadence wakes. See the migration
+    // supabase/migrations/20260921083752_create_pending_cadence_wakes.sql for
+    // the why and the reaper's "next_fire_at <= now()" predicate.
+    CREATE TABLE IF NOT EXISTS pending_cadence_wakes (
+      lock_key text PRIMARY KEY,
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      thread_parent_id uuid,
+      next_fire_at timestamptz NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_cadence_wakes_next_fire_at
+      ON pending_cadence_wakes(next_fire_at);
     CREATE TABLE IF NOT EXISTS agent_jobs (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -3620,6 +3635,12 @@ const readReceiptRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
 // bound a stuck button — a person legitimately halting several runaway agents
 // at once is the exact moment the feature exists for and must not be throttled.
 const agentJobCancelRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+// Operator-forced queue drain (POST /backend/workspaces/:id/agents/:aid/queue/drain).
+// Keyed per (user, agent). A flush on one agent is the shape a jittery click
+// makes; per-agent rate limiting lets one operator legitimately nudge several
+// agents at once (the moment the feature exists for) without unbounded retries
+// on the same one.
+const agentQueueControlRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 // Bridge deliveries are machine traffic and legitimately bursty — a busy Slack
 // channel or a Telegram group mid-argument outruns a human webhook by a lot.
 const bridgeRateLimiter = createRateLimiter({ windowMs: 60_000, max: 600 });
@@ -7317,10 +7338,18 @@ function pendingChatTurnKey(sessionId, agentId) {
 //
 // Write-through, never read on the hot path: the Map answers every live
 // question. These exist so a restart does not silently drop a turn that is still
-// owed an answer. All three swallow their errors — a parked turn is a retry, and
-// failing to persist one must never break the dispatch that parked it.
+// owed an answer.
+//
+// SM-8 (docs/queue-plumbing-audit-2026-09-21.md): writeThroughParkedTurn takes
+// a completion callback. Callers set the Map entry synchronously (the live path
+// depends on the Map being readable the moment parkChatTurn returns) and pass
+// a rollback that deletes the Map entry if the DB write fails. This keeps the
+// synchronous invariant callers like `parkChatTurn` already rely on while
+// closing the audit hole: a DB failure that previously left a Map entry whose
+// shadow was missing now rolls the Map back, so the next orphan sweep will not
+// find a row in the DB that no in-process state expects.
 
-function writeThroughParkedTurn(key, entry) {
+function writeThroughParkedTurn(key, entry, onComplete = null) {
  void (async () => {
   try {
    await getDb().unsafe(
@@ -7339,8 +7368,10 @@ function writeThroughParkedTurn(key, entry) {
      entry.attempts, entry.parkedAt,
     ],
    );
+   if (typeof onComplete === 'function') onComplete(null);
   } catch (error) {
    console.warn('[chat-retry] could not persist parked turn:', error?.message || error);
+   if (typeof onComplete === 'function') onComplete(error);
   }
  })();
 }
@@ -7435,6 +7466,11 @@ async function replayOrphanedChatTurns({
 // agent is busy, one replay answers all three — continueConversation re-reads the
 // conversation from the database, so the parked entry is a WAKE-UP, not a copy of
 // the message. Storing the newest keeps the thread/broadcast context current.
+//
+// SM-8: the Map.set is synchronous (callers like continueConversation's re-park
+// branch and the unit tests depend on it being readable the moment this returns)
+// and is rolled back if the durable write fails. This closes the audit hole
+// without breaking the synchronous invariant. See docs/queue-plumbing-audit-2026-09-21.md SM-8.
 function parkChatTurn({ workspaceId, sessionId, threadParentId, broadcastToChannel, targetAgentId, agentId }) {
  // agentId is optional now: the `locked` branch parks before any agent has been
  // elected, and a session-level wake is still a wake. Everything else about the
@@ -7452,8 +7488,21 @@ function parkChatTurn({ workspaceId, sessionId, threadParentId, broadcastToChann
   attempts,
   parkedAt: Date.now(),
  };
+ // Map.set FIRST so the live path can find the entry this microtask. The DB
+ // shadow is attempted asynchronously; if it fails, the rollback in onComplete
+ // deletes the Map entry, leaving the system in the same state as if the park
+ // had never happened. (Today's code did not roll back — a DB failure left a
+ // Map entry whose shadow was missing, which is exactly SM-8 in the audit.)
  pendingChatTurns.set(key, entry);
- writeThroughParkedTurn(key, entry);
+ writeThroughParkedTurn(key, entry, (error) => {
+  if (error) {
+   // Only roll back if the entry is still THIS one — a later park for the same
+   // key would have overwritten it and a rollback would erase the new entry.
+   if (pendingChatTurns.get(key) === entry) {
+    pendingChatTurns.delete(key);
+   }
+  }
+ });
 }
 
 /**
@@ -7509,10 +7558,16 @@ function drainPendingChatTurn(sessionId, agentId, cause = 'job_finished', run = 
    if (out && (out.reason === 'agent_busy' || out.reason === 'locked')) {
     const reparked = pendingChatTurns.get(key) || { ...parked, parkedAt: parked.parkedAt };
     const next = { ...reparked, attempts, parkedAt: parked.parkedAt };
-    pendingChatTurns.set(key, next);
+    // SM-8: same Map-first + rollback-on-DB-failure pattern as parkChatTurn.
     // Carry the incremented attempt count into the durable copy too, or a
-    // restart would reset the counter and the attempt cap would never bite.
-    writeThroughParkedTurn(key, next);
+    // restart would reset the counter and the attempt cap would never bite. If
+    // the durable write fails, roll back the Map so a later park isn't erased.
+    pendingChatTurns.set(key, next);
+    writeThroughParkedTurn(key, next, (error) => {
+     if (error && pendingChatTurns.get(key) === next) {
+      pendingChatTurns.delete(key);
+     }
+    });
    }
   } catch (error) {
    console.error('drainPendingChatTurn failed', error);
@@ -9713,6 +9768,9 @@ const builtinTurn = createBuiltinTurn({
  agentStepContent: (...a) => agentJobs.agentStepContent(...a),
  dispatchTaskAssignment: (...a) => taskDispatch.dispatchTaskAssignment(...a),
  scheduleTaskQueueDrain: (...a) => taskDispatch.scheduleTaskQueueDrain(...a),
+ drainAgentTaskQueue: (...a) => taskDispatch.drainAgentTaskQueue(...a),
+ drainPendingChatTurn: (...a) => drainPendingChatTurn(...a),
+ recordAudit: (...a) => recordAudit(...a),
  hasMcpPresence: (...a) => agentConnections.hasMcpPresence(...a),
  findConnectedAgent: (...a) => agentConnections.findConnectedAgent(...a),
  updateAgentHeartbeat: (...a) => agentConnections.updateAgentHeartbeat(...a),
@@ -9895,6 +9953,7 @@ const agentJobs = createAgentJobs({
  updateAgentHeartbeat: (...a) => agentConnections.updateAgentHeartbeat(...a),
  getConnectedAgents: () => agentConnections.connectedAgents,
  scheduleTaskQueueDrain: (...a) => taskDispatch.scheduleTaskQueueDrain(...a),
+ drainAgentTaskQueue: (...a) => taskDispatch.drainAgentTaskQueue(...a),
  recordAnthropicUsage: (...a) => recordAnthropicUsage(...a),
  publishHuddleVoiceText: (...a) => publishHuddleVoiceText(...a),
 });
@@ -10425,6 +10484,18 @@ function createApp() {
   drainPendingChatTurn: (...a) => drainPendingChatTurn(...a),
   sendToConnection,
   onWarn: message => console.warn(`[agent-job-cancel] ${message}`),
+ });
+
+// Operator surface for the agent queues: force a drain for one
+// (workspace, agent) pair, or read a queue snapshot. See
+// server/agent-queue-routes.cjs for the gate ('manage' for drain, 'read' for
+// status) and the audit row that makes a forced drain answerable.
+mountAgentQueueRoutes(app, {
+  ...coreDeps(),
+  agentQueueControlRateLimiter,
+  drainAgentTaskQueue: (...a) => taskDispatch.drainAgentTaskQueue(...a),
+  drainPendingChatTurn: (...a) => drainPendingChatTurn(...a),
+  onWarn: message => console.warn(`[agent-queue] ${message}`),
  });
  mountReactionsRoutes(app, { ...coreDeps(), reactionRateLimiter });
  mountReadReceiptsRoutes(app, { ...coreDeps(), readReceiptRateLimiter });
@@ -11365,8 +11436,13 @@ function startBackendServer(port = DEFAULT_PORT, { handleSignals = false } = {})
  server.listen(port, host, () => {
   console.log(`[backend] listening on http://${host}:${port}`);
  });
- void reconcileAgentConnectionsAtStartup();
- void reconcileSchedulesAtStartup();
+ // Startup reconciles. Bare `void fn()` would make a throw an unhandledRejection
+ // that the process-level guard swallows with no log line — pin the catch so
+ // a startup failure (DB unavailable, schema drift) is visible. (SM-1.)
+ void reconcileAgentConnectionsAtStartup()
+  .catch((error) => console.error('[backend] reconcileAgentConnectionsAtStartup failed:', error?.message || error));
+ void reconcileSchedulesAtStartup()
+  .catch((error) => console.error('[backend] reconcileSchedulesAtStartup failed:', error?.message || error));
  // Turns that were owed an answer when the last process died. Chained on the
  // schema promise because it reads a table the runtime bootstrap creates, and
  // the very first boot after this ships would otherwise race it.
@@ -11420,6 +11496,10 @@ function startBackendServer(port = DEFAULT_PORT, { handleSignals = false } = {})
   guardedSweep('replayOrphanedChatTurns', replayOrphanedChatTurns);
   guardedSweep('expireStalePermissionRequests', expireStalePermissionRequests);
   guardedSweep('pruneOfflineConnections', pruneOfflineConnections);
+  // Cadence wakes that the in-process timer cannot fire: lost on a Fly replica
+  // restart, or scheduled on a replica that no longer carries this conversation
+  // because of multi-replica routing. See SM-5 in the queue plumbing audit.
+  guardedSweep('reapCadenceWakes', taskDispatch.reapCadenceWakes);
   guardedSweep('runDueSchedules', runDueSchedules);
   guardedSweep('runDueThreadHarvests', runDueThreadHarvests);
   guardedSweep('sweepAutomationRuns', sweepAutomationRuns);

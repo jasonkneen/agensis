@@ -2048,6 +2048,23 @@ CREATE TABLE IF NOT EXISTS pending_chat_turns (
 );
 CREATE INDEX IF NOT EXISTS idx_pending_chat_turns_parked_at ON pending_chat_turns(parked_at);
 
+-- Durable cadence wakes. SM-5 from docs/queue-plumbing-audit-2026-09-21.md —
+-- the in-process Map that used to hold these was lost on restart and on any
+-- replica that didn't receive the social-channel continue. See the matching
+-- migration supabase/migrations/20260921083752_create_pending_cadence_wakes.sql
+-- for the reaper contract.
+CREATE TABLE IF NOT EXISTS pending_cadence_wakes (
+  lock_key text PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+  agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+  thread_parent_id uuid,
+  next_fire_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_pending_cadence_wakes_next_fire_at
+  ON pending_cadence_wakes(next_fire_at);
+
 -- The job a task was AUTO-CAPTURED from (server/chat-task-capture.cjs).
 --
 -- Declared here rather than beside the other `tasks` columns because it points
