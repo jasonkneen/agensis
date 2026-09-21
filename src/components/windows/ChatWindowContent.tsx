@@ -2041,7 +2041,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
           loaded pages and any in-flight composer text, so closing the panel
           returns to exactly the conversation that was left, not the top of it. */}
       <div className={cn('flex min-w-0 flex-1 flex-col overflow-hidden', overlaySidePanel && 'hidden')}>
-        <div className="channel-header relative z-20 shrink-0 border-b border-border">
+        <div className="channel-header relative z-20 shrink-0">
           <div className="flex h-11 min-w-max items-center gap-1.5 overflow-x-auto overflow-y-hidden px-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {isDirectMessage ? (
               <Button

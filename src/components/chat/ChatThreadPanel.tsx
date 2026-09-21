@@ -292,7 +292,7 @@ export function ChatThreadPanel({
 
   return (
     <aside className={embedded ? 'channel-side-panel flex h-full min-w-0 flex-1 flex-col text-card-foreground' : 'channel-side-panel flex h-full w-[320px] shrink-0 flex-col border-l border-border text-card-foreground'}>
-      <div className={cn(WINDOW_TOOLBAR, 'channel-header h-10')}>
+      <div className={cn(WINDOW_TOOLBAR, 'channel-header h-10 border-b-0')}>
         <CornerDownRight className="size-4 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">Thread</span>
         <span className="text-xs text-muted-foreground">
@@ -314,7 +314,7 @@ export function ChatThreadPanel({
         </Button>
       </div>
 
-      <div className="border-b border-border p-3">
+      <div className="p-3">
         <ThreadBubble
           msg={parentMessage}
           accent={resolveMessageAccent?.(parentMessage)}

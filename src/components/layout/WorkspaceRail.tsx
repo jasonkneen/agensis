@@ -324,10 +324,11 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
     />
   );
 
-  // bg-card/85 is deliberately more opaque than the sidebar's bg-card/45: the
-  // sidebar's own content hides the backdrop bleeding through it, and a
-  // mostly-empty column at the same alpha reads as a hole punched in the chrome
-  // rather than as part of it.
+  // The rail shares the sidebar's exact surface — same alpha, gradient and glass
+  // blur — so the two left columns read as one continuous panel with no seam
+  // between them. That background is painted by `[data-workspace-rail]` in
+  // index.css (mirroring `[data-sidebar-panel]`), not by the `bg-card/45`
+  // fallback here; the divider that used to sit on the rail's right edge is gone.
   //
   // Depth and elevation are NOT set here: `[data-workspace-rail]` in index.css
   // owns both, next to the `[data-sidebar-panel]` rule it has to be read
@@ -345,7 +346,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
       data-expanded={expanded ? 'true' : undefined}
       aria-label="Workspaces"
       aria-busy={showLoading ? 'true' : undefined}
-      className="relative flex h-full shrink-0 flex-col gap-1.5 overflow-hidden border-r border-border bg-card/85 py-2 text-card-foreground"
+      className="relative flex h-full shrink-0 flex-col gap-1.5 overflow-hidden bg-card/45 py-2 text-card-foreground"
       style={{ ...RAIL_WIDTH_STYLE, paddingTop: titlebarInset ? titlebarInset + 8 : undefined }}
       onKeyDown={handleKeyDown}
     >

@@ -44,7 +44,7 @@ export const COMPOSER_ADDON_CLASS = 'min-h-10 justify-between gap-2 border-t px-
  * pushed its whole composer 4px off the channel composer's baseline whenever
  * the two were open side by side.
  */
-export const COMPOSER_SHELL_CLASS = 'channel-composer border-t border-border p-2';
+export const COMPOSER_SHELL_CLASS = 'channel-composer p-2';
 
 /**
  * Autosize ceiling in px. MUST match the `max-h-*` in COMPOSER_TEXTAREA_CLASS —

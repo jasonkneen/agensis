@@ -1177,7 +1177,7 @@ export const Sidebar = React.memo(function Sidebar({
      </div>
     </ScrollArea>
 
-    <div ref={footerRef} className="flex shrink-0 flex-col gap-2 border-t border-border p-2">
+    <div ref={footerRef} className="flex shrink-0 flex-col gap-2 p-2">
      {getStartedSlot}
      <div className="flex items-center gap-2">
       <DropdownMenu>

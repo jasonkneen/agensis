@@ -1119,13 +1119,11 @@
 }
 
 :root[data-ui-theme="neo"][data-theme="dark"] .sidebar-search,
-:root[data-ui-theme="neo"][data-theme="dark"] .channel-header,
 :root[data-ui-theme="neo"][data-theme="dark"] .doc-toolbar {
  border-width: 1px !important;
  box-shadow: 2px 2px 0 color-mix(in srgb, var(--neo-shadow-ink) 72%, transparent) !important;
 }
 
-:root[data-ui-theme="neo"][data-theme="dark"] .channel-header,
 :root[data-ui-theme="neo"][data-theme="dark"] .doc-toolbar {
  box-shadow: none !important;
 }
@@ -1286,6 +1284,14 @@
     does not advertise it. The viewport keeps its cast (below), which is the
     one that does real work — it makes the sidebar read as recessed between
     two raised columns instead of tilted. */
+ /* Same painted surface as [data-sidebar-panel] above: identical gradient,
+    card alpha and glass blur, so the rail and the sidebar read as one
+    continuous left panel with no seam between them. Kept verbatim in step with
+    that rule. */
+ background:
+  linear-gradient(180deg, color-mix(in srgb, var(--foreground) 5%, transparent), transparent 32%),
+  color-mix(in srgb, var(--card) var(--agensis-sidebar-alpha, 88%), transparent) !important;
+ backdrop-filter: var(--agensis-glass-filter);
 }
 
 /* The canvas column is above the sidebar as well, so it casts back onto it.
@@ -5710,7 +5716,8 @@ select {
  -webkit-backdrop-filter: none !important;
 }
 
-:root[data-normal-theme="carbon"] [data-sidebar-panel] {
+:root[data-normal-theme="carbon"] [data-sidebar-panel],
+:root[data-normal-theme="carbon"] [data-workspace-rail] {
  border-color: var(--border) !important;
  background: var(--sidebar) !important;
 }
@@ -6181,7 +6188,9 @@ select {
    read as part of the page it sits beside. It follows the list above so it wins
    for the rail alone. */
 :root[data-ui-theme="neo"] [data-workspace-rail] {
- background: var(--secondary) !important;
+ /* var(--card), not var(--secondary): the rail must match the neo sidebar's
+    surface so the two left columns read as one panel. */
+ background: var(--card) !important;
  backdrop-filter: none !important;
  -webkit-backdrop-filter: none !important;
 }
