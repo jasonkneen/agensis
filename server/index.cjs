@@ -1621,9 +1621,9 @@ async function ensureRuntimeSchema() {
       parked_at timestamptz NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_pending_chat_turns_parked_at ON pending_chat_turns(parked_at);
-    // SM-5 — durable cadence wakes. See the migration
-    // supabase/migrations/20260921083752_create_pending_cadence_wakes.sql for
-    // the why and the reaper's "next_fire_at <= now()" predicate.
+    -- SM-5 — durable cadence wakes. See the migration
+    -- supabase/migrations/20260921083752_create_pending_cadence_wakes.sql for
+    -- the why and the reaper's "next_fire_at <= now()" predicate.
     CREATE TABLE IF NOT EXISTS pending_cadence_wakes (
       lock_key text PRIMARY KEY,
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
