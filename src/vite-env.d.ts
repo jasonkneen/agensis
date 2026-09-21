@@ -127,6 +127,14 @@ interface Window {
       onExit: (callback: (payload: { agentId: string }) => void) => () => void;
       onRestoreComplete: (callback: (report: unknown) => void) => () => void;
     };
+    /**
+     * Local RTMP broadcast control surface, backed by the independent Electron
+     * broadcast helper (`electron/broadcast/*`). Control verbs only — capture
+     * and encoding never cross into the renderer. Shape is owned by
+     * `BroadcastAPI` in `src/lib/broadcast.ts`; referenced rather than restated
+     * so the bridge and the control client cannot drift apart.
+     */
+    broadcast?: import('./lib/broadcast').BroadcastAPI;
     pty?: {
       spawn: (options?: { cols?: number; rows?: number; cwd?: string }) => Promise<
         { ok: true; id: string; shell: string } | { ok: false; error: string }
