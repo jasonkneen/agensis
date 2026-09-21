@@ -2723,6 +2723,11 @@ function buildTools() {
 
  add({
   name: 'force_drain_agent_queue',
+  // 'workspace' and 'user' only. An agent identity has no business forcing
+  // another agent's queue to drain — the gate 'manage' inside forceDrain
+  // already enforces the human authority check, but the kind list rejects an
+  // agent caller BEFORE the gate runs, so a malicious or buggy agent cannot
+  // even reach the audit row.
   kinds: ['workspace', 'user'],
   description: 'Operator-forced drain of one agent\'s queues right now. `kind` is "all" (default), "tasks", or "chat". Idempotent — firing twice is the same as firing once; each call audits one `agent.queue_force_drained` row. Use this when a queue is wedged behind a missed fire; an ordinary "agent finishes a job" drain is still preferred and runs automatically. Requires workspace manage authority.',
   inputSchema: {
@@ -2735,6 +2740,12 @@ function buildTools() {
    additionalProperties: false,
   },
   async run(args, { identity, deps }) {
+   // Belt-and-braces: the kind list already rejects agent callers, but if a
+   // future transport bypasses the kind list (e.g. a relayed tool call) the
+   // gate still fires here. Same shape as the HTTP route's enforceWorkspaceRole.
+   if (identity && identity.kind === 'agent') {
+    throw new ToolError('force_drain_agent_queue requires workspace or user authority; an agent cannot drain another agent\'s queue.');
+   }
    if (!deps.forceDrainAgentQueue) {
     throw new ToolError('This server does not support operator queue drains.');
    }
@@ -2758,7 +2769,10 @@ function buildTools() {
 
  add({
   name: 'get_agent_queue_status',
-  kinds: ['workspace', 'user', 'agent'],
+  // workspace/user only. An agent identity has its own in-process Map and
+  // cadence wake Map; reading another agent's queue state through MCP would
+  // expose audit rows (lastDrain carries the operator user id).
+  kinds: ['workspace', 'user'],
   description: 'Snapshot of one agent\'s queues: assigned todo task count, parked chat turn count, the active job if any, and the last operator-forced drain (if any). Read-only; safe to poll.',
   inputSchema: {
    type: 'object',
@@ -2769,6 +2783,9 @@ function buildTools() {
    additionalProperties: false,
   },
   async run(args, { identity, deps }) {
+   if (identity && identity.kind === 'agent') {
+    throw new ToolError('get_agent_queue_status requires workspace or user authority; agents read their own queue state via in-process maps, not MCP.');
+   }
    if (!deps.getAgentQueueStatus) {
     throw new ToolError('This server does not expose queue status.');
    }

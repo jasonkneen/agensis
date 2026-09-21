@@ -169,6 +169,20 @@ function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
       if (n.startsWith('select id, workspace_id, participants')) return [];
       if (n.startsWith('select display_name, email from app_users')) return [{ display_name: 'Jason' }];
 
+      // --- transaction body for findOrCreateDirectSession -------------------
+      // The drain path now goes through findOrCreateDirectSession, which calls
+      // getDb().begin(...) and reads four specific shapes. Returning sensible
+      // answers keeps the dispatch reaching the task write the test asserts on.
+      // The bare stub in makeWorld() handles every test EXCEPT the A/B one,
+      // which overrides both begin and unsafe to swap creator/assigner.
+      if (n.startsWith('select user_id from workspaces where id = $1::uuid for share')) {
+       return [{ user_id: '00000000-0000-0000-0000-000000000001' }];
+      }
+      if (n.startsWith('select pg_advisory_xact_lock')) return [{ pg_advisory_xact_lock: null }];
+      if (n.startsWith('select user_id, source, (user_id = $2::uuid) as requested_user')) {
+       return [{ user_id: '00000000-0000-0000-0000-000000000001', source: 'participant' }];
+      }
+
       // --- agent_jobs -------------------------------------------------------
       if (n.startsWith('select id, status, connection_id, metadata, started_at from agent_jobs where session_id')) {
         return state.jobs.filter((j) => j.session_id === String(params[0]) && j.agent_id === String(params[1]) && active(j));
@@ -228,6 +242,16 @@ function makeWorld({ tasks = [], jobs = [], agents = [AGENT] } = {}) {
       if (n.startsWith('update messages set content')) return [];
 
       return [];
+    },
+    // findOrCreateDirectSession (and a handful of other write paths) call
+    // getDb().begin(...). The transaction wrapper here routes its unsafe calls
+    // through the same fake as above so chat_session_members lookups, advisory
+    // locks, and workspace-owner reads all resolve against the in-memory state.
+    async begin(callback) {
+     const transaction = {
+      unsafe: async (sql, params = []) => db.unsafe(sql, params),
+     };
+     return callback(transaction);
     },
   };
   return { state, log, db };
