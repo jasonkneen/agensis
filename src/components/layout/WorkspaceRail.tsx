@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { InlineRename } from '@/components/common/InlineRename';
-import { ArrowDown, ArrowUp, Building2, EyeOff, Pencil, Plus, RotateCcw } from 'lucide-react';
+import { ArrowDown, ArrowUp, Building2, EyeOff, MessageSquareWarning, Pencil, Plus, RotateCcw } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@agensis/ui/components/tooltip';
 import {
   ContextMenu,
@@ -85,6 +85,12 @@ interface WorkspaceRailProps {
   /** Omitted for everyone but the system owner — the server decides, not us. */
   onOpenTenants?: () => void;
   /**
+   * Open the feedback dialog. The rail hosts a fixed, non-movable trigger for it
+   * (above the "+" button); the dialog itself lives at the app root. Omit to
+   * hide the trigger.
+   */
+  onOpenFeedback?: () => void;
+  /**
    * Desktop shell traffic-light band. The rail is now the leftmost chrome, so it
    * is what sits under the macOS window buttons and it takes the clearance.
    */
@@ -136,6 +142,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
  loadError = null,
  onRetry,
   onOpenTenants,
+  onOpenFeedback,
   titlebarInset = 0,
   width = WORKSPACE_RAIL_COLLAPSED_WIDTH,
   onWidthChange,
@@ -424,6 +431,37 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
             standing button here — hiding is a right-click action, so unhiding
             belongs on the same menu instead of a permanent row in the rail. */}
       </div>
+
+      {/* Feedback — a FIXED, non-movable trigger pinned just above "+". No
+          background, no tile: just the icon (plus a label when the rail is
+          expanded), so it reads as a utility action and not as a workspace. It
+          opens the report dialog owned by <FeedbackButton> at the app root.
+          `data-feedback-ui` exempts it from the element picker's click-swallow,
+          matching the launcher this replaced. */}
+      {onOpenFeedback && (
+        <div className="w-full shrink-0 px-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                data-feedback-ui
+                data-workspace-rail-feedback
+                onClick={onOpenFeedback}
+                aria-label="Send feedback"
+                className={cn(
+                  'group flex h-9 items-center rounded-lg text-muted-foreground transition-colors',
+                  'hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  expanded ? 'w-full gap-2 px-2.5' : 'mx-auto w-9 justify-center',
+                )}
+              >
+                <MessageSquareWarning className="size-4 shrink-0" />
+                {expanded && <span className="truncate text-[0.8125rem]">Feedback</span>}
+              </button>
+            </TooltipTrigger>
+            {!expanded && <TooltipContent side="right">Send feedback</TooltipContent>}
+          </Tooltip>
+        </div>
+      )}
 
       {/* "+" — pinned to the bottom of the rail, next to Tenants, rather than
           scrolling as the last row of the tile list. On an account with enough

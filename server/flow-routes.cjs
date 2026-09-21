@@ -39,7 +39,7 @@ function mountFlowRoutes(app, deps = {}) {
     workspaceId,
     channelId,
     name: req.body?.name || 'Event webhook',
-    webhookUrl: normalizeFlowWebhookUrl(req.body?.webhookUrl),
+    webhookUrl: await normalizeFlowWebhookUrl(req.body?.webhookUrl),
     events: req.body?.events,
     createdBy: req.userId,
    });

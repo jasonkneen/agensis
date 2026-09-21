@@ -1,5 +1,7 @@
 'use strict';
 
+const { isPrivateSessionRow } = require('../shared/backend-core.cjs');
+
 // ============================================================================
 // server/session-access-routes.cjs — the "…and allow it when required" half.
 // ----------------------------------------------------------------------------
@@ -48,11 +50,6 @@ function mountSessionAccessRoutes(app, deps = {}) {
   return rows[0] || null;
  }
 
- function isPrivate(session) {
-  return String(session?.visibility || '') === 'private'
-   || String(session?.folder || '') === 'Direct messages';
- }
-
  // Who can currently read this session, and why. Manage-gated like the grant
  // itself: the member list of a private conversation is not public information,
  // and "who else can see my DM" is exactly the question the list answers.
@@ -76,7 +73,7 @@ function mountSessionAccessRoutes(app, deps = {}) {
    res.json({
     data: {
      sessionId,
-     private: isPrivate(session),
+     private: isPrivateSessionRow(session),
      members: rows.map((row) => ({
       userId: String(row.user_id),
       name: row.name || '',
@@ -110,7 +107,7 @@ function mountSessionAccessRoutes(app, deps = {}) {
    // RULE 1. On the workspace role, never on the caller's own access to this
    // session. See the header.
    await enforceWorkspaceRole(req.userId, session.workspace_id, 'manage');
-   if (!isPrivate(session)) {
+   if (!isPrivateSessionRow(session)) {
     return jsonError(res, 400, badRequest('This conversation is not private — everyone in the workspace can already read it'));
    }
 

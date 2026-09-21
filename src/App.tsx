@@ -38,7 +38,7 @@ import CanvasTemplatePicker from './components/canvas/CanvasTemplatePicker';
 import { SettingsDialog, type SettingsTabId } from './components/settings/SettingsDialog';
 import { RegistrationApprovalPopup } from './components/agents/RegistrationApprovalPopup';
 import { WebMcpBridge } from './components/webmcp/WebMcpBridge';
-import { FeedbackButton } from './components/feedback/FeedbackButton';
+import { FeedbackButton, type FeedbackHandle } from './components/feedback/FeedbackButton';
 import { NotificationsBell } from './components/notifications/NotificationsBell';
 import { Separator } from '@agensis/ui/components/separator';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
@@ -730,6 +730,11 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     setWorkspaceRailWidth(clamped);
     localStorage.setItem(WORKSPACE_RAIL_WIDTH_KEY, String(clamped));
   }, []);
+  // The feedback launcher is now a fixed button in the workspace rail; it opens
+  // the dialog owned by <FeedbackButton> (mounted at the app root) through this
+  // imperative handle. Stable callback so the memoised rail does not re-render.
+  const feedbackRef = useRef<FeedbackHandle>(null);
+  const handleOpenFeedback = useCallback(() => feedbackRef.current?.open(), []);
   const isMobile = useIsMobile();
   // Phone: the rail rides inside the off-canvas drawer beside a full-width
   // sidebar, so it stays the icon strip whatever width was saved on desktop.
@@ -2521,6 +2526,7 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
             hiddenWorkspaces={hiddenWorkspaces}
             onRestoreWorkspace={restoreWorkspace}
             onOpenTenants={isSystemOwner ? handleOpenTenants : undefined}
+            onOpenFeedback={handleOpenFeedback}
             onCreateWorkspace={handleCreateWorkspace}
             loading={wsLoading || workspaceReadiness.status === 'pending' || workspaceReadiness.status === 'missing' || workspaceReadiness.status === 'preparing'}
             loadError={workspaceReadiness.status === 'unavailable' ? workspaceReadiness.reason : null}
@@ -3062,6 +3068,7 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
       />
       <RegistrationApprovalPopup workspaceId={activeWorkspaceId || null} />
       <FeedbackButton
+        ref={feedbackRef}
         workspaceId={activeWorkspaceId || null}
         userId={user.id}
         contextLabel={viewedLayer.name || activeWorkspace?.name || ''}

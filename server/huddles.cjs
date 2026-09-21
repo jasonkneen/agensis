@@ -73,6 +73,7 @@
 const crypto = require('crypto');
 const huddleAgents = require('./huddle-agents.cjs');
 const { slugMentionHandle } = require('../shared/channelMentions.cjs');
+const { isPrivateSessionRow, sessionOpenSql } = require('../shared/backend-core.cjs');
 
 // The LiveKit project is shared with other apps, so every room this app creates
 // is namespaced. Never derive a room name any other way.
@@ -1070,13 +1071,8 @@ function mountHuddleRoutes(app, deps = {}) {
   return error;
  }
 
- function isPrivateHost(host) {
-  return String(host?.visibility || '') === 'private'
-   || String(host?.folder || '') === 'Direct messages';
- }
-
  async function lockCurrentMember(tx, host, userId) {
-  if (!isPrivateHost(host)) return;
+  if (!isPrivateSessionRow(host)) return;
   const rows = await tx.unsafe(
    `select 1
       from chat_session_members huddle_member
@@ -1340,7 +1336,7 @@ function mountHuddleRoutes(app, deps = {}) {
         select $1, $2, $3, host.model, 'mention', 'huddle',
                host.canvas_id, host.participants,
                case
-                when host.visibility = 'private' or host.folder = 'Direct messages'
+                when not ${sessionOpenSql('host')}
                 then 'private'
                 else 'workspace'
                end

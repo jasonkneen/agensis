@@ -510,7 +510,7 @@ const queueService = createAgentQueueService({
   const agentContext = agentContextFromRow(agent, coParticipants);
   const recentActivity = await buildAgentActivityDigest(workspaceId, agent.id, sessionId);
   if (recentActivity && agentContext) {
-   agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<your_recent_activity>\nYou are one continuous agent across this workspace's DMs and channels. Recent activity elsewhere (reference it when asked what you're working on):\n${recentActivity}\n</your_recent_activity>`.trim();
+   agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<your_recent_activity>\nYou are one continuous agent across this workspace's channels. Recent activity in other open channels (reference it when asked what you're working on):\n${recentActivity}\n</your_recent_activity>`.trim();
   }
   // Someone is on a voice call in this conversation, so this turn will be spoken
   // out loud. Every lane below gets the same note — builtin through the system
@@ -1218,6 +1218,7 @@ const queueService = createAgentQueueService({
   try {
    return await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
+    redirect: 'error',
     headers: {
      'Content-Type': 'application/json',
      'x-api-key': apiKey,

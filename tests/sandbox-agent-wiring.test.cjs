@@ -334,10 +334,9 @@ test('the provider call refuses redirects and reuses the existing SSRF guard', (
   assert.ok(!/function isBlockedAddress\(/.test(INDEX_ONLY),
     'server/index.cjs must import the predicate, never re-declare it');
   assert.match(INDEX_ONLY, /require\('\.\/lib\/net-guard\.cjs'\)/);
-  // NOTE: server/link-preview.cjs still carries its own v4-only copy for its
-  // redirect chain, and tests/link-preview.test.cjs asserts the two agree.
-  // Converging them is a behaviour change, not a move, so this count is
-  // deliberately scoped to net-guard rather than widened across server/.
+  // link-preview re-exports this predicate rather than declaring its own.
+  // The count stays scoped to net-guard: a re-export is not a second
+  // declaration, and quoting the declaration in a comment would be counted.
 });
 
 test('the audit row carries no payload and binds jsonb as an object', () => {

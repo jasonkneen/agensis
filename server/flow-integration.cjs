@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const net = require('node:net');
+const { assertSafeOutboundUrl: assertSafeOutboundUrlDefault } = require('./lib/net-guard.cjs');
 
 // Reaction events are named where they are produced (shared/reaction-events.cjs)
 // because both backends emit them and only this one is a server/ file. Listed
@@ -84,7 +85,10 @@ function normalizeEvents(events) {
   return FLOW_EVENTS.filter((event) => requested.includes(event));
 }
 
-function normalizeFlowWebhookUrl(value, { production = process.env.NODE_ENV === 'production' } = {}) {
+async function normalizeFlowWebhookUrl(value, {
+  production = process.env.NODE_ENV === 'production',
+  assertSafeOutboundUrl = assertSafeOutboundUrlDefault,
+} = {}) {
   if (!value) return null;
   let url;
   try { url = new URL(String(value)); } catch { throw codedError('invalid_webhook_url', 'Flows webhook URL is invalid.'); }
@@ -104,6 +108,16 @@ function normalizeFlowWebhookUrl(value, { production = process.env.NODE_ENV === 
   }
   if (url.username || url.password) {
     throw codedError('invalid_webhook_url', 'Flows webhook URL must not contain credentials.');
+  }
+  // Shape checks above still refuse IP literals before DNS. The resolve check
+  // runs only off the loopback exemption: a dev http://127.0.0.1 URL is stored
+  // as given, and a Promise must never be what gets written to webhook_url.
+  if (!loopback) {
+    try {
+      await assertSafeOutboundUrl(url.toString());
+    } catch (error) {
+      throw codedError('invalid_webhook_url', String(error?.message || error || 'blocked'));
+    }
   }
   return url.toString();
 }

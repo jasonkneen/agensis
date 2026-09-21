@@ -713,6 +713,7 @@ test('terminal Anthropic and gateway SSE errors win partial persisted content on
       normalizeAiChatMessages(messages) { return { messages, systemPrompt: '' }; },
       parseJsonArray(value) { return Array.isArray(value) ? value : []; },
       async assertSafeOutboundUrl() {},
+      guardedFetchAgent() {},
       async resolveGatewayRoute() {
         return {
           id: 'test-gateway',

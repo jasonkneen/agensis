@@ -3436,6 +3436,7 @@ async function handleAiChat(req, userId) {
 	   : trustedAgentContext;
 
   const upstream = await fetch('https://api.anthropic.com/v1/messages', {
+  redirect: 'error',
   method: 'POST',
   headers: {
    'Content-Type': 'application/json',

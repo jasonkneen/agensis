@@ -55,20 +55,27 @@ test('Flows webhook signatures bind the timestamp and exact request bytes', () =
   assert.equal(verifyFlowWebhook({ ...input, timestamp: '1720890001', signature }), false);
 });
 
-test('Flows webhook URLs require a public HTTPS host outside local development', () => {
+test('Flows webhook URLs require a public HTTPS host outside local development', async () => {
+  let assertions = 0;
+  const assertSafeOutboundUrl = async (raw) => {
+    assertions += 1;
+    return raw;
+  };
   assert.equal(
-    normalizeFlowWebhookUrl('https://flows.example.test/events', { production: true }),
+    await normalizeFlowWebhookUrl('https://flows.example.test/events', { production: true, assertSafeOutboundUrl }),
     'https://flows.example.test/events',
   );
+  assert.equal(assertions, 1, 'a public host must be resolved before it is stored');
   assert.equal(
-    normalizeFlowWebhookUrl('http://127.0.0.1:3000/events', { production: false }),
+    await normalizeFlowWebhookUrl('http://127.0.0.1:3000/events', { production: false, assertSafeOutboundUrl }),
     'http://127.0.0.1:3000/events',
   );
-  assert.throws(
+  assert.equal(assertions, 1, 'dev http loopback must not be resolved');
+  await assert.rejects(
     () => normalizeFlowWebhookUrl('http://127.0.0.1:3000/events', { production: true }),
     /Loopback/,
   );
-  assert.throws(
+  await assert.rejects(
     () => normalizeFlowWebhookUrl('https://10.0.0.2/events', { production: true }),
     /public hostname/,
   );

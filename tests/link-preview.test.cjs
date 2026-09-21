@@ -166,6 +166,16 @@ test('the range table agrees with the gateway guard in server/index.cjs', () => 
     '::1', '::', 'fe80::1', 'fc00::1', 'fd12:3456::1', 'ff02::1', '::ffff:169.254.169.254',
     '::ffff:127.0.0.1', 'not-an-ip', '1.1.1.1', '8.8.8.8', '172.32.0.1', '192.167.255.255',
     '2606:4700::1111', '172.15.255.255', '172.16.0.0', '172.32.0.0',
+    // Spellings from tests/gateway-ssrf.test.cjs. The old text check missed
+    // these; the shared numeric guard must agree on them, and 2606:4700::1111
+    // above stays allowed.
+    '::ffff:a9fe:a9fe', '::ffff:7f00:1', '::ffff:0a00:1',
+    '0:0:0:0:0:0:0:1', '0:0:0:0:0:0:0:0',
+    '0000:0000:0000:0000:0000:0000:0000:0001',
+    '::a9fe:a9fe', 'FE80::1', 'fEc0:0:0:0:0:0:0:1',
+    '64:ff9b::a9fe:a9fe', '2001:db8::1', 'ff05:0:0:0:0:0:0:2',
+    '2606:4700:4700:0000:0000:0000:0000:1111', '2606:4700:4700::1111',
+    '2a00:1450:4009:81f::200e',
   ];
   for (const address of sample) {
     assert.equal(

@@ -53,6 +53,10 @@
 const crypto = require('node:crypto');
 const net = require('node:net');
 const dnsPromises = require('node:dns').promises;
+// The address predicate and v4 range table live in server/lib/net-guard.cjs.
+// Re-exported, not wrapped and not copied, so a link card and a gateway fetch
+// judge an address the same way.
+const { BLOCKED_IPV4_RANGES, isBlockedAddress } = require('./lib/net-guard.cjs');
 
 // How many URLs one message may unfurl. Two is enough to be useful, and the
 // cap is here because a message pasting forty links would otherwise be forty
@@ -85,53 +89,11 @@ const LINK_PREVIEW_USER_AGENT = 'agensis-linkpreview/1.0 (+https://agensis.io)';
 
 const LINK_PREVIEW_STATUSES = ['ok', 'empty', 'failed', 'blocked'];
 
-// Same table as assertSafeOutboundUrl's in server/index.cjs. Kept as a literal
-// here rather than imported so this module stays standalone and testable with
-// no server bootstrap; tests/link-preview.test.cjs asserts the two agree, so a
-// range added to one and not the other fails the suite.
-const BLOCKED_IPV4_RANGES = [
- ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
- ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16],
- ['198.18.0.0', 15], ['224.0.0.0', 4], ['240.0.0.0', 4],
-];
-
 // Hostname suffixes that are split-horizon by convention: they can resolve to
 // something else on the server than they do anywhere we could check. Refused by
 // name, before DNS is consulted at all.
 const BLOCKED_HOST_SUFFIXES = ['.local', '.localhost', '.internal', '.intranet', '.lan', '.home.arpa'];
 const BLOCKED_HOST_NAMES = ['localhost'];
-
-function ipv4ToInt(address) {
- return address.split('.').reduce((acc, octet) => ((acc << 8) + Number(octet)) >>> 0, 0);
-}
-
-/**
- * Is this resolved address one we refuse to connect to?
- *
- * Unparseable input returns TRUE. "I could not tell what this is" and "this is
- * safe" must not be the same answer.
- */
-function isBlockedAddress(address) {
- const value = String(address == null ? '' : address).trim();
- if (net.isIPv4(value)) {
-  const asInt = ipv4ToInt(value);
-  return BLOCKED_IPV4_RANGES.some(([base, bits]) => {
-   const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
-   return (asInt & mask) === (ipv4ToInt(base) & mask);
-  });
- }
- if (!net.isIPv6(value)) return true; // unparseable — refuse rather than guess
- const lower = value.toLowerCase();
- // IPv4-mapped (::ffff:a.b.c.d) must be judged on the embedded v4 address, or
- // ::ffff:169.254.169.254 walks straight through the v6 branch.
- const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
- if (mapped) return isBlockedAddress(mapped[1]);
- if (lower === '::' || lower === '::1') return true;
- if (/^f[cd]/.test(lower)) return true;    // fc00::/7 unique-local
- if (/^fe[89ab]/.test(lower)) return true; // fe80::/10 link-local
- if (lower.startsWith('ff')) return true;  // ff00::/8 multicast
- return false;
-}
 
 /**
  * Scheme/shape validation with no DNS. Returns

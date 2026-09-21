@@ -115,7 +115,7 @@ const {
  normalizeUnfurlUrl,
 } = require('./link-preview.cjs');
 const { mountVoiceRoutes, createVoiceRelay } = require('./voice.cjs');
-const { isBlockedAddress, assertSafeOutboundUrl } = require('./lib/net-guard.cjs');
+const { isBlockedAddress, assertSafeOutboundUrl, guardedFetchAgent } = require('./lib/net-guard.cjs');
 const { createGatewayResolver } = require('./lib/gateways.cjs');
 const { createRealtime } = require('./realtime.cjs');
 const { createAgentConnections } = require('./agent-connections.cjs');
@@ -277,6 +277,7 @@ const {
  sessionReadableSql,
  addSessionParticipant,
  isPrivateSessionRow,
+ sessionOpenSql,
  appendSessionAccessClause,
  userCanAccessWorkspace: sharedUserCanAccessWorkspace,
  // The vault surface — one classification, shared with the Netlify mirror.
@@ -6447,7 +6448,7 @@ async function buildAgentTurnContextSnapshot(sessionId, runningAgent, threadPare
 }
 
 // Cross-session "shared brain": a short digest of what THIS agent has recently
-// done in OTHER sessions (channels + DMs) in this workspace, so it has continuity
+// done in OTHER open channels (not DMs) in this workspace, so it has continuity
 // — e.g. you can ask it in a DM what it's working on in a channel, or give pointers.
 async function buildAgentActivityDigest(workspaceId, agentId, currentSessionId) {
  if (!workspaceId || !agentId) return '';
@@ -6461,6 +6462,7 @@ async function buildAgentActivityDigest(workspaceId, agentId, currentSessionId) 
          and m.session_id <> $3
          and m.content !~ '^Thinking '
          and m.deleted_at is null and s.deleted_at is null
+         and ${sessionOpenSql('s')}
        order by m.session_id, m.created_at desc`,
    [workspaceId, String(agentId), currentSessionId || ''],
   );
@@ -6967,6 +6969,7 @@ async function callProviderOperation({ workspaceId, agentId, args = {} } = {}) {
    headers: applyProviderCredential(plan, secret),
    body: plan.bodyText || undefined,
    redirect: 'manual',
+   dispatcher: guardedFetchAgent(),
    signal: AbortSignal.timeout(PROVIDER_CALL_TIMEOUT_MS),
   });
  } catch (error) {
@@ -7055,7 +7058,7 @@ function buildDaemonPrompt(contextMessages, agent, coParticipants, recentActivit
  }
  if (recentActivity) {
   lines.push(
-   "You are one continuous agent across this workspace's DMs and channels. Your recent activity elsewhere (use for continuity, and when asked what you are working on):",
+   "You are one continuous agent across this workspace's channels. Your recent activity in other open channels (use for continuity, and when asked what you are working on):",
    recentActivity,
    '',
   );
@@ -8275,7 +8278,7 @@ function cartesiaHeaders() {
  */
 async function cartesiaFetch(url, init = {}) {
  try {
-  return await fetch(url, { ...init, signal: AbortSignal.timeout(CARTESIA_TIMEOUT_MS) });
+  return await fetch(url, { ...init, signal: AbortSignal.timeout(CARTESIA_TIMEOUT_MS), redirect: 'error' });
  } catch (error) {
   if (error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
    const timeout = new Error(`Cartesia did not respond within ${Math.round(CARTESIA_TIMEOUT_MS / 1000)}s`);
@@ -9513,9 +9516,52 @@ async function flowDeliverySourceIsEligible(delivery) {
   && String(location.workspaceId) === String(delivery.workspace_id || payload?.workspaceId || '');
 }
 
+// Dev-only exemption for a stored Flows webhook. A non-production http URL whose
+// host is loopback is fetched as stored. Everything else is judged by
+// assertSafeOutboundUrl before any socket is opened. DNS failure stays on the
+// existing retry path; a private, loopback, or reserved answer is a dead letter.
+function flowWebhookDevHttpLoopback(rawUrl) {
+ if (process.env.NODE_ENV === 'production') return false;
+ let url;
+ try { url = new URL(String(rawUrl || '')); } catch { return false; }
+ if (url.protocol !== 'http:') return false;
+ const host = url.hostname.toLowerCase();
+ return host === '127.0.0.1' || host === '::1' || host === '[::1]' || host === 'localhost';
+}
+
 async function deliverNextFlowWebhook() {
  const delivery = await claimFlowWebhookDelivery();
  if (!delivery) return false;
+ let deliveryDispatcher = null;
+ if (!flowWebhookDevHttpLoopback(delivery.webhook_url)) {
+  try {
+   // The return value drops trailing slashes. Fetch the stored URL, not that rewrite.
+   await assertSafeOutboundUrl(delivery.webhook_url);
+  } catch (error) {
+   const message = String(error?.message || error || 'unsafe webhook url').slice(0, 1000);
+   if (/could not be resolved|ENOTFOUND|EAI_AGAIN/i.test(message)) {
+    const attempts = Number(delivery.attempt_count || 1);
+    const { dead, delaySeconds } = flowWebhookRetryDecision({ httpStatus: null, attempts });
+    await getDb().unsafe(
+     `update flow_webhook_deliveries
+          set status = $3, next_attempt_at = now() + ($4 * interval '1 second'),
+              last_error = $5, lease_expires_at = null, updated_at = now()
+        where id = $1 and claim_token = $2`,
+     [delivery.id, delivery.claim_token, dead ? 'dead' : 'pending', delaySeconds, message],
+    );
+    return true;
+   }
+   await getDb().unsafe(
+    `update flow_webhook_deliveries
+        set status = 'dead', last_error = $3, lease_expires_at = null, updated_at = now()
+      where id = $1 and claim_token = $2`,
+    [delivery.id, delivery.claim_token, message],
+   );
+   return true;
+  }
+  // Never on the dev http loopback branch: that lookup is blocked.
+  deliveryDispatcher = guardedFetchAgent();
+ }
  let sourceEligible = null;
  try {
   sourceEligible = await flowDeliverySourceIsEligible(delivery);
@@ -9566,6 +9612,7 @@ async function deliverNextFlowWebhook() {
    body,
    signal: AbortSignal.timeout(10_000),
    redirect: 'error',
+   ...(deliveryDispatcher ? { dispatcher: deliveryDispatcher } : {}),
   });
   httpStatus = response.status;
   await response.body?.cancel().catch(() => undefined);
@@ -11393,7 +11440,7 @@ mountAgentQueueRoutes(app, {
   aiChatRateLimiter, aiChatDbRateLimiter, dbQuery, inferenceBroker,
   liveSharedModelRoutes, bindInferenceAbort, getAnthropicApiKey,
   resolveAnthropicModel, buildSystemPrompt, normalizeAiChatMessages,
-  assertSafeOutboundUrl, resolveGatewayRoute,
+  assertSafeOutboundUrl, guardedFetchAgent, resolveGatewayRoute,
   emitBridgeOutbound: (...args) => channelBridges.emitBridgeOutbound(...args),
   logMessageActivity,
   recordAnthropicUsage, createAnthropicUsageAccumulator,

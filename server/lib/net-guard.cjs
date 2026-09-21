@@ -34,10 +34,10 @@
 // declaration out again in a comment here — a mention would be counted as a
 // second one. It is why this paragraph describes it instead of quoting it.)
 //
-// NOTE: server/link-preview.cjs still carries its own v4-only copy for its own
-// redirect chain, and tests/link-preview.test.cjs asserts the two agree.
-// Converging them is a behaviour change, not a move, so it is deliberately NOT
-// part of this commit.
+// server/link-preview.cjs re-exports the predicate and the v4 range table from
+// this module for its redirect chain. It used to keep a text-only copy; that
+// copy is gone, so the two gates cannot disagree. tests/link-preview.test.cjs
+// still compares them, including the spellings the text copy used to miss.
 
 const dns = require('dns').promises;
 const net = require('net');

@@ -8,7 +8,7 @@ const {
 // NOT array-serialize a raw JS array bound to an untyped $n — it coerces with
 // '' + value, producing `a,b` instead of `{a,b}`. Single-sourced from
 // backend-core (same helper the generic /backend/db path uses).
-const { toPgArrayLiteral, createFirstUseWindow } = require('../shared/backend-core.cjs');
+const { toPgArrayLiteral, createFirstUseWindow, sessionOpenSql } = require('../shared/backend-core.cjs');
 const { controllerHasScope } = require('../shared/workspaceControl.cjs');
 
 // Which identity kinds get a "this login credential was seen today" audit row.
@@ -3013,8 +3013,7 @@ function mcpSubjectUserId(identity) {
  * product loop) while not opening every other agent's DM to it.
  */
 function mcpSessionScopeSql(identity, alias, params, { lockMembership = false } = {}) {
- const open = `(coalesce(${alias}.visibility, 'workspace') <> 'private'
-    and coalesce(${alias}.folder, '') <> 'Direct messages')`;
+ const open = sessionOpenSql(alias);
 
  if (identity?.kind === 'agent' && identity.agentId) {
   params.push(String(identity.agentId));

@@ -56,6 +56,8 @@ function mountAiChatRoutes(app, deps = {}) {
   // Injected, never re-implemented: the same guard the gateway save path and the
   // provider proxy use. See server/lib/net-guard.cjs.
   assertSafeOutboundUrl,
+  // Same module: pins the socket to the addresses the pre-check just allowed.
+  guardedFetchAgent,
   // Defined inside createApp() rather than at index.cjs top level, so it has to
   // be passed explicitly.
   resolveGatewayRoute,
@@ -465,6 +467,7 @@ function mountAiChatRoutes(app, deps = {}) {
     let upstream;
     try {
      upstream = await fetch(`${route.baseUrl}/chat/completions`, {
+      dispatcher: guardedFetchAgent(),
       method: 'POST',
       // H1 — never follow redirects: base_url is validated as public at write time,
       // but a permitted host could still 302 this request onto an internal address.
@@ -602,6 +605,7 @@ function mountAiChatRoutes(app, deps = {}) {
    try {
     response = await fetch('https://api.anthropic.com/v1/messages', {
      method: 'POST',
+     redirect: 'error',
      signal: anthropicController.signal,
      headers: {
       'Content-Type': 'application/json',
