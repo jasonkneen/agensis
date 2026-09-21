@@ -633,10 +633,10 @@ function WorkspaceRow({
           // light, lighter in dark) and stay visible against an arbitrary
           // identity fill, which is a relationship to a theme token, not a
           // literal. The transparent border stays so gaining one costs no shift.
-          'workspace-tile-swatch flex size-9 shrink-0 items-center justify-center border border-transparent text-[0.8125rem] font-semibold tracking-tight text-white transition-all duration-150',
+          'workspace-tile-swatch flex size-9 shrink-0 items-center justify-center border border-transparent text-[0.8125rem] font-semibold tracking-tight text-white shadow-sm transition-all duration-150',
           tile.active
-            ? 'rounded-[7px] shadow-sm'
-            : 'rounded-[11px] opacity-60 group-hover:rounded-[7px] group-hover:opacity-100',
+            ? 'rounded-[7px] shadow'
+            : 'rounded-[11px] opacity-60 group-hover:rounded-[7px] group-hover:opacity-100 group-hover:shadow',
         )}
         style={{ backgroundColor: tile.color }}
       >
@@ -650,8 +650,8 @@ function WorkspaceRow({
           onDoubleClick={onRename ? (event => { event.preventDefault(); event.stopPropagation(); setRenaming(true); }) : undefined}
           title={onRename ? 'Double-click to rename' : undefined}
           className={cn(
-            'min-w-0 flex-1 truncate text-[0.8125rem] tracking-tight',
-            tile.active ? 'font-medium text-foreground' : 'text-muted-foreground group-hover:text-foreground',
+            'min-w-0 flex-1 truncate text-[0.8125rem] font-medium tracking-tight',
+            tile.active ? 'font-semibold text-foreground' : 'text-muted-foreground group-hover:text-foreground',
           )}
         >
           {tile.name}

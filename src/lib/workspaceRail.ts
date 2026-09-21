@@ -294,12 +294,18 @@ export function isWorkspaceRailExpanded(width: number): boolean {
 }
 
 /**
- * The persisted width, read back. A missing or junk value is the collapsed
- * rail — the shape the app has always had, so an upgrade changes nothing until
- * the user drags.
+ * The persisted width, read back. An unconfigured rail — a missing or junk
+ * value, meaning the user has never dragged or toggled it — opens expanded, so
+ * the first column shows workspace names by default. Only an explicit choice
+ * persists a real width here, and a stored collapsed width parses back to the
+ * icon strip unchanged, so "set it small" sticks.
  */
 export function readWorkspaceRailWidth(stored: string | null | undefined): number {
-  return clampWorkspaceRailWidth(Number.parseFloat(String(stored ?? '')));
+  const parsed = Number.parseFloat(String(stored ?? ''));
+  if (!Number.isFinite(parsed)) {
+    return WORKSPACE_RAIL_DEFAULT_EXPANDED_WIDTH;
+  }
+  return clampWorkspaceRailWidth(parsed);
 }
 
 /** Double-clicking the resize handle toggles between the two shapes. */

@@ -385,6 +385,13 @@ export const Sidebar = React.memo(function Sidebar({
   ));
 
  const userInitial = (userEmail[0] || 'U').toUpperCase();
+ // The account button defaults to a friendly first name rather than the raw
+ // address: the local-part's first token (split on . _ + -), capitalised. The
+ // full email stays on the button's title so it is one hover away.
+ const userFirstName = (() => {
+  const local = (userEmail.split('@')[0] || '').split(/[._+-]/)[0] || '';
+  return local ? local.charAt(0).toUpperCase() + local.slice(1) : (userEmail || 'Account');
+ })();
  const uniqueSessions = React.useMemo(() => uniqueById(sessions), [sessions]);
  const uniqueRecents = React.useMemo(() => uniqueById(recents), [recents]);
  const directAgents = React.useMemo(
@@ -1179,12 +1186,13 @@ export const Sidebar = React.memo(function Sidebar({
          type="button"
          className="flex min-w-0 flex-1 items-center gap-2 rounded-md p-1 text-left transition hover:bg-muted/60"
          aria-label="Account menu"
+         title={userEmail}
         >
          <Avatar size="sm">
           <AvatarFallback>{userInitial}</AvatarFallback>
          </Avatar>
          <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-medium">{userEmail}</div>
+          <div className="truncate text-xs font-medium">{userFirstName}</div>
          </div>
         </button>
        </DropdownMenuTrigger>
