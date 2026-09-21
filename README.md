@@ -36,6 +36,7 @@ server.
 - per-agent memory, skills and personas
 - capability and permission model, with approvals surfaced in chat
 - multiple local harnesses — Claude Code, Codex, Hermes, Grok, and others
+- **operator queue controls** — a manage-gated force-drain route (`POST /backend/workspaces/:id/agents/:aid/queue/drain`) and the MCP `force_drain_agent_queue` tool unblock a wedged queue without redeploying; every forced drain audits an `agent.queue_force_drained` row so the action is answerable. See [`docs/queue-plumbing-audit-2026-09-21.md`](docs/queue-plumbing-audit-2026-09-21.md) for the full plumbing map (SM-1..SM-8).
 
 **Conversation**
 - channels and private DMs, with threads

@@ -54,6 +54,7 @@ import {
   sharePolicyFromCapabilities,
 } from '../../lib/agentSharePolicy';
 import { AgentModelPicker } from '@/components/agents/AgentModelPicker';
+import { ForceDrainAgentButton } from '@/components/agents/ForceDrainAgentButton';
 import { Badge } from '@agensis/ui/components/badge';
 import { Button } from '@agensis/ui/components/button';
 import { AgentNetworkDiagram } from './AgentNetworkDiagram';
@@ -2811,6 +2812,12 @@ function AgentDetailPane({
             <Share2 data-icon="inline-start" />
             Share to marketplace
           </Button>
+          {workspaceId ? (
+            <ForceDrainAgentButton
+              workspaceId={workspaceId}
+              agentId={agent.id}
+            />
+          ) : null}
           <Button
             type="button"
             variant={confirmDelete ? 'destructive' : 'ghost'}
