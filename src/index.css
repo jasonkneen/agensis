@@ -5178,6 +5178,20 @@ select {
  border-color: var(--control-edge) !important;
 }
 
+/* Window titlebar controls (overflow / minimize / close in FloatingWindowShell):
+   bare glyphs at rest — no border, fill or shadow — that only take the outline +
+   tactile treatment on hover. `:not(:hover)` strips the rest state; on hover the
+   rule drops out and the normal outline rules above draw the border again, so
+   there's no layout shift. Scoped-under-`:root[data-ui-theme]` to match the
+   light-mode !important rule's specificity, then appended after it to win the
+   tie; the bare selector covers the other themes. */
+:root[data-ui-theme="default"] [data-slot="button"].window-titlebar-control:not(:hover),
+[data-slot="button"].window-titlebar-control:not(:hover) {
+ border-color: transparent !important;
+ background: transparent !important;
+ box-shadow: none !important;
+}
+
 /* The workspace bar (.sidebar-workspace-pill) is deliberately edgeless — its
    base rule above forces a transparent border/background, and Jason does not
    want a line drawn around it. It stays OUT of the list above. Workspace-rail

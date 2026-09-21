@@ -870,7 +870,16 @@ export function FloatingWindowShell({
               <GlobalPickerTitlebarControl className="mr-0.5" />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="outline" size="icon-xs" aria-label="Window actions">
+                  {/* The three titlebar controls (overflow / minimize / close)
+                      read as bare glyphs at rest and only take their outline on
+                      hover — see .window-titlebar-control in index.css. */}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon-xs"
+                    className="window-titlebar-control"
+                    aria-label="Window actions"
+                  >
                     <MoreHorizontal />
                   </Button>
                 </DropdownMenuTrigger>
@@ -945,6 +954,7 @@ export function FloatingWindowShell({
                 type="button"
                 variant="outline"
                 size="icon-xs"
+                className="window-titlebar-control"
                 // This cluster renders only for UNGROUPED windows now — a group's
                 // controls live on WindowGroupFrame's single title bar, which acts
                 // on every member. So there is no group case to handle here.
@@ -963,6 +973,7 @@ export function FloatingWindowShell({
                 type="button"
                 variant="outline"
                 size="icon-xs"
+                className="window-titlebar-control"
                 onClick={() => onClose(win.id)}
                 disabled={!canControl}
                 aria-label="Close"
