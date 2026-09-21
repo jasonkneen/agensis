@@ -24,11 +24,37 @@
 # This lives here rather than in the Netlify UI on purpose. The same failure was
 # fixed once before via the UI, where it was invisible to the repo and to anyone
 # reading it later — and it recurred.
+
+# The publish directory is PINNED HERE, not left to detection.
+#
+# `vite build` writes the deployable site to dist/ at the repository root
+# (flat — index.html, assets/, landing/, docs/, _redirects, _headers). The
+# Nitro netlify_static pass writes its unused server artifact to
+# node_modules/.nitro/ on purpose (see vite.config.ts), so dist/ needs no
+# nested client/ directory and never gets one.
+#
+# Nothing in the repo produced `dist/client`, yet a deploy resolved
+# `publish = /opt/build/repo/packages/ui/dist/client` and died with "The deploy
+# directory has not been found" AFTER a fully green build — the site's own
+# settings say `dist` with no package path, so the path came from monorepo +
+# framework auto-detection picking the `packages/*` UI workspace as the
+# project and guessing a `dist/client` output for it. Adding the @agensis/ui
+# workspace is what made this repo look like a monorepo to that detection.
+#
+# A netlify.toml value beats both the UI setting and anything detected
+# (config-file origin wins the merge), and `build.publish` resolves against the
+# repository root rather than the detected package, so this one line makes the
+# publish directory deterministic no matter which package a detector favours.
+# It is the counterpart to the paragraph above: the value belongs in the repo,
+# where it is visible, rather than only in a UI nobody reads.
+[build]
+  publish = "dist"
+
 [build.environment]
   SECRETS_SCAN_OMIT_KEYS = "VITE_BACKEND_BASE_URL,AGENSIS_DAEMON_BASE_URL"
 
-# Headers only — build/publish settings stay in the Netlify UI (no [build]
-# section here so we don't override them).
+# Everything below is headers/redirects. The build COMMAND still lives in the
+# Netlify UI (`bun run build`); only `publish` is pinned above.
 
 [functions]
   # server/nostr-community.cjs is statically bundled into the mirror, but its
