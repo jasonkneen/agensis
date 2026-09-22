@@ -125,6 +125,36 @@ function mainSessionsOf(sessions: ChatSession[]): ChatSession[] {
   return sessions.filter(s => !s.parent_message_id && !s.deleted_at && !isHuddleSession(s));
 }
 
+// Per-workspace memory of the last channel/session you were viewing. The
+// workspace id itself is already persisted in App (agensis_active_workspace);
+// this is its counterpart one level down, so a reload or a workspace switch
+// lands you back on the session you left instead of always on mainSessions[0].
+const ACTIVE_SESSION_KEY_PREFIX = 'agensis_active_session:';
+
+function readStoredSessionId(workspaceId: string | null): string | null {
+  if (!workspaceId) return null;
+  try {
+    return localStorage.getItem(`${ACTIVE_SESSION_KEY_PREFIX}${workspaceId}`);
+  } catch {
+    return null;
+  }
+}
+
+// The session to seed into an empty workspace: the last one you viewed here if
+// it still exists, else the first channel. Mirrors pickInitialWorkspaceId's
+// "keep your place, else fall back" contract, one level down.
+function pickInitialSession(
+  mainSessions: ChatSession[],
+  workspaceId: string | null,
+): ChatSession | null {
+  const storedId = readStoredSessionId(workspaceId);
+  if (storedId) {
+    const match = mainSessions.find(session => session.id === storedId);
+    if (match) return match;
+  }
+  return mainSessions[0] ?? null;
+}
+
 export function useChat(
   workspaceId: string | null,
   currentUserName?: string,
@@ -172,7 +202,7 @@ export function useChat(
       .filter(session => session.workspace_id === workspaceId);
     setSessions(mainSessions);
     if (mainSessions.length > 0) {
-      setActiveSession(prev => prev ?? mainSessions[0]);
+      setActiveSession(prev => prev ?? pickInitialSession(mainSessions, workspaceId));
     }
   }, [seedSessions, setActiveSession, setSessions, workspaceId]);
 
@@ -195,7 +225,7 @@ export function useChat(
       const mainSessions = mainSessionsOf(data);
       setSessions(mainSessions);
       if (mainSessions.length > 0) {
-        setActiveSession(prev => prev ?? mainSessions[0]);
+        setActiveSession(prev => prev ?? pickInitialSession(mainSessions, workspaceId));
       }
     }
   }, [beginSessionsRequest, setActiveSession, setSessions, workspaceId]);
@@ -207,6 +237,19 @@ export function useChat(
   const activeSessionId = activeSession?.id ?? null;
   const currentSessionRef = useRef<string | null>(activeSessionId);
   currentSessionRef.current = activeSessionId;
+
+  // Remember the session you're on, per workspace, so reload/switch restores it
+  // (see pickInitialSession). Guarded on a real id: the workspace fence blanks
+  // activeSession to null the moment you switch away, and writing that null
+  // would erase the place we just promised to keep.
+  useEffect(() => {
+    if (!workspaceId || !activeSessionId) return;
+    try {
+      localStorage.setItem(`${ACTIVE_SESSION_KEY_PREFIX}${workspaceId}`, activeSessionId);
+    } catch {
+      /* ignore quota / disabled storage */
+    }
+  }, [workspaceId, activeSessionId]);
   resetMessageSnapshotOverlay(snapshotOverlayRef.current, activeSessionId);
   const streaming = Boolean(activeSessionId && streamingSessionIdsRef.current.has(activeSessionId));
 
