@@ -69,6 +69,24 @@ export function sanitizeHtml(dirty: string | null | undefined): string {
   return DOMPurify.sanitize(dirty, RICH_TEXT_CONFIG);
 }
 
+// Mermaid renders untrusted chat into an SVG, then the chat pane assigns that
+// string to innerHTML. securityLevel 'strict' is not enough on its own: label
+// HTML is on by default, and a diagram directive can turn it back on because
+// htmlLabels is not one of mermaid's locked keys. The rich-text allowlist
+// would delete the SVG, so this profile keeps drawing elements and drops the
+// HTML-label container, scripts, and frames. KEEP_CONTENT false so a forbidden
+// wrapper cannot unwrap its children into the picture.
+const SVG_CONFIG: Config = {
+  USE_PROFILES: { svg: true, svgFilters: true },
+  FORBID_TAGS: ['script', 'foreignObject', 'iframe', 'object', 'embed'],
+  KEEP_CONTENT: false,
+};
+
+export function sanitizeSvg(dirty: string | null | undefined): string {
+  if (!dirty) return '';
+  return DOMPurify.sanitize(dirty, SVG_CONFIG);
+}
+
 /**
  * Sanitize HTML pasted into the contenteditable editor. Same allowlist as
  * document content; call from an onPaste handler with text/html clipboard data.

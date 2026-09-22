@@ -57,6 +57,8 @@ const PUBLIC_TOOL_SURFACE = {
   delete_workspace_resource: ['resource_id'],
   dispatch_agent: ['channel_id', 'content'],
   fail_job: ['job_id'],
+  force_drain_agent_queue: ['agent_id'],
+  get_agent_queue_status: ['agent_id'],
   get_connect_command: [],
   get_resource_operation: ['operation_id'],
   get_workspace_memory: [],

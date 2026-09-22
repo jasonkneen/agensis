@@ -1,4 +1,5 @@
 import React from 'react';
+import { sanitizeSvg } from '@/lib/sanitize';
 
 // Renders a fenced ```mermaid code block as an SVG diagram.
 //
@@ -49,6 +50,9 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: 'strict',
+          // Labels as SVG text. A %%{init}%% block can still flip this back on;
+          // sanitizeSvg drops the HTML label container if it does.
+          htmlLabels: false,
           theme,
           fontFamily: 'inherit',
         });
@@ -56,7 +60,7 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
         await mermaid.parse(code);
         const { svg: out } = await mermaid.render(renderId, code);
         if (cancelled) return;
-        setSvg(out);
+        setSvg(sanitizeSvg(out));
         setError(null);
       } catch (err) {
         if (cancelled) return;

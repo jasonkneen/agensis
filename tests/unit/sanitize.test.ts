@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeHtml } from '../../src/lib/sanitize';
+import { sanitizeHtml, sanitizeSvg } from '../../src/lib/sanitize';
 
 // Item 3 — XSS roundtrip for the centralized rich-text sanitizer.
 // jsdom provides the DOM that DOMPurify needs (vitest environment: 'jsdom').
@@ -105,5 +105,36 @@ describe('sanitizeHtml — edge cases', () => {
     expect(sanitizeHtml(null)).toBe('');
     expect(sanitizeHtml(undefined)).toBe('');
     expect(sanitizeHtml('')).toBe('');
+  });
+});
+
+describe('sanitizeSvg — mermaid output', () => {
+  it('keeps a drawing and drops a script', () => {
+    const out = sanitizeSvg('<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 L1 1"/><script>alert(1)</script></svg>');
+    expect(out).toContain('<path');
+    expect(out.toLowerCase()).not.toContain('<script');
+    expect(out).not.toContain('alert(1)');
+  });
+
+  it('drops an HTML label container instead of unwrapping it', () => {
+    const out = sanitizeSvg('<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><img src="x" onerror="alert(1)"></foreignObject><text>ok</text></svg>');
+    expect(out).toContain('<text');
+    expect(out.toLowerCase()).not.toContain('foreignobject');
+    expect(out.toLowerCase()).not.toContain('<img');
+    expect(out.toLowerCase()).not.toContain('onerror');
+    expect(out).not.toContain('alert(1)');
+  });
+
+  it('drops an event handler on an SVG element', () => {
+    const out = sanitizeSvg('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><rect width="1" height="1"/></svg>');
+    expect(out).toContain('<rect');
+    expect(out.toLowerCase()).not.toContain('onload');
+    expect(out).not.toContain('alert(1)');
+  });
+
+  it('returns empty string for nullish input', () => {
+    expect(sanitizeSvg(null)).toBe('');
+    expect(sanitizeSvg(undefined)).toBe('');
+    expect(sanitizeSvg('')).toBe('');
   });
 });
