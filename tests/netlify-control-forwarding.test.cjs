@@ -139,6 +139,7 @@ test('a deployed control request forwards to the distinct long-running backend',
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, `https://control.example.test/backend/sessions/${SESSION}/close`);
   assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.redirect, 'error');
   assert.equal(calls[0].options.headers.authorization, `Bearer ${bearer}`);
 });
 
@@ -166,6 +167,7 @@ test('a partial-returning generic close is forwarded intact for authoritative Fl
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, 'https://control.example.test/backend/db/update');
   assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.redirect, 'error');
   assert.equal(calls[0].options.headers.authorization, `Bearer ${bearer}`);
   assert.deepEqual(JSON.parse(String(calls[0].options.body)), {
     table: 'chat_sessions',

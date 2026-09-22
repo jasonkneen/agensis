@@ -510,6 +510,7 @@ async function forwardLongRunningControl(req, pathname, body, {
   const response = await fetch(`${baseUrl}${pathname}`, {
    method: req.method,
    headers: requestHeaders,
+   redirect: 'error',
    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const responseHeaders = { ...CORS_HEADERS };
@@ -1818,6 +1819,7 @@ async function proxyAgentDispatchToDaemon(req, baseUrl, body) {
     Authorization: req.headers.get('authorization') || '',
     'X-Agensis-Dispatch-Proxy': '1',
    },
+   redirect: 'error',
    body: JSON.stringify(body || {}),
   });
  } catch (error) {

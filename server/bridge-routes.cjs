@@ -39,6 +39,7 @@ function telegramAdapter({ fetchImpl = fetch } = {}) {
    const body = meta.authorName ? `${meta.authorName}: ${text}` : text;
    const res = await fetchImpl(`${TELEGRAM_API}/bot${token}/sendMessage`, {
     method: 'POST',
+    redirect: 'error',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ chat_id: bridge.external_id, text: body }),
    });
@@ -58,6 +59,7 @@ function telegramAdapter({ fetchImpl = fetch } = {}) {
 async function telegramSetWebhook({ botToken, url, secretToken, fetchImpl = fetch }) {
  const res = await fetchImpl(`${TELEGRAM_API}/bot${botToken}/setWebhook`, {
   method: 'POST',
+  redirect: 'error',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({
    url,
@@ -85,6 +87,7 @@ function slackAdapter({ fetchImpl = fetch } = {}) {
    if (!token) throw new Error('Slack bridge has no bot token');
    const res = await fetchImpl('https://slack.com/api/chat.postMessage', {
     method: 'POST',
+    redirect: 'error',
     headers: {
      'content-type': 'application/json; charset=utf-8',
      authorization: `Bearer ${token}`,
