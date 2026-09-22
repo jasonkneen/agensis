@@ -77,25 +77,40 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   // NET-06: the documents list is metadata-only, so full-content search fetches
   // bodies ONLY while the palette is open (not on every workspace load). Keyed on
   // the doc id+updated_at signature so an edited doc's body is refetched.
-  const [docBodies, setDocBodies] = useState<Record<string, string>>({});
-  const docSignature = documents.map(d => `${d.id}:${d.updated_at}`).join(',');
+  const [bodyResult, setBodyResult] = useState<{
+    signature: string;
+    bodies: Record<string, string>;
+    status: 'ready' | 'error';
+  } | null>(null);
+  const [retry, setRetry] = useState(0);
+  const docSignature = JSON.stringify(documents.map(d => [d.workspace_id, d.id, d.updated_at]));
+  const currentBodies = open && bodyResult?.signature === docSignature ? bodyResult : null;
+  const bodiesLoading = open && documents.length > 0 && !currentBodies;
   useEffect(() => {
+    setBodyResult(null);
     if (!open || documents.length === 0) return;
     let cancelled = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 20_000);
     const workspaceId = documents[0].workspace_id;
     const wanted = new Set(documents.map(d => d.id));
-    // NET-06: one batched fetch scoped to the workspace (the query builder only
-    // supports eq), then client-filter to the docs we're showing.
-    backendClient.from('documents').select('id, content').eq('workspace_id', workspaceId).then(({ data }) => {
-      if (cancelled) return;
-      const rows = Array.isArray(data) ? data as { id: string; content?: string }[] : [];
-      const next: Record<string, string> = {};
-      for (const row of rows) if (wanted.has(row.id)) next[row.id] = row.content || '';
-      setDocBodies(next);
-    });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- docSignature captures the docs to fetch; open gates it
-  }, [open, docSignature]);
+    // One workspace-scoped request; cancel it on close, revision or workspace change.
+    backendClient.from('documents').select('id, content').eq('workspace_id', workspaceId)
+      .abortSignal(controller.signal).then(({ data, error }) => {
+        window.clearTimeout(timeout);
+        if (cancelled) return;
+        const rows = Array.isArray(data) ? data as { id: string; content?: string }[] : [];
+        const bodies: Record<string, string> = {};
+        for (const row of rows) if (wanted.has(row.id)) bodies[row.id] = stripHtml(row.content || '');
+        setBodyResult({ signature: docSignature, bodies, status: error ? 'error' : 'ready' });
+      });
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- signature includes workspace, IDs and revisions
+  }, [open, docSignature, retry]);
 
   const actions: ResultItem[] = useMemo(
     () => [
@@ -172,7 +187,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   const catalog = useMemo(() => {
     if (!open) return [];
     const docs = documents.map(doc => {
-      const plainContent = stripHtml(docBodies[doc.id] ?? doc.content ?? '');
+      const plainContent = currentBodies?.bodies[doc.id] ?? stripHtml(doc.content ?? '');
       return {
         item: {
           id: `doc-${doc.id}`,
@@ -240,7 +255,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
     const actionItems = actions.map(a => ({ item: a, haystack: a.label }));
 
     return [...docs, ...chats, ...memories, ...taskItems, ...actionItems];
-  }, [open, documents, docBodies, sessions, facts, tasks, actions, onDocumentOpen, onSessionOpen, onTaskOpen, onViewChange, onClose]);
+  }, [open, documents, currentBodies, sessions, facts, tasks, actions, onDocumentOpen, onSessionOpen, onTaskOpen, onViewChange, onClose]);
 
   const filteredResults = useMemo(() => {
     const q = query.trim();
@@ -286,11 +301,18 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
       <Command shouldFilter={false}>
         <CommandInput value={query} onValueChange={setQuery} placeholder="Search documents, channels, memory..." />
         <CommandList className="max-h-[400px]">
-          <CommandEmpty>No results</CommandEmpty>
+          {!bodiesLoading && <CommandEmpty>No results</CommandEmpty>}
+          {bodiesLoading && <div role="status" className="px-3 py-2 text-xs text-muted-foreground">Loading document contents…</div>}
+          {currentBodies?.status === 'error' && (
+            <div role="status" className="px-3 py-2 text-xs text-muted-foreground">
+              Document contents could not be loaded. Titles and other results are still available.{' '}
+              <button type="button" className="underline underline-offset-2" onClick={() => setRetry(value => value + 1)}>Retry</button>
+            </div>
+          )}
           {groupedResults.map(group => (
             <CommandGroup key={group.label} heading={group.label}>
               {group.items.map(item => (
-                <CommandItem key={item.id} value={`${item.label} ${item.detail || ''}`} onSelect={item.onSelect}>
+                <CommandItem key={item.id} value={item.id} onSelect={item.onSelect}>
                   <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground group-data-selected/command-item:bg-primary group-data-selected/command-item:text-primary-foreground">
                     {item.icon}
                   </span>

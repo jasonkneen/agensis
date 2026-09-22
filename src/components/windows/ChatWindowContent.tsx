@@ -1,3 +1,4 @@
+import { useHistoryScrollAnchor } from '../../hooks/useHistoryScrollAnchor';
 import { buildChannelRoster, participantAgentKey, toPersistedParticipant } from '../../lib/sessionParticipants';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -1933,6 +1934,10 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
       cancelled = true;
     };
   }, [persistedParticipants, sidePanel, workspaceId]);
+  const historyScroll = useHistoryScrollAnchor({
+    scopeKey: sessionId, firstMessageId: shownMessages[0]?.id,
+    loadingEarlier, onLoadEarlier,
+  });
   const handleScrollerScroll = (event: React.UIEvent<HTMLDivElement>) => {
     const target = event.currentTarget;
     const distanceFromEnd = target.scrollHeight - target.scrollTop - target.clientHeight;
@@ -2334,6 +2339,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 not a hardcoded 8 — this app's default root font-size is 16px,
                 but the setting can change it. */}
             <MessageScrollerViewport
+              ref={historyScroll.viewportRef}
               onScroll={handleScrollerScroll}
               className="px-2 transition-[padding] ease-out motion-reduce:transition-none"
               style={{
@@ -2373,7 +2379,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           size="sm"
                           className="text-xs text-muted-foreground"
                           disabled={loadingEarlier}
-                          onClick={onLoadEarlier}
+                          onClick={historyScroll.loadEarlier}
                         >
                           {loadingEarlier ? 'Loading…' : 'Load earlier messages'}
                         </Button>

@@ -235,3 +235,38 @@ describe('open document revision refresh', () => {
     expect(editor!.value).toBe('local applet source');
   });
 });
+
+it('keeps a document read-only until its body loads and offers retry on failure', async () => {
+  let reject!: (reason: Error) => void;
+  fetchDocumentContent.mockReturnValueOnce(new Promise((_resolve, rejectRead) => { reject = rejectRead; }));
+  await act(async () => { root.render(renderDocument({ ...baseDocument, content: undefined })); await flush(); });
+  expect(container.querySelector('.doc-editor')?.getAttribute('contenteditable')).toBe('false');
+  expect((container.querySelector('.doc-title-input') as HTMLInputElement).disabled).toBe(true);
+  expect(container.textContent).toContain('Loading document');
+  await act(async () => { reject(new Error('unavailable')); await flush(); });
+  expect(container.textContent).toContain('Editing is paused');
+  expect(onAutoSave).not.toHaveBeenCalled();
+  await act(async () => { [...container.querySelectorAll('button')].find(button => button.textContent === 'Retry')?.click(); await flush(); });
+  expect(container.querySelector('.doc-editor')?.innerHTML).toBe('<p>remote body</p>');
+  expect(container.querySelector('.doc-editor')?.getAttribute('contenteditable')).toBe('true');
+});
+
+it('keeps applet title/source unavailable after a failed load until retry succeeds', async () => {
+  fetchDocumentContent.mockRejectedValueOnce(new Error('unavailable'));
+  await act(async () => { root.render(renderApplet({ ...appletDocument, content: undefined })); await flush(); });
+  expect(container.textContent).toContain('Applet source could not be loaded');
+  expect((container.querySelector('.doc-title-input') as HTMLInputElement).disabled).toBe(true);
+  expect(onAutoSave).not.toHaveBeenCalled();
+  await act(async () => { [...container.querySelectorAll('button')].find(button => button.textContent === 'Retry')?.click(); await flush(); });
+  expect(container.textContent).not.toContain('Editing is paused');
+  expect((container.querySelector('.doc-title-input') as HTMLInputElement).disabled).toBe(false);
+});
+
+it('preserves a loaded document body when refreshing its revision fails', async () => {
+  await act(async () => { root.render(renderDocument(baseDocument)); await flush(); });
+  fetchDocumentContent.mockRejectedValueOnce(new Error('unavailable'));
+  await act(async () => { root.render(renderDocument({ ...baseDocument, content: undefined, version: 2 })); await flush(); });
+  expect(container.querySelector('.doc-editor')?.innerHTML).toBe('<p>old body</p>');
+  expect(container.querySelector('.doc-editor')?.getAttribute('contenteditable')).toBe('false');
+  expect(container.textContent).toContain('Editing is paused');
+});

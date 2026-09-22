@@ -349,7 +349,7 @@ async function stop(agentId) {
 
   session.stopping = true;
   const child = session.child;
-  if (child && child.exitCode === null && !child.killed) {
+  if (child && child.exitCode === null && child.signalCode == null) {
     try {
       child.kill('SIGTERM');
     } catch {
@@ -358,7 +358,7 @@ async function stop(agentId) {
     await new Promise((resolve) => {
       const timer = setTimeout(() => {
         try {
-          if (child.exitCode === null) child.kill('SIGKILL');
+          if (child.exitCode === null && child.signalCode == null) child.kill('SIGKILL');
         } catch {
           // ignore
         }
@@ -376,28 +376,8 @@ async function stop(agentId) {
 }
 
 function stopAll() {
-  const ids = [...sessions.keys()];
-  for (const id of ids) {
-    const session = sessions.get(id);
-    if (!session?.child) continue;
-    session.stopping = true;
-    const child = session.child;
-    try {
-      child.kill('SIGTERM');
-    } catch {
-      // ignore
-    }
-    // Escalate after a short grace. before-quit is sync and must not block
-    // the app forever, so we fire-and-forget SIGKILL rather than await exit.
-    setTimeout(() => {
-      try {
-        if (child.exitCode === null && !child.killed) child.kill('SIGKILL');
-      } catch {
-        // ignore
-      }
-    }, 2500).unref?.();
-  }
-  sessions.clear();
+  // The caller waits through escalation before allowing Electron to exit.
+  return Promise.all([...sessions.keys()].map(id => stop(id)));
 }
 
 module.exports = {

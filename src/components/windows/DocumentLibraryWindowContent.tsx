@@ -243,12 +243,18 @@ export function DocumentLibraryWindowContent({
   const [primaryBody, setPrimaryBody] = useState('');
   const [compareBody, setCompareBody] = useState('');
   const [bodyLoading, setBodyLoading] = useState(false);
+  const [primaryError, setPrimaryError] = useState(false);
+  const [compareError, setCompareError] = useState(false);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const bodyError = primaryError || compareError;
+  const [bodyRetry, setBodyRetry] = useState(0);
 
   const primaryId = selected?.primary.id ?? '';
   useEffect(() => {
     if (!selected) { setPrimaryBody(''); setBodyLoading(false); return; }
     let cancelled = false;
     setBodyLoading(true);
+    setPrimaryError(false);
     void loadSource(selected.primary).then(body => {
       // Checked before EVERY setState including the loading flag: an early
       // return that leaves the spinner on is the version of this bug that looks
@@ -256,22 +262,26 @@ export function DocumentLibraryWindowContent({
       if (cancelled) return;
       setPrimaryBody(body);
       setBodyLoading(false);
+    }).catch(() => {
+      if (!cancelled) { setPrimaryError(true); setBodyLoading(false); }
     });
     return () => { cancelled = true; };
     // Keyed on the primary's id rather than the entry object: a realtime tick
     // rebuilds every entry, and depending on the object would refetch the body
     // on every heartbeat.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [primaryId, loadSource]);
+  }, [primaryId, loadSource, bodyRetry]);
 
   useEffect(() => {
-    if (!comparing) { setCompareBody(''); return; }
+    setCompareError(false);
+    if (!comparing) { setCompareBody(''); setCompareLoading(false); return; }
+    setCompareLoading(true);
     let cancelled = false;
     void loadSource(comparing).then(body => {
-      if (!cancelled) setCompareBody(body);
-    });
+      if (!cancelled) { setCompareBody(body); setCompareLoading(false); }
+    }).catch(() => { if (!cancelled) { setCompareError(true); setCompareLoading(false); } });
     return () => { cancelled = true; };
-  }, [comparing, loadSource]);
+  }, [comparing, loadSource, bodyRetry]);
 
   const diff = useMemo(
     () => (comparing ? diffLines(compareBody, primaryBody) : null),
@@ -483,7 +493,11 @@ export function DocumentLibraryWindowContent({
               </p>
             </div>
 
-            {comparing && diff ? (
+            {bodyError ? (
+              <div role="alert" className="p-3 text-sm text-muted-foreground">Document content could not be loaded. <Button variant="outline" size="sm" onClick={() => setBodyRetry(value => value + 1)}>Retry</Button></div>
+            ) : bodyLoading || compareLoading ? (
+              <div role="status" className="p-3 text-sm text-muted-foreground">Loading document content…</div>
+            ) : comparing && diff ? (
               <div>
                 <div className="mb-1.5 flex items-center gap-2">
                   <h4 className="ui-section-label">

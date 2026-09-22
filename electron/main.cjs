@@ -865,20 +865,27 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+let runtimeTeardown = null;
+let runtimesStopped = false;
 function tearDownLocalRuntimes() {
   // Tear down live daemons on quit (clean). Disk autostart list is preserved
   // so the next launch / reboot restore brings them back. The CLI also watches
   // AGENSIS_SUPERVISOR_PID and exits if this process disappears without us
   // getting here (force-quit / crash).
   try {
-    localRuntime.stopAll();
+    runtimeTeardown ||= Promise.resolve(localRuntime.stopAll()).catch(error => console.error('Runtime shutdown failed', error));
+    return runtimeTeardown;
   } catch {
     // ignore teardown races
   }
 }
 
-app.on('before-quit', () => {
-  tearDownLocalRuntimes();
+app.on('before-quit', event => {
+  if (!runtimesStopped) {
+    event.preventDefault();
+    Promise.resolve(tearDownLocalRuntimes()).finally(() => { runtimesStopped = true; app.quit(); });
+    return;
+  }
   if (backendServer) {
     backendServer.close();
     backendServer = null;

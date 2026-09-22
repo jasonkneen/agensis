@@ -1,4 +1,5 @@
 import { useEffect, useCallback, useMemo } from 'react';
+import { toast } from 'sonner';
 import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
@@ -102,7 +103,7 @@ export function useTasks(workspaceId: string | null, userId?: string, seed?: Tas
       due_date: input.due_date ?? null,
       source_type: input.source_type ?? 'manual',
       source_id: input.source_id ?? null,
-      attachments: input.attachments ?? null,
+      attachments: input.attachments ?? [],
     }, `tasks_${workspaceId}`);
     if (data) {
       const task = data as unknown as Task;
@@ -120,9 +121,18 @@ export function useTasks(workspaceId: string | null, userId?: string, seed?: Tas
     if (updates.status && updates.status !== 'done') {
       patch.completed_at = null;
     }
-    const result = await offlineUpdate('tasks', id, patch as Record<string, unknown>, `tasks_${workspaceId}`);
+    let result: Record<string, unknown> | null = null;
+    try {
+      result = await offlineUpdate('tasks', id, patch as Record<string, unknown>, `tasks_${workspaceId}`);
+    } catch {
+      // Local queue persistence can fail as well as the HTTP request.
+    }
     if (result) {
       setTasks(prev => prev.map(t => t.id === id ? { ...t, ...result } as Task : t));
+    } else {
+      toast.error('Task changes were not saved', {
+        description: 'Try the change again before closing this task.',
+      });
     }
     return result;
   }, [setTasks, workspaceId]);
@@ -133,8 +143,16 @@ export function useTasks(workspaceId: string | null, userId?: string, seed?: Tas
   }, [updateTask]);
 
   const deleteTask = useCallback(async (id: string) => {
-    const deleted = await offlineDelete('tasks', id, `tasks_${workspaceId}`);
-    if (!deleted) return false;
+    let deleted = false;
+    try {
+      deleted = await offlineDelete('tasks', id, `tasks_${workspaceId}`);
+    } catch {
+      // Keep the task visible if deletion could not be persisted.
+    }
+    if (!deleted) {
+      toast.error('Task could not be deleted', { description: 'The task is still available. Try again.' });
+      return false;
+    }
     setTasks(prev => prev.filter(t => t.id !== id));
     return true;
   }, [setTasks, workspaceId]);

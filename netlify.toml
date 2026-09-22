@@ -28,10 +28,12 @@
 # The publish directory is PINNED HERE, not left to detection.
 #
 # `vite build` writes the deployable site to dist/ at the repository root
-# (flat — index.html, assets/, landing/, docs/, _redirects, _headers). The
+# (flat — index.html, assets/, landing/, docs/, _headers). The
 # Nitro netlify_static pass writes its unused server artifact to
 # node_modules/.nitro/ on purpose (see vite.config.ts), so dist/ needs no
-# nested client/ directory and never gets one.
+# nested client/ directory and never gets one. The build finalizer removes
+# Nitro's generated catch-all _redirects: file rules run before this TOML and
+# would otherwise swallow /app and /join before these rewrites can run.
 #
 # Nothing in the repo produced `dist/client`, yet a deploy resolved
 # `publish = /opt/build/repo/packages/ui/dist/client` and died with "The deploy

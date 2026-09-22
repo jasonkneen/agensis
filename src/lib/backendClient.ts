@@ -307,13 +307,14 @@ function storeMintedSession(
   };
 }
 
-async function postJson<T = unknown>(path: string, body: unknown): Promise<{ data: T | null; error: { message: string; code?: string | null } | null }> {
+async function postJson<T = unknown>(path: string, body: unknown, signal?: AbortSignal): Promise<{ data: T | null; error: { message: string; code?: string | null } | null }> {
   try {
     const headers = authHeaders();
     const response = await fetch(backendUrl(path), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify(body ?? {}),
+      signal,
     });
     noteBackendResponse(path, response.status, Boolean(headers.Authorization));
 
@@ -352,6 +353,7 @@ class QueryBuilder<T = LooseJson> {
   private limitCount: number | null = null;
   private payload: unknown = null;
   private singleMode: 'many' | 'single' | 'maybeSingle' = 'many';
+  private signal: AbortSignal | undefined;
 
   constructor(table: string) {
     this.table = table;
@@ -404,6 +406,11 @@ class QueryBuilder<T = LooseJson> {
     return this;
   }
 
+  abortSignal(signal: AbortSignal) {
+    this.signal = signal;
+    return this;
+  }
+
   single() {
     this.singleMode = 'single';
     return this.execute();
@@ -430,7 +437,7 @@ class QueryBuilder<T = LooseJson> {
         orderBy: this.orderBy,
         limit: this.limitCount,
         single: this.singleMode !== 'many',
-      });
+      }, this.signal);
     }
 
     if (this.action === 'insert') {
@@ -439,7 +446,7 @@ class QueryBuilder<T = LooseJson> {
         values: this.payload,
         returning: this.returningColumns,
         single: this.singleMode !== 'many',
-      });
+      }, this.signal);
     }
 
     if (this.action === 'update') {
@@ -449,14 +456,14 @@ class QueryBuilder<T = LooseJson> {
         filters: this.filters,
         returning: this.returningColumns,
         single: this.singleMode !== 'many',
-      });
+      }, this.signal);
     }
 
     return postJson<T>('/backend/db/delete', {
       table: this.table,
       filters: this.filters,
       single: this.singleMode !== 'many',
-    });
+    }, this.signal);
   }
 }
 

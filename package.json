@@ -27,7 +27,7 @@
   "scripts": {
     "ops": "node cli/agensis-ops.mjs",
     "dev": "vite",
-    "build": "tsc --noEmit -p tsconfig.app.json && vite build",
+    "build": "tsc --noEmit -p tsconfig.app.json && vite build && node scripts/finalize-static-routing.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "node --require ./tests/helpers/test-env.cjs --experimental-test-module-mocks --test tests/*.test.cjs",

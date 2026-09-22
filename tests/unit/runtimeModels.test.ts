@@ -30,6 +30,7 @@ describe('runtimeModelCatalog', () => {
 
   it('offers the Claude models for Claude, minus the auto pseudo-entry', () => {
     const claude = runtimeModelCatalog('claude');
+    expect(claude.map(m => m.id)).toContain('claude-opus-5-5');
     expect(claude.map(m => m.id)).toContain('claude-fable-5');
     expect(claude.map(m => m.id)).not.toContain('auto');
   });

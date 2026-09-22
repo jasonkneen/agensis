@@ -3303,7 +3303,7 @@ function CanvasLayerScene({
   onAddFact: (fact: string, category: string) => void;
   onUpdateFact: (id: string, fact: string, category: string) => void;
   onDeleteFact: (id: string) => void | Promise<boolean>;
-  onCreateTask: (input: CreateTaskInput) => void;
+  onCreateTask: (input: CreateTaskInput) => Promise<Task | null>;
   onUpdateTask: (id: string, updates: Partial<Task>) => void;
   onToggleTaskStatus: (task: Task) => void;
   onDeleteTask: (id: string) => void;

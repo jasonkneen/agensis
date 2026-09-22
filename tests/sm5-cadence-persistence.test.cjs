@@ -37,7 +37,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const taskDispatchSrc = fs.readFileSync(path.join(ROOT, 'server', 'task-dispatch.cjs'), 'utf8');
 const indexSrc = fs.readFileSync(path.join(ROOT, 'server', 'index.cjs'), 'utf8');
 const neonSchemaSrc = fs.readFileSync(path.join(ROOT, 'database', 'neon-schema.sql'), 'utf8');
 const migrationDir = path.join(ROOT, 'supabase', 'migrations');
@@ -45,14 +44,6 @@ const migrationFiles = fs.readdirSync(migrationDir);
 const migration = migrationFiles
     .filter((name) => name.endsWith('.sql'))
     .map((name) => ({name, content: fs.readFileSync(path.join(migrationDir, name), 'utf8')}));
-
-function regionFrom(src, startMarker, endMarker) {
- const startIdx = src.indexOf(startMarker);
- assert.ok(startIdx >= 0, `start marker not found: ${startMarker.slice(0, 60)}`);
- const endIdx = src.indexOf(endMarker, startIdx);
- assert.ok(endIdx > startIdx, `end marker not found after ${startIdx}: ${endMarker.slice(0, 60)}`);
- return src.slice(startIdx, endIdx);
-}
 
 // (1) Three-place schema sync.
 test('SM-5 (1a): runtime bootstrap creates pending_cadence_wakes', () => {
@@ -70,83 +61,15 @@ test('SM-5 (1c): a Supabase migration creates pending_cadence_wakes', () => {
  assert.ok(hits.length >= 1, 'at least one migration file must create pending_cadence_wakes');
 });
 
-// (2) scheduleCadenceWake writes to the table.
-test('SM-5 (2): scheduleCadenceWake inserts into pending_cadence_wakes', () => {
- const region = regionFrom(
-  taskDispatchSrc,
-  'function scheduleCadenceWake(',
-  'function clearCadenceWakes() {',
- );
- assert.match(region, /insert into pending_cadence_wakes/);
- assert.match(region, /on conflict \(lock_key\) do nothing/);
+test('the reaper remains wired to the server tick', () => {
+ assert.match(indexSrc, /guardedSweep\('reapCadenceWakes', taskDispatch.reapCadenceWakes\)/);
 });
 
-// (3) Timer callback fires continueConversation and best-effort DELETEs the
-// row. The DELETE is NOT a dedupe gate — continueConversation is itself
-// idempotent, and treating the DELETE as a gate would make a wake conditional
-// on the DB (which is wrong: a wake the DB has forgotten is still owed an
-// answer). Cross-replica dedupe happens via the reaper's DELETE...RETURNING.
-test('SM-5 (3): the timer callback fires continueConversation and DELETEs the row (best-effort)', () => {
- const region = regionFrom(
-  taskDispatchSrc,
-  'function scheduleCadenceWake(',
-  'function clearCadenceWakes() {',
- );
- // Find the timer callback body specifically.
- const callbackMatch = region.match(/setTimeout\(\(\) => \{[\s\S]*?\}, delayMs\);/);
- assert.ok(callbackMatch, 'setTimeout callback present');
- const callbackBody = callbackMatch[0];
- // Both DELETE and continueConversation must be in the callback.
- const deleteIdx = callbackBody.indexOf('delete from pending_cadence_wakes');
- const continueIdx = callbackBody.indexOf('continueConversation');
- assert.ok(deleteIdx >= 0, 'callback must DELETE the row');
- assert.ok(continueIdx >= 0, 'callback must still call continueConversation');
- // No "if rows returned then fire" guard — the DELETE is best-effort, the
- // fire is unconditional. If we treated the DELETE result as a gate we would
- // miss wakes whenever the DB had drifted (table missing, replica never
- // mirrored, INSERT failed silently).
- assert.doesNotMatch(callbackBody, /if \(!Array\.isArray\(rows\)/);
-});
-
-// (4) clearCadenceWakes DELETEs the rows.
-test('SM-5 (4): clearCadenceWakes DELETEs the rows it is cancelling', () => {
- const region = regionFrom(
-  taskDispatchSrc,
-  'function clearCadenceWakes() {',
-  'async function reapCadenceWakes',
- );
- assert.match(region, /delete from pending_cadence_wakes/);
- assert.match(region, /lock_key = any\(\$1::text\[\]\)/);
-});
-
-// (5) The jobReaper interval invokes reapCadenceWakes.
-test('SM-5 (5): the jobReaper tick invokes reapCadenceWakes', () => {
- const region = regionFrom(
-  indexSrc,
-  "const jobReaper = setInterval(",
-  "guardedSweep('sweepAutomationRuns'",
- );
- assert.match(region, /guardedSweep\('reapCadenceWakes'/);
-});
-
-// (6) The reaper uses DELETE...RETURNING so cross-replica claims is atomic.
-test('SM-5 (6): reapCadenceWakes uses DELETE...RETURNING (atomic claim)', () => {
- const region = regionFrom(
-  taskDispatchSrc,
-  'async function reapCadenceWakes',
-  'function startCadenceReaper',
- );
- assert.match(region, /delete from pending_cadence_wakes\s+where next_fire_at <= to_timestamp\(\$1 \/ 1000\.0\)\s+returning/);
-});
-
-// Safety: the reaper's query is constrained to `next_fire_at <= now()` so a
-// row cannot fire early. This is the original "missed clear" objection the
-// previous comment block raised; it is preserved here by predicate.
-test('SM-5 (safety): the reaper only fires rows whose next_fire_at has elapsed', () => {
- const region = regionFrom(
-  taskDispatchSrc,
-  'async function reapCadenceWakes',
-  'function startCadenceReaper',
- );
- assert.match(region, /next_fire_at <= to_timestamp\(\$1 \/ 1000\.0\)/);
+test('unassigned cadence wakes are supported in every schema lane', () => {
+ for (const source of [indexSrc, neonSchemaSrc]) {
+  const table = source.slice(source.indexOf('CREATE TABLE IF NOT EXISTS pending_cadence_wakes'));
+  assert.match(table.slice(0, table.indexOf(');')), /agent_id uuid REFERENCES/);
+  assert.match(source, /ALTER TABLE pending_cadence_wakes ALTER COLUMN agent_id DROP NOT NULL/);
+ }
+ assert.ok(migration.some(m => /ALTER TABLE pending_cadence_wakes ALTER COLUMN agent_id DROP NOT NULL/.test(m.content)));
 });

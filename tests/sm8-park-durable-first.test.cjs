@@ -1,124 +1,99 @@
 'use strict';
 
-// SM-8 contract test (docs/queue-plumbing-audit-2026-09-21.md):
-//
-//   "parkChatTurn writes DB before pendingChatTurns.set" — the original
-//    code did the OPPOSITE: pendingChatTurns.set ran first, then a fire-and-
-//    forget IIFE shadowed it to pending_chat_turns. A throw inside that IIFE
-//    left the in-process Map populated but the DB row missing, so a restart
-//    could not recover the parked turn — the Map was gone and the DB had
-//    nothing to replay from."
-//
-// The fix preserves the SYNCHRONOUS Map.set invariant (so callers that read
-// pendingChatTurns the moment parkChatTurn returns still work — see the
-// continueConversation re-park branch and the unit tests) and rolls the Map
-// entry back if the durable write fails. The failure-mode analysis:
-//
-//   - DB ok + Map ok: row in both (same as today).
-//   - DB ok + Map would have failed (synchronous throw): row in DB only;
-//     the orphan sweep replays it on the next tick. STRICTLY BETTER than
-//     today — today there is no orphan to replay.
-//   - DB fail + Map ok (today's buggy case): Map is rolled back, DB has no
-//     row. SAME outcome as today — strictly no regression.
-//
-// Properties pinned here:
-//   1. parkChatTurn is synchronous (the live path and unit tests depend on
-//      the Map being readable the moment it returns; making it async would
-//      turn synchronous assertions into flakes).
-//   2. writeThroughParkedTurn accepts a completion callback that fires
-//      AFTER the durable write has either committed or thrown.
-//   3. parkChatTurn sets the Map entry FIRST, then calls writeThroughParkedTurn
-//      with a rollback that deletes the Map entry on failure. The rollback
-//      only fires if the Map still holds THIS entry — a later park that
-//      overwrote it must not be erased.
-//   4. The re-park branch inside drainPendingChatTurn applies the same rule.
-
+// A failed durable shadow must not destroy the live wake-up it protects.
+// Exercise rejection timing and recovery, rather than pinning rollback syntax.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+const { __test: api } = require('../server/index.cjs');
+const target = {
+ workspaceId: '33333333-3333-4333-8333-333333333333',
+ sessionId: '11111111-1111-4111-8111-111111111111',
+ agentId: '22222222-2222-4222-8222-222222222222',
+ targetAgentId: '22222222-2222-4222-8222-222222222222',
+ threadParentId: null, broadcastToChannel: null,
+};
+const key = `${target.sessionId}::${target.agentId}`;
+const settle = () => new Promise(resolve => setImmediate(resolve));
+test.afterEach(() => api.resetTestState());
 
-const indexSrc = fs.readFileSync(
-    path.join(__dirname, '..', 'server', 'index.cjs'),
-    'utf8',
-);
-
-function regionFrom(src, startMarker, endMarker) {
- const startIdx = src.indexOf(startMarker);
- assert.ok(startIdx >= 0, `start marker not found: ${startMarker.slice(0, 60)}`);
- const endIdx = src.indexOf(endMarker, startIdx);
- assert.ok(endIdx > startIdx, `end marker not found after ${startIdx}: ${endMarker.slice(0, 60)}`);
- return src.slice(startIdx, endIdx);
-}
-
-// (1) parkChatTurn is synchronous.
-test('SM-8 (1): parkChatTurn is synchronous so the Map is readable the moment it returns', () => {
- const region = regionFrom(
-  indexSrc,
-  '// SM-8: the Map.set is synchronous',
-  'function drainPendingChatTurn(sessionId',
- );
- assert.match(region, /^function parkChatTurn\(/m);
- // Specifically NOT async.
- assert.doesNotMatch(region, /async function parkChatTurn/);
+test('a rejected durable write retains the wake without dispatching', async () => {
+ api.setTestDb({ unsafe: async () => { throw new Error('database unavailable'); } });
+ api.parkChatTurn(target);
+ assert.equal(api.pendingChatTurns.size, 1);
+ await settle();
+ assert.equal(api.pendingChatTurns.size, 1);
+ let replayed = 0;
+ await api.drainPendingChatTurn(target.sessionId, target.agentId, 'test', async () => {
+  replayed++;
+  return { started: true };
+ });
+ assert.equal(replayed, 0);
+ assert.equal(api.pendingChatTurns.size, 1);
 });
 
-// (2) writeThroughParkedTurn accepts a completion callback.
-test('SM-8 (2): writeThroughParkedTurn takes a completion callback', () => {
- const region = regionFrom(
-  indexSrc,
-  'function writeThroughParkedTurn(',
-  'function forgetParkedTurn(',
- );
- assert.match(region, /function writeThroughParkedTurn\(key, entry, onComplete = null\)/);
- // The callback fires on success.
- assert.match(region, /onComplete\(null\)/);
- // The callback fires on failure.
- assert.match(region, /onComplete\(error\)/);
+test('a late failed write cannot erase a newer parked message', async () => {
+ let rejectFirst;
+ let writes = 0;
+ api.setTestDb({ unsafe: () => ++writes === 1
+  ? new Promise((_resolve, reject) => { rejectFirst = reject; })
+  : Promise.resolve([]) });
+ api.parkChatTurn(target);
+ api.parkChatTurn({ ...target, threadParentId: 'new-thread' });
+ rejectFirst(new Error('late failure'));
+ await settle();
+ assert.equal(api.pendingChatTurns.get(key).threadParentId, 'new-thread');
 });
 
-// (3) parkChatTurn sets the Map FIRST, then writes through with a rollback.
-test('SM-8 (3): parkChatTurn sets the Map first and rolls back on DB failure', () => {
- const region = regionFrom(
-  indexSrc,
-  '// SM-8: the Map.set is synchronous',
-  'function drainPendingChatTurn(sessionId',
- );
- const mapSetIdx = region.indexOf('pendingChatTurns.set(key, entry)');
- const writeIdx = region.indexOf('writeThroughParkedTurn(key, entry');
- assert.ok(mapSetIdx >= 0, 'parkChatTurn still sets the Map');
- assert.ok(writeIdx >= 0, 'parkChatTurn still writes through to the DB');
- assert.ok(mapSetIdx < writeIdx, `Map.set (${mapSetIdx}) must precede writeThroughParkedTurn (${writeIdx})`);
- // The completion callback ROLLS BACK the Map on failure — and only if the Map
- // still holds this exact entry.
- assert.match(region, /pendingChatTurns\.delete\(key\)/);
- assert.match(region, /pendingChatTurns\.get\(key\) === entry/);
+test('the sweep retries failed persistence even while the agent remains busy', async () => {
+ let unavailable = true;
+ const writes = [];
+ api.setTestDb({ unsafe: async (sql, params) => {
+  if (unavailable) throw new Error('offline');
+  writes.push({ sql, params });
+  return [];
+ } });
+ api.parkChatTurn(target);
+ await settle();
+ unavailable = false;
+ await api.replayOrphanedChatTurns({ isAgentBusy: async () => true });
+ assert.equal(writes.length, 1);
+ assert.match(writes[0].sql, /insert into pending_chat_turns/);
+ assert.equal(writes[0].params[0], key);
+ assert.equal(api.pendingChatTurns.size, 1);
+ await api.replayOrphanedChatTurns({ isAgentBusy: async () => true });
+ assert.equal(writes.length, 1, 'successful persistence is not repeated each sweep');
 });
 
-// (4) The re-park branch inside drainPendingChatTurn applies the same rule.
-test('SM-8 (4): the re-park branch in drainPendingChatTurn is also Map-first with rollback', () => {
- const region = regionFrom(
-  indexSrc,
-  "if (out && (out.reason === 'agent_busy' || out.reason === 'locked')) {",
-  "} catch (error) {\n   console.error('drainPendingChatTurn failed', error);",
- );
- const mapSetIdx = region.indexOf('pendingChatTurns.set(key, next)');
- const writeIdx = region.indexOf('writeThroughParkedTurn(key, next');
- assert.ok(mapSetIdx >= 0, 're-park branch still sets the Map');
- assert.ok(writeIdx >= 0, 're-park branch still writes through to the DB');
- assert.ok(mapSetIdx < writeIdx, `Map.set (${mapSetIdx}) must precede writeThroughParkedTurn (${writeIdx})`);
- assert.match(region, /pendingChatTurns\.delete\(key\)/);
- assert.match(region, /pendingChatTurns\.get\(key\) === next/);
+test('failed re-parking retains the attempt cap and original age', async () => {
+ api.setTestDb({ unsafe: async () => { throw new Error('offline'); } });
+ api.parkChatTurn(target);
+ const parkedAt = api.pendingChatTurns.get(key).parkedAt;
+ await api.drainPendingChatTurn(target.sessionId, target.agentId, 'test', async () => ({ started: false, reason: 'agent_busy' }));
+ await settle();
+ assert.equal(api.pendingChatTurns.get(key).attempts, 1);
+ assert.equal(api.pendingChatTurns.get(key).parkedAt, parkedAt);
 });
 
-// (5) The comment block references the audit file and SM-8 so a future reader
-// can follow the reasoning.
-test('SM-8 (5): the audit comment is in place', () => {
- const region = regionFrom(
-  indexSrc,
-  '// SM-8: the Map.set is synchronous',
-  'function drainPendingChatTurn(sessionId',
- );
- assert.match(region, /SM-8/);
- assert.match(region, /docs\/queue-plumbing-audit-2026-09-21\.md/);
+test('draining persists attempts before dispatch and deletes only after dispatch', async () => {
+ let finishInsert;
+ let first = true;
+ const events = [];
+ api.setTestDb({ unsafe: (sql) => {
+  if (/insert/.test(sql)) {
+   if (first) { first = false; return new Promise(resolve => {
+    finishInsert = () => { events.push('insert'); resolve([]); };
+   }); }
+   events.push('attempt'); return Promise.resolve([]);
+  }
+  events.push('delete'); return Promise.resolve([]);
+ } });
+ api.parkChatTurn(target);
+ const drain = api.drainPendingChatTurn(target.sessionId, target.agentId, 'test', async () => {
+  events.push('dispatch'); return { started: true };
+ });
+ assert.deepEqual(events, []);
+ finishInsert();
+ await drain;
+ await settle();
+ assert.deepEqual(events, ['insert', 'attempt', 'dispatch', 'delete']);
 });

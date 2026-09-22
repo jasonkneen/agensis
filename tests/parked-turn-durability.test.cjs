@@ -35,7 +35,8 @@ const SESSION = '11111111-1111-1111-1111-111111111111';
 const AGENT = '22222222-2222-2222-2222-222222222222';
 const WORKSPACE = '33333333-3333-3333-3333-333333333333';
 
-test.afterEach(() => pendingChatTurns.clear());
+test.beforeEach(() => __test.setTestDb({ unsafe: async () => [] }));
+test.afterEach(() => __test.resetTestState());
 
 // --- 2. the lock branch ----------------------------------------------------
 
@@ -127,7 +128,8 @@ test('the sweep does replay once that agent is free', async () => {
 
 // --- the shadow must never break the path it protects ----------------------
 
-test('persistence failure cannot break park or replay', async () => {
+test('persistence failure retains the wake and defers replay', async () => {
+  __test.setTestDb({ unsafe: async () => { throw new Error('offline'); } });
   // There is no DATABASE_URL in the test env, so getDb() THROWS SYNCHRONOUSLY.
   // This is not hypothetical: with the getDb() call outside its try/catch the
   // delete threw straight into drainPendingChatTurn and killed five replay
@@ -139,7 +141,8 @@ test('persistence failure cannot break park or replay', async () => {
   assert.equal(pendingChatTurns.size, 1, 'park must survive a dead shadow store');
   const calls = [];
   await drainPendingChatTurn(SESSION, AGENT, 'job_done', async (a) => { calls.push(a); return { started: true }; });
-  assert.equal(calls.length, 1, 'replay must survive a dead shadow store');
+  assert.equal(calls.length, 0, 'execution waits for durable recovery');
+  assert.equal(pendingChatTurns.size, 1);
 });
 
 test('the orphan sweep never throws, whatever it is handed', async () => {

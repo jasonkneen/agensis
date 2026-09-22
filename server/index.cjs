@@ -1629,11 +1629,12 @@ async function ensureRuntimeSchema() {
       lock_key text PRIMARY KEY,
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
       session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-      agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+      agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
       thread_parent_id uuid,
       next_fire_at timestamptz NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now()
     );
+    ALTER TABLE pending_cadence_wakes ALTER COLUMN agent_id DROP NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_pending_cadence_wakes_next_fire_at
       ON pending_cadence_wakes(next_fire_at);
     CREATE TABLE IF NOT EXISTS agent_jobs (
@@ -1661,6 +1662,13 @@ async function ensureRuntimeSchema() {
     -- Scheduled agent runs. A schedule posts a prompt into a session on a
     -- cadence (interval_seconds) and lets the orchestrator dispatch as usual.
     -- next_run_at drives the runner; running/last_* track execution + history.
+    ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS wake_id uuid NOT NULL DEFAULT gen_random_uuid();
+    ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS claim_token uuid;
+    ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS lease_until timestamptz;
+    ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0;
+    ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS failed_at timestamptz;
+    ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS last_error text;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_jobs_dispatch_wake ON agent_jobs ((metadata->>'dispatchWakeId')) WHERE metadata->>'dispatchWakeId' IS NOT NULL;
     CREATE TABLE IF NOT EXISTS agent_schedules (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -7343,17 +7351,26 @@ function pendingChatTurnKey(sessionId, agentId) {
 // question. These exist so a restart does not silently drop a turn that is still
 // owed an answer.
 //
-// SM-8 (docs/queue-plumbing-audit-2026-09-21.md): writeThroughParkedTurn takes
-// a completion callback. Callers set the Map entry synchronously (the live path
-// depends on the Map being readable the moment parkChatTurn returns) and pass
-// a rollback that deletes the Map entry if the DB write fails. This keeps the
-// synchronous invariant callers like `parkChatTurn` already rely on while
-// closing the audit hole: a DB failure that previously left a Map entry whose
-// shadow was missing now rolls the Map back, so the next orphan sweep will not
-// find a row in the DB that no in-process state expects.
+// A failed shadow write must not erase the only remaining wake-up. Keep the
+// live entry and retry its persistence on the orphan sweep, even while the
+// agent is busy. Weak references do not retain drained or superseded entries.
+const unpersistedChatTurns = new WeakSet();
+const parkedTurnWrites = new Map();
 
-function writeThroughParkedTurn(key, entry, onComplete = null) {
- void (async () => {
+// Preserve write/delete order for each wake. Otherwise a slow INSERT can land
+// after its drain's DELETE and resurrect a turn that already ran.
+function queueParkedTurnWrite(key, action) {
+ const previous = parkedTurnWrites.get(key);
+ const pending = previous ? previous.catch(() => {}).then(action) : action();
+ parkedTurnWrites.set(key, pending);
+ void pending.finally(() => {
+  if (parkedTurnWrites.get(key) === pending) parkedTurnWrites.delete(key);
+ }).catch(() => {});
+ return pending;
+}
+
+function writeThroughParkedTurn(key, entry, { required = false } = {}) {
+ return queueParkedTurnWrite(key, async () => {
   try {
    await getDb().unsafe(
     `insert into pending_chat_turns
@@ -7371,26 +7388,27 @@ function writeThroughParkedTurn(key, entry, onComplete = null) {
      entry.attempts, entry.parkedAt,
     ],
    );
-   if (typeof onComplete === 'function') onComplete(null);
+   unpersistedChatTurns.delete(entry);
   } catch (error) {
    console.warn('[chat-retry] could not persist parked turn:', error?.message || error);
-   if (typeof onComplete === 'function') onComplete(error);
+   unpersistedChatTurns.add(entry);
+   if (required) throw error;
   }
- })();
+ });
 }
 
-function forgetParkedTurn(key) {
+function forgetParkedTurn(key, parkedAt = null) {
  // getDb() THROWS SYNCHRONOUSLY when DATABASE_URL is unset, so it has to be
  // inside the try — not merely have its promise caught. With the call outside,
  // that throw escaped into drainPendingChatTurn and took the replay down with
  // it: the shadow write breaking the very path it exists to protect.
- void (async () => {
+ void queueParkedTurnWrite(key, async () => {
   try {
-   await getDb().unsafe('delete from pending_chat_turns where park_key = $1', [key]);
+   await getDb().unsafe('delete from pending_chat_turns where park_key = $1 and ($2::double precision is null or parked_at = to_timestamp($2 / 1000.0))', [key, parkedAt]);
   } catch (error) {
    console.warn('[chat-retry] could not clear parked turn:', error?.message || error);
   }
- })();
+ });
 }
 
 /**
@@ -7454,6 +7472,10 @@ async function replayOrphanedChatTurns({
     forgetParkedTurn(key);
     continue;
    }
+   if (unpersistedChatTurns.has(parked)) await writeThroughParkedTurn(key, parked);
+   // A newer message or terminal drain may have replaced this entry while the
+   // persistence retry was in flight. Only replay the snapshot we inspected.
+   if (pendingChatTurns.get(key) !== parked) continue;
    // No agent id: a `locked` park. Nobody holds a job slot for it, so it is
    // always this sweep's to re-drive.
    if (parked.agentId && await isAgentBusy(parked.sessionId, parked.agentId)) continue;
@@ -7470,10 +7492,8 @@ async function replayOrphanedChatTurns({
 // conversation from the database, so the parked entry is a WAKE-UP, not a copy of
 // the message. Storing the newest keeps the thread/broadcast context current.
 //
-// SM-8: the Map.set is synchronous (callers like continueConversation's re-park
-// branch and the unit tests depend on it being readable the moment this returns)
-// and is rolled back if the durable write fails. This closes the audit hole
-// without breaking the synchronous invariant. See docs/queue-plumbing-audit-2026-09-21.md SM-8.
+// Store synchronously for the live drain; persistence failure leaves the entry
+// retryable instead of dropping an unanswered human message.
 function parkChatTurn({ workspaceId, sessionId, threadParentId, broadcastToChannel, targetAgentId, agentId }) {
  // agentId is optional now: the `locked` branch parks before any agent has been
  // elected, and a session-level wake is still a wake. Everything else about the
@@ -7491,21 +7511,8 @@ function parkChatTurn({ workspaceId, sessionId, threadParentId, broadcastToChann
   attempts,
   parkedAt: Date.now(),
  };
- // Map.set FIRST so the live path can find the entry this microtask. The DB
- // shadow is attempted asynchronously; if it fails, the rollback in onComplete
- // deletes the Map entry, leaving the system in the same state as if the park
- // had never happened. (Today's code did not roll back — a DB failure left a
- // Map entry whose shadow was missing, which is exactly SM-8 in the audit.)
  pendingChatTurns.set(key, entry);
- writeThroughParkedTurn(key, entry, (error) => {
-  if (error) {
-   // Only roll back if the entry is still THIS one — a later park for the same
-   // key would have overwritten it and a rollback would erase the new entry.
-   if (pendingChatTurns.get(key) === entry) {
-    pendingChatTurns.delete(key);
-   }
-  }
- });
+ void writeThroughParkedTurn(key, entry);
 }
 
 /**
@@ -7526,24 +7533,27 @@ function drainPendingChatTurn(sessionId, agentId, cause = 'job_finished', run = 
  const parked = pendingChatTurns.get(key);
  if (!parked) return;
  pendingChatTurns.delete(key);
- // The durable copy goes with it. If the replay below re-parks, the write-through
- // in parkChatTurn puts a fresh row back — so a crash mid-replay loses at most
- // the retry, never leaves a row that would be replayed forever.
- forgetParkedTurn(key);
+ // Keep the durable wake until dispatch succeeds. Its stable identity prevents
+ // a restart between dispatch and deletion from starting the same job twice.
+
  // A human who has been waiting a quarter of an hour has moved on; answering now
  // is noise, not service.
  if (Date.now() - parked.parkedAt > PENDING_CHAT_TURN_MAX_AGE_MS) {
+  forgetParkedTurn(key, parked.parkedAt);
   console.log(`[chat-retry] dropping stale parked turn session=${sessionId} agent=${agentId} (cause=${cause})`);
   return;
  }
  if (parked.attempts >= PENDING_CHAT_TURN_MAX_ATTEMPTS) {
+  forgetParkedTurn(key, parked.parkedAt);
   console.log(`[chat-retry] giving up on parked turn session=${sessionId} agent=${agentId} after ${parked.attempts} attempts`);
   return;
  }
  const attempts = parked.attempts + 1;
  return (async () => {
   try {
+   await writeThroughParkedTurn(key, { ...parked, attempts }, { required: true });
    const out = await run({
+    dispatchWakeId: crypto.createHash('sha256').update(JSON.stringify([key, parked.parkedAt])).digest('hex'),
     workspaceId: parked.workspaceId,
     sessionId: parked.sessionId,
     threadParentId: parked.threadParentId,
@@ -7551,6 +7561,7 @@ function drainPendingChatTurn(sessionId, agentId, cause = 'job_finished', run = 
     targetAgentId: parked.targetAgentId,
    });
    if (out && out.started) {
+    forgetParkedTurn(key, parked.parkedAt);
     console.log(`[chat-retry] replayed parked turn session=${sessionId} agent=${agentId} (cause=${cause}, attempt ${attempts})`);
     return;
    }
@@ -7558,22 +7569,21 @@ function drainPendingChatTurn(sessionId, agentId, cause = 'job_finished', run = 
    // it with the attempt count it read before this call, so only the counter needs
    // carrying forward. 'locked' is a transient overlap with another turn on the
    // same thread and deserves the same treatment.
-   if (out && (out.reason === 'agent_busy' || out.reason === 'locked')) {
+   if (out && (out.reason === 'agent_busy' || out.reason === 'locked' || out.reason === 'refused')) {
     const reparked = pendingChatTurns.get(key) || { ...parked, parkedAt: parked.parkedAt };
     const next = { ...reparked, attempts, parkedAt: parked.parkedAt };
-    // SM-8: same Map-first + rollback-on-DB-failure pattern as parkChatTurn.
-    // Carry the incremented attempt count into the durable copy too, or a
-    // restart would reset the counter and the attempt cap would never bite. If
-    // the durable write fails, roll back the Map so a later park isn't erased.
+    // Carry the bounded retry count into both copies without losing the live
+    // wake if its durable shadow is temporarily unavailable.
     pendingChatTurns.set(key, next);
-    writeThroughParkedTurn(key, next, (error) => {
-     if (error && pendingChatTurns.get(key) === next) {
-      pendingChatTurns.delete(key);
-     }
-    });
-   }
+    void writeThroughParkedTurn(key, next);
+   } else { forgetParkedTurn(key, parked.parkedAt); }
   } catch (error) {
-   console.error('drainPendingChatTurn failed', error);
+   if (!pendingChatTurns.has(key)) {
+    const retained = { ...parked, attempts };
+    pendingChatTurns.set(key, retained);
+    unpersistedChatTurns.add(retained);
+   }
+   console.error('drainPendingChatTurn failed; retained wake', error);
   }
  })();
 }
@@ -7584,7 +7594,12 @@ async function continueConversation({
  threadParentId = null,
  broadcastToChannel = null,
  targetAgentId = null,
+ dispatchWakeId = null,
 }) {
+ if (dispatchWakeId) {
+  const handedOff = await getDb().unsafe("select id from agent_jobs where metadata->>'dispatchWakeId' = $1 limit 1", [dispatchWakeId]);
+  if (handedOff.length) return { started: true, reason: 'already_dispatched' };
+ }
  if (!workspaceId || !sessionId) return { started: false, reason: 'missing_input' };
  const lockKey = `${sessionId}::${threadParentId || ''}`;
  if (conversationLocks.has(lockKey)) {
@@ -7602,7 +7617,7 @@ async function continueConversation({
   // is no elected agent to pin to and a fresh election on replay is the correct
   // behaviour anyway. That makes it invisible to the job-terminal drain, which
   // keys on (session, agent) — replayOrphanedChatTurns is what picks it up.
-  parkChatTurn({ workspaceId, sessionId, threadParentId, broadcastToChannel, targetAgentId, agentId: null });
+  if (!dispatchWakeId) parkChatTurn({ workspaceId, sessionId, threadParentId, broadcastToChannel, targetAgentId, agentId: null });
   return { started: false, reason: 'locked' };
  }
  conversationLocks.add(lockKey);
@@ -7859,7 +7874,7 @@ async function continueConversation({
     // the replay answers as the same agent instead of paying for a second
     // election — explicitConversationAgent still degrades to a fresh election if
     // that agent has since left the session.
-    parkChatTurn({
+    if (!dispatchWakeId) parkChatTurn({
      workspaceId,
      sessionId,
      threadParentId,
@@ -7907,6 +7922,7 @@ async function continueConversation({
    }
    if (cadence.delayMs > 0) {
     scheduleCadenceWake(lockKey, cadence.delayMs, { workspaceId, sessionId, threadParentId: threadParentId || null });
+    if (dispatchWakeId) await taskDispatch.awaitCadenceWake(lockKey);
     return { started, reason: 'cadence_deferred' };
    }
 
@@ -7929,11 +7945,18 @@ async function continueConversation({
     .filter((agent) => String(agent.id) !== String(nextAgent.id))
     .map((agent) => ({ handle: slugHandle(agent.handle || agent.name), name: agent.name }));
 
-   const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants, isDirectMessage, broadcastToChannel });
+   const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants, isDirectMessage, broadcastToChannel, dispatchWakeId });
    if (result && result.ok) started = true;
+   // The first accepted job owns the wake identity. Preserve normal builtin
+   // conversation continuation without assigning that identity to another job.
+   if (dispatchWakeId && started) dispatchWakeId = null;
    // `ok:false, pending:true` is the one that matters to the task queue: the
    // one-active-job unique index bounced the insert, so NO job exists and nothing
    // will ever answer this turn.
+   if (dispatchWakeId && result && !result.ok && result.pending) {
+    const handedOff = await getDb().unsafe("select id from agent_jobs where metadata->>'dispatchWakeId' = $1 limit 1", [dispatchWakeId]);
+    if (handedOff.length) return { started: true, reason: 'already_dispatched' };
+   }
    if (result && !result.ok && result.pending) {
     // PARK, DON'T DROP — the same rule the agent_busy and locked branches follow.
     // The unique index uq_agent_jobs_active_per_session_agent let a CONCURRENT
@@ -7944,7 +7967,7 @@ async function continueConversation({
     // without the pin, a second DM thread would be silently dropped precisely
     // like the bug the parking feature was built to close (a turn that reaches
     // this line has NOTHING queued for it anywhere).
-    parkChatTurn({
+    if (!dispatchWakeId) parkChatTurn({
      workspaceId,
      sessionId,
      threadParentId,
@@ -9532,36 +9555,6 @@ function flowWebhookDevHttpLoopback(rawUrl) {
 async function deliverNextFlowWebhook() {
  const delivery = await claimFlowWebhookDelivery();
  if (!delivery) return false;
- let deliveryDispatcher = null;
- if (!flowWebhookDevHttpLoopback(delivery.webhook_url)) {
-  try {
-   // The return value drops trailing slashes. Fetch the stored URL, not that rewrite.
-   await assertSafeOutboundUrl(delivery.webhook_url);
-  } catch (error) {
-   const message = String(error?.message || error || 'unsafe webhook url').slice(0, 1000);
-   if (/could not be resolved|ENOTFOUND|EAI_AGAIN/i.test(message)) {
-    const attempts = Number(delivery.attempt_count || 1);
-    const { dead, delaySeconds } = flowWebhookRetryDecision({ httpStatus: null, attempts });
-    await getDb().unsafe(
-     `update flow_webhook_deliveries
-          set status = $3, next_attempt_at = now() + ($4 * interval '1 second'),
-              last_error = $5, lease_expires_at = null, updated_at = now()
-        where id = $1 and claim_token = $2`,
-     [delivery.id, delivery.claim_token, dead ? 'dead' : 'pending', delaySeconds, message],
-    );
-    return true;
-   }
-   await getDb().unsafe(
-    `update flow_webhook_deliveries
-        set status = 'dead', last_error = $3, lease_expires_at = null, updated_at = now()
-      where id = $1 and claim_token = $2`,
-    [delivery.id, delivery.claim_token, message],
-   );
-   return true;
-  }
-  // Never on the dev http loopback branch: that lookup is blocked.
-  deliveryDispatcher = guardedFetchAgent();
- }
  let sourceEligible = null;
  try {
   sourceEligible = await flowDeliverySourceIsEligible(delivery);
@@ -9593,6 +9586,36 @@ async function deliverNextFlowWebhook() {
    [delivery.id, delivery.claim_token, dead ? 'dead' : 'pending', delaySeconds, 'source session eligibility check failed'],
   );
   return true;
+ }
+ let deliveryDispatcher = null;
+ if (!flowWebhookDevHttpLoopback(delivery.webhook_url)) {
+  try {
+   // The return value drops trailing slashes. Fetch the stored URL, not that rewrite.
+   await assertSafeOutboundUrl(delivery.webhook_url);
+  } catch (error) {
+   const message = String(error?.message || error || 'unsafe webhook url').slice(0, 1000);
+   if (/could not be resolved|ENOTFOUND|EAI_AGAIN/i.test(message)) {
+    const attempts = Number(delivery.attempt_count || 1);
+    const { dead, delaySeconds } = flowWebhookRetryDecision({ httpStatus: null, attempts });
+    await getDb().unsafe(
+     `update flow_webhook_deliveries
+          set status = $3, next_attempt_at = now() + ($4 * interval '1 second'),
+              last_error = $5, lease_expires_at = null, updated_at = now()
+        where id = $1 and claim_token = $2`,
+     [delivery.id, delivery.claim_token, dead ? 'dead' : 'pending', delaySeconds, message],
+    );
+    return true;
+   }
+   await getDb().unsafe(
+    `update flow_webhook_deliveries
+        set status = 'dead', last_error = $3, lease_expires_at = null, updated_at = now()
+      where id = $1 and claim_token = $2`,
+    [delivery.id, delivery.claim_token, message],
+   );
+   return true;
+  }
+  // Never on the dev http loopback branch: that lookup is blocked.
+  deliveryDispatcher = guardedFetchAgent();
  }
  const body = JSON.stringify(delivery.payload);
  const timestamp = String(Math.floor(Date.now() / 1000));
@@ -9999,6 +10022,7 @@ const agentJobs = createAgentJobs({
  isConnectionSocketOpen: (...a) => agentConnections.isConnectionSocketOpen(...a),
  updateAgentHeartbeat: (...a) => agentConnections.updateAgentHeartbeat(...a),
  getConnectedAgents: () => agentConnections.connectedAgents,
+ cancelBuiltinJob: (...a) => builtinTurn.cancelBuiltinJob(...a),
  scheduleTaskQueueDrain: (...a) => taskDispatch.scheduleTaskQueueDrain(...a),
  drainAgentTaskQueue: (...a) => taskDispatch.drainAgentTaskQueue(...a),
  recordAnthropicUsage: (...a) => recordAnthropicUsage(...a),

@@ -326,13 +326,15 @@ describe('isWorkspaceRailExpanded', () => {
 });
 
 describe('readWorkspaceRailWidth', () => {
-  it('opens collapsed for a browser that has never dragged the rail', () => {
-    // The shape the app has always had — an upgrade must change nothing until
-    // the user asks for it.
-    expect(readWorkspaceRailWidth(null)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
-    expect(readWorkspaceRailWidth(undefined)).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
-    expect(readWorkspaceRailWidth('')).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
-    expect(readWorkspaceRailWidth('wide please')).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
+  it('shows workspace names until the user chooses a width', () => {
+    expect(readWorkspaceRailWidth(null)).toBe(WORKSPACE_RAIL_DEFAULT_EXPANDED_WIDTH);
+    expect(readWorkspaceRailWidth(undefined)).toBe(WORKSPACE_RAIL_DEFAULT_EXPANDED_WIDTH);
+    expect(readWorkspaceRailWidth('')).toBe(WORKSPACE_RAIL_DEFAULT_EXPANDED_WIDTH);
+    expect(readWorkspaceRailWidth('wide please')).toBe(WORKSPACE_RAIL_DEFAULT_EXPANDED_WIDTH);
+  });
+
+  it('preserves an explicitly collapsed rail', () => {
+    expect(readWorkspaceRailWidth(String(WORKSPACE_RAIL_COLLAPSED_WIDTH))).toBe(WORKSPACE_RAIL_COLLAPSED_WIDTH);
   });
 
   it('restores a saved width, clamped', () => {

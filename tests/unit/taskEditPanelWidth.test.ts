@@ -56,7 +56,7 @@ function openEditor() {
       tasks: [makeTask({ id: 't1', title: LONG })],
       members: [], agents: [], agentConnections: [],
       currentUserEmail: 'a@b.c', workspaceId: 'ws-1',
-      onCreateTask: () => { }, onUpdateTask: () => { }, onToggleStatus: () => { },
+      onCreateTask: () => null, onUpdateTask: () => { }, onToggleStatus: () => { },
       onDeleteTask: () => { }, onUpdateAgent: () => { },
     } as never));
   });

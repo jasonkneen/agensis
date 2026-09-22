@@ -2057,11 +2057,12 @@ CREATE TABLE IF NOT EXISTS pending_cadence_wakes (
   lock_key text PRIMARY KEY,
   workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   session_id uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
-  agent_id uuid NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+  agent_id uuid REFERENCES workspace_agents(id) ON DELETE CASCADE,
   thread_parent_id uuid,
   next_fire_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE pending_cadence_wakes ALTER COLUMN agent_id DROP NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_pending_cadence_wakes_next_fire_at
   ON pending_cadence_wakes(next_fire_at);
 
@@ -2434,3 +2435,12 @@ CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_mcp_oauth_tokens_workspace
   ON mcp_oauth_tokens(workspace_id) WHERE revoked_at IS NULL;
+
+-- Durable dispatch handoff and bounded crash recovery.
+ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS wake_id uuid NOT NULL DEFAULT gen_random_uuid();
+ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS claim_token uuid;
+ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS lease_until timestamptz;
+ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0;
+ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS failed_at timestamptz;
+ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS last_error text;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_jobs_dispatch_wake ON agent_jobs ((metadata->>'dispatchWakeId')) WHERE metadata->>'dispatchWakeId' IS NOT NULL;

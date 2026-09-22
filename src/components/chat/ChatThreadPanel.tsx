@@ -1,3 +1,4 @@
+import { useHistoryScrollAnchor } from '../../hooks/useHistoryScrollAnchor';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Bot, Check, CornerDownRight, Paperclip, Pencil, Send, Trash2, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
@@ -284,6 +285,10 @@ export function ChatThreadPanel({
     }
   };
 
+  const historyScroll = useHistoryScrollAnchor({
+    scopeKey: parentMessage.id, firstMessageId: replies[0]?.id,
+    loadingEarlier, onLoadEarlier,
+  });
   const handleScrollerScroll = (event: React.UIEvent<HTMLDivElement>) => {
     const target = event.currentTarget;
     const distanceFromEnd = target.scrollHeight - target.scrollTop - target.clientHeight;
@@ -327,7 +332,7 @@ export function ChatThreadPanel({
 
       <MessageScrollerProvider autoScroll={autoScroll}>
         <MessageScroller className="channel-message-surface flex-1">
-          <MessageScrollerViewport onScroll={handleScrollerScroll}>
+          <MessageScrollerViewport ref={historyScroll.viewportRef} onScroll={handleScrollerScroll}>
             <MessageScrollerContent className="min-h-full gap-3 p-3">
               {hasMoreMessages && onLoadEarlier && (
                 <div className="flex justify-center py-1">
@@ -337,7 +342,7 @@ export function ChatThreadPanel({
                     size="sm"
                     className="text-xs text-muted-foreground"
                     disabled={loadingEarlier}
-                    onClick={onLoadEarlier}
+                    onClick={historyScroll.loadEarlier}
                   >
                     {loadingEarlier ? 'Loading…' : 'Load earlier messages'}
                   </Button>

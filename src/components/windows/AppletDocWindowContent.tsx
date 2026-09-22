@@ -48,6 +48,8 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
   const [title, setTitle] = useState(doc.title);
   const [content, setContent] = useState(doc.content || '');
   const [loadingContent, setLoadingContent] = useState(doc.content === undefined);
+  const [bodyError, setBodyError] = useState(false);
+  const [bodyRetry, setBodyRetry] = useState(0);
   const [view, setView] = useState<'preview' | 'code' | 'split'>('preview');
   const appletSplit = usePaneSplit({
     preferenceKey: viewPreferenceKey('applet.split', doc.id),
@@ -73,6 +75,7 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
     // `undefined` for a doc opened by id (Sidebar, picker) — fetch the body on
     // demand instead of rendering blank code/preview forever.
     let cancelled = false;
+    setBodyError(false);
     const applyBody = (body: string) => {
       if (cancelled) return;
       const remoteBody = body || '';
@@ -100,12 +103,15 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
       // in place while the body request is in flight; hiding it would reset a
       // CodeMirror selection even when the revision turns out to be our ack.
       if (!revisionChanged) setLoadingContent(true);
-      fetchDocumentContent(doc.id, revisionChanged).then(applyBody);
+      fetchDocumentContent(doc.id, revisionChanged || bodyRetry > 0).then(applyBody).catch(() => {
+        if (!cancelled) { setBodyError(true); setLoadingContent(false); }
+      });
     }
     return () => { cancelled = true; };
-  }, [doc.id, doc.title, doc.content, doc.version, doc.updated_at, fetchDocumentContent]);
+  }, [doc.id, doc.title, doc.content, doc.version, doc.updated_at, fetchDocumentContent, bodyRetry]);
 
   const triggerAutoSave = useCallback((newTitle?: string, newContent?: string) => {
+    if (loadingContent || bodyError) return;
     localDirtyRef.current = true;
     // useDocuments owns the one 800ms debounce. Pass the captured edit now so
     // closing this editor cannot strand its last change in a local timer.
@@ -113,7 +119,7 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
       title: newTitle ?? title,
       content: newContent ?? content,
     });
-  }, [doc.id, title, content, onAutoSave]);
+  }, [bodyError, loadingContent, doc.id, title, content, onAutoSave]);
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const next = e.target.value;
@@ -142,7 +148,7 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
 
   return (
     <div className={WINDOW_SHELL}>
-      <div className={cn(WINDOW_TOOLBAR, 'doc-toolbar h-10 gap-1 overflow-x-auto bg-card/65 px-2 backdrop-blur-md')}>
+      <div inert={loadingContent || bodyError} className={cn(WINDOW_TOOLBAR, 'doc-toolbar h-10 gap-1 overflow-x-auto bg-card/65 px-2 backdrop-blur-md')}>
         <Button
           type="button"
           onClick={() => setView('preview')}
@@ -207,6 +213,7 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
         <Input
           type="text"
           value={title}
+          disabled={loadingContent || bodyError}
           onChange={handleTitleChange}
           placeholder="Untitled applet"
           className="doc-title-input mb-3 h-auto w-full border-0 bg-transparent px-0 py-0 text-xl font-semibold tracking-tight shadow-none focus-visible:ring-0"
@@ -214,7 +221,9 @@ export const AppletDocWindowContent = React.memo(function AppletDocWindowContent
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden px-6 pb-5">
-        {loadingContent ? (
+        {bodyError ? (
+          <div role="alert" className="p-4 text-sm text-muted-foreground">Applet source could not be loaded. Editing is paused. <Button variant="outline" size="sm" onClick={() => setBodyRetry(value => value + 1)}>Retry</Button></div>
+        ) : loadingContent ? (
           <div className="flex h-full items-center justify-center rounded-md border border-dashed border-border text-sm text-muted-foreground">
             Loading applet source…
           </div>

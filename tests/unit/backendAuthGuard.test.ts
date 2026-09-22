@@ -204,3 +204,13 @@ describe('the interceptor is inert on everything else', () => {
     subscription.unsubscribe();
   });
 });
+
+it('passes query cancellation through the authenticated fetch wrapper', async () => {
+  storeSession(token());
+  const controller = new AbortController();
+  await backendClient.from('documents').select('id, content').eq('workspace_id', 'workspace-a').abortSignal(controller.signal);
+  expect(fetchCalls.at(-1)?.init?.signal).toBe(controller.signal);
+  controller.abort();
+  expect(fetchCalls.at(-1)?.init?.signal?.aborted).toBe(true);
+  expect(localStorage.getItem(AUTH_STORAGE_KEY)).not.toBeNull();
+});

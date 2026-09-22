@@ -324,6 +324,8 @@ export const DocWindowContent = React.memo(function DocWindowContent({
   fetchDocumentContent,
 }: DocWindowContentProps) {
   const [title, setTitle] = useState(doc.title);
+  const [bodyStatus, setBodyStatus] = useState<'loading' | 'ready' | 'error'>(doc.content === undefined ? 'loading' : 'ready');
+  const [bodyRetry, setBodyRetry] = useState(0);
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [pendingAnchor, setPendingAnchor] = useState('');
@@ -357,6 +359,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
   } | null>(null);
 
   const triggerAutoSave = useCallback((newTitle?: string, newContent?: string) => {
+    if (bodyStatus !== 'ready') return;
     localDirtyRef.current = true;
     const savedTitle = newTitle ?? title;
     // Sanitize on write (defence-in-depth): the DB stores clean HTML, so a future
@@ -383,7 +386,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
         createSnapshot(savedTitle, savedContent);
       }
     }, 800);
-  }, [doc.id, title, onAutoSave, createSnapshot]);
+  }, [bodyStatus, doc.id, title, onAutoSave, createSnapshot]);
 
   useEffect(() => {
     const revision = `${doc.version ?? ''}:${doc.updated_at ?? ''}`;
@@ -392,6 +395,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
     let cancelled = false;
     const applyBody = (body: string) => {
       if (cancelled) return;
+      setBodyStatus('ready');
       const cleanBody = sanitizeHtml(body || '');
       const currentBody = contentRef.current?.innerHTML || '';
 
@@ -428,10 +432,13 @@ export const DocWindowContent = React.memo(function DocWindowContent({
     if (doc.content !== undefined && !revisionChanged) {
       applyBody(doc.content);
     } else {
-      fetchDocumentContent(doc.id, revisionChanged).then(applyBody);
+      if (!revisionChanged) setBodyStatus('loading');
+      fetchDocumentContent(doc.id, revisionChanged || bodyRetry > 0).then(applyBody).catch(() => {
+        if (!cancelled) setBodyStatus('error');
+      });
     }
     return () => { cancelled = true; };
-  }, [doc.id, doc.title, doc.content, doc.version, doc.updated_at, fetchDocumentContent]);
+  }, [doc.id, doc.title, doc.content, doc.version, doc.updated_at, fetchDocumentContent, bodyRetry]);
 
   // Keep embedded "Task list" blocks in sync with live task status. `tasks` is
   // websocket-backed (see useTasks), so this re-runs whenever a task's status
@@ -722,7 +729,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
 
   return (
     <div className={WINDOW_SHELL}>
-      <div className={cn(WINDOW_TOOLBAR, 'doc-toolbar h-10 gap-1 overflow-x-auto bg-card/65 px-2 backdrop-blur-md')}>
+      <div inert={bodyStatus !== 'ready'} className={cn(WINDOW_TOOLBAR, 'doc-toolbar h-10 gap-1 overflow-x-auto bg-card/65 px-2 backdrop-blur-md')}>
         {TOOLBAR.map((item, idx) => (
           item.divider ? (
             <Separator key={idx} orientation="vertical" className="mx-1 h-5" />
@@ -818,19 +825,27 @@ export const DocWindowContent = React.memo(function DocWindowContent({
         </Button>
       </div>
 
+      {bodyStatus !== 'ready' && (
+        <div role={bodyStatus === 'error' ? 'alert' : 'status'} className="border-b border-border px-6 py-3 text-sm text-muted-foreground">
+          {bodyStatus === 'loading' ? 'Loading document…' : <>Document content could not be loaded. Editing is paused. <Button variant="outline" size="sm" onClick={() => setBodyRetry(value => value + 1)}>Retry</Button></>}
+        </div>
+      )}
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <ScrollArea className="min-w-0 flex-1">
           <div className="mx-auto w-full max-w-[52rem] px-6 py-5">
             <Input
               type="text"
               value={title}
+              disabled={bodyStatus !== 'ready'}
               onChange={handleTitleChange}
               placeholder="Untitled"
               className="doc-title-input mb-3 h-auto w-full border-0 bg-transparent px-0 py-0 text-xl font-semibold tracking-tight shadow-none focus-visible:ring-0"
             />
             <div
               ref={contentRef}
-              contentEditable
+              contentEditable={bodyStatus === 'ready'}
+              aria-label="Document content"
+              aria-busy={bodyStatus === 'loading'}
               suppressContentEditableWarning
               onInput={handleContentInput}
               onPaste={handlePaste}

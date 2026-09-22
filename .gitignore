@@ -58,3 +58,4 @@ SCRATCHPAD.md
 # Cascade pipeline artifacts (analysis scratch, not source of truth).
 /cascade/
 .cube
+/docs

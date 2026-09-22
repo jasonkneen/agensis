@@ -246,7 +246,6 @@ const NOT_A_FILTER: Record<string, string> = {
   // decides which rows exist. It IS clamped back into the viewport on resize
   // (feedbackButtonDrag tests), so a stored position cannot strand the control
   // off-screen — which is the equivalent trap for a position rather than a list.
-  'feedback.anchor': 'stored button position, clamped into view on resize — hides no data',
 };
 
 /** Preferences whose key is a bare constant rather than viewPreferenceKey(...). */

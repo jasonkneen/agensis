@@ -1,5 +1,36 @@
 [
   {
+    "version": "opus-5-5",
+    "date": "2026-09-22",
+    "title": "Opus 5.5 is in the model list",
+    "summary": "Claude Opus 5.5 can be selected for chat and Claude agents. Auto still uses Opus 5 unless the workspace default is changed.",
+    "highlights": [
+      "Opus 5.5 appears in the model picker next to Opus 5",
+      "Usage estimates use its published $4 / $20 token prices"
+    ]
+  },
+  {
+    "version": "link-preview-loading",
+    "date": "2026-09-22",
+    "title": "More reliable loading and queued replies",
+    "summary": "Link previews use less memory and stop waiting when requests time out. Queued replies recover more reliably after temporary database failures, and the web build preserves the app and join-link routes.",
+    "highlights": [
+      "Leaving a conversation cancels previews that have not started loading",
+      "Preview requests load in batches without piling up on slow connections",
+      "Temporary database failures no longer discard parked replies",
+      "Scheduled conversation replies survive restarts without duplicate timer dispatch",
+      "Web builds preserve the routes used by Open the app and join links",
+      "Loading earlier messages keeps your reading position and includes messages sent close together",
+      "Search shows document loading and retry states, cancels closed searches, and distinguishes results with matching titles",
+      "Failed document saves show a persistent Retry action that preserves the unsaved draft",
+      "Document caching uses less memory and clears when switching workspaces or accounts",
+      "Failed document loads show Retry and pause editing so a missing body cannot be mistaken for an empty document",
+      "Document saves run in order so a slow earlier save cannot overwrite a later edit",
+      "Tasks can be created without attachments; failed creation keeps the form ready to retry",
+      "Failed task edits and deletions show an error instead of silently doing nothing"
+    ]
+  },
+  {
     "version": "calmer-workspace-themes",
     "date": "2026-09-04",
     "title": "Cleaner themes, clearer workspaces",

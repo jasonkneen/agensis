@@ -100,7 +100,11 @@ test('a login token reaches exactly the tools the agw_ workspace token reaches',
   // a comment authored through them is attributed to an agent, and a user token
   // has no agent id to stamp — so they are absent from both sets and the
   // equality above still holds for the reason it always did.
-  assert.equal(byUser.length, 43);
+  // Queue status and force-drain are operator tools shared by both kinds.
+  assert.equal(byUser.length, 45);
+  for (const name of ['force_drain_agent_queue', 'get_agent_queue_status']) {
+    assert.ok(byUser.includes(name));
+  }
   assert.ok(byUser.includes('get_connect_command'), 'including the tool that mints an aga_ daemon token');
   assert.ok(byUser.includes('register_agent'));
   for (const standingRuleTool of [

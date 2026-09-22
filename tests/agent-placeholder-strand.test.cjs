@@ -61,6 +61,7 @@ test.afterEach(() => __test.resetTestState());
 test('clearStrandedPlaceholders deletes leftovers scoped to this agent, session and turn', async () => {
   const calls = [];
   __test.setTestDb({
+  async begin(work) { return work(this); },
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
       calls.push({ n, params });
@@ -92,6 +93,7 @@ test('clearStrandedPlaceholders deletes leftovers scoped to this agent, session 
 test('the sweep holds back the row the caller already resolved itself', async () => {
   const calls = [];
   __test.setTestDb({
+  async begin(work) { return work(this); },
     async unsafe(sql, params = []) {
       calls.push({ n: String(sql).replace(/\s+/g, ' ').trim(), params });
       return [];
@@ -113,6 +115,7 @@ test('the sweep holds back the row the caller already resolved itself', async ()
 test('a farm/control-plane job has no conversation to sweep', async () => {
   let queried = false;
   __test.setTestDb({
+  async begin(work) { return work(this); },
     async unsafe() { queried = true; return []; },
   });
 
@@ -123,6 +126,7 @@ test('a farm/control-plane job has no conversation to sweep', async () => {
 
 test('a sweep that throws cannot fail the job that was finishing cleanly', async () => {
   __test.setTestDb({
+  async begin(work) { return work(this); },
     async unsafe() { throw new Error('messages table is on fire'); },
   });
   await __test.clearStrandedPlaceholders({
@@ -135,6 +139,7 @@ test('a sweep that throws cannot fail the job that was finishing cleanly', async
 test('a job that dies leaves an honest failure AND no leftover placeholders', async () => {
   const calls = [];
   __test.setTestDb({
+  async begin(work) { return work(this); },
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
       calls.push({ n, params });
@@ -171,6 +176,7 @@ test('a job with no tracked placeholder still sweeps whatever it left behind', a
   // rows" — the early return that used to sit here skipped the sweep entirely.
   const calls = [];
   __test.setTestDb({
+  async begin(work) { return work(this); },
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
       calls.push({ n, params });
@@ -190,6 +196,7 @@ test('a job with no tracked placeholder still sweeps whatever it left behind', a
 test('finalizing a real result sweeps the placeholders the turn rotated past', async () => {
   const calls = [];
   __test.setTestDb({
+  async begin(work) { return work(this); },
     async unsafe(sql, params = []) {
       const n = String(sql).replace(/\s+/g, ' ').trim();
       calls.push({ n, params });

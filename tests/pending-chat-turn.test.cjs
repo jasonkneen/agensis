@@ -42,7 +42,8 @@ function park(overrides = {}) {
   });
 }
 
-test.afterEach(() => pendingChatTurns.clear());
+test.beforeEach(() => __test.setTestDb({ unsafe: async () => [] }));
+test.afterEach(() => __test.resetTestState());
 
 test('a refused turn is parked rather than dropped', () => {
   assert.equal(pendingChatTurns.size, 0);

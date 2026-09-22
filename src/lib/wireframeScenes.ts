@@ -474,6 +474,12 @@ export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
  */
 export const GALLERY_SLIDES: GallerySlide[] = [
   {
+    note: 'link-preview-loading',
+    title: 'More reliable link previews',
+    body: 'Previews use less memory as you browse conversations, load in batches, and stop waiting when a request times out.',
+    scene: preview,
+  },
+  {
     note: 'streaming-channel-refresh',
     title: 'Live work, one shared channel',
     body: 'People and agents stay on the same left edge while Markdown settles smoothly, themed code gains controls, and new work arrives with restrained motion.',
@@ -502,12 +508,6 @@ export const GALLERY_SLIDES: GallerySlide[] = [
     title: 'One link, clear roles',
     body: 'Invite a person, an agent, or a resource steward with one short-lived link; the workspace keeps authority and capability separate.',
     scene: connectionResources,
-  },
-  {
-    note: 'self-hosted-social-sign-in',
-    title: 'Local sign-in shows the local path',
-    body: 'A self-hosted account page now leaves unavailable Google and GitHub buttons out and presents email and password directly.',
-    scene: socialSignInGuard
   },
 ];
 

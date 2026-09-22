@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { commitJobOutcome } = require('./job-finalization.cjs');
 const { ADVANCE_AGENT_READ_MARKER_SQL } = require('../shared/read-receipts.cjs');
 
 // Agent jobs: the row that says a turn is RUNNING, everything that streams into
@@ -45,6 +46,7 @@ function createAgentJobs(deps = {}) {
   // Every other cross-module dep here is a thunk for the same reason.
   getConnectedAgents,
   scheduleTaskQueueDrain,
+  cancelBuiltinJob = () => {},
   // drainAgentTaskQueue is the non-fire-and-forget counterpart of
   // scheduleTaskQueueDrain. After-job-finalize drains run inside
   // afterDurableWrite (SM-2 fix); there we want to AWAIT the task drain before
@@ -71,7 +73,7 @@ function createAgentJobs(deps = {}) {
   normalizeAgentPermissionMode,
   notifyDbSubscribers,
   parseJsonObject,
-  sendWs,
+  sendWs = () => false,
   slugHandle,
   textFromValue,
   verifyThreadParent,
@@ -402,78 +404,90 @@ function createAgentJobs(deps = {}) {
  // pending "Thinking …" placeholder with a clear message, so a chat never hangs on
  // a spinner when the daemon disconnects, crashes, or simply never answers.
  async function finalizeStuckJob(job, reason, stopReason = 'connection_lost') {
+  const events = [];
+  const publish = (...args) => events.push(args);
+  let finalized = false;
+  const responseMessageId = parseJsonObject(job.metadata).responseMessageId || null;
   try {
-   // A reaped job is now distinguishable from one that ended on its own. The
-   // reason is server-authored here (not daemon-supplied), but it goes through
-   // the same validator so there is exactly one way a stopReason enters a row.
-   const stuckMetadata = {
-    ...parseJsonObject(job.metadata),
-    ...(normalizeStopReason(stopReason) ? { stopReason: normalizeStopReason(stopReason) } : {}),
-   };
-   // Use 'error' (not 'failed'): the agent_jobs.status CHECK constraint only permits
-   // queued/running/done/error/cancelled. Writing 'failed' throws a constraint
-   // violation that the surrounding try/catch swallows, so the job would stay
-   // 'running' forever — the exact bug that let a phantom job wedge a DM indefinitely
-   // (reaper, connection-drop cleanup, and startup reconcile all funnel through here).
-   const updated = await getDb().unsafe(
-    // 'queued' is in the guard as well as 'running': hasActiveBurstJob awaits this
-    // for phantom jobs that never got claimed (the MCP case), specifically so the
-    // one-active-job unique index won't bounce the retry. A running-only guard
-    // matched zero rows there, leaving the queued row holding the
-    // (session_id, agent_id) active slot and silently dropping the next message.
-    // 'error' (not 'failed') is load-bearing — see the comment above.
-    // Bind the merged OBJECT, never JSON.stringify: a stringified bind becomes a
-    // jsonb string scalar and corrupts the column.
-    `update agent_jobs set status = 'error', error = $2, metadata = $3::jsonb, finished_at = now(), updated_at = now() where id = $1 and status in ('queued', 'running') returning *`,
-    [job.id, `Agent stopped responding (${reason})`, stuckMetadata],
-   );
-   if (updated.length === 0) return; // a real result already finalized it
-   // The only job-terminating path that never notified subscribers. A wedged job's
-   // elapsed badge would otherwise tick forever, because the client never learns the
-   // job stopped — the timeout, dropped daemon, phantom cleanup and restart reconcile
-   // all land here.
-   notifyDbSubscribers('agent_jobs', 'UPDATE', updated);
-   // A timeout, a dropped daemon, a phantom cleanup and a backend restart all land
-   // here — each one frees the agent's active-job slot, and each one used to strand
-   // whatever was queued behind it. Fire-and-forget, so it cannot fail this write.
-   scheduleTaskQueueDrain(job.workspace_id, job.agent_id, `job_stuck:${reason}`);
-   drainPendingChatTurn(job.session_id, job.agent_id, `job_stuck:${reason}`);
-   const meta = parseJsonObject(job.metadata);
-   const responseMessageId = meta.responseMessageId || null;
-   if (responseMessageId) {
-    const handle = meta.handle || 'agent';
-    // "It produced nothing for several minutes" and "it hit the maximum time
-    // allowed for one turn" send a human to two different places, and the old
-    // text — one word, "timed out" — said neither.
-    //
-    // connection_lost deliberately keeps the ORIGINAL wording: "stopped
-    // responding" is exactly what happened there, and `reason` already carries
-    // the specific cause ("the daemon disconnected", "the backend restarted").
-    // Rewording it would be churn that tells the reader nothing new.
-    const stuckSentence = stuckMetadata.stopReason === 'connection_lost'
-     ? ''
-     : STOP_REASON_TEXT[stuckMetadata.stopReason] || '';
-    const content = stuckSentence
-     ? `@${handle} stopped: ${stuckSentence}. Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`
-     : `@${handle} stopped responding (${reason}). Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`;
-    // Broadcast it for the same reason the reply is broadcast: the placeholder was
-    // working inside a thread, and a channel that shows nothing at all after the
-    // human's message reads as "still thinking" forever.
-    const rows = await getDb().unsafe(
-     `update messages set content = $2, broadcast_to_channel = $4
-         where id = $1 and session_id = $3 and content ~ $5
-         returning *`,
-     [responseMessageId, content, job.session_id, meta.broadcastToChannel === true, PLACEHOLDER_CONTENT_RE],
+   await commitJobOutcome(getDb(), { id: job.id, status: 'error', field: 'error', value: `Agent stopped responding (${reason})` }, async tx => {
+    // A reaped job is now distinguishable from one that ended on its own. The
+    // reason is server-authored here (not daemon-supplied), but it goes through
+    // the same validator so there is exactly one way a stopReason enters a row.
+    const stuckMetadata = {
+     ...parseJsonObject(job.metadata),
+     ...(normalizeStopReason(stopReason) ? { stopReason: normalizeStopReason(stopReason) } : {}),
+    };
+    // Use 'error' (not 'failed'): the agent_jobs.status CHECK constraint only permits
+    // queued/running/done/error/cancelled. Writing 'failed' throws a constraint
+    // violation that the surrounding try/catch swallows, so the job would stay
+    // 'running' forever — the exact bug that let a phantom job wedge a DM indefinitely
+    // (reaper, connection-drop cleanup, and startup reconcile all funnel through here).
+    const updated = await tx.unsafe(
+     // 'queued' is in the guard as well as 'running': hasActiveBurstJob awaits this
+     // for phantom jobs that never got claimed (the MCP case), specifically so the
+     // one-active-job unique index won't bounce the retry. A running-only guard
+     // matched zero rows there, leaving the queued row holding the
+     // (session_id, agent_id) active slot and silently dropping the next message.
+     // 'error' (not 'failed') is load-bearing — see the comment above.
+     // Bind the merged OBJECT, never JSON.stringify: a stringified bind becomes a
+     // jsonb string scalar and corrupts the column.
+     `update agent_jobs set status = 'error', error = $2, metadata = $3::jsonb, finished_at = now(), updated_at = now() where id = $1 and status in ('queued', 'running') returning *`,
+     [job.id, `Agent stopped responding (${reason})`, stuckMetadata],
     );
-    if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
+    if (updated.length === 0) return; // a real result already finalized it
+    // The only job-terminating path that never notified subscribers. A wedged job's
+    // elapsed badge would otherwise tick forever, because the client never learns the
+    // job stopped — the timeout, dropped daemon, phantom cleanup and restart reconcile
+    // all land here.
+    publish('agent_jobs', 'UPDATE', updated);
+    // A timeout, a dropped daemon, a phantom cleanup and a backend restart all land
+    // here — each one frees the agent's active-job slot, and each one used to strand
+    // whatever was queued behind it. Fire-and-forget, so it cannot fail this write.
+    finalized = true;
+    const meta = parseJsonObject(job.metadata);
+
+    if (responseMessageId) {
+     const handle = meta.handle || 'agent';
+     // "It produced nothing for several minutes" and "it hit the maximum time
+     // allowed for one turn" send a human to two different places, and the old
+     // text — one word, "timed out" — said neither.
+     //
+     // connection_lost deliberately keeps the ORIGINAL wording: "stopped
+     // responding" is exactly what happened there, and `reason` already carries
+     // the specific cause ("the daemon disconnected", "the backend restarted").
+     // Rewording it would be churn that tells the reader nothing new.
+     const stuckSentence = stuckMetadata.stopReason === 'connection_lost'
+      ? ''
+      : STOP_REASON_TEXT[stuckMetadata.stopReason] || '';
+     const content = stuckSentence
+      ? `@${handle} stopped: ${stuckSentence}. Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`
+      : `@${handle} stopped responding (${reason}). Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`;
+     // Broadcast it for the same reason the reply is broadcast: the placeholder was
+     // working inside a thread, and a channel that shows nothing at all after the
+     // human's message reads as "still thinking" forever.
+     const rows = await tx.unsafe(
+      `update messages set content = $2, broadcast_to_channel = $4
+          where id = $1 and session_id = $3 and content ~ $5
+          returning *`,
+      [responseMessageId, content, job.session_id, meta.broadcastToChannel === true, PLACEHOLDER_CONTENT_RE],
+     );
+     if (rows.length > 0) publish('messages', 'UPDATE', rows);
+    }
+    // A job that died leaves the human with something honest in the placeholder it
+    // was tracking — but a turn that had already rotated through several has others
+    // standing behind it, and those are not covered by the id above. No placeholder
+    // this turn wrote may outlive it still claiming to be live.
+   });
+   if (finalized) {
+    cancelBuiltinJob(job.id, `Agent stopped responding (${reason})`);
+    for (const args of events) notifyDbSubscribers(...args);
+    scheduleTaskQueueDrain(job.workspace_id, job.agent_id, `job_stuck:${reason}`);
+    void Promise.resolve(drainPendingChatTurn(job.session_id, job.agent_id, `job_stuck:${reason}`)).catch(error => console.error('Stuck job chat drain failed', error));
+    await clearStrandedPlaceholders(job, responseMessageId);
    }
-   // A job that died leaves the human with something honest in the placeholder it
-   // was tracking — but a turn that had already rotated through several has others
-   // standing behind it, and those are not covered by the id above. No placeholder
-   // this turn wrote may outlive it still claiming to be live.
-   await clearStrandedPlaceholders(job, responseMessageId);
-  } catch {
-   // best effort
+  } catch (error) {
+   console.error('Agent job recovery finalization failed', job.id, error);
+   throw error;
   }
  }
 
@@ -510,8 +524,9 @@ function createAgentJobs(deps = {}) {
     [connectionId],
    );
    for (const job of rows) await finalizeStuckJob(job, reason, 'connection_lost');
-  } catch {
-   // best effort
+  } catch (error) {
+   console.error('Connection job finalization failed', { connectionId, error });
+   throw error;
   }
  }
 
@@ -569,17 +584,17 @@ function createAgentJobs(deps = {}) {
     // the constants above are.
     [AGENT_JOB_IDLE_REAP_MINUTES, AGENT_JOB_HARD_CEILING_MINUTES, AGENT_JOB_FARM_CEILING_MINUTES],
    );
+   const failures = [];
    for (const job of rows) {
     // Two different failures wear the same 'timed out' label today: a job that
     // went SILENT (no content for AGENT_JOB_IDLE_REAP_MINUTES) and one that ran
     // past the absolute ceiling. Only started_at can tell them apart here.
     const startedAt = job.started_at ? new Date(job.started_at).getTime() : 0;
     const hitCeiling = startedAt > 0 && Date.now() - startedAt >= AGENT_JOB_HARD_CEILING_MINUTES * 60_000;
-    await finalizeStuckJob(job, 'timed out', hitCeiling ? 'hard_timeout' : 'idle_timeout');
+    try { await finalizeStuckJob(job, 'timed out', hitCeiling ? 'hard_timeout' : 'idle_timeout'); } catch (error) { failures.push(error); }
    }
-  } catch {
-   // best effort
-  }
+   if (failures.length) throw new AggregateError(failures, 'Agent job reaping failed');
+  } catch (error) { throw error; }
  }
 
  // Finalize ONE agent job (daemon push OR MCP pull) with its result, then resume the
@@ -1292,14 +1307,18 @@ function createAgentJobs(deps = {}) {
   // frame rather than changing it back to done/error.
   const diagnosticRows = await getDb().unsafe(
    `select status from agent_jobs
-      where id = $1 and agent_id = $2 and workspace_id = $3 and connection_id = $4 limit 1`,
-   [jobId, auth.agentId, auth.workspaceId, ws.agentConnectionId],
+      where id = $1 and agent_id = $2 and workspace_id = $3 limit 1`,
+   [jobId, auth.agentId, auth.workspaceId],
   );
-  if (diagnosticRows[0]?.status === 'cancelled') {
+  if (['done', 'error', 'cancelled'].includes(diagnosticRows[0]?.status)) {
+   // A reconnect may replay a committed result after its ACK was lost. The
+   // authenticated agent/workspace pair may acknowledge its own terminal job;
+   // active mutation still requires the current connection below.
+   sendWs(ws, { type: 'agent_job_result_ack', jobId, status: diagnosticRows[0].status });
    await updateAgentHeartbeat(ws, { busy: false }).catch(() => { });
    return;
   }
-  await withCurrentDaemonJob(ws, jobId, ({ tx, job, publishAfterCommit, afterCommit }) => (
+  const finalized = await withCurrentDaemonJob(ws, jobId, ({ tx, job, publishAfterCommit, afterCommit }) => (
    finalizeAgentJobResult(job, {
     // Classic daemon sends `response`. Desktop ACP v0.1 mistakenly sent only
     // `content` (which deltas use); accept both so a final frame cannot wipe a
@@ -1325,6 +1344,7 @@ function createAgentJobs(deps = {}) {
     statusGuardOverride: "status = 'running'",
    })
   ), { allowSessionlessFarm: true });
+  if (finalized) sendWs(ws, { type: 'agent_job_result_ack', jobId, status: finalized.status });
   await updateAgentHeartbeat(ws, { busy: false }).catch(() => { });
  }
 

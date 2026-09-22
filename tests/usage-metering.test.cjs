@@ -248,6 +248,10 @@ test('an unknown model is priced at the Opus rate and SAYS it was estimated', ()
 });
 
 test('a model id is matched exactly — no prefix matching', () => {
+ assert.equal(anthropicRateFor('claude-opus-5-5').known, true);
+ assert.equal(anthropicRateFor('claude-opus-5-5').rate.input, 4);
+ assert.equal(anthropicRateFor('claude-opus-5-5').rate.output, 20);
+ assert.equal(anthropicRateFor('claude-opus-5-5').rate.cacheRead, 0.2);
  assert.equal(anthropicRateFor('claude-opus-4-5').known, true);
  assert.equal(anthropicRateFor('claude-opus').known, false);
  assert.equal(anthropicRateFor('CLAUDE-OPUS-4-5  ').known, true);

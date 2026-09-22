@@ -597,7 +597,7 @@ test('the sweep runs on the reaper tick and the terminal job path settles', () =
 
   // Inside finalizeAgentJobResult, and on the afterDurableWrite queue so it
   // cannot commit ahead of the terminal row the daemon path holds open.
-  const finalize = jobs.slice(jobs.indexOf('async function finalizeAgentJobResult'), jobs.indexOf('async function finalizeAgentJobResult') + 4000);
+  const finalize = jobs.slice(jobs.indexOf('async function finalizeAgentJobResult'), jobs.indexOf('async function relayEndedHuddleWorkToChannel'));
   assert.match(finalize, /afterDurableWrite\(\(\) => \{ void settleCapturedChatTask\(job\.id, status\); \}\)/);
 });
 

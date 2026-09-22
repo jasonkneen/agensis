@@ -79,7 +79,7 @@ function installDb({
           || params[0] !== job.id
           || params[1] !== job.agent_id
           || params[2] !== job.workspace_id
-          || params[3] !== job.connection_id) return [];
+          || (params.length > 3 && params[3] !== job.connection_id)) return [];
         return [{ status: job.status }];
       }
       if (n.startsWith('update agent_jobs') && n.includes('response = case')) {
@@ -89,7 +89,7 @@ function installDb({
         return [{ id: params[0] }];
       }
       if (n.startsWith('update agent_jobs set updated_at')) {
-        if (job.status !== 'running' || params[3] !== job.connection_id) return [];
+        if (job.status !== 'running' || (params.length > 3 && params[3] !== job.connection_id)) return [];
         job.metadata = params[1];
         return [{ id: params[0] }];
       }
@@ -270,7 +270,8 @@ test('daemon result side effects run only after its locked transcript transactio
     textFromValue: (value) => String(value ?? ''),
     slugHandle: (value) => String(value || '').toLowerCase(),
     notifyDbSubscribers: (table) => events.push(`fanout:${table}:${inTransaction}`),
-    scheduleTaskQueueDrain: () => events.push(`drain:${inTransaction}`),
+    drainAgentTaskQueue: async () => events.push(`drain:${inTransaction}`),
+    settleCapturedChatTask: async () => events.push(`settle:${inTransaction}`),
     logMessageActivity: async () => events.push(`activity:${inTransaction}`),
     mirrorAgentReplyToTaskComment: async () => events.push(`mirror:${inTransaction}`),
     continueConversation: async () => events.push(`continue:${inTransaction}`),
@@ -281,7 +282,7 @@ test('daemon result side effects run only after its locked transcript transactio
 
   assert.ok(events.indexOf('terminal-write') < events.indexOf('commit'));
   assert.ok(events.indexOf('transcript-write') < events.indexOf('commit'));
-  for (const effect of ['fanout:agent_jobs:false', 'fanout:messages:false', 'drain:false', 'activity:false', 'mirror:false', 'continue:false']) {
+  for (const effect of ['fanout:agent_jobs:false', 'fanout:messages:false', 'drain:false', 'settle:false', 'activity:false', 'mirror:false', 'continue:false']) {
     assert.ok(events.includes(effect), `${effect} must observe committed state: ${events.join(', ')}`);
   }
   assert.ok(!events.some((event) => /:(true)$/.test(event)), `no external effect escaped before commit: ${events.join(', ')}`);
@@ -471,4 +472,35 @@ test('an empty heartbeat preserves streamed response for a bodyless final result
   const finalMessage = calls.find((call) => call.n.startsWith('update messages set content = $2'));
   assert.ok(finalMessage, 'the bodyless result still finalised the placeholder');
   assert.equal(finalMessage.params[1], 'streamed answer');
+});
+
+test('result acknowledgment follows commit, survives reconnect, and is withheld on rollback', async () => {
+ for (const failCommit of [false, true]) {
+  const job = { ...JOB, metadata: { mode: 'farm' }, session_id: null };
+  const calls = installDb({ job });
+  const db = calls.db;
+  let committed = false;
+  db.begin = async work => {
+   const value = await work(db);
+   if (failCommit) { job.status = 'running'; throw new Error('commit failed'); }
+   committed = true; return value;
+  };
+  const frames = [];
+  const jobs = createAgentJobs({
+   getDb: () => db, notifyDbSubscribers() {}, parseJsonObject: x => x || {}, textFromValue: x => String(x || ''), slugHandle: x => x,
+   scheduleTaskQueueDrain() {}, drainPendingChatTurn() {}, settleCapturedChatTask() {}, updateAgentHeartbeat: async () => {},
+   sendWs: (_, frame) => { assert.equal(committed, true); frames.push(frame); },
+  });
+  if (failCommit) {
+   await assert.rejects(jobs.handleAgentJobResult(agentWs(), { jobId: job.id, response: 'answer' }), /commit failed/);
+   assert.equal(frames.length, 0);
+  } else {
+   await jobs.handleAgentJobResult(agentWs(), { jobId: job.id, response: 'answer' });
+   assert.deepEqual(frames, [{ type: 'agent_job_result_ack', jobId: job.id, status: 'done' }]);
+   const before = calls.filter(call => call.n.startsWith('update agent_jobs set status')).length;
+   await jobs.handleAgentJobResult({ ...agentWs(), agentConnectionId: 'reconnected' }, { jobId: job.id, response: 'answer' });
+   assert.equal(frames.length, 2);
+   assert.equal(calls.filter(call => call.n.startsWith('update agent_jobs set status')).length, before);
+  }
+ }
 });

@@ -14,5 +14,14 @@ export function compareMessagePosition(
 ): number {
   const time = Date.parse(left.created_at) - Date.parse(right.created_at);
   if (time !== 0) return time;
+  // Date.parse truncates fractional seconds to milliseconds. History cursors
+  // preserve Postgres microseconds, which must sort before the UUID tie-break.
+  const micros = fractionalMicros(left.created_at) - fractionalMicros(right.created_at);
+  if (micros !== 0) return micros;
   return String(left.id).localeCompare(String(right.id));
+}
+
+function fractionalMicros(timestamp: string): number {
+  const fraction = timestamp.match(/\.(\d+)(?:Z|[+-]\d{2}(?::?\d{2})?)$/i)?.[1] ?? '';
+  return Number(fraction.padEnd(6, '0').slice(3, 6));
 }

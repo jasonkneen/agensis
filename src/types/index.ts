@@ -675,6 +675,7 @@ export interface GatewayConfig {
 
 export const AI_MODELS: AIModel[] = [
  { id: 'auto', label: 'Auto', description: 'Uses the workspace default model' },
+ { id: 'claude-opus-5-5', label: 'Opus 5.5', description: 'Newer Opus for long-running work, at a lower price' },
  { id: 'claude-opus-5', label: 'Opus 5', description: 'Most capable model' },
  { id: 'claude-opus-4-8', label: 'Opus 4.8', description: 'Previous flagship model' },
  { id: 'claude-fable-5', label: 'Fable 5', description: 'Claude 5 family model' },

@@ -36,9 +36,10 @@ function makeDb({ messages = [], sessionWorkspace = {}, roles = {}, owners = {},
         const role = roles[`${params[0]}:${params[1]}`];
         return role ? [{ role }] : [];
       }
-      if (q.includes('from messages') && q.includes('order by created_at desc, id desc')) {
+      if (q.includes('from messages') && q.includes('order by m.created_at desc, m.id desc')) {
         const sessionId = params[0];
-        const before = params[1];
+        const before = params[1] && (q.includes('$2::text::timestamptz')
+          ? params[1] : new Date(params[1]).toISOString());
         const beforeId = params[2];
         const limitMatch = q.match(/limit (\d+)/);
         const lim = limitMatch ? Number(limitMatch[1]) : 201;
@@ -47,7 +48,10 @@ function makeDb({ messages = [], sessionWorkspace = {}, roles = {}, owners = {},
           rows = rows.filter(m => (m.created_at < before) || (beforeId && m.created_at === before && m.id < beforeId));
         }
         rows = rows.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : (a.id < b.id ? 1 : -1)));
-        return rows.slice(0, lim);
+        // Model the driver boundary: timestamptz becomes Date unless selected as text.
+        return rows.slice(0, lim).map(row => ({ ...row, created_at:
+          q.includes('to_char(m.created_at at time zone') ? row.created_at : new Date(row.created_at),
+        }));
       }
       return [];
     },
@@ -196,5 +200,28 @@ test('a fractional or invalid limit is coerced to a safe integer', async () => {
     const res2 = await authed(baseUrl, token, '/backend/sessions/sess-1/messages?limit=abc');
     const body2 = await res2.json();
     assert.equal(body2.data.messages.length, 10);
+  });
+});
+
+test('preserves sub-millisecond cursors across consecutive history pages', async () => {
+  const messages = ['100001', '100002', '100003', '100004', '100005'].map((fraction, i) => ({
+    id: `m-${5 - i}`, session_id: 'sess-1', content: `msg ${i}`,
+    created_at: `2026-09-22T06:44:42.${fraction}Z`, deleted_at: null,
+  }));
+  __test.setTestDb(makeDb({ messages, sessionWorkspace: { 'sess-1': 'ws-1' }, roles: { 'ws-1:user-1': 'editor' }, authSecret: 'fixed' }));
+  await withServer(async baseUrl => {
+    const token = await __test.issueToken('user-1', '1');
+    let cursor = '';
+    const loaded = [];
+    for (let page = 0; page < 3; page++) {
+      const response = await authed(baseUrl, token, `/backend/sessions/sess-1/messages?limit=2${cursor}`);
+      assert.equal(response.status, 200);
+      const { data } = await response.json();
+      loaded.unshift(...data.messages);
+      if (!data.hasMore) break;
+      const oldest = data.messages[0];
+      cursor = `&before=${encodeURIComponent(oldest.created_at)}&beforeId=${oldest.id}`;
+    }
+    assert.deepEqual(loaded.map(row => row.id), messages.map(row => row.id));
   });
 });

@@ -136,6 +136,7 @@ test('finalizeAgentJobResult persists a validated stop reason as an OBJECT bind'
  const updates = [];
  const usageInserts = [];
  __test.setTestDb({
+  async begin(work) { return work(this); },
   async unsafe(sql, params) {
    const n = String(sql).replace(/\s+/g, ' ').trim();
    if (n.startsWith('update agent_jobs set status')) {
@@ -191,6 +192,7 @@ test('finalizeAgentJobResult persists a validated stop reason as an OBJECT bind'
 test('finalizeAgentJobResult does not invent a usage_events row without token counts', async () => {
  const usageInserts = [];
  __test.setTestDb({
+  async begin(work) { return work(this); },
   async unsafe(sql, params) {
    const n = String(sql).replace(/\s+/g, ' ').trim();
    if (n.startsWith('update agent_jobs set status')) {
@@ -215,6 +217,7 @@ test('finalizeAgentJobResult does not invent a usage_events row without token co
 test('finalizeAgentJobResult ignores a stop reason it does not recognise', async () => {
  const updates = [];
  __test.setTestDb({
+  async begin(work) { return work(this); },
   async unsafe(sql, params) {
    const n = String(sql).replace(/\s+/g, ' ').trim();
    if (n.startsWith('update agent_jobs set status')) {
@@ -268,6 +271,7 @@ test('every stop reason has a distinct, non-empty human sentence', () => {
 test('finalizeStuckJob records WHY it reaped the job — and still writes status=error', async () => {
  const updates = [];
  __test.setTestDb({
+  async begin(work) { return work(this); },
   async unsafe(sql, params) {
    const n = String(sql).replace(/\s+/g, ' ').trim();
    if (n.startsWith('update agent_jobs set status')) {
@@ -299,6 +303,7 @@ test('finalizeStuckJob records WHY it reaped the job — and still writes status
 test('finalizeStuckJob tells the human which kind of stop it was', async () => {
  const messageWrites = [];
  __test.setTestDb({
+  async begin(work) { return work(this); },
   async unsafe(sql, params) {
    const n = String(sql).replace(/\s+/g, ' ').trim();
    if (n.startsWith('update agent_jobs set status')) return [{ id: 'job-1' }];
@@ -324,6 +329,7 @@ test('finalizeStuckJob tells the human which kind of stop it was', async () => {
 test('finalizeStuckJob falls back to the old wording when the reason is unusable', async () => {
  const messageWrites = [];
  __test.setTestDb({
+  async begin(work) { return work(this); },
   async unsafe(sql, params) {
    const n = String(sql).replace(/\s+/g, ' ').trim();
    if (n.startsWith('update agent_jobs set status')) return [{ id: 'job-1' }];
@@ -356,6 +362,7 @@ test('reapStuckAgentJobs distinguishes a SILENT job from one that hit the ceilin
  const finalized = [];
  const now = Date.now();
  __test.setTestDb({
+  async begin(work) { return work(this); },
   async unsafe(sql, params) {
    const n = String(sql).replace(/\s+/g, ' ').trim();
    if (n.startsWith('select * from agent_jobs')) {
@@ -389,6 +396,7 @@ test('reapStuckAgentJobs distinguishes a SILENT job from one that hit the ceilin
 test('reapStuckAgentJobs survives a job with no started_at rather than throwing', async () => {
  const finalized = [];
  __test.setTestDb({
+  async begin(work) { return work(this); },
   async unsafe(sql, params) {
    const n = String(sql).replace(/\s+/g, ' ').trim();
    if (n.startsWith('select * from agent_jobs')) {

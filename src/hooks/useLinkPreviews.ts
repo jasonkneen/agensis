@@ -23,6 +23,8 @@ const MAX_PER_REQUEST = 8;
 // A request-level failure (offline, 429, 500) is NOT a fact about the URL, so it
 // is held only briefly and then retried, unlike a row the server actually wrote.
 const LOCAL_FAILURE_RETRY_MS = 60_000;
+const MAX_IDLE_PREVIEWS = 256;
+const REQUEST_TIMEOUT_MS = 30_000;
 
 const cache = new Map<string, LinkPreview>();
 const inflight = new Set<string>();
@@ -30,6 +32,22 @@ const queue = new Set<string>();
 /** url -> when a LOCAL (transport) failure was recorded, so it can be retried. */
 const localFailures = new Map<string, number>();
 const listeners = new Set<() => void>();
+const consumers = new Map<string, number>();
+let activeRequest: AbortController | null = null;
+let generation = 0;
+
+// Mounted cards keep their answer. Only the reusable, offscreen cache is capped.
+function pruneCache() {
+  let idle = 0;
+  for (const url of cache.keys()) if (!consumers.has(url)) idle++;
+  for (const url of cache.keys()) {
+    if (idle <= MAX_IDLE_PREVIEWS) break;
+    if (consumers.has(url)) continue;
+    cache.delete(url);
+    localFailures.delete(url);
+    idle--;
+  }
+}
 
 let storeVersion = 0;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -65,7 +83,7 @@ function localFailure(url: string, detail: string): LinkPreview {
 }
 
 function scheduleFlush() {
-  if (flushTimer !== null) return;
+  if (flushTimer !== null || activeRequest !== null) return;
   flushTimer = setTimeout(() => {
     flushTimer = null;
     void flush();
@@ -82,22 +100,25 @@ async function flush() {
     queue.delete(url);
     inflight.add(url);
   }
-  // More than one batch's worth queued: come back for the rest rather than
-  // sending a body the server will trim.
-  if (queue.size > 0) scheduleFlush();
   if (!batch.length) return;
+  const requestGeneration = generation;
+  const controller = new AbortController();
+  activeRequest = controller;
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
     const response = await fetch(apiUrl('/backend/link-previews'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...apiAuthHeaders() },
       body: JSON.stringify({ urls: batch }),
+      signal: controller.signal,
     });
     if (!response.ok) throw new Error(`link preview request failed (${response.status})`);
     const payload = await response.json();
+    if (requestGeneration !== generation) return;
     const previews: LinkPreview[] = Array.isArray(payload?.data?.previews) ? payload.data.previews : [];
     for (const preview of previews) {
-      if (!preview || typeof preview.url !== 'string') continue;
+      if (!preview || typeof preview.url !== 'string' || !batch.includes(preview.url)) continue;
       cache.set(preview.url, preview);
       localFailures.delete(preview.url);
     }
@@ -110,13 +131,20 @@ async function flush() {
       }
     }
   } catch {
+    if (requestGeneration !== generation) return;
     for (const url of batch) {
       cache.set(url, localFailure(url, 'request_failed'));
       localFailures.set(url, Date.now());
     }
   } finally {
-    for (const url of batch) inflight.delete(url);
-    emit();
+    clearTimeout(timeout);
+    if (requestGeneration === generation) {
+      activeRequest = null;
+      for (const url of batch) inflight.delete(url);
+      pruneCache();
+      emit();
+      if (queue.size > 0) scheduleFlush();
+    }
   }
 }
 
@@ -174,7 +202,24 @@ export function useLinkPreviews(urls: string[]): LinkPreviewEntry[] {
 
   useEffect(() => {
     if (!key) return;
-    request(key.split('\n'));
+    const requested = key.split('\n');
+    for (const url of requested) consumers.set(url, (consumers.get(url) ?? 0) + 1);
+    request(requested);
+    return () => {
+      for (const url of requested) {
+        const remaining = (consumers.get(url) ?? 1) - 1;
+        if (remaining > 0) consumers.set(url, remaining);
+        else {
+          consumers.delete(url);
+          queue.delete(url);
+        }
+      }
+      pruneCache();
+      if (queue.size === 0 && flushTimer !== null) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+    };
   }, [key]);
 
   return entries;
@@ -182,6 +227,10 @@ export function useLinkPreviews(urls: string[]): LinkPreviewEntry[] {
 
 /** Test seam: drop every cached row and pending request. */
 export function __resetLinkPreviewStoreForTests() {
+  generation++;
+  activeRequest?.abort();
+  activeRequest = null;
+  consumers.clear();
   cache.clear();
   inflight.clear();
   queue.clear();

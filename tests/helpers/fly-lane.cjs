@@ -41,6 +41,8 @@ const EXTRACTED_NON_ROUTE_MODULES = [
   'server/realtime.cjs',
   'server/agent-connections.cjs',
   'server/task-dispatch.cjs',
+  'server/cadence-wakes.cjs',
+  'server/anthropic-stream.cjs',
   'server/agent-jobs.cjs',
   'server/builtin-turn.cjs',
 ];

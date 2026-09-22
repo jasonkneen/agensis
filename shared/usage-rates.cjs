@@ -34,14 +34,15 @@
  *
  * UPDATE THIS WHENEVER YOU EDIT A RATE.
  */
-const RATES_AS_OF = '2026-07-27';
+const RATES_AS_OF = '2026-09-22';
 
 /**
  * USD per MILLION tokens, from platform.claude.com/docs/en/about-claude/pricing.
  *
  * Keyed on the model id as we send it. `cacheWrite` is the 5-minute write rate
  * (1.25x base input); the 1-hour rate (2x) is not represented because nothing
- * in this app requests a 1-hour cache. `cacheRead` is 0.1x base input.
+ * in this app requests a 1-hour cache. `cacheRead` is 0.1x base input, except
+ * Opus 5.5, whose published cache-read price is 0.05x ($0.20).
  *
  * Sonnet 5 is priced at its STANDARD rate ($3/$15), not the introductory rate
  * in effect until 2026-08-31, on the principle that a cost screen should round
@@ -52,6 +53,7 @@ const RATES_AS_OF = '2026-07-27';
 const ANTHROPIC_TOKEN_RATES = {
  'claude-fable-5': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
  'claude-mythos-5': { input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1 },
+ 'claude-opus-5-5': { input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2 },
  'claude-opus-5': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
  'claude-opus-4-8': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
  'claude-opus-4-7': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },

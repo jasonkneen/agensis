@@ -79,7 +79,7 @@ type RenderOptions = {
   onFocusTaskConsumed?: () => void;
   workspaceId?: string;
   onUploadFiles?: (files: File[]) => Promise<UploadedFile[]>;
-  onCreateTask?: (input: CreateTaskInput) => void;
+  onCreateTask?: (input: CreateTaskInput) => Task | null | Promise<Task | null>;
 };
 
 function render(tasks: Task[], updates: Update[] = [], options: RenderOptions = {}) {
@@ -91,7 +91,7 @@ function render(tasks: Task[], updates: Update[] = [], options: RenderOptions = 
       agentConnections: [],
       currentUserEmail: 'a@b.c',
       workspaceId: 'ws-1',
-      onCreateTask: () => { },
+      onCreateTask: () => null,
       onUpdateTask: (id: string, patch: Partial<Task>) => { updates.push({ id, updates: patch }); },
       onToggleStatus: () => { },
       onDeleteTask: () => { },
@@ -901,7 +901,7 @@ describe('new task composer: attachments', () => {
     };
     render([], [], {
       onUploadFiles: async () => [uploaded],
-      onCreateTask: input => creates.push(input),
+      onCreateTask: input => { creates.push(input); return TASKS[0]; },
     });
 
     const windowDropzone = container.querySelector('[data-testid="task-window-dropzone"]');
@@ -914,7 +914,7 @@ describe('new task composer: attachments', () => {
     const title = container.querySelector<HTMLInputElement>('.task-title-input');
     if (!title) throw new Error('no new task title input');
     setInputValue(title, 'Review design');
-    clickText('Add');
+    await act(async () => { clickText('Add'); await Promise.resolve(); });
 
     expect(creates).toEqual([{
       title: 'Review design',
@@ -976,4 +976,26 @@ describe('task editor: the title wraps instead of widening the panel', () => {
     // overrides the clamped `width` outright, which is how it escaped 720px.
     expect(panel!.className).toContain('min-w-0');
   });
+});
+
+it('retains a failed creation draft, blocks duplicates and clears only after success', async () => {
+  let calls = 0;
+  let resolve!: (task: Task | null) => void;
+  render([], [], { onCreateTask: () => {
+    calls++;
+    return calls === 1 ? new Promise<Task | null>(done => { resolve = done; }) : TASKS[0];
+  } });
+  const input = container.querySelector<HTMLInputElement>('.task-title-input')!;
+  setInputValue(input, 'Keep this draft');
+  clickText('Add');
+  expect(input.value).toBe('Keep this draft');
+  expect(container.textContent).toContain('Adding…');
+  act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+  expect(calls).toBe(1);
+  await act(async () => { resolve(null); await Promise.resolve(); });
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('Task could not be created');
+  expect(input.value).toBe('Keep this draft');
+  await act(async () => { clickText('Add'); await Promise.resolve(); });
+  expect(input.value).toBe('');
+  expect(container.querySelector('[role="alert"]')).toBeNull();
 });

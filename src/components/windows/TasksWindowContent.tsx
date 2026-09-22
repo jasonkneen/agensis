@@ -109,7 +109,7 @@ interface TasksWindowContentProps {
   currentUserEmail: string;
   workspaceId: string;
   currentUserId?: string;
-  onCreateTask: (input: CreateTaskInput) => void;
+  onCreateTask: (input: CreateTaskInput) => Task | null | Promise<Task | null>;
   onUpdateTask: (id: string, updates: Partial<Task>) => void;
   onToggleStatus: (task: Task) => void;
   onDeleteTask: (id: string) => void;
@@ -219,6 +219,11 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   onUploadFiles,
 }: TasksWindowContentProps) {
   const [newTitle, setNewTitle] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState(false);
+  const creatingRef = useRef(false);
+  const creationWorkspace = useRef({ workspaceId });
+  if (creationWorkspace.current.workspaceId !== workspaceId) creationWorkspace.current = { workspaceId };
   const [newPriority, setNewPriority] = useState<TaskPriority>('normal');
   const [newAssignee, setNewAssignee] = useState<string>('');
   const [newAttachments, setNewAttachments] = useState<MessageAttachment[]>([]);
@@ -295,23 +300,36 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     return groups;
   }, [filteredTopLevel]);
 
-  const handleAdd = () => {
-    if (!newTitle.trim() || newAttachmentUploading) return;
-    onCreateTask({
-      title: newTitle.trim(),
-      priority: newPriority,
-      assignee_id: newAssignee || null,
-      source_type: 'manual',
-      attachments: newAttachments.length > 0 ? newAttachments : null,
-    });
-    setNewTitle('');
-    setNewPriority('normal');
-    setNewAssignee('');
-    setNewAttachments([]);
+  useEffect(() => {
+    setNewTitle(''); setNewPriority('normal'); setNewAssignee(''); setNewAttachments([]);
+    setCreating(false); setCreateError(false); creatingRef.current = false;
+  }, [workspaceId]);
+
+  const handleAdd = async () => {
+    if (!newTitle.trim() || newAttachmentUploading || creatingRef.current) return;
+    const ownerWorkspace = creationWorkspace.current;
+    creatingRef.current = true;
+    setCreating(true); setCreateError(false);
+    try {
+      const task = await onCreateTask({
+        title: newTitle.trim(),
+        priority: newPriority,
+        assignee_id: newAssignee || null,
+        source_type: 'manual',
+        attachments: newAttachments,
+      });
+      if (creationWorkspace.current !== ownerWorkspace) return;
+      if (!task) { setCreateError(true); return; }
+      setNewTitle(''); setNewPriority('normal'); setNewAssignee(''); setNewAttachments([]);
+    } catch {
+      if (creationWorkspace.current === ownerWorkspace) setCreateError(true);
+    } finally {
+      if (creationWorkspace.current === ownerWorkspace) { creatingRef.current = false; setCreating(false); }
+    }
   };
 
   const uploadNewAttachments = async (files: File[]) => {
-    if (!files.length || !onUploadFiles) return;
+    if (!files.length || !onUploadFiles || creatingRef.current) return;
     setNewAttachmentUploading(true);
     try {
       const uploaded = await onUploadFiles(files);
@@ -504,7 +522,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
         'shrink-0 border-b border-border bg-card/55 p-3 backdrop-blur-md transition-colors',
         newAttachmentDragActive && 'bg-primary/10 ring-1 ring-inset ring-primary',
       )}>
-        <div className="task-add-row gap-2">
+        <div className="task-add-row gap-2" inert={creating}>
           <div className="min-w-0">
             <Input
               value={newTitle}
@@ -549,11 +567,12 @@ export const TasksWindowContent = memo(function TasksWindowContent({
               <Paperclip />
             </Button>
           )}
-          <Button type="button" size="sm" onClick={handleAdd} disabled={!newTitle.trim() || newAttachmentUploading}>
+          <Button type="button" size="sm" onClick={handleAdd} disabled={!newTitle.trim() || newAttachmentUploading || creating}>
             <Plus data-icon="inline-start" />
-            Add
+            {creating ? 'Adding…' : 'Add'}
           </Button>
         </div>
+        {createError && <p role="alert" className="mt-2 text-sm text-destructive">Task could not be created. Your details are still here; try Add again.</p>}
         {onUploadFiles && (
           <input
             ref={newAttachmentInputRef}
@@ -564,7 +583,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           />
         )}
         {(newAttachmentDragActive || newAttachmentUploading || newAttachments.length > 0) && (
-          <div className="mt-2 flex flex-col gap-1.5" data-testid="new-task-attachments">
+          <div className="mt-2 flex flex-col gap-1.5" data-testid="new-task-attachments" inert={creating}>
             {newAttachmentDragActive && (
               <p className="text-xs font-medium text-primary">Drop to attach to the new task</p>
             )}

@@ -121,12 +121,12 @@ test('the paged transcript route selects * and retains redacted deleted anchors'
   const flat = require('./helpers/fly-lane.cjs').flyLaneSource().replace(/\s+/g, ' ');
   assert.match(
     flat,
-    /select \* from messages where session_id = \$1/,
+    /select m\.\*, .+? from messages m where m\.session_id = \$1/,
     '/backend/sessions/:id/messages must stay `select *` or new columns load blank',
   );
   assert.doesNotMatch(
     flat,
-    /select \* from messages where session_id = \$1 and deleted_at is null/,
+    /select m\.\*, .+? from messages m where m\.session_id = \$1 and (?:m\.)?deleted_at is null/,
     'deleted roots must remain as redacted tombstones so replies keep their anchor',
   );
   assert.match(

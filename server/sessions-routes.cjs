@@ -131,16 +131,21 @@ function mountSessionsRoutes(app, deps = {}) {
    if (before) {
     if (beforeId) {
      params.push(before, beforeId);
-     beforeClause = ' and (created_at < $2 or (created_at = $2 and id < $3))';
+     beforeClause = ' and (m.created_at < $2::text::timestamptz or (m.created_at = $2::text::timestamptz and m.id < $3))';
     } else {
      params.push(before);
-     beforeClause = ' and created_at < $2';
+     beforeClause = ' and m.created_at < $2::text::timestamptz';
     }
    }
+   // Preserve Postgres microseconds in the cursor: the driver turns timestamptz
+   // into JS Date, losing sub-millisecond rows at the next page boundary. Qualify
+   // ORDER BY so it sorts the timestamp column, not the projected text alias.
+   // Bind the cursor as text too: the driver also rounds inferred timestamp
+   // parameters through Date before sending them to Postgres.
    const rows = await getDb().unsafe(
-    `select * from messages
-       where session_id = $1${beforeClause}
-       order by created_at desc, id desc
+    `select m.*, to_char(m.created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at from messages m
+       where m.session_id = $1${beforeClause}
+       order by m.created_at desc, m.id desc
        limit ${limit + 1}`,
     params,
    );

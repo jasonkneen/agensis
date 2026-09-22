@@ -79,7 +79,7 @@ test('the paginated Fly transcript returns a redacted deleted root instead of dr
       return {
         async unsafe(sql) {
           const q = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
-          if (q.startsWith('select * from messages')) return [deletedRow()];
+          if (q.startsWith('select m.*,') && q.includes('from messages m')) return [deletedRow()];
           throw new Error(`Unexpected transcript query: ${sql}`);
         },
       };

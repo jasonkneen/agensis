@@ -242,7 +242,11 @@ test('the wake fires and re-drives the conversation', async () => {
   // An empty DB, so the re-drive reaches continueConversation and bails at
   // 'no_session' instead of trying to open a real connection.
   const seen = [];
-  __test.setTestDb({ async unsafe(sql, params) { seen.push([String(sql), params]); return []; } });
+  __test.setTestDb({ async unsafe(sql, params) {
+    seen.push([String(sql), params]);
+    if (/with due/.test(sql)) return [{ lock_key: 'session-2::', workspace_id: 'w', session_id: 'session-2', wake_id: 'wake', claim_token: 'claim' }];
+    return [];
+  } });
   const key = 'session-2::';
   __test.scheduleCadenceWake(key, 5, { workspaceId: 'w', sessionId: 'session-2', threadParentId: null });
   await new Promise((resolve) => setTimeout(resolve, 40));
@@ -367,9 +371,8 @@ test('cadenceWakes is written from exactly one place', () => {
   const sets = source.match(/cadenceWakes\.set\(/g) || [];
   assert.equal(sets.length, 1, `cadenceWakes.set appears ${sets.length} times`);
   const calls = source.match(/scheduleCadenceWake\(/g) || [];
-  // The definition (server/task-dispatch.cjs, Wave 4), the ONE call site in
-  // continueConversation, and index.cjs's destructure of the module.
-  assert.equal(calls.length, 2, `expected the definition and ONE call site, found ${calls.length}`);
+  // Definition, conversation booking, and bounded persistence retry.
+  assert.equal(calls.length, 3, `expected definition, booking and retry, found ${calls.length}`);
 });
 
 // --- the parity fixture -----------------------------------------------------

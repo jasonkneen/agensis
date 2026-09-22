@@ -132,9 +132,19 @@ broadcast, and the two are not equivalent:
   job/schedule writes are server-owned and refused; thread mutations must prove
   one session and pass its access gate. Schedule execution re-checks both the
   creator's current workspace role and private-session membership at run time.
-- **`messages` is covered by a different argument**, not by that split. An
-  unfiltered `messages` subscription cannot be established at all, so a message
-  only ever reaches a socket that named its session.
+- **`messages` re-check the current session audience on every fanout.** A
+  session-filtered subscription is required, but proves access only at subscribe
+  time. Grant expiry or a privacy change through the other backend must stop
+  delivery on an already-open socket too. The filter is a routing key, not
+  continuing authorization.
+- **`thread_harvests` and `agent_schedule_runs` also use the session audience
+  lane.** Their `session_id` must resolve; missing or unknown sessions fail closed.
+- **`session_read_state` batches live session audiences and recipient opt-ins.**
+  A receipt subscription alone is insufficient; recipients must still have
+  session access and have opted into read receipts.
+- **Session-derived `activity_events` are scoped too.** `message_sent` resolves
+  `metadata.session_id`; `chat_created` resolves `entity_id`. Missing associations
+  fail closed. Other activity event types remain on the workspace lane.
 - **Every other allowlisted table is covered by none of those lanes.** A table
   that is subscribable on a `workspace_id` filter and that can hold DM-derived
   rows fans those rows to every socket in the workspace that holds `read`. The
@@ -142,7 +152,7 @@ broadcast, and the two are not equivalent:
   does not go through it.
 
 **So the session granularity is enforced broadly on the REST/MCP side but only
-for the eight named table shapes above.** If you are adding a table that can
+for the explicitly described table/event shapes above.** If you are adding a table that can
 carry content derived from a private session, do not assume realtime will scope
 it. Add an explicit session-audience lane and tests, or raise the gap rather
 than allowlisting quietly.
@@ -504,6 +514,21 @@ only through the `manage`-gated `GET /backend/workspaces/:id/audit`
 - **`workspace_id` is `ON DELETE SET NULL`, not `CASCADE`** — deleting a
   workspace is the most audit-worthy action there is, and `CASCADE` would erase
   the evidence of it as a side effect. Those rows become DB-only.
+
+### Parked turns and cadence recovery
+
+- A failed `pending_chat_turns` shadow write must not erase the live parked
+  turn. The orphan sweep retries persistence even while the agent is busy.
+  Serialize inserts and deletes per park key so a late insert cannot resurrect
+  a turn after its drain has deleted the durable row.
+- Cadence wakes belong to a session/thread before election picks an agent.
+  `pending_cadence_wakes.agent_id` is nullable; recovery passes a stored agent
+  as `targetAgentId`, never `agentId`, to `continueConversation`.
+- A persisted cadence timer and the recovery sweep both claim via
+  `DELETE ... RETURNING`. An empty successful claim means somebody else won;
+  do not fire anyway. Only failed persistence permits a local-only fallback.
+  Recovery claims a bounded batch with `FOR UPDATE SKIP LOCKED`, and a claimed
+  local timer is cancelled and dispatched by the sweep, never skipped.
 
 ### Structured stop reasons, and two deadlines instead of one
 

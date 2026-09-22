@@ -1,8 +1,10 @@
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useMemo, useRef } from 'react';
+import { toast } from 'sonner';
 import { apiAuthHeaders, backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsert, offlineUpdate, offlineDelete } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import { useWorkspaceListState, useWorkspaceState } from './useWorkspaceState';
+import { DocumentBodyCache } from '../lib/documentBodyCache';
 import type { Document } from '../types';
 
 // NET-06: the documents LIST is metadata-only — pulling every doc's full HTML
@@ -69,7 +71,32 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
   }>());
   // Per-doc content cache (id -> body). Populated by fetchDocumentContent and
   // invalidated when a doc's realtime UPDATE arrives (its body may have changed).
-  const contentCache = useRef<Map<string, string>>(new Map());
+  const renderAuthOwner = apiAuthHeaders().Authorization || '';
+  const bodyScope = useMemo(() => ({
+    workspaceId,
+    owner: renderAuthOwner,
+    cache: new DocumentBodyCache(),
+    reads: new Map<string, AbortController>(),
+    pending: new Map<string, Promise<string>>(),
+  }), [workspaceId, renderAuthOwner]);
+  const activeBodyScope = useRef(bodyScope);
+  activeBodyScope.current = bodyScope;
+  const contentCache = bodyScope.cache;
+  useEffect(() => () => {
+    for (const controller of bodyScope.reads.values()) controller.abort();
+    bodyScope.reads.clear();
+    bodyScope.pending.clear();
+    bodyScope.cache.clear();
+  }, [bodyScope]);
+  const saveGenerations = useRef(new Map<string, number>());
+  const documentWrites = useRef(new Map<string, Promise<Record<string, unknown> | null>>());
+  const saveNotices = useRef(new Map<string, string>());
+  const dismissSaveNotice = useCallback((id: string) => {
+    const notice = saveNotices.current.get(id);
+    if (!notice) return;
+    saveNotices.current.delete(id);
+    toast.dismiss(notice);
+  }, []);
 
   useEffect(() => {
     if (seed) setDocuments(seed.filter(doc => doc.workspace_id === workspaceId).map(toListDocument));
@@ -105,19 +132,52 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
   // NET-06: fetch a single document's body on demand (editor open, search index,
   // applet render). Cached per doc; pass force to bypass the cache after an edit.
   const fetchDocumentContent = useCallback(async (id: string, force = false): Promise<string> => {
-    if (!id) return '';
+    const isCurrent = () => activeBodyScope.current === bodyScope
+      && bodyScope.owner === (apiAuthHeaders().Authorization || '');
+    if (!id || !bodyScope.workspaceId || !bodyScope.owner || !isCurrent()) return '';
     if (!force) {
-      const cached = contentCache.current.get(id);
+      const cached = contentCache.get(id);
       if (cached !== undefined) return cached;
+      const pending = bodyScope.pending.get(id);
+      if (pending) return pending;
     }
-    const { data } = await backendClient
-      .from('documents')
-      .select('id, content')
-      .eq('id', id);
-    const body = (Array.isArray(data) ? data[0]?.content : (data as { content?: string } | null)?.content) || '';
-    contentCache.current.set(id, body);
-    return body;
-  }, []);
+    if (force) contentCache.delete(id);
+    bodyScope.reads.get(id)?.abort();
+    const controller = new AbortController();
+    bodyScope.reads.set(id, controller);
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+    const request = (async () => {
+      try {
+        const { data, error } = await backendClient
+          .from('documents')
+          .select('id, content')
+          .eq('id', id)
+          .eq('workspace_id', bodyScope.workspaceId)
+          .abortSignal(controller.signal);
+        if (!isCurrent()) return '';
+        if (controller.signal.aborted) {
+          const newer = bodyScope.reads.get(id);
+          if (newer && newer !== controller) return bodyScope.pending.get(id) ?? '';
+          const cached = contentCache.get(id);
+          if (cached !== undefined) return cached;
+          throw new Error('Document content could not be loaded.');
+        }
+        if (error) throw new Error('Document content could not be loaded.');
+        const row = Array.isArray(data) ? data[0] : data;
+        if (!row || typeof row.content !== 'string') throw new Error('Document content is unavailable.');
+        contentCache.set(id, row.content);
+        return row.content;
+      } finally {
+        clearTimeout(timeout);
+        if (bodyScope.reads.get(id) === controller) {
+          bodyScope.reads.delete(id);
+          bodyScope.pending.delete(id);
+        }
+      }
+    })();
+    bodyScope.pending.set(id, request);
+    return request;
+  }, [bodyScope, contentCache]);
 
   const deduper = useRealtimeDeduper();
   useTableSubscription<Document>(
@@ -131,10 +191,13 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
     },
     (payload) => {
       if (!deduper.shouldProcess(payload)) return;
+      if (activeBodyScope.current !== bodyScope || renderAuthOwner !== (apiAuthHeaders().Authorization || '')) return;
+      const changedId = payload.new?.id || payload.old?.id;
+      if (changedId) bodyScope.reads.get(changedId)?.abort();
       const eventType = String(payload.eventType || '');
       if (eventType === 'DELETE') {
         const oldDoc = payload.old;
-        applyDocumentRealtimeToContentCache(contentCache.current, eventType, null, oldDoc);
+        applyDocumentRealtimeToContentCache(contentCache, eventType, null, oldDoc);
         if (oldDoc?.id) {
           setDocuments(prev => prev.filter(doc => doc.id !== oldDoc.id));
         }
@@ -143,7 +206,7 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
 
       const nextDoc = payload.new;
       if (!nextDoc?.id) return;
-      applyDocumentRealtimeToContentCache(contentCache.current, eventType, nextDoc);
+      applyDocumentRealtimeToContentCache(contentCache, eventType, nextDoc);
       const listDoc = toListDocument(nextDoc as Document);
       setDocuments(prev => {
         const existingIndex = prev.findIndex(doc => doc.id === listDoc.id);
@@ -168,26 +231,71 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
     if (data) {
       const doc = data as unknown as Document;
       // A new doc's body is empty; prime the cache and keep the list metadata-only.
-      contentCache.current.set(doc.id, doc.content ?? '');
+      if (activeBodyScope.current === bodyScope) contentCache.set(doc.id, doc.content ?? '');
       setDocuments(prev => [toListDocument(doc), ...prev]);
       return doc;
     }
     return null;
-  }, [setDocuments, workspaceId]);
+  }, [bodyScope, contentCache, setDocuments, workspaceId]);
 
-  const saveDocument = useCallback(async (id: string, updates: { title?: string; content?: string; folder?: string | null }) => {
-    const result = await offlineUpdate('documents', id, {
-      ...updates,
-      updated_at: new Date().toISOString(),
-    }, `documents_meta_${workspaceId}`);
+  const saveDocument = useCallback(async function persistDocument(id: string, updates: { title?: string; content?: string; folder?: string | null }): Promise<Record<string, unknown> | null> {
+    const owner = apiAuthHeaders().Authorization || '';
+    if (!owner) return null;
+    const generation = (saveGenerations.current.get(id) ?? 0) + 1;
+    saveGenerations.current.set(id, generation);
+    const isCurrent = () => saveGenerations.current.get(id) === generation
+      && apiAuthHeaders().Authorization === owner;
+    let result: Record<string, unknown> | null = null;
+    try {
+      // One write per document at a time. Ignoring an old response protects
+      // React state but cannot stop that request overwriting the database.
+      const previous = documentWrites.current.get(id);
+      const write = (async () => {
+        if (previous) await previous.catch(() => null);
+        if (apiAuthHeaders().Authorization !== owner) return null;
+        return offlineUpdate('documents', id, {
+          ...updates,
+          updated_at: new Date().toISOString(),
+        }, `documents_meta_${workspaceId}`);
+      })();
+      documentWrites.current.set(id, write);
+      try {
+        result = await write;
+      } finally {
+        if (documentWrites.current.get(id) === write) documentWrites.current.delete(id);
+      }
+    } catch {
+      // IndexedDB persistence can fail too. Never leave a fire-and-forget
+      // autosave rejection invisible or claim a draft was queued when it wasn't.
+    }
+    if (!isCurrent()) return result;
     if (result) {
-      // Keep the content cache authoritative for a body edit, but never let the
-      // body into the metadata-only list state.
-      if (typeof updates.content === 'string') contentCache.current.set(id, updates.content);
-      setDocuments(prev => prev.map(d => d.id === id ? stripContent({ ...d, ...(result as Record<string, unknown>) }) : d));
+      dismissSaveNotice(id);
+      if (typeof updates.content === 'string' && activeBodyScope.current === bodyScope) {
+        bodyScope.reads.get(id)?.abort();
+        contentCache.set(id, updates.content);
+      }
+      setDocuments(prev => prev.map(d => d.id === id ? stripContent({ ...d, ...result }) : d));
+    } else {
+      dismissSaveNotice(id);
+      const noticeId = `document-save-${id}-${generation}`;
+      saveNotices.current.set(id, noticeId);
+      toast.error('Document changes were not saved', {
+        id: noticeId,
+        duration: Infinity,
+        description: 'Your changes need saving. Retry before reloading the page.',
+        action: {
+          label: 'Retry',
+          onClick: () => {
+            // A newer edit, successful deletion or account switch invalidates
+            // this captured draft, even if a toast action was already queued.
+            if (isCurrent()) void persistDocument(id, updates);
+          },
+        },
+      });
     }
     return result;
-  }, [setDocuments, workspaceId]);
+  }, [bodyScope, contentCache, dismissSaveNotice, setDocuments, workspaceId]);
 
   // The backend client resolves its token at request time. Keep the exact
   // authorization value with each debounced write so an account switch cannot
@@ -196,7 +304,11 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
   // Capture ownership at render time as well as at timer execution time. A
   // stale callback retained by an editor can run after auth storage changes;
   // reading only the current token there would incorrectly re-own old work.
-  const renderAuthOwner = apiAuthHeaders().Authorization || '';
+
+  useEffect(() => () => {
+    for (const id of saveNotices.current.keys()) dismissSaveNotice(id);
+  }, [dismissSaveNotice, renderAuthOwner]);
+
 
   // A hook instance can survive a workspace switch. Flush pending writes using
   // the save function captured for the workspace that owned them, instead of
@@ -215,6 +327,8 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
   const autoSave = useCallback((id: string, updates: { title?: string; content?: string; folder?: string | null }) => {
     const owner = renderAuthOwner;
     if (!owner || owner !== currentAuthOwner()) return;
+    saveGenerations.current.set(id, (saveGenerations.current.get(id) ?? 0) + 1);
+    dismissSaveNotice(id);
     const pending = autoSaveTimers.current.get(id);
     const sameOwnerPending = pending?.owner === owner ? pending : undefined;
     if (pending) {
@@ -227,7 +341,7 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
       if (owner === currentAuthOwner()) void saveDocument(id, mergedUpdates);
     }, 800);
     autoSaveTimers.current.set(id, { timer, updates: mergedUpdates, owner });
-  }, [currentAuthOwner, renderAuthOwner, saveDocument]);
+  }, [currentAuthOwner, dismissSaveNotice, renderAuthOwner, saveDocument]);
 
   const deleteDocument = useCallback(async (id: string) => {
     const pending = autoSaveTimers.current.get(id);
@@ -251,10 +365,13 @@ export function useDocuments(workspaceId: string | null, seed?: Document[] | nul
       clearTimeout(newerPending.timer);
       autoSaveTimers.current.delete(id);
     }
-    contentCache.current.delete(id);
+    saveGenerations.current.set(id, (saveGenerations.current.get(id) ?? 0) + 1);
+    dismissSaveNotice(id);
+    bodyScope.reads.get(id)?.abort();
+    contentCache.delete(id);
     setDocuments(prev => prev.filter(d => d.id !== id));
     return true;
-  }, [autoSave, currentAuthOwner, setDocuments, workspaceId]);
+  }, [autoSave, bodyScope, contentCache, currentAuthOwner, dismissSaveNotice, setDocuments, workspaceId]);
 
   const toggleFavorite = useCallback(async (id: string, currentValue: boolean) => {
     const result = await offlineUpdate('documents', id, {

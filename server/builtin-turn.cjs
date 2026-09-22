@@ -1,6 +1,8 @@
 'use strict';
 
 const crypto = require('crypto');
+const { commitJobOutcome } = require('./job-finalization.cjs');
+const { readAnthropicStream } = require('./anthropic-stream.cjs');
 const { ADVANCE_AGENT_READ_MARKER_SQL } = require('../shared/read-receipts.cjs');
 const { createAgentQueueService } = require('./agent-queue-routes.cjs');
 
@@ -256,10 +258,10 @@ function createBuiltinTurn(deps = {}) {
    const results = [];
    for (const use of uses) {
     let outcome;
-    if (use.inputError) {
+    if (use.inputError || !use.input || typeof use.input !== 'object' || Array.isArray(use.input) || '_partial' in use.input || '_raw' in use.input) {
      // The model's own arguments were unparseable. Nothing was called, so this is
      // reported as a failed call rather than executed with a guess.
-     outcome = { ok: false, error: use.inputError };
+     outcome = { ok: false, error: use.inputError || 'Tool arguments must be a complete JSON object.' };
     } else if (toolCalls >= maxToolCalls) {
      outcome = { ok: false, error: `Tool budget for this turn is used up (${maxToolCalls} calls). Answer with what you have.` };
     } else {
@@ -274,7 +276,7 @@ function createBuiltinTurn(deps = {}) {
     results.push({
      type: 'tool_result',
      tool_use_id: use.id,
-     content: outcome.ok ? toolResultText(outcome.value) : String(outcome.error || 'Tool failed'),
+     content: outcome.ok ? toolResultText(outcome.value) : toolResultText(String(outcome.error || 'Tool failed')),
      is_error: !outcome.ok,
     });
    }
@@ -470,7 +472,7 @@ const queueService = createAgentQueueService({
   }
  }
 
- async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [], isDirectMessage = false, broadcastToChannel: broadcastOverride = null }) {
+ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [], isDirectMessage = false, broadcastToChannel: broadcastOverride = null, dispatchWakeId = null }) {
   if (!isAgentEnabled(agent)) return { ok: false, pending: false };
   const handle = slugHandle(agent.handle || agent.name);
   const runMode = resolveRunTarget(agent);
@@ -569,6 +571,7 @@ const queueService = createAgentQueueService({
       lastSeenMessageId,
       readScopeThreadParentId: threadParentId || null,
       mode: 'mcp',
+      ...(dispatchWakeId ? { dispatchWakeId } : {}),
      },
     ],
     responseMessageId,
@@ -601,6 +604,7 @@ const queueService = createAgentQueueService({
       lastSeenMessageId,
       readScopeThreadParentId: threadParentId || null,
       mode: 'mcp',
+      ...(dispatchWakeId ? { dispatchWakeId } : {}),
      },
     ],
     null,
@@ -653,6 +657,7 @@ const queueService = createAgentQueueService({
      lastSeenMessageId,
      readScopeThreadParentId: threadParentId || null,
      mode: 'builtin',
+     ...(dispatchWakeId ? { dispatchWakeId } : {}),
     },
    ],
    null,
@@ -662,6 +667,38 @@ const queueService = createAgentQueueService({
    const builtinJobId = String(jobRows[0].id || '');
    const abortController = new AbortController();
    builtinAbortControllers.set(builtinJobId, abortController);
+   const assertActiveJob = async () => {
+    throwIfAborted(abortController.signal);
+    const rows = await getDb().unsafe('select status from agent_jobs where id = $1 limit 1', [builtinJobId]);
+    if (rows[0]?.status !== 'running') {
+     cancelBuiltinJob(builtinJobId, 'Job is no longer running');
+     throwIfAborted(abortController.signal);
+    }
+   };
+   // Serialize transcript writes with terminalization on this exact job row.
+   // A status read before a write alone leaves a reaper race between the two.
+   const writeActiveMessages = (sql, params) => getDb().begin(async tx => {
+    throwIfAborted(abortController.signal);
+    const rows = await tx.unsafe('select status from agent_jobs where id = $1 limit 1 for update', [builtinJobId]);
+    if (rows[0]?.status !== 'running') return [];
+    return tx.unsafe(sql, params);
+   });
+   let checking = false;
+   const ownershipTimer = setInterval(() => {
+    if (checking) return;
+    checking = true;
+    void assertActiveJob().catch(error => abortController.abort(error)).finally(() => { checking = false; });
+   }, 2000);
+   ownershipTimer.unref?.();
+   let lastProgressAt = 0;
+   const recordProgress = async () => {
+    if (Date.now() - lastProgressAt < 1000) return;
+    lastProgressAt = Date.now();
+    await getDb().unsafe(
+     `update agent_jobs set metadata = metadata || jsonb_build_object('lastContentAt', now()), updated_at = now()
+      where id = $1 and status = 'running'`, [builtinJobId]);
+   };
+
    let writeChain = Promise.resolve();
    // Once the stream is over — successfully or not — the terminal write owns
    // the row and no throttled partial may land behind it.
@@ -680,13 +717,16 @@ const queueService = createAgentQueueService({
     // token-by-token (message UPDATE broadcasts) so it renders live in the thread
     // like a daemon agent — instead of popping in complete when the call finishes.
     const responseMessageId = crypto.randomUUID();
-    const placeholderRows = await getDb().unsafe(
+    const placeholderRows = await writeActiveMessages(
      `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
           values ($1, $2, 'assistant', 'Thinking 0s', $3, 'agent', $4, $5)
           returning *`,
      [responseMessageId, sessionId, workThreadParentId, String(agent.id), agent.name],
     );
     currentMessageId = responseMessageId;
+    await getDb().unsafe(
+     `update agent_jobs set metadata = metadata || jsonb_build_object('responseMessageId', $2::text)
+      where id = $1 and status = 'running'`, [builtinJobId, responseMessageId]);
     notifyDbSubscribers('messages', 'INSERT', placeholderRows);
    // The turn's tools and the identity they run as. Built from the agent ROW, so
    // every tool call is scoped to the agent's OWN workspace — see
@@ -776,8 +816,10 @@ const queueService = createAgentQueueService({
      if (currentMessageId) emitVoice(currentMessageId, target);
      const write = (async () => {
       try {
+       await assertActiveJob();
+       await recordProgress();
        if (currentMessageId) {
-        const rows = await getDb().unsafe(
+        const rows = await writeActiveMessages(
          `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
          [currentMessageId, target || 'Thinking…', sessionId],
         );
@@ -785,7 +827,7 @@ const queueService = createAgentQueueService({
        } else {
         // Materialise the next block's row now that there is something to show.
         const nextId = crypto.randomUUID();
-        const rows = await getDb().unsafe(
+        const rows = await writeActiveMessages(
          `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
               values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6) returning *`,
          [nextId, sessionId, target || 'Thinking…', workThreadParentId, String(agent.id), agent.name],
@@ -818,6 +860,7 @@ const queueService = createAgentQueueService({
     // A text block is finished (the model went on to call tools). Settle the row
     // it was streaming into and hand the next block a clean slate.
     const sealSegment = async (text) => {
+     await assertActiveJob();
      sealing = true;
      await writeChain.catch(() => { });
      try {
@@ -827,13 +870,13 @@ const queueService = createAgentQueueService({
       voiceSpoken = '';
       let rows;
       if (currentMessageId) {
-       rows = await getDb().unsafe(
+       rows = await writeActiveMessages(
         `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
         [currentMessageId, text, sessionId],
        );
        if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
       } else {
-       rows = await getDb().unsafe(
+       rows = await writeActiveMessages(
         `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name)
              values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6) returning *`,
         [crypto.randomUUID(), sessionId, text, workThreadParentId, String(agent.id), agent.name],
@@ -867,7 +910,7 @@ const queueService = createAgentQueueService({
      // Normalised through the same agentStepParts the daemon path uses, so the
      // `content` fallback line and the two structured columns can never disagree.
      const step = agentStepParts({ name: rawName, detail: rawDetail });
-     const rows = await getDb().unsafe(
+     const rows = await writeActiveMessages(
       `insert into messages (session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, message_kind, tool_name, tool_detail)
            values ($1, 'assistant', $2, $3, 'agent', $4, $5, 'tool_step', $6, $7) returning *`,
       [sessionId, agentStepContent(step), stepParentId, String(agent.id), agent.name, step.name, step.detail],
@@ -882,6 +925,7 @@ const queueService = createAgentQueueService({
       tools: toolSpecs,
       signal: abortController.signal,
       async callModel({ messages, tools }) {
+       await assertActiveJob();
        const outcome = await streamAnthropicTurn({
         model: resolveAnthropicModel(agent.model),
         messages,
@@ -894,6 +938,7 @@ const queueService = createAgentQueueService({
         signal: abortController.signal,
         voiceHuddle,
        }, (partial) => { latest = partial; flush(); });
+       await assertActiveJob();
        // The provider completed its first response from this exact prompt, so
        // the read is now proven. Mark the captured message id, never whatever
        // happens to be newest after the model/tool round trip.
@@ -907,14 +952,17 @@ const queueService = createAgentQueueService({
       // { ok: false, error } and the loop hands that to the model as a readable
       // tool_result it can recover from, instead of killing the turn.
       async callTool({ name, args }) {
+       await assertActiveJob();
        return toolset.call({ name, args, identity: toolIdentity, db: getDb(), signal: abortController.signal });
       },
       onSegment: sealSegment,
       async onToolStart({ name, args }) {
+       await assertActiveJob();
+       await recordProgress();
        // Keep the placeholder's clock honest while a slow tool runs — but only
        // while it still holds a status line. Never write over streamed text.
        if (currentMessageId && !latest) {
-        const rows = await getDb().unsafe(
+        const rows = await writeActiveMessages(
          `update messages set content = $2 where id = $1 and session_id = $3 returning *`,
          [currentMessageId, `Thinking ${formatElapsedMs(Date.now() - turnStartedAt)}`, sessionId],
         ).catch(() => []);
@@ -931,7 +979,7 @@ const queueService = createAgentQueueService({
        // a tool is visible rather than inferred from a vague reply. The error TEXT
        // stays out of the chip and goes to the model only — a tool result can be
        // untrusted provider output, and a chip is chrome the human reads at a glance.
-       const rows = await getDb().unsafe(
+       const rows = await writeActiveMessages(
         `update messages set content = $2, tool_detail = $3 where id = $1 and session_id = $4 returning *`,
         [handle.id, agentStepContent({ name: handle.name, detail: 'failed' }), 'failed', sessionId],
        ).catch(() => []);
@@ -942,112 +990,146 @@ const queueService = createAgentQueueService({
     })();
     // The stream is over, so the writes below own the row from here.
     finished = true;
-    const updatedRows = await getDb().unsafe(
-     `update agent_jobs set status = 'done', response = $2, finished_at = now(), updated_at = now()
-         where id = $1 and status = 'running' returning *`,
-     [jobRows[0].id, responseText],
-    );
-    // The clear route atomically cancels active jobs. Once it wins, this turn
-    // must not change the terminal state back to done or write a final message.
-    if (updatedRows.length === 0) return { ok: false, pending: false };
-    notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
-    // A builtin turn finalizes its own job here and never reaches
-    // finalizeAgentJobResult, so this is its own terminal hook for the task queue.
+    await writeChain.catch(() => {});
+    const events = [];
+    const afterCommit = [];
+    const publish = (...args) => events.push(args);
+    const settled = await commitJobOutcome(getDb(), { id: builtinJobId, status: 'done', field: 'response', value: responseText }, async tx => {
+     const updatedRows = await tx.unsafe(
+      `update agent_jobs set status = 'done', response = $2, finished_at = now(), updated_at = now()
+          where id = $1 and status = 'running' returning *`,
+      [jobRows[0].id, responseText],
+     );
+     // The clear route atomically cancels active jobs. Once it wins, this turn
+     // must not change the terminal state back to done or write a final message.
+     if (updatedRows.length === 0) return { ok: false, pending: false };
+     publish('agent_jobs', 'UPDATE', updatedRows);
+     // A builtin turn finalizes its own job here and never reaches
+     // finalizeAgentJobResult, so this is its own terminal hook for the task queue.
+
+     // Wait for any in-flight throttled write to finish, THEN write the complete
+     // text last so it can never be clobbered by a late-landing partial update.
+
+     // The turn is over: this row IS the answer, so it graduates out of the work
+     // thread into the channel view (it stays a thread message — the flag only adds
+     // it to the channel). The throttled partial writes above deliberately leave the
+     // flag alone, which is what keeps the channel quiet while the agent works.
+     const finalText = responseText || `@${handle} finished without output.`;
+     const finalMessageKind = String(responseText || '').trim() ? 'agent_result' : '';
+     let messageRows = currentMessageId
+      ? await tx.unsafe(
+       `update messages
+           set content = $2, broadcast_to_channel = $4, message_kind = $5
+         where id = $1 and session_id = $3 and deleted_at is null
+         returning *`,
+       [currentMessageId, finalText, sessionId, broadcastToChannel, finalMessageKind],
+      )
+      // Every block was sealed and the last round produced no delta to materialise
+      // a row — the answer still has to exist, and it is what gets broadcast.
+      : await tx.unsafe(
+       `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel, message_kind)
+            values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7, $8) returning *`,
+       [
+        crypto.randomUUID(),
+        sessionId,
+        finalText,
+        workThreadParentId,
+        String(agent.id),
+        agent.name,
+        broadcastToChannel,
+        finalMessageKind,
+       ],
+      );
+     if (!messageRows.length) {
+      messageRows = await tx.unsafe(
+       `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel, message_kind)
+        values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7, $8) returning *`,
+       [crypto.randomUUID(), sessionId, finalText, workThreadParentId, String(agent.id), agent.name, broadcastToChannel, finalMessageKind]);
+      if (!messageRows.length) throw new Error('Final transcript was not written');
+      currentMessageId = null;
+     }
+     if (messageRows.length > 0) {
+      publish('messages', currentMessageId ? 'UPDATE' : 'INSERT', messageRows);
+      afterCommit.push(() => { void logMessageActivity(messageRows); void mirrorAgentReplyToTaskComment(messageRows[0]); });
+     }
+     if (!finalMessageKind && lastSealedMessageId) {
+      // The terminal model round was empty, but a prior nonempty block is the
+      // successful answer. Mark THAT exact live row atomically; the synthetic
+      // "finished without output" notice above deliberately remains unmarked.
+      const resultRows = await tx.unsafe(
+       `update messages
+           set message_kind = 'agent_result'
+         where id = $1
+           and session_id = $2
+           and sender_kind = 'agent'
+           and sender_id = $3
+           and deleted_at is null
+           and length(btrim(coalesce(content, ''))) > 0
+         returning *`,
+       [lastSealedMessageId, sessionId, String(agent.id)],
+      );
+      if (resultRows.length > 0) publish('messages', 'UPDATE', resultRows);
+     }
+     return { ok: true, pending: false };
+    });
+    if (!settled.ok) return settled;
+    for (const args of events) notifyDbSubscribers(...args);
+    for (const effect of afterCommit) effect();
     scheduleTaskQueueDrain(workspaceId, agent.id, 'builtin_done');
-    // Wait for any in-flight throttled write to finish, THEN write the complete
-    // text last so it can never be clobbered by a late-landing partial update.
-    await writeChain.catch(() => { });
-    // The turn is over: this row IS the answer, so it graduates out of the work
-    // thread into the channel view (it stays a thread message — the flag only adds
-    // it to the channel). The throttled partial writes above deliberately leave the
-    // flag alone, which is what keeps the channel quiet while the agent works.
-    const finalText = responseText || `@${handle} finished without output.`;
-    const finalMessageKind = String(responseText || '').trim() ? 'agent_result' : '';
-    const messageRows = currentMessageId
-     ? await getDb().unsafe(
-      `update messages
-          set content = $2, broadcast_to_channel = $4, message_kind = $5
-        where id = $1 and session_id = $3
-        returning *`,
-      [currentMessageId, finalText, sessionId, broadcastToChannel, finalMessageKind],
-     )
-     // Every block was sealed and the last round produced no delta to materialise
-     // a row — the answer still has to exist, and it is what gets broadcast.
-     : await getDb().unsafe(
-      `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel, message_kind)
-           values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7, $8) returning *`,
-      [
-       crypto.randomUUID(),
-       sessionId,
-       finalText,
-       workThreadParentId,
-       String(agent.id),
-       agent.name,
-       broadcastToChannel,
-       finalMessageKind,
-      ],
-     );
-    if (messageRows.length > 0) {
-     notifyDbSubscribers('messages', currentMessageId ? 'UPDATE' : 'INSERT', messageRows);
-     void logMessageActivity(messageRows);
-     void mirrorAgentReplyToTaskComment(messageRows[0]);
-    }
-    if (!finalMessageKind && lastSealedMessageId) {
-     // The terminal model round was empty, but a prior nonempty block is the
-     // successful answer. Mark THAT exact live row atomically; the synthetic
-     // "finished without output" notice above deliberately remains unmarked.
-     const resultRows = await getDb().unsafe(
-      `update messages
-          set message_kind = 'agent_result'
-        where id = $1
-          and session_id = $2
-          and sender_kind = 'agent'
-          and sender_id = $3
-          and deleted_at is null
-          and length(btrim(coalesce(content, ''))) > 0
-        returning *`,
-      [lastSealedMessageId, sessionId, String(agent.id)],
-     );
-     if (resultRows.length > 0) notifyDbSubscribers('messages', 'UPDATE', resultRows);
-    }
     return { ok: true, pending: false };
    } catch (error) {
     // Let any in-flight partial write settle so it can't clobber the error text —
     // and stop any further one from being started behind it.
     finished = true;
     await writeChain.catch(() => { });
+    if (error?.code === 'agent_job_finalization_failed') throw error;
     const errorText = error?.message || 'Direct agent failed';
-    const updatedRows = await getDb().unsafe(
-     `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now()
-         where id = $1 and status = 'running' returning *`,
-     [jobRows[0].id, errorText],
-    );
-    // A deleted conversation already set the durable terminal state to
-    // cancelled. Do not overwrite it or try to append a failure notice there.
-    if (updatedRows.length === 0) return { ok: false, pending: false };
-    notifyDbSubscribers('agent_jobs', 'UPDATE', updatedRows);
-    scheduleTaskQueueDrain(workspaceId, agent.id, 'builtin_error');
-    // A failure is the outcome of the turn, so it broadcasts too — a channel that
-    // silently shows nothing reads as "still working" forever.
-    //
-    // Written into the LIVE row, never blindly into the dispatch placeholder: once
-    // a text block has been sealed, that placeholder is a finished message the
-    // agent actually said, and overwriting it with the error would destroy it. With
-    // no live row the notice is a new message of its own.
-    const noticeText = `@${handle} failed: ${errorText}`;
-    const messageRows = currentMessageId
-     ? await getDb().unsafe(
-      `update messages set content = $2, broadcast_to_channel = $4 where id = $1 and session_id = $3 returning *`,
-      [currentMessageId, noticeText, sessionId, broadcastToChannel],
-     )
-     : await getDb().unsafe(
-      `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
-           values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7) returning *`,
-      [crypto.randomUUID(), sessionId, noticeText, workThreadParentId, String(agent.id), agent.name, broadcastToChannel],
+    const events = [];
+    const publish = (...args) => events.push(args);
+    await commitJobOutcome(getDb(), { id: builtinJobId, status: 'error', field: 'error', value: errorText }, async tx => {
+     const updatedRows = await tx.unsafe(
+      `update agent_jobs set status = 'error', error = $2, finished_at = now(), updated_at = now()
+          where id = $1 and status = 'running' returning *`,
+      [jobRows[0].id, errorText],
      );
-    if (messageRows.length > 0) notifyDbSubscribers('messages', currentMessageId ? 'UPDATE' : 'INSERT', messageRows);
+     // A deleted conversation already set the durable terminal state to
+     // cancelled. Do not overwrite it or try to append a failure notice there.
+     if (updatedRows.length === 0) return { ok: false, pending: false };
+     publish('agent_jobs', 'UPDATE', updatedRows);
+
+     // A failure is the outcome of the turn, so it broadcasts too — a channel that
+     // silently shows nothing reads as "still working" forever.
+     //
+     // Written into the LIVE row, never blindly into the dispatch placeholder: once
+     // a text block has been sealed, that placeholder is a finished message the
+     // agent actually said, and overwriting it with the error would destroy it. With
+     // no live row the notice is a new message of its own.
+     const noticeText = `${error.partialText ? error.partialText + '\n\n' : ''}@${handle} failed: ${errorText}`;
+     let messageRows = currentMessageId
+      ? await tx.unsafe(
+       `update messages set content = $2, broadcast_to_channel = $4 where id = $1 and session_id = $3 and deleted_at is null returning *`,
+       [currentMessageId, noticeText, sessionId, broadcastToChannel],
+      )
+      : await tx.unsafe(
+       `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+            values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7) returning *`,
+       [crypto.randomUUID(), sessionId, noticeText, workThreadParentId, String(agent.id), agent.name, broadcastToChannel],
+      );
+     if (!messageRows.length) {
+      messageRows = await tx.unsafe(
+       `insert into messages (id, session_id, role, content, thread_parent_id, sender_kind, sender_id, sender_name, broadcast_to_channel)
+        values ($1, $2, 'assistant', $3, $4, 'agent', $5, $6, $7) returning *`,
+       [crypto.randomUUID(), sessionId, noticeText, workThreadParentId, String(agent.id), agent.name, broadcastToChannel]);
+      if (!messageRows.length) throw new Error('Failure transcript was not written');
+      currentMessageId = null;
+     }
+     if (messageRows.length > 0) publish('messages', currentMessageId ? 'UPDATE' : 'INSERT', messageRows);
+    });
+    for (const args of events) notifyDbSubscribers(...args);
+    if (events.length) scheduleTaskQueueDrain(workspaceId, agent.id, 'builtin_error');
     return { ok: false, pending: false };
    } finally {
+    clearInterval(ownershipTimer);
     // Compare by controller as well as id: defensive against a future retry
     // path reusing this helper while an older turn unwinds its finally block.
     if (builtinAbortControllers.get(builtinJobId) === abortController) {
@@ -1137,6 +1219,7 @@ const queueService = createAgentQueueService({
      lastSeenMessageId,
      readScopeThreadParentId: threadParentId || null,
      mode: 'daemon',
+     ...(dispatchWakeId ? { dispatchWakeId } : {}),
      // Server-derived, never client-authored. New daemons use this to lower
      // Codex reasoning latency for spoken turns; keeping it durable also makes
      // the exact execution context visible if a live connection drops.
@@ -1303,7 +1386,7 @@ const queueService = createAgentQueueService({
  async function streamAnthropicTurn({
   model, messages, memory, documents, workspaceContext, agentContext,
   tools = null, maxTokens = 4096, workspaceId = null,
-  usageKind = 'builtin_turn', signal = null, voiceHuddle = false,
+  usageKind = 'builtin_turn', signal = null, voiceHuddle = false, idleMs = 120_000,
  }, onDelta) {
   throwIfAborted(signal);
   const apiKey = await getAnthropicApiKey(workspaceId);
@@ -1324,102 +1407,26 @@ const queueService = createAgentQueueService({
   // model having no tool to reach for.
   if (Array.isArray(tools) && tools.length > 0) payload.tools = tools;
 
-  // The streaming call, and the one the headers-only deadline was designed for:
-  // the timer is released as soon as headers land, so the token stream below can
-  // run for as long as the model needs.
-  const response = await sendAnthropicRequest({ apiKey, body: payload, signal });
-
-  if (!response.ok || !response.body) {
-   throw new Error(await response.text().catch(() => 'Anthropic stream failed'));
-  }
-
-  let full = '';
-  let buffer = '';
-  let stopReason = '';
-  // ONE model call is ONE usage row, and this function is called once per step of
-  // the builtin tool loop — up to BUILTIN_TOOL_LOOP_MAX_STEPS + 1 times in a
-  // single human turn. That multiplier is exactly why metering lives here rather
-  // than around the loop: recording once per turn would under-report a
-  // tool-heavy turn by up to 9x, and the tool-heavy turns are the expensive ones.
+  const bodyController = new AbortController();
+  const bodySignal = signal ? AbortSignal.any([signal, bodyController.signal]) : bodyController.signal;
   const usage = createAnthropicUsageAccumulator();
-  // Blocks are addressed by index across the whole message, and text and tool_use
-  // blocks share that numbering, so they are tracked in one map and split apart at
-  // the end rather than assumed to arrive in any particular order.
-  const blocks = new Map();
-  const decoder = new TextDecoder();
-  for await (const chunk of response.body) {
-   throwIfAborted(signal);
-   buffer += decoder.decode(chunk, { stream: true });
-   // SSE frames are separated by a blank line; each frame has a `data:` line.
-   let sep;
-   while ((sep = buffer.indexOf('\n\n')) !== -1) {
-    const frame = buffer.slice(0, sep);
-    buffer = buffer.slice(sep + 2);
-    const line = frame.split('\n').find((l) => l.startsWith('data:'));
-    if (!line) continue;
-    const data = line.slice(5).trim();
-    if (!data || data === '[DONE]') continue;
-    try {
-     const parsed = JSON.parse(data);
-     // Fed EVERY frame — the accumulator picks out message_start (input and
-     // cache tokens) and message_delta (the running output total) and ignores
-     // the rest, so no frame handler below has to know about billing.
-     usage.event(parsed);
-     if (parsed.type === 'content_block_start' && parsed.content_block?.type === 'tool_use') {
-      blocks.set(parsed.index, {
-       id: String(parsed.content_block.id || ''),
-       name: String(parsed.content_block.name || ''),
-       json: '',
-      });
-      continue;
-     }
-     if (parsed.type === 'content_block_delta') {
-      if (parsed.delta?.type === 'text_delta') {
-       full += parsed.delta.text || '';
-       if (onDelta) onDelta(full);
-       continue;
-      }
-      if (parsed.delta?.type === 'input_json_delta') {
-       const block = blocks.get(parsed.index);
-       if (block) block.json += parsed.delta.partial_json || '';
-      }
-      continue;
-     }
-     if (parsed.type === 'message_delta' && parsed.delta?.stop_reason) {
-      stopReason = String(parsed.delta.stop_reason);
-     }
-    } catch { /* ignore malformed chunk */ }
+  try {
+   const response = await sendAnthropicRequest({ apiKey, body: payload, signal: bodySignal });
+   if (!response.ok || !response.body) {
+    bodyController.abort();
+    throw new Error(`Anthropic request failed: HTTP ${response.status}`);
    }
+   return await readAnthropicStream(response.body, {
+    signal: bodySignal, onDelta, usage, idleMs,
+    abort: error => bodyController.abort(error),
+   });
+  } finally {
+   // Includes body errors and cancellation after usage has been reported.
+   bodyController.abort();
+   await recordAnthropicUsage(dbQuery, {
+    workspaceId, model: resolvedModel, kind: usageKind, counts: usage.result(),
+   });
   }
-
-  const toolUses = [];
-  for (const index of [...blocks.keys()].sort((a, b) => a - b)) {
-   const block = blocks.get(index);
-   if (!block.name) continue; // a tool_use block with no tool is not a call
-   const raw = block.json.trim();
-   let input = {};
-   let inputError = '';
-   if (raw) {
-    try {
-     const parsed = JSON.parse(raw);
-     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) input = parsed;
-     else inputError = 'Tool arguments must be a JSON object.';
-    } catch {
-     inputError = 'Tool arguments were not valid JSON.';
-    }
-   }
-   toolUses.push({ id: block.id, name: block.name, input, inputError });
-  }
-  // Recorded after the stream drains, so a turn that is cut off mid-flight still
-  // books the tokens it had already reported rather than nothing.
-  await recordAnthropicUsage(dbQuery, {
-   workspaceId,
-   model: resolvedModel,
-   kind: usageKind,
-   counts: usage.result(),
-  });
-  throwIfAborted(signal);
-  return { text: full, toolUses, stopReason };
  }
 
  return {

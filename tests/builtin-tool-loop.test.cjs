@@ -80,7 +80,13 @@ const AGENT_ROW = {
 
 test('live huddle builtin requests disable Anthropic thinking, ordinary turns do not', async () => {
   const requests = [];
+  const unexpectedQueueCall = () => { throw new Error('voice streaming must not invoke queue controls'); };
   const turn = createBuiltinTurn({
+    getDb: unexpectedQueueCall,
+    recordAudit: unexpectedQueueCall,
+    drainAgentTaskQueue: unexpectedQueueCall,
+    drainPendingChatTurn: unexpectedQueueCall,
+    enforceWorkspaceRole: unexpectedQueueCall,
     getAnthropicApiKey: async () => 'test-key',
     resolveAnthropicModel: (model) => model || 'claude-test',
     buildSystemPrompt: () => 'system',
@@ -89,7 +95,7 @@ test('live huddle builtin requests disable Anthropic thinking, ordinary turns do
     dbQuery: () => {},
     anthropicFetch: async (request) => {
       requests.push(request);
-      return new Response('', { status: 200 });
+      return new Response('data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\ndata: {"type":"message_stop"}\n\n', { status: 200 });
     },
   });
 
@@ -564,6 +570,7 @@ function sseBody(blocks) {
     index += 1;
   }
   frames.push({ type: 'message_delta', delta: { stop_reason: blocks.some((b) => b.name) ? 'tool_use' : 'end_turn' } });
+  frames.push({ type: 'message_stop' });
   return frames.map((f) => `event: ${f.type}\ndata: ${JSON.stringify(f)}\n\n`).join('');
 }
 
@@ -661,6 +668,7 @@ function installTurnDb({ reservationAccepted = true, agentMcpApproved = true } =
         jobs.set(job.id, job);
         return [{ ...job }];
       }
+      if (n.startsWith('select status from agent_jobs')) return jobs.has(params[0]) ? [{ status: jobs.get(params[0]).status }] : [];
       if (n.startsWith('update agent_jobs')) {
         const job = jobs.get(params[0]);
         if (!job) return [];

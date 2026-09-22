@@ -72,7 +72,7 @@ function render(tasks: Task[]) {
       agentConnections: [],
       currentUserEmail: 'a@b.c',
       workspaceId: 'ws-1',
-      onCreateTask: () => { },
+      onCreateTask: () => null,
       onUpdateTask: () => { },
       onToggleStatus: () => { },
       onDeleteTask: () => { },

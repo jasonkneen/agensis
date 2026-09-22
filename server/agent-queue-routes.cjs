@@ -262,7 +262,7 @@ function createAgentQueueService({
 
 function mountAgentQueueRoutes(app, deps = {}) {
  const {
-  requireAuth, jsonError, badRequest, getDb, enforceWorkspaceRole,
+  requireAuth, jsonError, getDb, enforceWorkspaceRole,
   recordAudit, drainAgentTaskQueue, drainPendingChatTurn,
   rateLimitBlocked, agentQueueControlRateLimiter,
   onWarn = () => {},
