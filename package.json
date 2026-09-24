@@ -4,7 +4,7 @@
   "workspaces": [
     "packages/*"
   ],
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Realtime collaborative workspace for chat, documents, memory, files, and shared canvas.",
   "author": {
     "name": "Jason Kneen",
