@@ -108,14 +108,25 @@ function jsonrpcError(id, code, message, data) {
  return { jsonrpc: '2.0', id: id ?? null, error };
 }
 
+// A tool result goes straight into a model's context, so one oversized result can
+// crowd out the rest of the turn. Same ceiling the builtin loop applies, but with
+// a marker that says how much is missing and what to do about it.
+const MCP_TOOL_TEXT_MAX_CHARS = 12_000;
+
+function capToolText(text) {
+ if (text.length <= MCP_TOOL_TEXT_MAX_CHARS) return text;
+ const elided = text.length - MCP_TOOL_TEXT_MAX_CHARS;
+ return `${text.slice(0, MCP_TOOL_TEXT_MAX_CHARS)}\n[truncated: ${elided} chars elided - re-call with a narrower query]`;
+}
+
 // A tool's return value is rendered as a single text content part holding JSON.
 function toolContent(value) {
  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
- return { content: [{ type: 'text', text }] };
+ return { content: [{ type: 'text', text: capToolText(text) }] };
 }
 
 function toolError(message) {
- return { content: [{ type: 'text', text: String(message) }], isError: true };
+ return { content: [{ type: 'text', text: capToolText(String(message)) }], isError: true };
 }
 
 class ToolError extends Error { }
@@ -3339,6 +3350,7 @@ module.exports = {
  SERVER_INSTRUCTIONS,
  SERVER_NAME,
  __test: {
+  toolContent, toolError, MCP_TOOL_TEXT_MAX_CHARS,
   buildTools, ToolError, toolAllowedForIdentity, runToolForIdentity, KINDS_TO_RECORD,
   encodeCursor, decodeCursor, keysetClause, nextCursor, mcpSessionScopeSql,
  },
