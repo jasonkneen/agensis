@@ -665,11 +665,13 @@ class RealtimeManager {
     this.reconnectAttempts = 0;
     this.unavailableUntil = 0;
     this.permanentlyUnavailable = false;
-    this.flushPending();
+    // Subscribe BEFORE flushing: a queued broadcast sent ahead of its channel's
+    // subscribe frame is delivered to a server that has not yet bound the channel.
     for (const channel of this.channels) {
       channel.resubscribe();
       channel.notifyStatus('SUBSCRIBED');
     }
+    this.flushPending();
   }
 
   register(channel: LocalChannel) {
