@@ -14,7 +14,8 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { resolveAgentAvatar } from '@/lib/agentAvatars';
+import { BLOBATAR_AVATAR_PREFIX, isBlobatarAvatar, resolveAgentAvatar } from '@/lib/agentAvatars';
+import { BloubAgentFace } from './BloubAgentFace';
 import { isImageAvatar, isPetSpritesheetAvatar, renderablePetAssetUrl } from '@/lib/openpets';
 
 export interface AgentAvatarProps {
@@ -72,6 +73,13 @@ export function AgentAvatar({
   // preserves an existing marker, so renaming an agent does not silently
   // replace a previously generated identity.
   const resolved = resolveAgentAvatar(avatar, seed);
+
+  // Automatic avatars are the animated characters. The marker's slug is the
+  // stable seed, so renaming an agent does not change its face.
+  if (isBlobatarAvatar(resolved)) {
+    const markerSeed = resolved.slice(BLOBATAR_AVATAR_PREFIX.length).trim() || seed;
+    return <BloubAgentFace seed={markerSeed} className={cn('grid size-full place-items-center', className)} />;
+  }
 
   if (isPetSpritesheetAvatar(resolved)) {
     return (

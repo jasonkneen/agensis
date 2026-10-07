@@ -113,11 +113,14 @@ const VOICE_OPTION_LIMIT = 60;
 import { AGENT_ACCENT_CHOICES, DEFAULT_AGENT_ACCENT, agentAccentColor, agentAccentPaletteColor, agentAccentStyle, validAgentAccentColor } from '../../lib/agentAccent';
 import {
   AGENT_AVATAR_CHOICES,
+  BLOBATAR_AVATAR_PREFIX,
   DEFAULT_AGENT_AVATAR,
   automaticAgentAvatar,
   isAutomaticAgentAvatar,
+  isBlobatarAvatar,
   resolveAgentAvatar,
 } from '../../lib/agentAvatars';
+import { BloubAgentFace } from '../agents/BloubAgentFace';
 import { fetchFeaturedOpenPets, isImageAvatar, isPetSpritesheetAvatar, openPetAvatarSrc, renderablePetAssetUrl, type OpenPet } from '../../lib/openpets';
 import {
   AGENT_TEMPLATES,
@@ -4571,6 +4574,9 @@ function AgentAvatarPreview({ value, seed, className }: { value?: string | null;
     ? automaticAgentAvatar(seed)
     : resolveAgentAvatar(value, seed);
   const iconChoice = getAgentIconChoice(avatar);
+  if (isBlobatarAvatar(avatar)) {
+    return <BloubAgentFace seed={avatar.slice(BLOBATAR_AVATAR_PREFIX.length).trim() || String(seed || 'agent')} className={cn('grid size-full place-items-center', className)} />;
+  }
   if (isPetSpritesheetAvatar(avatar)) {
     return (
       <span className={cn('animated-pet-avatar-shell', className)}>

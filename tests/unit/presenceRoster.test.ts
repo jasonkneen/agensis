@@ -191,12 +191,14 @@ describe('presence roster: the row', () => {
     expect(agentRow.textContent).toContain('Message');
   });
 
-  it('renders the automatic Blobatar in both compact and expanded agent avatars', () => {
+  it('renders the same animated character in both compact and expanded agent avatars', () => {
     const panel = renderRoster([AGENT]);
-    const rowImage = panel!.querySelector<HTMLImageElement>('img');
-    const compactImage = document.querySelector<HTMLImageElement>('.presence-avatar-group img');
-    expect(rowImage?.src).toMatch(/^data:image\/svg\+xml/);
-    expect(compactImage?.src).toBe(rowImage?.src);
+    const rowFace = panel!.querySelector<SVGGElement>('[data-character]');
+    const compactFace = document.querySelector<SVGGElement>('.presence-avatar-group [data-character]');
+    expect(rowFace).not.toBeNull();
+    expect(compactFace).not.toBeNull();
+    // Stable seed: one agent, one face, wherever it is drawn.
+    expect(compactFace?.getAttribute('data-character')).toBe(rowFace?.getAttribute('data-character'));
   });
 
   // The squeeze: `Avatar.Root` is a flex row, and an agent used to put TWO

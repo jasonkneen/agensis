@@ -127,6 +127,8 @@ import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { useTheme } from './hooks/useTheme';
 import { useWindowManager } from './providers/WindowManagerProvider';
 import { HuddleDockHost } from './components/huddle/HuddleDockHost';
+import { BLOBATAR_AVATAR_PREFIX, isBlobatarAvatar } from './lib/agentAvatars';
+import { BloubAgentFace } from './components/agents/BloubAgentFace';
 import { DevLocalHosts } from './dev-local/DevLocalHosts';
 import { useDesktopAgentReconnect } from './hooks/useDesktopAgentReconnect';
 import { AccountScopedProviders } from './components/auth/AccountScopedProviders';
@@ -248,6 +250,9 @@ function dockChatAvatar(session: ChatSession | undefined, agents: WorkspaceAgent
 // the sidebar's spritesheet/image/fallback branches so animated pets animate and
 // missing images fall back to the chat glyph.
 function DockChatAvatar({ avatar }: { avatar: string }) {
+  if (isBlobatarAvatar(avatar)) {
+    return <BloubAgentFace seed={avatar.slice(BLOBATAR_AVATAR_PREFIX.length).trim() || 'agent'} className="grid size-6 place-items-center overflow-hidden rounded-md" />;
+  }
   if (isPetSpritesheetAvatar(avatar)) {
     return (
       <span className="animated-pet-avatar-shell size-6 rounded-md">

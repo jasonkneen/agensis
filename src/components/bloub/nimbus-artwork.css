@@ -1,0 +1,78 @@
+.nimbus-artwork .nimbus-life {
+  transform-origin: 0 90px;
+  animation: legion-nimbus-breathe 3.4s ease-in-out infinite;
+  animation-delay: var(--nimbus-phase);
+  animation-play-state: var(--nimbus-play);
+}
+.nimbus-artwork[data-expression="heureux"] .nimbus-life {
+  animation-name: legion-nimbus-hop;
+  animation-duration: 1s;
+}
+.nimbus-artwork:is([data-expression="excite"], [data-expression="hilare"]) .nimbus-life {
+  animation-name: legion-nimbus-dance;
+  animation-duration: .8s;
+}
+.nimbus-artwork[data-expression="attentif"] .nimbus-life {
+  animation-name: legion-nimbus-focus;
+  animation-duration: 2.4s;
+}
+.nimbus-artwork[data-expression="somnolent"] .nimbus-life {
+  animation-name: legion-nimbus-snooze;
+  animation-duration: 5s;
+}
+.nimbus-artwork[data-live="false"] .nimbus-life { animation: none; }
+.nimbus-artwork .part {
+  transform-origin: var(--ox) var(--oy);
+  animation: legion-nimbus-wag var(--nimbus-period) ease-in-out infinite;
+  animation-play-state: var(--nimbus-play);
+}
+.nimbus-artwork .nimbus-foot {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+.nimbus-artwork:is([data-expression="excite"], [data-expression="hilare"]) .nimbus-foot {
+  animation: legion-nimbus-step .8s ease-in-out infinite;
+  animation-delay: var(--nimbus-phase);
+  animation-play-state: var(--nimbus-play);
+}
+.nimbus-artwork .nimbus-foot-1 { animation-delay: calc(var(--nimbus-phase) - .4s); }
+.nimbus-artwork .nimbus-zzz { animation: legion-nimbus-float 3.2s ease-out infinite; animation-play-state: var(--nimbus-play); }
+.nimbus-artwork .nimbus-bang { animation: legion-nimbus-bang .6s ease-in-out infinite alternate; animation-play-state: var(--nimbus-play); }
+.nimbus-artwork :is(.nimbus-thinking, .nimbus-spark) { animation: legion-nimbus-dot 1.2s ease-in-out infinite; animation-play-state: var(--nimbus-play); }
+.nimbus-artwork .nimbus-tear { animation: legion-nimbus-tear 2.2s ease-in infinite; animation-play-state: var(--nimbus-play); }
+@keyframes legion-nimbus-breathe {
+  0%, 100% { transform: scale(1, 1); }
+  50% { transform: scale(1.018, .972); }
+}
+@keyframes legion-nimbus-hop {
+  0%, 100% { transform: scale(1.07, .92); }
+  18% { transform: scale(.96, 1.06); }
+  45% { transform: translateY(-29px) scale(.97, 1.05); }
+  72% { transform: scale(1.07, .92); }
+  85% { transform: scale(.99, 1.01); }
+}
+@keyframes legion-nimbus-dance {
+  0%, 100% { transform: rotate(-7deg) scale(1.04, .94); }
+  25%, 75% { transform: translateY(-17px) rotate(0deg) scale(.97, 1.05); }
+  50% { transform: rotate(7deg) scale(1.04, .94); }
+}
+@keyframes legion-nimbus-focus {
+  0%, 100% { transform: scale(1, 1); }
+  50% { transform: scale(1.018, .972); }
+}
+@keyframes legion-nimbus-snooze {
+  0%, 100% { transform: rotate(-3deg) scale(1.02, .97); }
+  50% { transform: rotate(-1deg) scale(1, 1); }
+}
+@keyframes legion-nimbus-wag {
+  0%, 100% { transform: rotate(calc(var(--s, 1) * var(--nimbus-wag) * -.4)); }
+  50% { transform: rotate(calc(var(--s, 1) * var(--nimbus-wag))); }
+}
+@keyframes legion-nimbus-step { 0%, 50%, 100% { transform: none; } 25% { transform: translateY(-5px) rotate(-8deg); } }
+@keyframes legion-nimbus-float { 0% { opacity: 0; transform: translateY(6px); } 20% { opacity: 1; } 100% { opacity: 0; transform: translate(8px, -25px); } }
+@keyframes legion-nimbus-bang { from { transform: translateY(0) rotate(-5deg); } to { transform: translateY(-6px) rotate(5deg); } }
+@keyframes legion-nimbus-dot { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+@keyframes legion-nimbus-tear { 0% { opacity: 0; transform: translateY(0); } 20% { opacity: 1; } 100% { opacity: 0; transform: translateY(30px); } }
+@media (prefers-reduced-motion: reduce) {
+  .nimbus-artwork .part, .nimbus-artwork .nimbus-life, .nimbus-artwork .nimbus-foot, .nimbus-artwork .nimbus-effects > * { animation: none; }
+}
