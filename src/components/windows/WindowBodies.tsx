@@ -20,7 +20,6 @@ import { useCallback, useMemo, type ComponentProps } from 'react';
 import { ChatWindowContent } from './ChatWindowContent';
 import { DocWindowContent } from './DocWindowContent';
 import { AppletDocWindowContent } from './AppletDocWindowContent';
-import { TasksWindowContent } from './TasksWindowContent';
 import { APPLETS_FOLDER } from '../../lib/canvasApps';
 import type { SendMessageResult } from '../../hooks/useChat';
 import { useSessionMessages } from '../../hooks/useSessionMessages';
@@ -218,25 +217,4 @@ export function DocWindowBody({
   return (
     <DocWindowContent {...contentProps} onDelete={handleDelete} onTitleChange={handleTitleChange} />
   );
-}
-
-export type TasksWindowBodyProps = Omit<
-  ComponentProps<typeof TasksWindowContent>,
-  'onFocusTaskConsumed'
-> & {
-  windowId: string;
-  onUpdateWindow: (id: string, updates: Partial<FloatingWindow>) => void;
-};
-
-export function TasksWindowBody({
-  windowId,
-  onUpdateWindow,
-  ...contentProps
-}: TasksWindowBodyProps) {
-  const handleFocusTaskConsumed = useCallback(
-    () => onUpdateWindow(windowId, { focusTaskId: undefined }),
-    [onUpdateWindow, windowId],
-  );
-
-  return <TasksWindowContent {...contentProps} onFocusTaskConsumed={handleFocusTaskConsumed} />;
 }

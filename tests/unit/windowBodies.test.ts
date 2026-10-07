@@ -35,9 +35,10 @@ vi.mock('../../src/components/windows/TasksWindowContent', async () => {
   return { TasksWindowContent: m(function TasksWindowContent() { counters.tasks++; return null; }) };
 });
 
-const { ChatWindowBody, DocWindowBody, TasksWindowBody } = await import(
+const { ChatWindowBody, DocWindowBody } = await import(
   '../../src/components/windows/WindowBodies'
 );
+const { TasksWindowBody } = await import('../../src/components/windows/TasksWindowBody');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

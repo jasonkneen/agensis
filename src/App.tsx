@@ -16,7 +16,7 @@ import { tipSurfaceFor } from './lib/pageTips';
 import { DIRECT_MESSAGES_FOLDER } from './lib/onboardingChecklist';
 import { WindowGroupFrame } from './components/windows/WindowGroupFrame';
 import { ChatWindowContent } from './components/windows/ChatWindowContent';
-import { ChatWindowBody, DocWindowBody, TasksWindowBody } from './components/windows/WindowBodies';
+import { ChatWindowBody, DocWindowBody } from './components/windows/WindowBodies';
 import { channelMessages } from './components/chat/channelView';
 import { MemorySection } from './components/memory/MemorySection';
 import { useDocumentLibrary, type DocumentLibrary } from './hooks/useDocumentLibrary';
@@ -173,6 +173,7 @@ const SkillsWindowContent = lazy(() => import('./components/windows/SkillsWindow
 const DocumentLibraryWindowContent = lazy(() => import('./components/windows/DocumentLibraryWindowContent').then(m => ({ default: m.DocumentLibraryWindowContent })));
 const TenantsWindowContent = lazy(() => import('./components/tenants/TenantsWindowContent').then(m => ({ default: m.TenantsWindowContent })));
 const SettingsDialog = lazy(() => import('./components/settings/SettingsDialog').then(m => ({ default: m.SettingsDialog })));
+const TasksWindowBody = lazy(() => import('./components/windows/TasksWindowBody').then(m => ({ default: m.TasksWindowBody })));
 const InboxWindowContent = lazy(() => import('./components/inbox/InboxWindowContent').then(m => ({ default: m.InboxWindowContent })));
 
 const TOUR_KEY = 'agensis_tour_complete';
@@ -3743,25 +3744,27 @@ function CanvasLayerScene({
               titleIcon={<CheckCircle2 size={13} />}
               breadcrumb={workspaceName}
             >
-              <TasksWindowBody
-                windowId={win.id}
-                onUpdateWindow={onUpdateWindow}
-                tasks={tasks}
-                members={members}
-                agents={agents}
-                agentConnections={agentConnections}
-                currentUserEmail={userEmail}
-                workspaceId={workspaceId}
-                currentUserId={userId}
-                onCreateTask={onCreateTask}
-                onUpdateTask={onUpdateTask}
-                onToggleStatus={onToggleTaskStatus}
-                onDeleteTask={onDeleteTask}
-                onUpdateAgent={onUpdateAgent}
-                onOpenSession={onOpenSessionById}
-                focusTaskId={win.focusTaskId}
-                onUploadFiles={onUploadFiles}
-              />
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <TasksWindowBody
+                  windowId={win.id}
+                  onUpdateWindow={onUpdateWindow}
+                  tasks={tasks}
+                  members={members}
+                  agents={agents}
+                  agentConnections={agentConnections}
+                  currentUserEmail={userEmail}
+                  workspaceId={workspaceId}
+                  currentUserId={userId}
+                  onCreateTask={onCreateTask}
+                  onUpdateTask={onUpdateTask}
+                  onToggleStatus={onToggleTaskStatus}
+                  onDeleteTask={onDeleteTask}
+                  onUpdateAgent={onUpdateAgent}
+                  onOpenSession={onOpenSessionById}
+                  focusTaskId={win.focusTaskId}
+                  onUploadFiles={onUploadFiles}
+                />
+              </Suspense>
             </FloatingWindowShell>
           );
         }
