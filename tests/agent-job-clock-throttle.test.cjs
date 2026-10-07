@@ -30,7 +30,7 @@ test('handleAgentJobDelta throttles content-free clock message rewrites', () => 
   assert.match(body, /CLOCK_MESSAGE_THROTTLE_MS/);
   assert.match(body, /lastClockAt/);
   // Must still record liveness without treating clock as content progress.
-  assert.match(body, /if \(deltaText\) nextMetadata\.lastContentAt/);
+  assert.match(body, /if \(deltaText \|\| isToolFrame\) nextMetadata\.lastContentAt/);
   // Message update is gated on the throttle flag.
   assert.match(body, /if \(responseMessageId && !skipClockMessageUpdate\)/);
 });

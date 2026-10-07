@@ -416,3 +416,43 @@ test('reapStuckAgentJobs survives a job with no started_at rather than throwing'
  // for thirty minutes", which we cannot know.
  assert.deepEqual(finalized, [{ id: 'no-start', stopReason: 'idle_timeout' }]);
 });
+
+// --- Reaper honesty + compare-and-set -----------------------------------------
+
+test('reaping an idle job never tells the human to just resend it', async () => {
+ const messageWrites = [];
+ __test.setTestDb({
+  async begin(work) { return work(this); },
+  async unsafe(sql, params) {
+   const n = String(sql).replace(/\s+/g, ' ').trim();
+   if (n.startsWith('update agent_jobs set status')) return [{ id: 'job-1' }];
+   if (n.startsWith('update messages set content')) { messageWrites.push(params[1]); return []; }
+   return [];
+  },
+ });
+ await __test.finalizeStuckJob(
+  { id: 'job-1', session_id: 's1', metadata: { handle: 'scout', responseMessageId: 'msg-1', lastTool: 'bash' } },
+  'timed out', 'idle_timeout', { requireStale: true },
+ );
+ assert.equal(messageWrites.length, 1);
+ assert.doesNotMatch(messageWrites[0], /Send again to retry/);
+ assert.match(messageWrites[0], /outcome is unknown/);
+});
+
+test('the reaper write re-checks the no-progress predicate (compare-and-set)', async () => {
+ const updates = [];
+ __test.setTestDb({
+  async begin(work) { return work(this); },
+  async unsafe(sql, params) {
+   const n = String(sql).replace(/\s+/g, ' ').trim();
+   if (n.startsWith('update agent_jobs set status')) { updates.push({ n, params }); return []; }
+   return [];
+  },
+ });
+ await __test.finalizeStuckJob({ id: 'job-1', session_id: 's1', metadata: {} }, 'timed out', 'idle_timeout', { requireStale: true });
+ await __test.finalizeStuckJob({ id: 'job-2', session_id: 's1', metadata: {} }, 'the daemon disconnected', 'connection_lost');
+ assert.match(updates[0].n, /lastContentAt/);
+ assert.equal(updates[0].params.length, 6);
+ assert.doesNotMatch(updates[1].n, /lastContentAt/, 'non-reaper callers are not gated on staleness');
+ assert.equal(updates[1].params.length, 3);
+});

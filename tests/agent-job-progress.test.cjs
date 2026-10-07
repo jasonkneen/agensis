@@ -76,7 +76,7 @@ test('lastContentAt is only recorded when a delta actually carries text', () => 
   assert.match(body, /const deltaText = textFromValue\(/);
   // Guarded on the text being non-empty — an unconditional assignment would make
   // every "Thinking Ns" tick look like progress again.
-  assert.match(body, /if \(deltaText\) nextMetadata\.lastContentAt/);
+  assert.match(body, /if \(deltaText \|\| isToolFrame\) nextMetadata\.lastContentAt/);
  // An empty heartbeat updates liveness metadata only. It must leave the latest
  // streamed response intact for a later bodyless final result.
   assert.match(body, /response = case when \$2 <> '' then \$2 else response end/);

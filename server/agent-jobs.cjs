@@ -403,7 +403,7 @@ function createAgentJobs(deps = {}) {
  // Finalize a stuck/abandoned daemon job: mark it failed and rewrite its still-
  // pending "Thinking …" placeholder with a clear message, so a chat never hangs on
  // a spinner when the daemon disconnects, crashes, or simply never answers.
- async function finalizeStuckJob(job, reason, stopReason = 'connection_lost') {
+ async function finalizeStuckJob(job, reason, stopReason = 'connection_lost', { requireStale = false } = {}) {
   const events = [];
   const publish = (...args) => events.push(args);
   let finalized = false;
@@ -431,8 +431,13 @@ function createAgentJobs(deps = {}) {
      // 'error' (not 'failed') is load-bearing — see the comment above.
      // Bind the merged OBJECT, never JSON.stringify: a stringified bind becomes a
      // jsonb string scalar and corrupts the column.
-     `update agent_jobs set status = 'error', error = $2, metadata = $3::jsonb, finished_at = now(), updated_at = now() where id = $1 and status in ('queued', 'running') returning *`,
-     [job.id, `Agent stopped responding (${reason})`, stuckMetadata],
+     // The reaper passes requireStale so a delta that landed between its select
+     // and this write (refreshing lastContentAt) is not reaped on stale data: the
+     // same no-progress predicate is re-checked here, atomically with the update.
+     `update agent_jobs set status = 'error', error = $2, metadata = $3::jsonb, finished_at = now(), updated_at = now() where id = $1 and status in ('queued', 'running')${requireStale ? ` and ${STALE_JOB_PREDICATE}` : ''} returning *`,
+     requireStale
+      ? [job.id, `Agent stopped responding (${reason})`, stuckMetadata, AGENT_JOB_IDLE_REAP_MINUTES, AGENT_JOB_HARD_CEILING_MINUTES, AGENT_JOB_FARM_CEILING_MINUTES]
+      : [job.id, `Agent stopped responding (${reason})`, stuckMetadata],
     );
     if (updated.length === 0) return; // a real result already finalized it
     // The only job-terminating path that never notified subscribers. A wedged job's
@@ -459,9 +464,16 @@ function createAgentJobs(deps = {}) {
      const stuckSentence = stuckMetadata.stopReason === 'connection_lost'
       ? ''
       : STOP_REASON_TEXT[stuckMetadata.stopReason] || '';
+     // idle_timeout and connection_lost are the server GUESSING: the daemon may
+     // still be inside a long silent tool call, so the turn may have finished or
+     // had side effects. Telling the human to resend repeats those side effects.
+     const outcomeUnknown = stuckMetadata.stopReason === 'idle_timeout' || stuckMetadata.stopReason === 'connection_lost';
+     const retryAdvice = outcomeUnknown
+      ? 'The outcome is unknown: the work may have completed or partly run. Check before sending again — if it keeps happening, reconnect the daemon from AI Agents.'
+      : 'Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.';
      const content = stuckSentence
-      ? `@${handle} stopped: ${stuckSentence}. Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`
-      : `@${handle} stopped responding (${reason}). Send again to retry — if it keeps happening, reconnect the daemon from AI Agents.`;
+      ? `@${handle} stopped: ${stuckSentence}. ${retryAdvice}`
+      : `@${handle} stopped responding (${reason}). ${retryAdvice}`;
      // Broadcast it for the same reason the reply is broadcast: the placeholder was
      // working inside a thread, and a channel that shows nothing at all after the
      // human's message reads as "still thinking" forever.
@@ -546,6 +558,19 @@ function createAgentJobs(deps = {}) {
  // extend. Matches the daemon's DEFAULT_TIMEOUT_MS (30 minutes).
  const AGENT_JOB_HARD_CEILING_MINUTES = 30;
  const AGENT_JOB_FARM_CEILING_MINUTES = 31;
+ // The no-progress predicate used as finalizeStuckJob's compare-and-set guard.
+ // Binds: $4 idle minutes, $5 hard ceiling, $6 farm ceiling. Mirrors the select
+ // in reapStuckAgentJobs; keep the two in step.
+ const STALE_JOB_PREDICATE = `(
+   ((metadata->>'mode') = 'farm' and updated_at < now() - make_interval(mins => $6::int))
+   or (
+     coalesce(metadata->>'mode', '') <> 'farm'
+     and (
+       coalesce((metadata->>'lastContentAt')::timestamptz, started_at) < now() - make_interval(mins => $4::int)
+       or started_at < now() - make_interval(mins => $5::int)
+     )
+   )
+  )`;
 
  // Backstop: time out jobs whose result/progress has gone stale.
  //
@@ -590,7 +615,7 @@ function createAgentJobs(deps = {}) {
    // past the absolute ceiling. Only started_at can tell them apart here.
    const startedAt = job.started_at ? new Date(job.started_at).getTime() : 0;
    const hitCeiling = startedAt > 0 && Date.now() - startedAt >= AGENT_JOB_HARD_CEILING_MINUTES * 60_000;
-   try { await finalizeStuckJob(job, 'timed out', hitCeiling ? 'hard_timeout' : 'idle_timeout'); } catch (error) { failures.push(error); }
+   try { await finalizeStuckJob(job, 'timed out', hitCeiling ? 'hard_timeout' : 'idle_timeout', { requireStale: true }); } catch (error) { failures.push(error); }
   }
   if (failures.length) throw new AggregateError(failures, 'Agent job reaping failed');
  }
@@ -1591,7 +1616,12 @@ function createAgentJobs(deps = {}) {
    lastDeltaAt: new Date().toISOString(),
    elapsedMs: Number(message.elapsedMs || 0),
   };
-  if (deltaText) nextMetadata.lastContentAt = nextMetadata.lastDeltaAt;
+  // A frame announcing a tool start is the agent demonstrably working (a long
+  // silent tool call is exactly what the idle reaper used to misread as dead), so
+  // it counts as progress like text does. Plain clock ticks still do not.
+  const isToolFrame = Boolean(message.toolName || message.tool_name || message.tool
+   || message.phase === 'tool_start' || message.type === 'tool_start');
+  if (deltaText || isToolFrame) nextMetadata.lastContentAt = nextMetadata.lastDeltaAt;
   // Content-free ticks are pure liveness (lastDeltaAt above). Rewriting
   // messages.content every second as "Thinking Ns" forced full-row fanout +
   // agent-status at ~1 Hz for a clock digit. Throttle display rewrites to 10s;
