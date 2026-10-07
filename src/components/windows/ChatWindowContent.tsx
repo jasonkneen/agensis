@@ -1,4 +1,5 @@
 import { useHistoryScrollAnchor } from '../../hooks/useHistoryScrollAnchor';
+import { SelectionToolbar } from '../chat/SelectionToolbar';
 import { buildChannelRoster, participantAgentKey, toPersistedParticipant } from '../../lib/sessionParticipants';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -2318,6 +2319,10 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
             </DropdownMenu>
           </div>
         </div>
+        <SelectionToolbar
+          scopeRef={shellRef}
+          onQuote={({ excerpt }) => insertComposerText(`> ${excerpt}\n\n`)}
+        />
         <MessageScrollerProvider autoScroll={autoScroll}>
           <MessageScroller className="channel-message-surface flex-1">
             {/* The rail's width comes out of the SURFACE, never out of the
@@ -3525,6 +3530,7 @@ function ChatMessageBubble({
     <UiMessage
       align="start"
       className="chat-message-row group relative flex w-full min-w-0 gap-3 px-4 py-2 pr-20"
+      data-message-id={msg.id}
       data-agent-message={isAgentMessage ? 'true' : undefined}
       data-streaming={isStreaming ? 'true' : undefined}
       data-fresh={isStreaming || isFreshMessage(msg.created_at) ? 'true' : undefined}
