@@ -98,3 +98,28 @@ test('the tool note carries efficiency guidance and stays small', () => {
   assert.match(turn.BUILTIN_TOOL_NOTE, /Be efficient: call independent tools together/);
   assert.ok(turn.BUILTIN_TOOL_NOTE.length <= 1300, `tool note is ${turn.BUILTIN_TOOL_NOTE.length} chars`);
 });
+
+test('runAnthropicCompletion bounds the body read and names phase=body', async () => {
+  const unexpected = () => { throw new Error('unexpected'); };
+  let aborted = false;
+  const turn = createBuiltinTurn({
+    getDb: unexpected, recordAudit: unexpected, drainAgentTaskQueue: unexpected,
+    drainPendingChatTurn: unexpected, enforceWorkspaceRole: unexpected,
+    getAnthropicApiKey: async () => 'k',
+    resolveAnthropicModel: (m) => m || 'claude-test',
+    buildSystemPrompt: () => 'system',
+    createAnthropicUsageAccumulator: () => ({ event: () => {}, result: () => ({}) }),
+    recordAnthropicUsage: async () => {},
+    dbQuery: () => {},
+    anthropicBodyTimeoutMs: 30,
+    anthropicFetch: async ({ signal }) => {
+      signal.addEventListener('abort', () => { aborted = true; });
+      return { ok: true, json: () => new Promise(() => {}), text: async () => '' };
+    },
+  });
+  await assert.rejects(
+    () => turn.runAnthropicCompletion({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }),
+    (error) => /phase=body/.test(error.message) && error.code === 'anthropic_body_timeout',
+  );
+  assert.equal(aborted, true, 'the connection is aborted when the body stalls');
+});

@@ -33,6 +33,7 @@ function createBuiltinTurn(deps = {}) {
  const {
   VOICE_HUDDLE_NOTE,
   anthropicFetch: injectedAnthropicFetch,
+  anthropicBodyTimeoutMs = 120_000,
   agentContextFromRow,
   agentRuntimePayload,
   buildAgentActivityDigest,
@@ -1376,13 +1377,38 @@ const queueService = createAgentQueueService({
   return [...messages.slice(0, -1), { role: last.role, content }];
  }
 
+ // The header deadline ends when headers arrive; a body that then stalls would hang
+ // the caller forever. Bound the read and abort the connection when it expires.
+ async function readBodyWithin(read, controller) {
+  let timer;
+  const expired = new Promise((_, reject) => {
+   timer = setTimeout(() => {
+    const error = Object.assign(
+     new Error(`Anthropic response failed: phase=body reason=timeout after ${anthropicBodyTimeoutMs}ms`),
+     { code: 'anthropic_body_timeout' },
+    );
+    reject(error);
+    controller.abort(error);
+   }, anthropicBodyTimeoutMs);
+  });
+  const reading = read();
+  reading.catch(() => {}); // lost the race: its abort rejection must not go unhandled
+  try {
+   return await Promise.race([reading, expired]);
+  } finally {
+   clearTimeout(timer);
+  }
+ }
+
  async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null, usageKind = 'completion', voiceHuddle = false }) {
   const apiKey = await getAnthropicApiKey(workspaceId);
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
 
   const resolvedModel = resolveAnthropicModel(model);
+  const bodyController = new AbortController();
   const response = await sendAnthropicRequest({
    apiKey,
+   signal: bodyController.signal,
    body: {
     model: resolvedModel,
     max_tokens: 4096,
@@ -1393,10 +1419,10 @@ const queueService = createAgentQueueService({
   });
 
   if (!response.ok) {
-   throw new Error(await response.text());
+   throw new Error(await readBodyWithin(() => response.text(), bodyController));
   }
 
-  const payload = await response.json();
+  const payload = await readBodyWithin(() => response.json(), bodyController);
   // Metered from the API's OWN reported usage, never estimated from the text.
   // Awaited rather than fire-and-forget so a caller's own error handling cannot
   // race the write; it cannot throw, so awaiting costs only the insert.
