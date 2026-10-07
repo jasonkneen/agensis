@@ -355,7 +355,12 @@ process.on('SIGTERM', () => process.exit(0));
     const first = await supervisor.start(options);
     assert.equal(first.adopted, undefined);
     pid = first.pid;
-    await new Promise((r) => setTimeout(r, 700)); // let it heartbeat
+    // Let it heartbeat: wait for the file rather than a fixed delay, since process
+    // start-up is slow when the whole suite runs in parallel.
+    const beatFile = path.join(home, '.agensis', 'ws-1', 'agent-1', 'heartbeat.json');
+    for (let waited = 0; !fs.existsSync(beatFile) && waited < 15_000; waited += 100) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
 
     supervisor.releaseAll(); // what a hot reload / SIGTERM does
     process.kill(pid, 0); // still alive

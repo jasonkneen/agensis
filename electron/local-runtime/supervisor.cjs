@@ -154,7 +154,7 @@ function isAgensisDaemon(pid) {
   try {
     const command = execFileSync('ps', ['-o', 'command=', '-p', String(n)], {
       encoding: 'utf8',
-      timeout: 2000,
+      timeout: 5000,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     return /agensis/i.test(command);
