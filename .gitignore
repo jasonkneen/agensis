@@ -63,3 +63,10 @@ SCRATCHPAD.md
 latest.md
 latest22.md
 *.profraw
+
+# Machine-local dev extras: plugins loaded by scripts/dev-local-plugins.mjs and
+# overlays mounted by src/dev-local/DevLocalHosts.tsx. Nothing here is shared.
+scripts/local/
+src/dev-local/*
+!src/dev-local/DevLocalHosts.tsx
+.claude-inspector/

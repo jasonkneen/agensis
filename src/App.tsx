@@ -127,6 +127,7 @@ import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { useTheme } from './hooks/useTheme';
 import { useWindowManager } from './providers/WindowManagerProvider';
 import { HuddleDockHost } from './components/huddle/HuddleDockHost';
+import { DevLocalHosts } from './dev-local/DevLocalHosts';
 import { useDesktopAgentReconnect } from './hooks/useDesktopAgentReconnect';
 import { AccountScopedProviders } from './components/auth/AccountScopedProviders';
 import { useItemPresence } from './hooks/useItemPresence';
@@ -655,6 +656,7 @@ export default function App() {
   return (
     <AccountScopedProviders accountKey={accountKey}>
       <AppContent auth={auth} />
+      <DevLocalHosts />
     </AccountScopedProviders>
   );
 }

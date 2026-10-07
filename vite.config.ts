@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { nitro } from 'nitro/vite';
 import { createRequire } from 'node:module';
+import { loadDevLocalPlugins } from './scripts/dev-local-plugins.mjs';
 
 const require = createRequire(import.meta.url);
 const pkgVersion: string = require('./package.json').version || '0.0.0';
@@ -146,6 +147,9 @@ function clientOnly(plugins: Plugin[]): Plugin[] {
   return plugins;
 }
 
+// Machine-local dev extras (scripts/local, gitignored); empty in a clean checkout.
+const devLocalPlugins = await loadDevLocalPlugins();
+
 export default defineConfig(({ command }) => ({
   define: {
     __BUILD_ID__: JSON.stringify(BUILD_ID),
@@ -277,6 +281,7 @@ export default defineConfig(({ command }) => ({
   plugins: [
     react(),
     tailwindcss(),
+    ...(command === 'serve' ? devLocalPlugins : []),
     ...clientOnly([
       emitVersionJson(),
       browserRuntimeAssets(),
