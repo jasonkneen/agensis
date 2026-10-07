@@ -2,6 +2,7 @@ import { useHistoryScrollAnchor } from '../../hooks/useHistoryScrollAnchor';
 import { SelectionToolbar } from '../chat/SelectionToolbar';
 import { ElapsedTimer } from '../chat/ElapsedTimer';
 import { CopyMessageButton } from '../chat/CopyMessageButton';
+import { DirectMessageGreeting } from '../chat/DirectMessageGreeting';
 import { buildChannelRoster, participantAgentKey, toPersistedParticipant } from '../../lib/sessionParticipants';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -2364,7 +2365,13 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                     Show {hiddenCount} earlier message{hiddenCount === 1 ? '' : 's'}
                   </button>
                 )}
-                {shownMessages.length === 0 && !clearedAt ? (
+                {shownMessages.length === 0 && !clearedAt && isDirectMessage && directAgent && !readOnly ? (
+                  <DirectMessageGreeting
+                    name={directAgent.name}
+                    avatar={agents.find(agent => agent.id === directAgent.agent_id || agent.handle === directAgent.handle)?.avatar}
+                    onPick={insertComposerText}
+                  />
+                ) : shownMessages.length === 0 && !clearedAt ? (
                   <Empty className="min-h-full border-0">
                     <EmptyHeader>
                       <EmptyMedia variant="icon">
