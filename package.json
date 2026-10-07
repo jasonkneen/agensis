@@ -143,7 +143,7 @@
     "shadcn": "^4.21.3",
     "sharp": "^0.35.5",
     "tailwindcss": "^4.3.3",
-    "typescript": "^5.9.3",
+    "typescript": "^6.0.3",
     "typescript-eslint": "^8.71.1",
     "vite": "^8.3.3",
     "vite-plugin-pwa": "^2.0.0",

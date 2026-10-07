@@ -13,6 +13,7 @@
     // bundler does, with no library build step in the loop.
     "customConditions": ["source"],
     "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
     "paths": {
       "@/*": ["./src/*"]
     },

@@ -563,38 +563,36 @@ function createAgentJobs(deps = {}) {
  // absolute stop measured from started_at, so no amount of ticking can keep a job
  // alive indefinitely. Farm coding jobs keep sharing the CLI's 30-minute budget.
  async function reapStuckAgentJobs() {
-  try {
-   const rows = await getDb().unsafe(
-    `select * from agent_jobs
-        where status = 'running'
-          and (
-            ((metadata->>'mode') = 'farm' and updated_at < now() - make_interval(mins => $3::int))
-            or (
-              coalesce(metadata->>'mode', '') <> 'farm'
-              and (
-                coalesce((metadata->>'lastContentAt')::timestamptz, started_at) < now() - make_interval(mins => $1::int)
-                or started_at < now() - make_interval(mins => $2::int)
-              )
-            )
-          )`,
-    // make_interval with an explicit ::int cast rather than building a string
-    // (`$1 || ' minutes'`). Both parse — checked against the real database, not
-    // just the mock — but this form states the parameter's type outright instead
-    // of leaving it to operator resolution, and reads as a number, which is what
-    // the constants above are.
-    [AGENT_JOB_IDLE_REAP_MINUTES, AGENT_JOB_HARD_CEILING_MINUTES, AGENT_JOB_FARM_CEILING_MINUTES],
-   );
-   const failures = [];
-   for (const job of rows) {
-    // Two different failures wear the same 'timed out' label today: a job that
-    // went SILENT (no content for AGENT_JOB_IDLE_REAP_MINUTES) and one that ran
-    // past the absolute ceiling. Only started_at can tell them apart here.
-    const startedAt = job.started_at ? new Date(job.started_at).getTime() : 0;
-    const hitCeiling = startedAt > 0 && Date.now() - startedAt >= AGENT_JOB_HARD_CEILING_MINUTES * 60_000;
-    try { await finalizeStuckJob(job, 'timed out', hitCeiling ? 'hard_timeout' : 'idle_timeout'); } catch (error) { failures.push(error); }
-   }
-   if (failures.length) throw new AggregateError(failures, 'Agent job reaping failed');
-  } catch (error) { throw error; }
+  const rows = await getDb().unsafe(
+   `select * from agent_jobs
+       where status = 'running'
+         and (
+           ((metadata->>'mode') = 'farm' and updated_at < now() - make_interval(mins => $3::int))
+           or (
+             coalesce(metadata->>'mode', '') <> 'farm'
+             and (
+               coalesce((metadata->>'lastContentAt')::timestamptz, started_at) < now() - make_interval(mins => $1::int)
+               or started_at < now() - make_interval(mins => $2::int)
+             )
+           )
+         )`,
+   // make_interval with an explicit ::int cast rather than building a string
+   // (`$1 || ' minutes'`). Both parse — checked against the real database, not
+   // just the mock — but this form states the parameter's type outright instead
+   // of leaving it to operator resolution, and reads as a number, which is what
+   // the constants above are.
+   [AGENT_JOB_IDLE_REAP_MINUTES, AGENT_JOB_HARD_CEILING_MINUTES, AGENT_JOB_FARM_CEILING_MINUTES],
+  );
+  const failures = [];
+  for (const job of rows) {
+   // Two different failures wear the same 'timed out' label today: a job that
+   // went SILENT (no content for AGENT_JOB_IDLE_REAP_MINUTES) and one that ran
+   // past the absolute ceiling. Only started_at can tell them apart here.
+   const startedAt = job.started_at ? new Date(job.started_at).getTime() : 0;
+   const hitCeiling = startedAt > 0 && Date.now() - startedAt >= AGENT_JOB_HARD_CEILING_MINUTES * 60_000;
+   try { await finalizeStuckJob(job, 'timed out', hitCeiling ? 'hard_timeout' : 'idle_timeout'); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, 'Agent job reaping failed');
  }
 
  // Finalize ONE agent job (daemon push OR MCP pull) with its result, then resume the
