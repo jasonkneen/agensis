@@ -8,7 +8,7 @@ export default tseslint.config(
   // 'dist' is root-relative in flat config, so a built library needs naming
   // separately — without 'packages/*/dist' the 91 TS rules get applied to
   // packages/ui/dist/*.d.ts the moment anyone runs `npm run ui:build`.
-  { ignores: ['dist', 'packages/*/dist/**', '.netlify/**', '.claude/**', '.worktrees/**', 'build/**', 'release/**', 'landing/**'] },
+  { ignores: ['dist', 'packages/*/dist/**', '.netlify/**', '.claude/**', '.worktrees/**', 'build/**', 'release/**', 'landing/**', 'scripts/local/**'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

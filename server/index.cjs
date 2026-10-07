@@ -10378,6 +10378,10 @@ function coreDeps() {
  };
 }
 
+// Non-fatal boot problems, surfaced by /backend/health as `degraded` detail.
+// Module scope: the runtime schema migrations record into it from outside createApp.
+const degradedDetails = {};
+
 function createApp() {
  const app = express();
  app.use(cors());
@@ -10411,8 +10415,6 @@ function createApp() {
  // lets /backend/health — registered before the gate — report "not ready" instead
  // of a green light while every other /backend route is broken.
  let runtimeSchemaError = null;
- // Non-fatal boot problems, surfaced by /backend/health as `degraded` detail.
- const degradedDetails = {};
  runtimeSchemaReady.catch((error) => { runtimeSchemaError = error; });
 
  // Identity rows corrupted by the double-encoded jsonb bind (see
