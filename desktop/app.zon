@@ -13,15 +13,28 @@
         .entry = "index.html",
         .spa_fallback = true,
         .dev = .{
+            // Vite URL is supplied at runtime by scripts/desktop-dev.mjs via
+            // VITE_DEV_SERVER_URL. The 5173 below is only a build-time default
+            // and is overridden when the launcher discovers a free port.
             .url = "http://127.0.0.1:5173/",
-            .command = .{ "npm", "--prefix", "..", "run", "dev", "--", "--host", "127.0.0.1", "--port", "5173", "--strictPort" },
+            // Vite is invoked WITHOUT --strictPort so it picks the first free
+            // port starting at 5173 (or AGENSIS_VITE_PORT). The launcher
+            // reads the actual port from Vite's stdout.
+            .command = .{ "npm", "--prefix", "..", "run", "dev", "--", "--host", "127.0.0.1", "--port", "5173", "--strictPort=false" },
             .ready_path = "/",
             .timeout_ms = 60000,
         },
     },
     .security = .{
         .navigation = .{
-            .allowed_origins = .{ "zero://app", "zero://inline", "http://127.0.0.1:5173" },
+            // Allowed origins are computed at runtime in src/main.zig. The
+            // always-on zero:// schemes ship in the binary; the dev origin
+            // (whatever port Vite picked) is added from AGENSIS_DEV_ORIGINS,
+            // a pipe-separated list set by scripts/desktop-dev.mjs.
+            //
+            // Edit this list only to add new *production* origins (e.g.
+            // app.agensis.io). Local dev ports are runtime-supplied.
+            .allowed_origins = .{ "zero://app", "zero://inline" },
             // Match the old Electron thin shell: leave the app, open the OS browser.
             .external_links = .{ .action = "open_system_browser" },
         },
