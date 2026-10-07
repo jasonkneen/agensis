@@ -3641,7 +3641,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
  }
 }
 
-.channel-message-surface [data-slot="message-scroller-content"] > :last-child .chat-message-row,
+.channel-message-surface .chat-message-row[data-fresh],
 .channel-message-surface [data-slot="message-scroller-content"] > :last-child .chat-thread-message {
  animation: chat-message-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -3651,7 +3651,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
- .channel-message-surface [data-slot="message-scroller-content"] > :last-child .chat-message-row,
+ .channel-message-surface .chat-message-row[data-fresh],
  .channel-message-surface [data-slot="message-scroller-content"] > :last-child .chat-thread-message,
  .channel-message-surface [data-slot="message-scroller-content"] > :last-child .chat-tool-steps {
   animation: none;

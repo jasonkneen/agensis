@@ -3378,6 +3378,13 @@ function ThreadReplySummaryButton({
 // same branch, so there are no pills to click.
 const NOOP_TOGGLE = () => {};
 
+/** A message that arrived in the last few seconds, not one rehydrated with the thread. */
+function isFreshMessage(createdAt: string | null | undefined): boolean {
+  if (!createdAt) return false;
+  const age = Date.now() - new Date(createdAt).getTime();
+  return age >= -5_000 && age < 10_000;
+}
+
 function ChatMessageBubble({
   msg,
   avatar,
@@ -3520,6 +3527,7 @@ function ChatMessageBubble({
       className="chat-message-row group relative flex w-full min-w-0 gap-3 px-4 py-2 pr-20"
       data-agent-message={isAgentMessage ? 'true' : undefined}
       data-streaming={isStreaming ? 'true' : undefined}
+      data-fresh={isStreaming || isFreshMessage(msg.created_at) ? 'true' : undefined}
       style={accentStyle}
     >
       <UiMessageAvatar className="chat-message-avatar mt-0.5 size-8 self-start rounded-lg bg-muted text-3xs font-semibold text-muted-foreground">
