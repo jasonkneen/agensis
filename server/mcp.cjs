@@ -1241,10 +1241,14 @@ function buildTools() {
    // Fire-and-forget: the conversation advances in the background as each agent
    // message lands and streams over realtime. Awaiting would hold the HTTP
    // response open for the entire multi-turn chain. Mirrors the dispatch route.
+   // Record who asked, so a failure of the dispatched work can be reported back
+   // to the parent. Best effort: a lookup failure must never block the dispatch.
+   const dispatchedBy = await resolveDispatchedBy(ctx, acting);
    void ctx.deps.continueConversation({
     workspaceId: ctx.identity.workspaceId,
     sessionId: channelId,
     threadParentId,
+    ...(dispatchedBy ? { dispatchedBy } : {}),
    }).catch((err) => console.error('[mcp] continueConversation failed', err));
    return { dispatched: true, message };
   },
@@ -3078,6 +3082,29 @@ async function assertChannelInWorkspace(db, channelId, identity) {
  // caller "that exists but is private" confirms the conversation exists, which
  // is most of what is being protected.
  if (!rows[0]) throw new ToolError('Channel not found in this workspace');
+}
+
+// The calling agent's own running job: `{ agentId, sessionId, jobId }`, or null
+// when the caller is not an agent mid-job (a human-driven workspace token, an
+// integration). Used as the parent link on a dispatched job.
+async function resolveDispatchedBy(ctx, actingAgent) {
+ const agentId = actingAgent
+  ? String(actingAgent.id)
+  : (ctx.identity.agentId ? String(ctx.identity.agentId) : '');
+ if (!agentId) return null;
+ try {
+  const rows = await ctx.db.unsafe(
+   `select id, session_id from agent_jobs
+     where workspace_id = $1 and agent_id = $2 and status = 'running'
+     order by started_at desc nulls last, created_at desc
+     limit 1`,
+   [ctx.identity.workspaceId, agentId],
+  );
+  if (!rows.length) return null;
+  return { agentId, sessionId: rows[0].session_id ? String(rows[0].session_id) : null, jobId: String(rows[0].id) };
+ } catch {
+  return null;
+ }
 }
 
 async function insertAgentMessage(ctx, channelId, content, threadParentId, actingAgent = null, broadcastToChannel = false) {

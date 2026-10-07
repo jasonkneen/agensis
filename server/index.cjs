@@ -3015,7 +3015,12 @@ ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_
         WHERE status IN ('queued','running');
     `);
  } catch (error) {
-  console.warn('[backend] agent_jobs active-job unique index migration failed:', error.message || error);
+  // Boot continues (hasActiveBurstJob keeps the one-active-job rule per process),
+  // but cross-instance duplicate turns are possible until the index exists, so
+  // this must be visible: loud log here, `degraded` detail on /backend/health.
+  const detail = error.message || String(error);
+  console.error('[backend] DEGRADED: agent_jobs active-job unique index migration failed — duplicate turns across instances are possible:', detail);
+  degradedDetails.agentJobsActiveIndex = detail;
  }
 
  // tasks.origin_job_id — the runtime mirror of the block in
@@ -7610,6 +7615,9 @@ async function continueConversation({
  broadcastToChannel = null,
  targetAgentId = null,
  dispatchWakeId = null,
+ // The dispatching agent (agentId, sessionId, jobId), recorded on the first job
+ // this turn creates so a failure can be reported back to that parent.
+ dispatchedBy = null,
 }) {
  if (dispatchWakeId) {
   const handedOff = await getDb().unsafe("select id from agent_jobs where metadata->>'dispatchWakeId' = $1 limit 1", [dispatchWakeId]);
@@ -7960,8 +7968,11 @@ async function continueConversation({
     .filter((agent) => String(agent.id) !== String(nextAgent.id))
     .map((agent) => ({ handle: slugHandle(agent.handle || agent.name), name: agent.name }));
 
-   const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants, isDirectMessage, broadcastToChannel, dispatchWakeId });
+   const result = await runAgentTurn(nextAgent, { workspaceId, sessionId, threadParentId, coParticipants, isDirectMessage, broadcastToChannel, dispatchWakeId, dispatchedBy });
    if (result && result.ok) started = true;
+   // Only the first job belongs to the dispatching parent; later turns in the
+   // loop are other agents answering each other.
+   if (dispatchedBy && started) dispatchedBy = null;
    // The first accepted job owns the wake identity. Preserve normal builtin
    // conversation continuation without assigning that identity to another job.
    if (dispatchWakeId && started) dispatchWakeId = null;
@@ -10400,6 +10411,8 @@ function createApp() {
  // lets /backend/health — registered before the gate — report "not ready" instead
  // of a green light while every other /backend route is broken.
  let runtimeSchemaError = null;
+ // Non-fatal boot problems, surfaced by /backend/health as `degraded` detail.
+ const degradedDetails = {};
  runtimeSchemaReady.catch((error) => { runtimeSchemaError = error; });
 
  // Identity rows corrupted by the double-encoded jsonb bind (see
@@ -10417,6 +10430,7 @@ function createApp() {
  mountHealthRoutes(app, {
   ...coreDeps(), cspReportRateLimiter,
   getRuntimeSchemaError: () => runtimeSchemaError,
+  getDegradedDetails: () => degradedDetails,
  });
 
  mountFarmRoutes(app, { ...coreDeps(), cancelFarmAgentJob, createAgentConnectToken, createPostgresFarmIntegrationStore, disableFarmIntegrationAgents, disconnectAgentDaemons, dispatchFarmAgentJob, farmDeviceRateLimiter, getFarmAgentJob, getFarmIntegrationCore, hashAgentToken, isConnectionSocketLive, normalizeAgentBackendBaseUrl, normalizeAgentPermissionMode, normalizeBaseUrl, publicAgentConnection, publicFarmEnrolledAgent, requestBaseUrl });

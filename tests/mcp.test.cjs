@@ -712,6 +712,25 @@ test('dispatch_agent inserts AND fires continueConversation (the trigger path)',
   assert.deepEqual(continueCalls[0], { workspaceId: WS, sessionId: 'ch-1', threadParentId: null });
 });
 
+test('dispatch_agent records the calling agent\'s running job as dispatchedBy', async () => {
+  const db = makeDb();
+  const base = db.unsafe;
+  db.unsafe = async (sql, params = []) => {
+    if (String(sql).replace(/\s+/g, ' ').toLowerCase().includes('from agent_jobs')) {
+      return [{ id: 'job-parent', session_id: 'ch-parent' }];
+    }
+    return base(sql, params);
+  };
+  const { deps, continueCalls } = makeDeps({ db });
+  const handler = createMcpHandler(deps);
+  await call(handler, {
+    token: 'good-token',
+    body: rpc('tools/call', { name: 'dispatch_agent', arguments: { channel_id: 'ch-1', content: '@scout go' } }),
+  });
+  assert.equal(continueCalls.length, 1);
+  assert.deepEqual(continueCalls[0].dispatchedBy, { agentId: String(AGENT.agentId), sessionId: 'ch-parent', jobId: 'job-parent' });
+});
+
 test('post_message: broadcast_to_channel is ignored on a top-level (non-thread) post', async () => {
   const db = makeDb();
   const { deps } = makeDeps({ db });

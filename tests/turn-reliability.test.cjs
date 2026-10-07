@@ -50,3 +50,11 @@ test('a tool call aborted after callTool settles its chip as failed, not success
   assert.equal(results[0].outcome.ok, false);
   assert.match(results[0].outcome.error, /Interrupted/);
 });
+
+test('every job-metadata site in builtin-turn carries dispatchedBy', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '../server/builtin-turn.cjs'), 'utf8');
+  const wake = (src.match(/\.\.\.\(dispatchWakeId \? \{ dispatchWakeId \} : \{\}\),/g) || []).length;
+  const by = (src.match(/\.\.\.\(dispatchedBy \? \{ dispatchedBy \} : \{\}\),/g) || []).length;
+  assert.equal(wake, 4);
+  assert.equal(by, wake);
+});

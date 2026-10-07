@@ -480,7 +480,7 @@ const queueService = createAgentQueueService({
   }
  }
 
- async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [], isDirectMessage = false, broadcastToChannel: broadcastOverride = null, dispatchWakeId = null }) {
+ async function runAgentTurn(agent, { workspaceId, sessionId, threadParentId = null, createdBy = null, coParticipants = [], isDirectMessage = false, broadcastToChannel: broadcastOverride = null, dispatchWakeId = null, dispatchedBy = null }) {
   if (!isAgentEnabled(agent)) return { ok: false, pending: false };
   const handle = slugHandle(agent.handle || agent.name);
   const runMode = resolveRunTarget(agent);
@@ -580,6 +580,7 @@ const queueService = createAgentQueueService({
       readScopeThreadParentId: threadParentId || null,
       mode: 'mcp',
       ...(dispatchWakeId ? { dispatchWakeId } : {}),
+      ...(dispatchedBy ? { dispatchedBy } : {}),
      },
     ],
     responseMessageId,
@@ -613,6 +614,7 @@ const queueService = createAgentQueueService({
       readScopeThreadParentId: threadParentId || null,
       mode: 'mcp',
       ...(dispatchWakeId ? { dispatchWakeId } : {}),
+      ...(dispatchedBy ? { dispatchedBy } : {}),
      },
     ],
     null,
@@ -666,6 +668,7 @@ const queueService = createAgentQueueService({
      readScopeThreadParentId: threadParentId || null,
      mode: 'builtin',
      ...(dispatchWakeId ? { dispatchWakeId } : {}),
+     ...(dispatchedBy ? { dispatchedBy } : {}),
     },
    ],
    null,
@@ -1228,6 +1231,7 @@ const queueService = createAgentQueueService({
      readScopeThreadParentId: threadParentId || null,
      mode: 'daemon',
      ...(dispatchWakeId ? { dispatchWakeId } : {}),
+     ...(dispatchedBy ? { dispatchedBy } : {}),
      // Server-derived, never client-authored. New daemons use this to lower
      // Codex reasoning latency for spoken turns; keeping it durable also makes
      // the exact execution context visible if a live connection drops.
