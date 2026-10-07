@@ -400,6 +400,39 @@ function createAgentJobs(deps = {}) {
   }
  }
 
+// A child job dispatched by another agent (metadata.dispatchedBy = {agentId,
+ // sessionId, jobId}) that ends in anything but success must tell its dispatcher,
+ // otherwise the parent waits on a result that is never coming. ONE system message
+ // per child job lands in the dispatcher's session, prefixed `[child-failure:<id>]`;
+ // the insert is conditional on no such message existing, so replays, a reaper
+ // racing a result, or a retried finalization never duplicate it. Best effort.
+ async function notifyDispatcherOfFailure(job, { status = 'error', reason = '', db = null, publish = notifyDbSubscribers } = {}) {
+  try {
+   const dispatchedBy = parseJsonObject(job?.metadata).dispatchedBy;
+   const sessionId = dispatchedBy && typeof dispatchedBy === 'object' ? String(dispatchedBy.sessionId || '') : '';
+   if (!job?.id || !sessionId || status === 'done' || status === 'completed') return null;
+   const prefix = `[child-failure:${job.id}]`;
+   const handle = job.agent_handle || parseJsonObject(job.metadata).handle || 'agent';
+   const detail = String(reason || job.error || status).replace(/\s+/g, ' ').trim().slice(0, 300);
+   const content = `${prefix} @${handle} ended with status ${status}: ${detail}`;
+   const rows = await (db || getDb()).unsafe(
+    `insert into messages (session_id, role, content, sender_kind, sender_name)
+       select $1, 'assistant', $2, 'system', 'System'
+        where not exists (
+          select 1 from messages
+           where session_id = $1 and deleted_at is null and left(content, length($3)) = $3
+        )
+     returning *`,
+    [sessionId, content, prefix],
+   );
+   if (rows.length > 0) publish('messages', 'INSERT', rows);
+   return rows[0] || null;
+  } catch (error) {
+   console.error('Child failure notification failed', job?.id, error);
+   return null;
+  }
+ }
+
  // Finalize a stuck/abandoned daemon job: mark it failed and rewrite its still-
  // pending "Thinking …" placeholder with a clear message, so a chat never hangs on
  // a spinner when the daemon disconnects, crashes, or simply never answers.
@@ -497,6 +530,7 @@ function createAgentJobs(deps = {}) {
     scheduleTaskQueueDrain(job.workspace_id, job.agent_id, `job_stuck:${reason}`);
     void Promise.resolve(drainPendingChatTurn(job.session_id, job.agent_id, `job_stuck:${reason}`)).catch(error => console.error('Stuck job chat drain failed', error));
     await clearStrandedPlaceholders(job, responseMessageId);
+    await notifyDispatcherOfFailure(job, { status: 'error', reason: `stopped responding (${reason})` });
    }
   } catch (error) {
    console.error('Agent job recovery finalization failed', job.id, error);
@@ -911,6 +945,9 @@ function createAgentJobs(deps = {}) {
   // Only 'done' closes it — settleCapturedChatTask leaves an errored turn's task
   // open on purpose, so the failure stays visible in the list.
   afterDurableWrite(() => { void settleCapturedChatTask(job.id, status); });
+  if (status === 'error') {
+   afterDurableWrite(() => { void notifyDispatcherOfFailure({ ...job, metadata: mergedMetadata }, { status, reason: finalErrorText }); });
+  }
 
   // Farm-originated coding jobs are control-plane work, not chat turns. They
   // deliberately have no session and are polled through the integration API;
@@ -2149,6 +2186,7 @@ function createAgentJobs(deps = {}) {
   failConnectionJobs,
   finalizeAgentJobResult,
   finalizeStuckJob,
+  notifyDispatcherOfFailure,
   getFarmAgentJob,
   handleAgentJobDelta,
   handleAgentJobResult,
