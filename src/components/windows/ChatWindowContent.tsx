@@ -1,6 +1,7 @@
 import { useHistoryScrollAnchor } from '../../hooks/useHistoryScrollAnchor';
 import { SelectionToolbar } from '../chat/SelectionToolbar';
 import { ElapsedTimer } from '../chat/ElapsedTimer';
+import { CopyMessageButton } from '../chat/CopyMessageButton';
 import { buildChannelRoster, participantAgentKey, toPersistedParticipant } from '../../lib/sessionParticipants';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -3739,6 +3740,7 @@ function ChatMessageBubble({
               )}
             />
           )}
+          {displayContent && !isStreaming && <CopyMessageButton markdown={displayContent} />}
           {onOpenThread && (
             <Button type="button" variant="ghost" size="icon-xs" onClick={onOpenThread} disabled={isStreaming || actionBusy} aria-label={replyCount ? 'Open thread' : 'Start thread'} title={replyCount ? 'Open thread' : 'Start thread'}>
               <CornerDownRight />
