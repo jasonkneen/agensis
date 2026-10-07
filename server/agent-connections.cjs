@@ -594,6 +594,40 @@ function createAgentConnections(deps = {}) {
   return rows.length;
  }
 
+ // A daemon that restarted lost every turn it was running, but the rows still say
+ // 'running' until the ten-minute reaper notices. The register frame now carries
+ // activeJobIds (the jobs the daemon is actually executing); a running row it does
+ // not list was lost, so finalize it now through the normal path. An absent field
+ // (older daemon) means "unknown" and reconciles NOTHING. Rows younger than the
+ // grace window may have been claimed a moment ago and not yet reported.
+ const RECONCILE_GRACE_SECONDS = 15;
+ async function reconcileLostJobs(workspaceId, agentId, handle, activeJobIds) {
+  if (!Array.isArray(activeJobIds)) return [];
+  const alive = new Set(activeJobIds.map((id) => String(id)));
+  try {
+   const rows = await getDb().unsafe(
+    `select * from agent_jobs
+        where workspace_id = $1 and agent_id = $2 and status = 'running'
+          and coalesce(metadata->>'mode', 'daemon') = 'daemon'
+          and started_at < now() - make_interval(secs => $3::int)`,
+    [workspaceId, agentId, RECONCILE_GRACE_SECONDS],
+   );
+   const lost = rows.filter((job) => !alive.has(String(job.id)));
+   for (const job of lost) {
+    try {
+     await finalizeStuckJob(job, 'the daemon restarted; the turn was lost', 'connection_lost');
+    } catch (error) {
+     console.error('Lost-job reconciliation failed', job.id, error);
+    }
+   }
+   if (lost.length > 0) console.log(`[agensis] @${handle} re-registered without ${lost.length} running job(s); finalized them as lost`);
+   return lost;
+  } catch (error) {
+   console.error('Lost-job reconciliation query failed', { agentId, error });
+   return [];
+  }
+ }
+
  async function registerAgentConnection(ws, message) {
   const auth = ws.agentAuth;
   if (!auth) throw forbidden('Agent token is required');
@@ -703,6 +737,7 @@ function createAgentConnections(deps = {}) {
   if (readopted.length > 0) {
    console.log(`[agensis] @${handle} reconnected with ${readopted.length} job(s) still running; kept them alive on connection ${connectionId}`);
   }
+  await reconcileLostJobs(workspaceId, agentId, handle, message.activeJobIds);
   // The same re-adoption for tool calls parked on a human's answer — but only the
   // ones this daemon says it is STILL parked on. `permissionRequestIds` is the
   // daemon's proof that the process holding those promises survived the blip;
