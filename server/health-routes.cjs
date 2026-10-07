@@ -27,6 +27,9 @@ function mountHealthRoutes(app, deps = {}) {
   // freeze it at null and this route would report a green light forever while
   // every other /backend route was broken. Same rule as getDb in coreDeps().
   getRuntimeSchemaError,
+  // Optional getter of non-fatal boot failures. Reported but never a 503: the
+  // instance serves correctly, just with a weaker guarantee (see index.cjs M15).
+  getDegradedDetails = () => ({}),
  } = deps;
 
  app.get('/backend/health', async (_req, res) => {
@@ -39,7 +42,8 @@ function mountHealthRoutes(app, deps = {}) {
    if (runtimeSchemaError) {
     return res.status(503).json({ ok: false, schema: 'failed', error: runtimeSchemaError.message || String(runtimeSchemaError) });
    }
-   res.json({ ok: true });
+   const degraded = getDegradedDetails();
+   res.json(Object.keys(degraded).length > 0 ? { ok: true, degraded } : { ok: true });
   } catch (error) {
    jsonError(res, error.status || 500, error);
   }
