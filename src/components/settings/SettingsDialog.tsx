@@ -2,6 +2,7 @@ import { GATEWAY_PRESETS, gatewayPresetById } from '../../lib/gatewayPresets';
 
 // Keeps recharts out of the main bundle — see the note in UsageCharts.tsx.
 const UsageCharts = lazy(() => import('./UsageCharts'));
+import { onInterfaceSoundsChanged, playInterfaceSound } from '@/lib/interfaceSound';
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
@@ -373,6 +374,7 @@ function NotificationsPanel() {
   const [desktop, setDesktop] = useState(settings.notifications_desktop);
   const [agentEvents, setAgentEvents] = useState(settings.notifications_agent_events);
   const [taskReminders, setTaskReminders] = useState(settings.notifications_task_reminders);
+  const [interfaceSounds, setInterfaceSounds] = useState(settings.ui_interface_sounds);
 
   const setNotificationLevel = (next: NotificationLevel) => {
     setLevel(next);
@@ -438,6 +440,17 @@ function NotificationsPanel() {
           description="A soft chime when a notification arrives."
           checked={sound}
           onCheckedChange={checked => toggle('notifications_sound', checked)}
+        />
+        <SettingsToggleRow
+          title="Interface sounds"
+          description="A soft tap when you press buttons and switches."
+          checked={interfaceSounds}
+          onCheckedChange={checked => {
+            setSetting('ui_interface_sounds', checked);
+            setInterfaceSounds(checked);
+            onInterfaceSoundsChanged(checked);
+            if (checked) void playInterfaceSound('toggleOn');
+          }}
         />
         <SettingsToggleRow
           title="Desktop notifications"

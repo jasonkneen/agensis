@@ -79,6 +79,7 @@ import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Spinner } from '@agensis/ui/components/spinner';
 import { TooltipProvider } from '@agensis/ui/components/tooltip';
 import { Toaster } from './components/ui/sonner';
+import { InterfaceSound } from './components/common/InterfaceSound';
 import { toast } from 'sonner';
 import { AppUpdateManager } from './components/AppUpdateManager';
 import { cn } from './lib/utils';
@@ -3090,6 +3091,7 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
           waiting; closing it is the server-side dismissal. */}
       <OwnerMessageDialog />
       <Toaster />
+      <InterfaceSound />
       </PickerProvider>
       </OwnerMessageProvider>
     </TooltipProvider>
