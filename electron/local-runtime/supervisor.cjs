@@ -13,7 +13,7 @@
 // Desktop owns process lifecycle + autostart only. Job wire protocol lives in
 // the CLI — one implementation instead of a second host.
 
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -142,6 +142,27 @@ function pidAlive(pid) {
   }
 }
 
+/**
+ * Is this pid really one of our daemons? A pid recorded in a sidecar can outlive
+ * a reboot or crash and be handed to an unrelated process, which we must never
+ * adopt or signal. Unknown (no `ps`, Windows) counts as "no": the caller then
+ * respawns instead of touching a process it cannot identify.
+ */
+function isAgensisDaemon(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 1 || process.platform === 'win32') return false;
+  try {
+    const command = execFileSync('ps', ['-o', 'command=', '-p', String(n)], {
+      encoding: 'utf8',
+      timeout: 2000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return /agensis/i.test(command);
+  } catch {
+    return false;
+  }
+}
+
 function readJson(file) {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -169,9 +190,9 @@ function removeSidecar(dir) {
  * it is safe to keep: same agent, same settings, live pid, fresh heartbeat.
  * Anything doubtful returns null and the caller falls back to stop + respawn.
  */
-function findAdoptable(dir, wanted, now = Date.now()) {
+function findAdoptable(dir, wanted, now = Date.now(), isDaemon = isAgensisDaemon) {
   const sidecar = readJson(path.join(dir, SIDECAR_FILE));
-  if (!sidecar || !pidAlive(sidecar.pid)) return null;
+  if (!sidecar || !pidAlive(sidecar.pid) || !isDaemon(sidecar.pid)) return null;
   for (const key of ['baseUrl', 'runtime', 'model', 'permissionMode', 'cwd', 'tokenHash', 'workspaceId']) {
     if (String(sidecar[key] ?? '') !== String(wanted[key] ?? '')) return null;
   }
@@ -558,8 +579,8 @@ async function start(options = {}) {
 }
 
 
-async function terminatePid(pid, graceMs = 4000) {
-  if (!pidAlive(pid)) return;
+async function terminatePid(pid, graceMs = 4000, isDaemon = isAgensisDaemon) {
+  if (!pidAlive(pid) || !isDaemon(pid)) return;
   try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ }
   const deadline = Date.now() + graceMs;
   while (pidAlive(pid) && Date.now() < deadline) {
@@ -571,11 +592,15 @@ async function terminatePid(pid, graceMs = 4000) {
 }
 
 /** Stop whatever daemon a previous session recorded for this agent. */
-async function retireStaleDaemon(stateDir) {
+async function retireStaleDaemon(stateDir, isDaemon = isAgensisDaemon) {
   const sidecar = readJson(path.join(stateDir, SIDECAR_FILE));
   if (sidecar && pidAlive(sidecar.pid) && Number(sidecar.pid) !== process.pid) {
-    console.log(`[desktop-local] retiring previous daemon pid=${sidecar.pid}`);
-    await terminatePid(Number(sidecar.pid));
+    if (isDaemon(sidecar.pid)) {
+      console.log(`[desktop-local] retiring previous daemon pid=${sidecar.pid}`);
+      await terminatePid(Number(sidecar.pid), 4000, isDaemon);
+    } else {
+      console.warn(`[desktop-local] pid ${sidecar.pid} in the sidecar is not an agensis process (reused); leaving it alone`);
+    }
   }
   removeSidecar(stateDir);
 }
@@ -693,6 +718,8 @@ function releaseAll() {
 
 module.exports = {
   events,
+  retireStaleDaemon,
+  isAgensisDaemon,
   releaseAll,
   findAdoptable,
   stateDirFor,

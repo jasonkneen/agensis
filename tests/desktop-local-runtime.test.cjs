@@ -104,7 +104,7 @@ test('desktop supervisor spawns daemons that outlive it, with no pipes to die on
   assert.match(body, /detached:\s*true/);
   assert.match(body, /stdio:\s*\['ignore',\s*logFd,\s*logFd\]/);
   assert.match(body, /AGENSIS_SUPERVISOR_PID:\s*undefined/);
-  assert.doesNotMatch(body, /stdio:\s*\[[^\]]*'pipe'/);
+  assert.doesNotMatch(body, /stdio:\s*\['ignore',\s*'pipe',\s*'pipe'\]/); // the old piped daemon config
 });
 
 test('autostart store persists runtime (not harness) and migrates ACP files', () => {
@@ -296,7 +296,7 @@ function adoptFixture({ beatAgeMs = 1000, beatPid, sidecar = {}, status = 'onlin
 
 test('findAdoptable keeps a live, fresh, matching daemon', () => {
   const { dir, wanted, now } = adoptFixture();
-  assert.equal(supervisor.findAdoptable(dir, wanted, now)?.pid, process.pid);
+  assert.equal(supervisor.findAdoptable(dir, wanted, now, () => true)?.pid, process.pid);
 });
 
 test('findAdoptable refuses anything doubtful', () => {
@@ -310,10 +310,10 @@ test('findAdoptable refuses anything doubtful', () => {
     'another model': adoptFixture({ sidecar: { model: 'opus' } }),
   };
   for (const [label, { dir, wanted, now }] of Object.entries(cases)) {
-    assert.equal(supervisor.findAdoptable(dir, wanted, now), null, label);
+    assert.equal(supervisor.findAdoptable(dir, wanted, now, () => true), null, label);
   }
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'agensis-adopt-'));
-  assert.equal(supervisor.findAdoptable(empty, {}, Date.now()), null, 'no sidecar');
+  assert.equal(supervisor.findAdoptable(empty, {}, Date.now(), () => true), null, 'no sidecar');
 });
 
 test('stateDirFor matches the CLI layout and cannot escape ~/.agensis', () => {
@@ -404,5 +404,21 @@ setTimeout(() => {
     await supervisor.stopAll();
     process.env.HOME = savedHome;
     process.env.PATH = savedPath;
+  }
+});
+
+test('a reused pid is never adopted or signalled: only agensis processes are touched', { skip: process.platform === 'win32', timeout: 30_000 }, async () => {
+  const { spawn } = require('node:child_process');
+  // An unrelated process that a stale sidecar's pid now points at.
+  const bystander = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  try {
+    const { dir, wanted, now } = adoptFixture({ sidecar: { pid: bystander.pid }, beatPid: bystander.pid });
+    assert.equal(supervisor.isAgensisDaemon(bystander.pid), false);
+    assert.equal(supervisor.findAdoptable(dir, wanted, now), null, 'not adopted');
+    await supervisor.retireStaleDaemon(dir);
+    process.kill(bystander.pid, 0); // throws if it was killed
+    assert.equal(fs.existsSync(path.join(dir, 'desktop-session.json')), false, 'stale sidecar is cleaned up');
+  } finally {
+    bystander.kill('SIGKILL');
   }
 });
