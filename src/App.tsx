@@ -19,8 +19,6 @@ import { ChatWindowContent } from './components/windows/ChatWindowContent';
 import { ChatWindowBody, DocWindowBody, TasksWindowBody } from './components/windows/WindowBodies';
 import { channelMessages } from './components/chat/channelView';
 import { MemorySection } from './components/memory/MemorySection';
-import { SkillsWindowContent } from './components/windows/SkillsWindowContent';
-import { DocumentLibraryWindowContent } from './components/windows/DocumentLibraryWindowContent';
 import { useDocumentLibrary, type DocumentLibrary } from './hooks/useDocumentLibrary';
 import { countOpenTasks } from './components/windows/taskSchedule';
 import { OnboardingTour } from './components/onboarding/OnboardingTour';
@@ -35,7 +33,7 @@ import { DrawingLayer } from './components/canvas/DrawingLayer';
 import { CanvasDropZone } from './components/canvas/CanvasDropZone';
 import { CanvasSelectionLayer } from './components/canvas/CanvasSelectionLayer';
 import CanvasTemplatePicker from './components/canvas/CanvasTemplatePicker';
-import { SettingsDialog, type SettingsTabId } from './components/settings/SettingsDialog';
+import type { SettingsTabId } from './components/settings/SettingsDialog';
 import { RegistrationApprovalPopup } from './components/agents/RegistrationApprovalPopup';
 import { WebMcpBridge } from './components/webmcp/WebMcpBridge';
 import { FeedbackButton, type FeedbackHandle } from './components/feedback/FeedbackButton';
@@ -108,7 +106,6 @@ import {
   type ShowDesktopStash,
 } from './lib/showDesktop';
 import { InlineRename } from './components/common/InlineRename';
-import { TenantsWindowContent } from './components/tenants/TenantsWindowContent';
 import { useTenantAccess } from './hooks/useTenants';
 import { writeFailureNotice, type SendOutcome, type WriteFailure } from './lib/writeFeedback';
 import { useAuth } from './hooks/useAuth';
@@ -172,6 +169,10 @@ const SchedulesWindow = lazy(() => import('./components/windows/SchedulesWindow'
 const AutomationsWindowContent = lazy(() => import('./components/windows/AutomationsWindowContent').then(m => ({ default: m.AutomationsWindowContent })));
 const TerminalPanel = lazy(() => import('./components/windows/TerminalPanel').then(m => ({ default: m.TerminalPanel })));
 const BrowserPanel = lazy(() => import('./components/windows/BrowserPanel').then(m => ({ default: m.BrowserPanel })));
+const SkillsWindowContent = lazy(() => import('./components/windows/SkillsWindowContent').then(m => ({ default: m.SkillsWindowContent })));
+const DocumentLibraryWindowContent = lazy(() => import('./components/windows/DocumentLibraryWindowContent').then(m => ({ default: m.DocumentLibraryWindowContent })));
+const TenantsWindowContent = lazy(() => import('./components/tenants/TenantsWindowContent').then(m => ({ default: m.TenantsWindowContent })));
+const SettingsDialog = lazy(() => import('./components/settings/SettingsDialog').then(m => ({ default: m.SettingsDialog })));
 const InboxWindowContent = lazy(() => import('./components/inbox/InboxWindowContent').then(m => ({ default: m.InboxWindowContent })));
 
 const TOUR_KEY = 'agensis_tour_complete';
@@ -1104,6 +1105,10 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
   const [systemCapabilities, setSystemCapabilities] = useState<SystemCapabilities | null>(null);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Settings loads on first open and then stays mounted, so its close animation
+  // and in-dialog state survive; until then it costs no bundle bytes.
+  const [settingsMounted, setSettingsMounted] = useState(false);
+  if (settingsOpen && !settingsMounted) setSettingsMounted(true);
   const [settingsLayerId, setSettingsLayerId] = useState<string | null>(null);
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTabId>('general');
   const [confirmAction, setConfirmAction] = useState<{
@@ -3006,30 +3011,34 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
           onCreate={handleCreateWorkspaceSubmit}
         />
 
-        <SettingsDialog
-          open={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
-          workspace={settingsWorkspace}
-          secretsWorkspaceId={activeWorkspace?.id ?? null}
-          isWorkspaceOwner={
-            // List route projects `role` (owner/admin/…), not always `user_id`.
-            // Prefer role; fall back to user_id when a row still carries it.
-            Boolean(
-              activeWorkspace
-              && user?.id
-              && (
-                activeWorkspace.role === 'owner'
-                || (activeWorkspace.user_id && activeWorkspace.user_id === user.id)
-              ),
-            )
-          }
-          initialTab={settingsInitialTab}
-          onUpdateWorkspace={handleUpdateSettingsWorkspace}
-          workspaceName={settingsWorkspace?.name || 'Personal'}
-          userEmail={user.email || ''}
-          themeMode={themeMode}
-          onThemeChange={setTheme}
-        />
+        {settingsMounted && (
+          <Suspense fallback={null}>
+          <SettingsDialog
+            open={settingsOpen}
+            onClose={() => setSettingsOpen(false)}
+            workspace={settingsWorkspace}
+            secretsWorkspaceId={activeWorkspace?.id ?? null}
+            isWorkspaceOwner={
+              // List route projects `role` (owner/admin/…), not always `user_id`.
+              // Prefer role; fall back to user_id when a row still carries it.
+              Boolean(
+                activeWorkspace
+                && user?.id
+                && (
+                  activeWorkspace.role === 'owner'
+                  || (activeWorkspace.user_id && activeWorkspace.user_id === user.id)
+                ),
+              )
+            }
+            initialTab={settingsInitialTab}
+            onUpdateWorkspace={handleUpdateSettingsWorkspace}
+            workspaceName={settingsWorkspace?.name || 'Personal'}
+            userEmail={user.email || ''}
+            themeMode={themeMode}
+            onThemeChange={setTheme}
+          />
+          </Suspense>
+        )}
 
         <AlertDialog open={!!confirmAction} onOpenChange={(open) => !open && setConfirmAction(null)}>
           <AlertDialogContent>
@@ -3665,12 +3674,14 @@ function CanvasLayerScene({
               titleIcon={<Sparkles size={13} />}
               breadcrumb={workspaceName}
             >
-              <SkillsWindowContent
-                agents={agents}
-                agentConnections={agentConnections}
-                systemCapabilities={systemCapabilities}
-                workspaceId={workspaceId}
-              />
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <SkillsWindowContent
+                  agents={agents}
+                  agentConnections={agentConnections}
+                  systemCapabilities={systemCapabilities}
+                  workspaceId={workspaceId}
+                />
+              </Suspense>
             </FloatingWindowShell>
           );
         }
@@ -3697,13 +3708,15 @@ function CanvasLayerScene({
               titleIcon={<Library size={13} />}
               breadcrumb={workspaceName}
             >
-              <DocumentLibraryWindowContent
-                library={documentLibrary}
-                workspaceId={workspaceId}
-                focusKey={win.focusLibraryKey}
-                onFocusConsumed={() => onUpdateWindow(win.id, { focusLibraryKey: undefined })}
-                onOpenWorkspaceDocument={onOpenDocumentById}
-              />
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <DocumentLibraryWindowContent
+                  library={documentLibrary}
+                  workspaceId={workspaceId}
+                  focusKey={win.focusLibraryKey}
+                  onFocusConsumed={() => onUpdateWindow(win.id, { focusLibraryKey: undefined })}
+                  onOpenWorkspaceDocument={onOpenDocumentById}
+                />
+              </Suspense>
             </FloatingWindowShell>
           );
         }
