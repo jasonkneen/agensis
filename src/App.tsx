@@ -129,7 +129,7 @@ import { useFiles } from './hooks/useFiles';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { useTheme } from './hooks/useTheme';
 import { useWindowManager } from './providers/WindowManagerProvider';
-import { HuddleDock } from './components/huddle/HuddleDock';
+import { HuddleDockHost } from './components/huddle/HuddleDockHost';
 import { AccountScopedProviders } from './components/auth/AccountScopedProviders';
 import { useItemPresence } from './hooks/useItemPresence';
 import { useMultiplayerCursors } from './hooks/useMultiplayerCursors';
@@ -3074,7 +3074,7 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
         userId={user.id}
         contextLabel={viewedLayer.name || activeWorkspace?.name || ''}
       />
-      <HuddleDock />
+      <HuddleDockHost />
       {/* Offers a small set of agensis actions to an in-browser AI agent over
           WebMCP. Renders nothing, and no-ops entirely in browsers without
           navigator/document.modelContext. */}
