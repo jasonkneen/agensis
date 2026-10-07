@@ -1,5 +1,6 @@
 import { useHistoryScrollAnchor } from '../../hooks/useHistoryScrollAnchor';
 import { SelectionToolbar } from '../chat/SelectionToolbar';
+import { ElapsedTimer } from '../chat/ElapsedTimer';
 import { buildChannelRoster, participantAgentKey, toPersistedParticipant } from '../../lib/sessionParticipants';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -2550,6 +2551,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                   ))}
                   {'…'}
                 </span>
+                <ElapsedTimer resetKey={thinkingAgents.map(a => a.name).join('|')} className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground" />
                 {/* Stop. Driven by agent_jobs, not by the line it sits beside —
                     the "is thinking" text comes from placeholder messages,
                     which carry no job id, so there would be nothing to cancel.
@@ -2558,7 +2560,6 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                   <SessionStopButton
                     sessionId={sessionId}
                     resolveAgentName={resolveAgentName}
-                    className="ml-auto"
                   />
                 )}
               </div>
