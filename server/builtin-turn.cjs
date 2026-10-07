@@ -40,6 +40,7 @@ function createBuiltinTurn(deps = {}) {
   buildAgentTurnContextSnapshot,
   buildDaemonPrompt,
   buildSystemPrompt,
+  buildSystemPromptParts,
   callProviderOperation,
   continueConversation,
   createAnthropicUsageAccumulator,
@@ -188,6 +189,7 @@ function createBuiltinTurn(deps = {}) {
   'Never write out a tool call, its arguments, or its result as prose and continue as though it happened — a described call has not run. If you have not called it, it has not happened.',
   'Never say you have created, posted, updated or fetched anything until a tool has actually returned success for it.',
   `You get at most ${BUILTIN_TOOL_LOOP_MAX_STEPS} rounds of tool use in one turn. Work in as few as you can, and finish with a plain answer for the human.`,
+  'Be efficient: call independent tools together in one round, do not re-fetch what a result already gave you, and ask for only the fields or rows you need.',
   'If a tool returns an error, read it and either fix the arguments and retry once, or tell the human plainly what you could not do. Do not loop on the same failing call.',
  ].join('\n');
 
@@ -517,14 +519,14 @@ const queueService = createAgentQueueService({
   const agentContext = agentContextFromRow(agent, coParticipants);
   const recentActivity = await buildAgentActivityDigest(workspaceId, agent.id, sessionId);
   if (recentActivity && agentContext) {
-   agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<your_recent_activity>\nYou are one continuous agent across this workspace's channels. Recent activity in other open channels (reference it when asked what you're working on):\n${recentActivity}\n</your_recent_activity>`.trim();
+   addVolatilePrompt(agentContext, `<your_recent_activity>\nYou are one continuous agent across this workspace's channels. Recent activity in other open channels (reference it when asked what you're working on):\n${recentActivity}\n</your_recent_activity>`);
   }
   // Someone is on a voice call in this conversation, so this turn will be spoken
   // out loud. Every lane below gets the same note — builtin through the system
   // prompt, daemon/MCP/external through the daemon prompt.
   const voiceHuddle = await sessionHasLiveHuddle(sessionId);
   if (voiceHuddle && agentContext) {
-   agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<voice_huddle>\n${VOICE_HUDDLE_NOTE}\n</voice_huddle>`.trim();
+   addVolatilePrompt(agentContext, `<voice_huddle>\n${VOICE_HUDDLE_NOTE}\n</voice_huddle>`);
   }
   // The channel's house style, for every lane: builtin through the system
   // prompt, daemon/MCP/external through the daemon prompt.
@@ -536,7 +538,7 @@ const queueService = createAgentQueueService({
    agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n${sandboxSkillNote}`.trim();
   }
   if (intentNote && agentContext) {
-   agentContext.systemPrompt = `${agentContext.systemPrompt}\n\n<channel_intent>\n${intentNote}\n</channel_intent>`.trim();
+   addVolatilePrompt(agentContext, `<channel_intent>\n${intentNote}\n</channel_intent>`);
   }
 
   // If one or more MCP clients are working AS this agent (joined via the invite link and
@@ -1333,6 +1335,47 @@ const queueService = createAgentQueueService({
  // production keeps the bounded header-timeout wrapper above.
  const sendAnthropicRequest = injectedAnthropicFetch || anthropicFetch;
 
+ // Per-turn material goes in `volatilePrompt`, which buildSystemPromptParts emits
+ // AFTER everything stable — so a changing activity digest never invalidates the
+ // cached prefix. Nothing per-turn belongs in `systemPrompt`.
+ function addVolatilePrompt(agentContext, text) {
+  agentContext.volatilePrompt = agentContext.volatilePrompt ? `${agentContext.volatilePrompt}\n\n${text}` : text;
+ }
+
+ // Anthropic `system` as content blocks: the stable part carries the cache
+ // breakpoint (tools, which sit ahead of system in the prefix, are covered by it);
+ // the volatile tail does not. Falls back to one uncached block when the injected
+ // builder has no split.
+ function buildAnthropicSystem(memory, documents, workspaceContext, agentContext) {
+  const parts = typeof buildSystemPromptParts === 'function'
+   ? buildSystemPromptParts(memory, documents, workspaceContext, agentContext)
+   : { static: buildSystemPrompt(memory, documents, workspaceContext, agentContext), volatile: '' };
+  const blocks = [];
+  if (parts.static) blocks.push({ type: 'text', text: parts.static, cache_control: { type: 'ephemeral' } });
+  if (parts.volatile && parts.volatile.trim()) blocks.push({ type: 'text', text: parts.volatile });
+  return blocks.length > 0 ? blocks : buildSystemPrompt(memory, documents, workspaceContext, agentContext);
+ }
+
+ // Mark the last message's last cacheable block so each loop step reads the
+ // previous step's history from cache. Never mutates the caller's messages.
+ const CACHEABLE_BLOCK_TYPES = new Set(['text', 'tool_use', 'tool_result', 'image']);
+ function withHistoryCacheBreakpoint(messages) {
+  if (!messages.length) return messages;
+  const last = messages[messages.length - 1];
+  let content = last.content;
+  if (typeof content === 'string') {
+   if (!content) return messages;
+   content = [{ type: 'text', text: content, cache_control: { type: 'ephemeral' } }];
+  } else if (Array.isArray(content) && content.length > 0) {
+   const tail = content[content.length - 1];
+   if (!tail || typeof tail !== 'object' || !CACHEABLE_BLOCK_TYPES.has(tail.type)) return messages;
+   content = [...content.slice(0, -1), { ...tail, cache_control: { type: 'ephemeral' } }];
+  } else {
+   return messages;
+  }
+  return [...messages.slice(0, -1), { role: last.role, content }];
+ }
+
  async function runAnthropicCompletion({ model, messages, memory, documents, workspaceContext, agentContext, workspaceId = null, usageKind = 'completion', voiceHuddle = false }) {
   const apiKey = await getAnthropicApiKey(workspaceId);
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured');
@@ -1344,7 +1387,7 @@ const queueService = createAgentQueueService({
     model: resolvedModel,
     max_tokens: 4096,
     messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
-    system: buildSystemPrompt(memory, documents, workspaceContext, agentContext),
+    system: buildAnthropicSystem(memory, documents, workspaceContext, agentContext),
     ...(voiceHuddle ? { thinking: { type: 'disabled' } } : {}),
    },
   });
@@ -1403,8 +1446,8 @@ const queueService = createAgentQueueService({
    model: resolvedModel,
    max_tokens: maxTokens,
    stream: true,
-   messages: Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : [],
-   system: buildSystemPrompt(memory, documents, workspaceContext, agentContext),
+   messages: withHistoryCacheBreakpoint(Array.isArray(messages) ? messages.map((m) => ({ role: m.role, content: m.content })) : []),
+   system: buildAnthropicSystem(memory, documents, workspaceContext, agentContext),
    ...(voiceHuddle ? { thinking: { type: 'disabled' } } : {}),
   };
   // Omitted entirely when empty — an empty `tools: []` is not the same request as

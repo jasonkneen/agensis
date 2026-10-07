@@ -775,7 +775,7 @@ test('a builtin turn attaches tools, runs one, surfaces it as a chip, and answer
       'the FIRST request must carry a tools array');
     assert.ok(requests[0].body.tools.some((t) => t.name === 'read_channel'));
     assert.ok(requests[0].body.tools.every((t) => t.input_schema && typeof t.input_schema === 'object'));
-    assert.match(requests[0].body.system, /MAKE THE TOOL CALL/, 'the agent is told to call, not narrate');
+    assert.match(requests[0].body.system.map((b) => b.text).join('\n'), /MAKE THE TOOL CALL/, 'the agent is told to call, not narrate');
 
     // (b) The tool result reached the model as a tool_result block.
     const second = requests[1].body.messages;

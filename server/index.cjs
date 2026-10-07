@@ -9085,9 +9085,16 @@ async function inspectProjectPath(inputPath) {
  return result;
 }
 
-function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
+// The system prompt in two parts. `static` is identical turn over turn for a given
+// agent (identity, soul, instructions, tool note, roster, guidelines, memory) so a
+// prompt cache can hold it; `volatile` is whatever changes per turn (recent
+// activity, channel intent, voice rules, workspace snapshot, linked documents)
+// and always comes last, so a change there never invalidates the prefix.
+function buildSystemPromptParts(memory, documents, workspaceContext, agentContext) {
  const sections = [];
- const voiceHuddle = String(agentContext?.systemPrompt || '').includes('<voice_huddle>');
+ const volatile = [];
+ const voiceHuddle = String(agentContext?.systemPrompt || '').includes('<voice_huddle>')
+  || String(agentContext?.volatilePrompt || '').includes('<voice_huddle>');
  if (agentContext && (agentContext.systemPrompt || agentContext.name)) {
   if (agentContext.name) {
    sections.push(`You are "${agentContext.name}", an AI agent collaborating in a shared agensis workspace.`);
@@ -9139,7 +9146,7 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
   '- You are one of potentially many people in this workspace; speak in a way that is useful to the whole team, not just a single user.',
  );
  if (voiceHuddle) {
-  sections.push(
+  volatile.push(
    '',
    '<voice_output_rules>',
    'Speak directly to the human. Never output a mention, your own name, an "at <handle>" phrase, a speaker label, or hidden reasoning. Begin with the answer.',
@@ -9160,13 +9167,19 @@ function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
   if (workspaceContext.tools) wsBlocks.push(`# Tools and SDKs\n${workspaceContext.tools}`);
   if (workspaceContext.webhooks) wsBlocks.push(`# Agent webhooks\n${workspaceContext.webhooks}`);
   if (wsBlocks.length > 0) {
-   sections.push('', '<workspace_context>', 'The following is a snapshot of the shared workspace you are assisting in. Use it to answer grounded questions, but do not dump it verbatim unless asked.', '', wsBlocks.join('\n\n'), '</workspace_context>');
+   volatile.push('', '<workspace_context>', 'The following is a snapshot of the shared workspace you are assisting in. Use it to answer grounded questions, but do not dump it verbatim unless asked.', '', wsBlocks.join('\n\n'), '</workspace_context>');
   }
  }
 
  if (memory) sections.push('', '<user_memory>', 'Persistent facts the user has saved. Use this to personalize responses.', memory, '</user_memory>');
- if (documents) sections.push('', '<linked_documents>', 'The user has explicitly linked these documents for this message. Treat them as high-priority context.', documents, '</linked_documents>');
- return sections.join('\n');
+ if (documents) volatile.push('', '<linked_documents>', 'The user has explicitly linked these documents for this message. Treat them as high-priority context.', documents, '</linked_documents>');
+ if (agentContext?.volatilePrompt) volatile.push('', agentContext.volatilePrompt);
+ return { static: sections.join('\n'), volatile: volatile.join('\n') };
+}
+
+function buildSystemPrompt(memory, documents, workspaceContext, agentContext) {
+ const parts = buildSystemPromptParts(memory, documents, workspaceContext, agentContext);
+ return parts.volatile ? `${parts.static}\n${parts.volatile}` : parts.static;
 }
 
 function normalizeAiChatMessages(messages) {
@@ -9819,6 +9832,7 @@ const builtinTurn = createBuiltinTurn({
  buildAgentTurnContextSnapshot: (...a) => buildAgentTurnContextSnapshot(...a),
  buildDaemonPrompt: (...a) => buildDaemonPrompt(...a),
  buildSystemPrompt: (...a) => buildSystemPrompt(...a),
+ buildSystemPromptParts: (...a) => buildSystemPromptParts(...a),
  callProviderOperation: (...a) => callProviderOperation(...a),
  continueConversation: (...a) => continueConversation(...a),
  createAnthropicUsageAccumulator, createBuiltinToolset, dbQuery,
@@ -11822,6 +11836,7 @@ module.exports = {
  createApp,
  __test: {
   snapshotFromChannelRows,
+  buildSystemPromptParts,
   allowLoopbackAgentDevFallback,
   appendWorkspaceAccessClause,
   assertSafeOutboundUrl,
