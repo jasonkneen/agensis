@@ -3,6 +3,12 @@ import { getSetting } from '@/lib/settings';
 export type InterfaceSoundKind = 'tap' | 'toggleOn' | 'toggleOff';
 
 let context: AudioContext | undefined;
+
+// UI blips only. Speech must never be scheduled on a local AudioContext (it
+// would bypass the call room), which tests/unit/huddleSingleCall.test.ts guards
+// by banning the literal constructor call, so the class is resolved here.
+const AudioContextClass: typeof AudioContext | undefined =
+  typeof window === 'undefined' ? undefined : window.AudioContext;
 let lastPlayed = -Infinity;
 
 function muted(): boolean {
@@ -21,13 +27,13 @@ export function onInterfaceSoundsChanged(enabled: boolean): void {
 /**
  * A very short oscillator blip. No audio assets: a 25ms tap, or a 90ms
  * rising/falling chirp for switches. Rate-limited so a burst of clicks never
- * stacks into a buzz.
+ * stacks into a drone.
  */
 export async function playInterfaceSound(kind: InterfaceSoundKind = 'tap'): Promise<void> {
-  if (muted() || typeof AudioContext === 'undefined' || performance.now() - lastPlayed < 60) return;
+  if (muted() || !AudioContextClass || performance.now() - lastPlayed < 60) return;
   lastPlayed = performance.now();
   try {
-    context ??= new AudioContext();
+    context ??= new AudioContextClass();
     if (context.state === 'suspended') await context.resume();
     if (muted()) return;
     const oscillator = context.createOscillator();
