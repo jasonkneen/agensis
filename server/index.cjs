@@ -6419,10 +6419,25 @@ async function loadChannelMessages(sessionId, threadParentId = null, limit = CHA
 // with a "[@handle]:" / "[name]:" prefix so the agent can tell who said what.
 async function buildAgentTurnContextSnapshot(sessionId, runningAgent, threadParentId = null) {
  const rows = await loadChannelMessages(sessionId, threadParentId);
+ return snapshotFromChannelRows(rows, runningAgent);
+}
+
+// A failure notice the agent posted ("@x failed: ...") is a status line for the
+// human, not something the agent said. Fed back as its own assistant text it
+// reads as precedent. Any partial answer written ahead of the notice is kept.
+const OWN_FAILURE_NOTICE_RE = /(?:^|\n\n)@[^\s:]+ failed: [\s\S]*$/;
+
+function snapshotFromChannelRows(rows, runningAgent) {
  const runningId = String(runningAgent?.id || '');
  const mapped = [];
  for (const row of rows) {
-  const text = textFromValue(row.content).trim();
+  // Tool chips are UI for the human. Replayed as assistant prose they teach the
+  // model to narrate tool calls instead of making them.
+  if (row.message_kind === 'tool_step') continue;
+  let text = textFromValue(row.content).trim();
+  if (row.sender_kind === 'agent' && String(row.sender_id || '') === runningId) {
+   text = text.replace(OWN_FAILURE_NOTICE_RE, '').trim();
+  }
   if (!text) continue;
   const isOwn = row.sender_kind === 'agent' && String(row.sender_id || '') === runningId;
   if (isOwn) {
@@ -11806,6 +11821,7 @@ module.exports = {
  startBackendServer,
  createApp,
  __test: {
+  snapshotFromChannelRows,
   allowLoopbackAgentDevFallback,
   appendWorkspaceAccessClause,
   assertSafeOutboundUrl,

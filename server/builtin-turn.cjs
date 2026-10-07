@@ -270,6 +270,11 @@ function createBuiltinTurn(deps = {}) {
      const handle = onToolStart ? await onToolStart({ name: use.name, args: use.input || {}, id: use.id }) : null;
      throwIfAborted(signal);
      outcome = await callTool({ name: use.name, args: use.input || {}, id: use.id });
+     if (signal?.aborted && onToolResult) {
+      // The call ran but the turn was stopped before its result could be used.
+      // Without this the chip never settles and reads as a success.
+      await onToolResult(handle, { ok: false, error: 'Interrupted: the turn was stopped before this result was used.' });
+     }
      throwIfAborted(signal);
      if (onToolResult) await onToolResult(handle, outcome);
     }
