@@ -807,7 +807,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
 
   const handleExportTemplate = (stored: StoredAgentTemplate) => {
     const bundle = buildAgentBundle(stored, workspaceSkillStore.skills);
-    const blob = new Blob([bundle.bytes], { type: 'application/vnd.agensis.agent-bundle' });
+    const blob = new Blob([bundle.bytes as BlobPart], { type: 'application/vnd.agensis.agent-bundle' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -907,7 +907,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
         setTemplateTransferMessage({ ok: false, text: payload.error || 'Could not open that .agn bundle.' });
         return;
       }
-      const file = new File([payload.bytes], payload.name || 'agent.agn', {
+      const file = new File([payload.bytes as BlobPart], payload.name || 'agent.agn', {
         type: 'application/vnd.agensis.agent-bundle',
       });
       void handleTemplateFile(file);

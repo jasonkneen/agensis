@@ -782,7 +782,7 @@ class RealtimeManager {
   sendBinary(data: ArrayBufferLike): boolean {
     if (this.socket?.readyState !== WebSocket.OPEN) return false;
     try {
-      this.socket.send(data);
+      this.socket.send(data as ArrayBuffer);
       return true;
     } catch {
       return false;

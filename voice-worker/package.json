@@ -12,11 +12,11 @@
     "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
-    "@livekit/agents": "1.6.1",
-    "@livekit/agents-plugin-cartesia": "1.6.1",
-    "@livekit/agents-plugin-deepgram": "1.6.1",
-    "@livekit/agents-plugin-silero": "1.6.1",
-    "@livekit/rtc-node": "0.13.33"
+    "@livekit/agents": "1.9.1",
+    "@livekit/agents-plugin-cartesia": "1.9.1",
+    "@livekit/agents-plugin-deepgram": "1.9.1",
+    "@livekit/agents-plugin-silero": "1.9.1",
+    "@livekit/rtc-node": "1.1.0"
   },
   "engines": {
     "node": ">=20"
