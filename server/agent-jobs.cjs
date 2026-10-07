@@ -404,6 +404,7 @@ function createAgentJobs(deps = {}) {
  // pending "Thinking …" placeholder with a clear message, so a chat never hangs on
  // a spinner when the daemon disconnects, crashes, or simply never answers.
  async function finalizeStuckJob(job, reason, stopReason = 'connection_lost', { requireStale = false } = {}) {
+  await flushStreamedText(job.id, { forget: true });
   const events = [];
   const publish = (...args) => events.push(args);
   let finalized = false;
@@ -1341,6 +1342,9 @@ function createAgentJobs(deps = {}) {
    await updateAgentHeartbeat(ws, { busy: false }).catch(() => { });
    return;
   }
+  // Streamed text still only in memory must reach the row first: a bodyless final
+  // result falls back to job.response.
+  await flushStreamedText(jobId, { forget: true });
   const finalized = await withCurrentDaemonJob(ws, jobId, ({ tx, job, publishAfterCommit, afterCommit }) => (
    finalizeAgentJobResult(job, {
     // Classic daemon sends `response`. Desktop ACP v0.1 mistakenly sent only
@@ -1598,6 +1602,68 @@ function createAgentJobs(deps = {}) {
   }
  }
 
+// Streaming write throttle. Each text delta used to UPDATE agent_jobs.response AND
+ // messages.content with the whole accumulated text — one pair of full-row writes
+ // per token burst. The latest text is now kept in memory and persisted at most
+ // once per STREAM_PERSIST_INTERVAL_MS (the first delta of a block writes at once so
+ // the placeholder fills quickly). Between writes the realtime fan-out still fires
+ // per delta, built from the last row the DB returned with the new content, so the
+ // browser sees the same cadence without a DB write. Pending text is always flushed
+ // by a trailing timer, before a result, and before a stuck-job finalization.
+ // State is scoped per db handle (WeakMap) so a swapped test db starts clean.
+ const STREAM_PERSIST_INTERVAL_MS = 1500;
+ const STREAM_HEARTBEAT_INTERVAL_MS = 5000;
+ const streamStatesByDb = new WeakMap();
+ function streamStates() {
+  const db = getDb();
+  let states = streamStatesByDb.get(db);
+  if (!states) { states = new Map(); streamStatesByDb.set(db, states); }
+  return states;
+ }
+
+ // Persist whatever streamed text is still only in memory for this job. Guarded on
+ // the job still running against the same placeholder, so a segment rotation or a
+ // terminal transition that already wrote the final text is never overwritten.
+ async function flushStreamedText(jobId, { forget = false } = {}) {
+  const states = streamStates();
+  const state = states.get(jobId);
+  if (!state) return;
+  if (state.timer) { clearTimeout(state.timer); state.timer = null; }
+  const text = state.pendingText;
+  state.pendingText = '';
+  if (forget) states.delete(jobId);
+  if (!text) return;
+  state.lastPersistAt = Date.now();
+  try {
+   const jobRows = await getDb().unsafe(
+    `update agent_jobs set response = $2, updated_at = now()
+      where id = $1 and status = 'running'
+        and coalesce(metadata->>'responseMessageId', '') = $3
+      returning id`,
+    [jobId, text, state.responseMessageId],
+   );
+   if (jobRows.length === 0) { states.delete(jobId); return; }
+   const rows = await getDb().unsafe(
+    `update messages set content = $2
+      where id = $1 and session_id = $3 and deleted_at is null
+      returning *`,
+    [state.responseMessageId, text, state.sessionId],
+   );
+   if (rows.length > 0) { state.lastRow = rows[0]; notifyDbSubscribers('messages', 'UPDATE', rows); }
+  } catch (error) {
+   console.error('Streamed text flush failed', jobId, error);
+  }
+ }
+
+ function armStreamFlush(jobId, state) {
+  if (state.timer) return;
+  state.timer = setTimeout(() => {
+   state.timer = null;
+   void flushStreamedText(jobId);
+  }, STREAM_PERSIST_INTERVAL_MS);
+  if (typeof state.timer.unref === 'function') state.timer.unref();
+ }
+
  async function handleAgentJobDelta(ws, message) {
   const auth = ws.agentAuth;
   if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
@@ -1635,6 +1701,19 @@ function createAgentJobs(deps = {}) {
     skipClockMessageUpdate = true;
    } else {
     nextMetadata.lastClockAt = nextMetadata.lastDeltaAt;
+   }
+  }
+  // Throttled path: persisted recently and nothing else changed, so only remember
+  // the text and fan the update out from the last known row. Voice huddles keep
+  // the per-delta path because sentence latency matters there.
+  if (deltaText && responseMessageId && metadata.voiceHuddle !== true) {
+   const state = streamStates().get(jobId);
+   if (state && state.responseMessageId === responseMessageId && state.lastRow
+    && Date.now() - state.lastPersistAt < STREAM_PERSIST_INTERVAL_MS) {
+    state.pendingText = deltaText;
+    armStreamFlush(jobId, state);
+    publishAfterCommit('messages', 'UPDATE', [{ ...state.lastRow, content: agentLiveMessageContent(message) }]);
+    return true;
    }
   }
   const deltaRows = await tx.unsafe(
@@ -1705,6 +1784,19 @@ function createAgentJobs(deps = {}) {
    );
    if (updatedRows.length > 0) {
     publishAfterCommit('messages', 'UPDATE', updatedRows);
+    if (deltaText) {
+     const states = streamStates();
+     const prior = states.get(jobId);
+     if (prior?.timer) clearTimeout(prior.timer);
+     states.set(jobId, {
+      responseMessageId: String(responseMessageId),
+      sessionId: job.session_id,
+      lastPersistAt: Date.now(),
+      pendingText: '',
+      timer: null,
+      lastRow: updatedRows[0],
+     });
+    }
     // Live huddle: push completed sentences so Cartesia can start without
     // waiting on this fanout. Gated by metadata.voiceHuddle (set at job create).
     if (deltaText && metadata.voiceHuddle === true) {
@@ -1757,7 +1849,12 @@ function createAgentJobs(deps = {}) {
   }
   return true;
   }, { allowSessionlessFarm: true });
-  if (wrote) await updateAgentHeartbeat(ws, { busy: true }).catch(() => { });
+  // The busy heartbeat is a connection-row write plus a fan-out. Once per
+  // interval is plenty: the daemon sends its own heartbeats between turns' frames.
+  if (wrote && Date.now() - (ws.lastDeltaHeartbeatAt || 0) >= STREAM_HEARTBEAT_INTERVAL_MS) {
+   ws.lastDeltaHeartbeatAt = Date.now();
+   await updateAgentHeartbeat(ws, { busy: true }).catch(() => { });
+  }
  }
 
  // The two halves of a step, normalized to one clipped line each: the tool name
@@ -1896,6 +1993,14 @@ function createAgentJobs(deps = {}) {
  // follow flow into the new one, so the turn renders as message · chips · message
  // instead of one bubble that grows.
  async function handleAgentJobSegment(ws, message) {
+  // The segment carries this block's complete text and rotates the placeholder, so
+  // any in-memory pending text for the old block is superseded, not flushed.
+  {
+   const states = streamStates();
+   const stale = states.get(String(message.jobId || ''));
+   if (stale?.timer) clearTimeout(stale.timer);
+   states.delete(String(message.jobId || ''));
+  }
   const auth = ws.agentAuth;
   if (!auth || !ws.agentConnectionId) throw forbidden('Agent is not registered');
   const jobId = String(message.jobId || '');
