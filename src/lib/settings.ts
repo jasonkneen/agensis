@@ -16,6 +16,8 @@ export interface AppSettings {
   notifications_desktop: boolean;
   notifications_agent_events: boolean;
   notifications_task_reminders: boolean;
+  /** Soft tap/toggle sounds on buttons and switches. */
+  ui_interface_sounds: boolean;
   ui_font_family: UiFontFamily;
   ui_base_font_size: number;
   ui_font_weight: number;
@@ -45,6 +47,7 @@ const DEFAULTS: AppSettings = {
   notifications_desktop: true,
   notifications_agent_events: true,
   notifications_task_reminders: false,
+  ui_interface_sounds: true,
   ui_font_family: 'bricolage',
   // Legion's medium/default scale is a 16px root. Keeping the same baseline
   // lets shared text-sm/text-xs utilities land on the same visual hierarchy;
