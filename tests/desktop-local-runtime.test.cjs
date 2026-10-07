@@ -91,17 +91,20 @@ test('pickRuntimeId accepts harness ids and pi alias', () => {
   assert.equal(supervisor.pickRuntimeId({}), 'claude');
 });
 
-test('desktop supervisor binds every child to AGENSIS_SUPERVISOR_PID', () => {
-  // Orphaned connect processes (PPID 1 after Electron force-quit) were the
-  // root of the "connection dropped mid-turn" melt: nobody read their pipes,
-  // uncaught handlers stormed at 100% CPU, and codex app-server could not
-  // handshake. The CLI watches this env var and exits when desktop dies.
+test('desktop supervisor spawns daemons that outlive it, with no pipes to die on', () => {
+  // Orphaned connect processes used to melt down (100% CPU) writing into pipes
+  // nobody read, so they were bound to the supervisor pid and died with it —
+  // which also dropped every agent on each restart and hot reload. The fix is
+  // not to chain them to us but to remove the pipe: output goes to a file, the
+  // daemon is detached, and the next launch adopts it (findAdoptable).
   const body = fs.readFileSync(
     path.join(__dirname, '../electron/local-runtime/supervisor.cjs'),
     'utf8',
   );
-  assert.match(body, /AGENSIS_SUPERVISOR_PID:\s*String\(process\.pid\)/);
-  assert.match(body, /detached:\s*false/);
+  assert.match(body, /detached:\s*true/);
+  assert.match(body, /stdio:\s*\['ignore',\s*logFd,\s*logFd\]/);
+  assert.match(body, /AGENSIS_SUPERVISOR_PID:\s*undefined/);
+  assert.doesNotMatch(body, /stdio:\s*\[[^\]]*'pipe'/);
 });
 
 test('autostart store persists runtime (not harness) and migrates ACP files', () => {
@@ -273,4 +276,106 @@ test('supervisor spawns .cmd/.bat shims through a shell, .exe directly', () => {
   assert.match(src, /windowsHide: true/);
   // Args must be quoted on the shell path.
   assert.match(src, /args\.map\(quoteWindowsShellArg\)/);
+});
+
+// ---- daemons outlive the desktop process ---------------------------------
+
+function adoptFixture({ beatAgeMs = 1000, beatPid, sidecar = {}, status = 'online' } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agensis-adopt-'));
+  const wanted = {
+    workspaceId: 'ws-1', baseUrl: 'http://127.0.0.1:3142', runtime: 'claude',
+    model: 'auto', permissionMode: 'default', cwd: '/work', tokenHash: 'abc',
+  };
+  const now = Date.now();
+  fs.writeFileSync(path.join(dir, 'desktop-session.json'), JSON.stringify({ ...wanted, pid: process.pid, ...sidecar }));
+  fs.writeFileSync(path.join(dir, 'heartbeat.json'), JSON.stringify({
+    ts: now - beatAgeMs, status, pid: beatPid ?? process.pid,
+  }));
+  return { dir, wanted, now };
+}
+
+test('findAdoptable keeps a live, fresh, matching daemon', () => {
+  const { dir, wanted, now } = adoptFixture();
+  assert.equal(supervisor.findAdoptable(dir, wanted, now)?.pid, process.pid);
+});
+
+test('findAdoptable refuses anything doubtful', () => {
+  const cases = {
+    'a stale heartbeat': adoptFixture({ beatAgeMs: 5 * 60_000 }),
+    'a heartbeat from another pid (pid reuse)': adoptFixture({ beatPid: process.pid + 1 }),
+    'a dead pid': adoptFixture({ sidecar: { pid: 2 ** 22 + 12345 }, beatPid: 2 ** 22 + 12345 }),
+    'a cleanly stopped daemon': adoptFixture({ status: 'stopped' }),
+    'a rotated token': adoptFixture({ sidecar: { tokenHash: 'different' } }),
+    'another backend': adoptFixture({ sidecar: { baseUrl: 'https://agensis-backend.fly.dev' } }),
+    'another model': adoptFixture({ sidecar: { model: 'opus' } }),
+  };
+  for (const [label, { dir, wanted, now }] of Object.entries(cases)) {
+    assert.equal(supervisor.findAdoptable(dir, wanted, now), null, label);
+  }
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'agensis-adopt-'));
+  assert.equal(supervisor.findAdoptable(empty, {}, Date.now()), null, 'no sidecar');
+});
+
+test('stateDirFor matches the CLI layout and cannot escape ~/.agensis', () => {
+  const home = '/home/u';
+  assert.equal(supervisor.stateDirFor('ws-1', 'agent-9', home), path.join(home, '.agensis', 'ws-1', 'agent-9'));
+  const evil = supervisor.stateDirFor('../..', '../etc/passwd', home);
+  assert.ok(evil.startsWith(path.join(home, '.agensis') + path.sep), evil);
+  assert.ok(!evil.split(path.sep).includes('..'));
+});
+
+test('releaseAll lets go without stopping anything', () => {
+  assert.doesNotThrow(() => supervisor.releaseAll());
+  assert.deepEqual(supervisor.listRunning(), []);
+});
+
+test('a daemon survives releaseAll and is adopted, not respawned, by the next start', { skip: process.platform === 'win32', timeout: 60_000 }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agensis-home-'));
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'agensis-bin-'));
+  // A stand-in for the CLI: heartbeats into ~/.agensis/<ws>/<agent> like the real one.
+  const fake = path.join(bin, 'agensis');
+  fs.writeFileSync(fake, `#!${process.execPath}
+const fs = require('fs'), path = require('path'), os = require('os');
+const arg = (n) => process.argv[process.argv.indexOf(n) + 1];
+const dir = path.join(os.homedir(), '.agensis', arg('--workspace'), arg('--agent'));
+fs.mkdirSync(dir, { recursive: true });
+const beat = () => fs.writeFileSync(path.join(dir, 'heartbeat.json'), JSON.stringify({ ts: Date.now(), status: 'online', pid: process.pid }));
+beat(); setInterval(beat, 200);
+console.log('registered and online');
+process.on('SIGTERM', () => process.exit(0));
+`, { mode: 0o755 });
+
+  const savedHome = process.env.HOME;
+  const savedPath = process.env.PATH;
+  process.env.HOME = home;
+  process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
+  const options = { agentId: 'agent-1', workspaceId: 'ws-1', token: 't', baseUrl: 'http://127.0.0.1:3142', runtime: 'claude', cwd: home };
+  let pid;
+  try {
+    const first = await supervisor.start(options);
+    assert.equal(first.adopted, undefined);
+    pid = first.pid;
+    await new Promise((r) => setTimeout(r, 700)); // let it heartbeat
+
+    supervisor.releaseAll(); // what a hot reload / SIGTERM does
+    process.kill(pid, 0); // still alive
+
+    const second = await supervisor.start(options);
+    assert.equal(second.adopted, true);
+    assert.equal(second.pid, pid, 'same process, not a respawn');
+    assert.equal(supervisor.status('agent-1').running, true);
+
+    // Changed settings are not adopted: the old daemon is retired.
+    supervisor.releaseAll();
+    const third = await supervisor.start({ ...options, model: 'opus' });
+    assert.notEqual(third.adopted, true);
+    assert.notEqual(third.pid, pid);
+    assert.throws(() => process.kill(pid, 0), 'old daemon was retired');
+    pid = third.pid;
+  } finally {
+    await supervisor.stopAll();
+    process.env.HOME = savedHome;
+    process.env.PATH = savedPath;
+  }
+  assert.throws(() => process.kill(pid, 0), 'stopAll stops the daemon');
 });

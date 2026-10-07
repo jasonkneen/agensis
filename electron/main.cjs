@@ -867,17 +867,29 @@ app.on('window-all-closed', () => {
 
 let runtimeTeardown = null;
 let runtimesStopped = false;
+let daemonsReleased = false;
 function tearDownLocalRuntimes() {
-  // Tear down live daemons on quit (clean). Disk autostart list is preserved
-  // so the next launch / reboot restore brings them back. The CLI also watches
-  // AGENSIS_SUPERVISOR_PID and exits if this process disappears without us
-  // getting here (force-quit / crash).
+  // A deliberate Quit stops live daemons. The disk autostart list is preserved
+  // so the next launch / reboot restore brings them back. Daemons run detached
+  // (see local-runtime/supervisor.cjs), so a crash or a signal-driven restart
+  // is NOT a stop: releaseLocalRuntimes() lets them keep their hub connection
+  // and the next launch adopts them.
+  if (daemonsReleased) return Promise.resolve();
   try {
     runtimeTeardown ||= Promise.resolve(localRuntime.stopAll()).catch(error => console.error('Runtime shutdown failed', error));
     return runtimeTeardown;
   } catch {
     // ignore teardown races
   }
+}
+
+// SIGTERM / SIGINT is how the dev launcher restarts this process and how an
+// OS shutdown asks it to leave. Neither should drop connected agents.
+function releaseLocalRuntimes() {
+  if (daemonsReleased) return;
+  daemonsReleased = true;
+  try { localRuntime.releaseAll(); } catch (error) { console.error('Runtime release failed', error); }
+  app.quit();
 }
 
 app.on('before-quit', event => {
@@ -892,18 +904,13 @@ app.on('before-quit', event => {
   }
 });
 
-// before-quit is not guaranteed on every platform path (e.g. some SIGTERM
-// routes). Belt-and-braces with the supervisor-pid watchdog in the CLI.
+// before-quit is not guaranteed on every platform path. Belt-and-braces.
 app.on('will-quit', () => {
   tearDownLocalRuntimes();
 });
 
-process.once('SIGTERM', () => {
-  tearDownLocalRuntimes();
-});
-process.once('SIGINT', () => {
-  tearDownLocalRuntimes();
-});
+process.once('SIGTERM', releaseLocalRuntimes);
+process.once('SIGINT', releaseLocalRuntimes);
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();

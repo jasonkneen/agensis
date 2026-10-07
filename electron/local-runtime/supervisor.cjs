@@ -14,6 +14,10 @@
 // the CLI — one implementation instead of a second host.
 
 const { spawn } = require('node:child_process');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const {
   resolveAgensisBinary,
   probeAgensisBinary,
@@ -69,6 +73,158 @@ function quoteWindowsShellArg(value) {
   return `"${str.replace(/(\\*)"/g, '$1$1""').replace(/(\\+)$/, '$1$1')}"`;
 }
 
+
+// ---------------------------------------------------------------------------
+// DAEMONS OUTLIVE THIS PROCESS.
+//
+// A daemon used to be a piped, non-detached child that exited the moment this
+// process did (AGENSIS_SUPERVISOR_PID watchdog) — so every desktop restart and
+// every dev hot-reload dropped every connected agent and cold-started it again.
+//
+// Now each daemon is spawned detached with stdout/stderr going to a log file in
+// its own state dir (a pipe nobody reads is what used to kill orphans), with no
+// supervisor-pid watchdog. A sidecar file records what it was started with. On
+// the next launch start() ADOPTS a daemon whose pid is alive, whose heartbeat is
+// fresh and whose settings match, instead of killing and respawning it. A clean
+// Quit still stops them (stopAll); a crash, SIGTERM or hot-reload releases them
+// (releaseAll) and they keep their hub connection across the gap.
+// ---------------------------------------------------------------------------
+
+const SIDECAR_FILE = 'desktop-session.json';
+const LOG_FILE = 'desktop-daemon.log';
+const HEARTBEAT_FILE = 'heartbeat.json';
+const ADOPT_MAX_HEARTBEAT_AGE_MS = 90_000;
+const LOG_POLL_MS = 1000;
+const EXIT_POLL_MS = 2000;
+
+// Mirrors the CLI's state.mjs safeSegment so both sides agree on the directory.
+function safeSegment(value, fallback) {
+  const cleaned = String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^[.-]+/, '')
+    .slice(0, 96);
+  return cleaned || fallback;
+}
+
+function stateDirFor(workspaceId, agentId, homedir = os.homedir()) {
+  return path.join(homedir, '.agensis', safeSegment(workspaceId, 'workspace'), safeSegment(agentId, 'agent'));
+}
+
+function hashToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex').slice(0, 32);
+}
+
+function pidAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 1) return false;
+  try {
+    process.kill(n, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+function readJson(file) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSidecar(dir, data) {
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(dir, SIDECAR_FILE), `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+  } catch {
+    // Without a sidecar the next launch simply respawns instead of adopting.
+  }
+}
+
+function removeSidecar(dir) {
+  try { fs.unlinkSync(path.join(dir, SIDECAR_FILE)); } catch { /* absent */ }
+}
+
+/**
+ * The daemon this agent already has running from a previous desktop session, if
+ * it is safe to keep: same agent, same settings, live pid, fresh heartbeat.
+ * Anything doubtful returns null and the caller falls back to stop + respawn.
+ */
+function findAdoptable(dir, wanted, now = Date.now()) {
+  const sidecar = readJson(path.join(dir, SIDECAR_FILE));
+  if (!sidecar || !pidAlive(sidecar.pid)) return null;
+  for (const key of ['baseUrl', 'runtime', 'model', 'permissionMode', 'cwd', 'tokenHash', 'workspaceId']) {
+    if (String(sidecar[key] ?? '') !== String(wanted[key] ?? '')) return null;
+  }
+  const beat = readJson(path.join(dir, HEARTBEAT_FILE));
+  if (!beat || Number(beat.pid) !== Number(sidecar.pid)) return null;
+  const age = now - Number(beat.ts || 0);
+  if (!(age >= 0 && age <= ADOPT_MAX_HEARTBEAT_AGE_MS)) return null;
+  if (String(beat.status || '') === 'stopped') return null;
+  return sidecar;
+}
+
+/** Feed new bytes appended to the daemon's log file into appendLog. */
+function startLogTail(session, onLog, { fromEnd }) {
+  const file = session.logPath;
+  if (!file) return;
+  let offset = session.logOffsetStart || 0;
+  try {
+    const size = fs.statSync(file).size;
+    if (fromEnd) {
+      offset = size;
+      const start = Math.max(0, size - 8000);
+      const fd = fs.openSync(file, 'r');
+      try {
+        const buf = Buffer.alloc(size - start);
+        fs.readSync(fd, buf, 0, buf.length, start);
+        session.lastLog = buf.toString('utf8');
+        if (/registered|authenticated|online/i.test(session.lastLog)) session.registeredHint = true;
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+  } catch {
+    // no log yet
+  }
+  const tick = () => {
+    let size;
+    try { size = fs.statSync(file).size; } catch { return; }
+    if (size < offset) offset = 0; // truncated / rotated
+    if (size === offset) return;
+    let fd;
+    try {
+      fd = fs.openSync(file, 'r');
+      const buf = Buffer.alloc(Math.min(size - offset, 256 * 1024));
+      const read = fs.readSync(fd, buf, 0, buf.length, offset);
+      offset += read;
+      appendLog(session, buf.subarray(0, read).toString('utf8'), onLog);
+    } catch {
+      // next tick
+    } finally {
+      if (fd !== undefined) try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+  };
+  session.logTimer = setInterval(tick, LOG_POLL_MS);
+  session.logTimer.unref?.();
+}
+
+function stopTimers(session) {
+  if (session.logTimer) clearInterval(session.logTimer);
+  if (session.exitTimer) clearInterval(session.exitTimer);
+  session.logTimer = null;
+  session.exitTimer = null;
+}
+
+function sessionAlive(session) {
+  if (session.adopted) return pidAlive(session.pid) && !session.exited;
+  return Boolean(session.child && session.child.exitCode === null && !session.child.killed);
+}
+
 function createSession(config, child, binary) {
   return {
     agentId: config.agentId,
@@ -81,8 +237,14 @@ function createSession(config, child, binary) {
     cwd: config.cwd || process.cwd(),
     baseUrl: config.baseUrl,
     permissionMode: config.permissionMode || 'default',
-    pid: child.pid,
-    startedAt: new Date().toISOString(),
+    pid: config.pid ?? child?.pid,
+    startedAt: config.startedAt || new Date().toISOString(),
+    adopted: Boolean(config.adopted),
+    stateDir: config.stateDir || null,
+    logPath: config.logPath || null,
+    logTimer: null,
+    exitTimer: null,
+    exited: false,
     child,
     binary,
     lastError: null,
@@ -116,9 +278,10 @@ function status(agentId) {
   const id = String(agentId || '').trim();
   const session = sessions.get(id);
   if (!session) return null;
-  const alive = Boolean(session.child && session.child.exitCode === null && !session.child.killed);
+  const alive = sessionAlive(session);
   return {
     agentId: session.agentId,
+    adopted: session.adopted,
     runtime: session.runtime,
     mode: session.mode,
     label: runtimeStatusLabel(session.runtime),
@@ -207,7 +370,29 @@ async function start(options = {}) {
   const handle = String(options.handle || '').trim();
   const name = String(options.name || handle || 'Desktop agent').trim();
 
+  const stateDir = stateDirFor(options.workspaceId, agentId);
+  const wanted = {
+    workspaceId: String(options.workspaceId),
+    baseUrl,
+    runtime,
+    model,
+    permissionMode,
+    cwd,
+    tokenHash: hashToken(options.token),
+  };
+
+  // A daemon left running by the previous desktop session (restart, crash or
+  // hot-reload) keeps its hub connection; take it over rather than replace it.
+  // A second Start for an agent this process already runs still restarts it.
+  if (!sessions.has(agentId)) {
+    const existing = findAdoptable(stateDir, wanted);
+    if (existing) return adopt(existing, { agentId, handle, name, runtime, connect, stateDir, wanted, options });
+  }
+
   await stop(agentId).catch(() => {});
+  // Settings changed (or the heartbeat went quiet): retire the old daemon so two
+  // never serve one agent. The CLI also claims the pid file, this is the tidy path.
+  await retireStaleDaemon(stateDir);
 
   const pathEnv = desktopPathEnv();
   const binary = resolveAgensisBinary({ pathEnv });
@@ -254,30 +439,38 @@ async function start(options = {}) {
   // directly, with no argument re-quoting risk.
   const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(binary.command);
 
-  const child = spawn(
-    needsShell ? quoteWindowsShellArg(binary.command) : binary.command,
-    needsShell ? args.map(quoteWindowsShellArg) : args,
-    {
-      cwd,
-      env: {
-        ...process.env,
-        PATH: pathEnv,
-        ...connect.env,
-        ELECTRON_RUN_AS_NODE: undefined,
-        // Daemon exits when this Electron process dies (CLI processGuard).
-        // Without it, a force-quit leaves hub-connected orphans that can
-        // storm at 100% CPU writing into pipes nobody reads.
-        AGENSIS_SUPERVISOR_PID: String(process.pid),
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  const logPath = path.join(stateDir, LOG_FILE);
+  const logFd = fs.openSync(logPath, 'a', 0o600);
+  const logStart = (() => { try { return fs.fstatSync(logFd).size; } catch { return 0; } })();
+
+  let child;
+  try {
+    child = spawn(
+      needsShell ? quoteWindowsShellArg(binary.command) : binary.command,
+      needsShell ? args.map(quoteWindowsShellArg) : args,
+      {
+        cwd,
+        env: {
+          ...process.env,
+          PATH: pathEnv,
+          ...connect.env,
+          ELECTRON_RUN_AS_NODE: undefined,
+          // Deliberately NOT setting AGENSIS_SUPERVISOR_PID: the daemon must
+          // outlive this process. Its own process guard still exits it on a
+          // broken console, which is why output goes to a file, not a pipe.
+          AGENSIS_SUPERVISOR_PID: undefined,
+        },
+        stdio: ['ignore', logFd, logFd],
+        detached: true,
+        shell: needsShell,
+        windowsHide: true,
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      // Keep the child in our process group so a clean desktop quit can
-      // signal the whole tree; the supervisor-pid watchdog covers the
-      // force-kill / crash case where we never get before-quit.
-      detached: false,
-      shell: needsShell,
-      windowsHide: true,
-    },
-  );
+    );
+  } finally {
+    fs.closeSync(logFd);
+  }
+  child.unref();
 
   const session = createSession(
     {
@@ -291,14 +484,15 @@ async function start(options = {}) {
       cwd,
       baseUrl,
       permissionMode,
+      stateDir,
+      logPath,
     },
     child,
     binary,
   );
   sessions.set(agentId, session);
-
-  child.stdout?.on('data', (buf) => appendLog(session, buf, options.onLog));
-  child.stderr?.on('data', (buf) => appendLog(session, buf, options.onLog));
+  session.logOffsetStart = logStart;
+  startLogTail(session, options.onLog, { fromEnd: false });
 
   child.on('error', (error) => {
     session.lastError = error?.message || String(error);
@@ -306,6 +500,7 @@ async function start(options = {}) {
   });
 
   child.on('exit', (code, signal) => {
+    stopTimers(session);
     session.exitCode = code;
     session.exitSignal = signal;
     session.pid = undefined;
@@ -328,6 +523,8 @@ async function start(options = {}) {
     throw new Error(detail);
   }
 
+  writeSidecar(stateDir, { ...wanted, pid: child.pid, agentId, startedAt: session.startedAt, logPath });
+
   return {
     ok: true,
     agentId,
@@ -342,12 +539,97 @@ async function start(options = {}) {
   };
 }
 
+
+async function terminatePid(pid, graceMs = 4000) {
+  if (!pidAlive(pid)) return;
+  try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ }
+  const deadline = Date.now() + graceMs;
+  while (pidAlive(pid) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (pidAlive(pid)) {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+  }
+}
+
+/** Stop whatever daemon a previous session recorded for this agent. */
+async function retireStaleDaemon(stateDir) {
+  const sidecar = readJson(path.join(stateDir, SIDECAR_FILE));
+  if (sidecar && pidAlive(sidecar.pid) && Number(sidecar.pid) !== process.pid) {
+    console.log(`[desktop-local] retiring previous daemon pid=${sidecar.pid}`);
+    await terminatePid(Number(sidecar.pid));
+  }
+  removeSidecar(stateDir);
+}
+
+function adopt(sidecar, { agentId, handle, name, runtime, connect, stateDir, wanted, options }) {
+  const session = createSession(
+    {
+      agentId,
+      runtime,
+      mode: connect.def.mode,
+      workspaceId: wanted.workspaceId,
+      handle,
+      name,
+      model: wanted.model,
+      cwd: wanted.cwd,
+      baseUrl: wanted.baseUrl,
+      permissionMode: wanted.permissionMode,
+      pid: Number(sidecar.pid),
+      startedAt: sidecar.startedAt,
+      adopted: true,
+      stateDir,
+      logPath: sidecar.logPath || path.join(stateDir, LOG_FILE),
+    },
+    null,
+    null,
+  );
+  session.registeredHint = true; // it was already heartbeating when we found it
+  sessions.set(agentId, session);
+  startLogTail(session, options.onLog, { fromEnd: true });
+
+  // No child handle to listen on, so watch the pid.
+  session.exitTimer = setInterval(() => {
+    if (pidAlive(session.pid)) return;
+    stopTimers(session);
+    session.exited = true;
+    session.pid = undefined;
+    if (!session.stopping) session.lastError = session.lastError || 'daemon exited';
+    console.log(`[desktop-local] exit agent=${agentId} (adopted daemon)`);
+    if (typeof options.onExit === 'function') options.onExit({ agentId, code: null, signal: null });
+  }, EXIT_POLL_MS);
+  session.exitTimer.unref?.();
+
+  console.log(`[desktop-local] adopted agent=${agentId} pid=${session.pid} runtime=${runtime}`);
+  return {
+    ok: true,
+    agentId,
+    runtime,
+    mode: connect.def.mode,
+    classicRuntime: connect.classicRuntime || null,
+    acpHarness: connect.acpHarness || null,
+    pid: session.pid,
+    baseUrl: wanted.baseUrl,
+    binarySource: null,
+    adopted: true,
+    label: runtimeStatusLabel(runtime),
+  };
+}
+
 async function stop(agentId) {
   const id = String(agentId || '').trim();
   const session = sessions.get(id);
   if (!session) return { stopped: false, agentId: id };
 
   session.stopping = true;
+  stopTimers(session);
+  if (session.adopted) {
+    await terminatePid(session.pid);
+    removeSidecar(session.stateDir);
+    sessions.delete(id);
+    console.log(`[desktop-local] stop agent=${id} (adopted daemon)`);
+    return { stopped: true, agentId: id };
+  }
   const child = session.child;
   if (child && child.exitCode === null && child.signalCode == null) {
     try {
@@ -370,6 +652,7 @@ async function stop(agentId) {
       });
     });
   }
+  removeSidecar(session.stateDir);
   sessions.delete(id);
   console.log(`[desktop-local] stop agent=${id}`);
   return { stopped: true, agentId: id };
@@ -380,7 +663,19 @@ function stopAll() {
   return Promise.all([...sessions.keys()].map(id => stop(id)));
 }
 
+/**
+ * Let go of every daemon WITHOUT stopping it: crash, SIGTERM and dev hot-reload
+ * paths. They keep running and the next launch adopts them.
+ */
+function releaseAll() {
+  for (const session of sessions.values()) stopTimers(session);
+  sessions.clear();
+}
+
 module.exports = {
+  releaseAll,
+  findAdoptable,
+  stateDirFor,
   quoteWindowsShellArg,
   listRuntimes,
   status,
