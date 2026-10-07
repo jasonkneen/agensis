@@ -6570,3 +6570,22 @@ select {
  font-size: 10px;
  color: var(--muted-foreground);
 }
+
+/* Toolbar over selected transcript text: a short lift, like a popover. */
+@keyframes selection-toolbar-in {
+ from {
+  opacity: 0;
+  transform: translateY(4px) scale(0.97);
+ }
+}
+
+.selection-toolbar {
+ animation: selection-toolbar-in 120ms cubic-bezier(0.22, 1, 0.36, 1) both;
+ transform-origin: bottom center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+ .selection-toolbar {
+  animation: none;
+ }
+}
