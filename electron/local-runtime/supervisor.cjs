@@ -18,6 +18,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 const {
   resolveAgensisBinary,
   probeAgensisBinary,
@@ -35,6 +36,20 @@ const {
 
 /** @type {Map<string, ReturnType<typeof createSession>>} */
 const sessions = new Map();
+
+/**
+ * 'auth-rejected' { agentId, handle }: the hub refused this agent's stored token
+ * (it is rotated whenever a connect command is minted anywhere else), so the
+ * daemon stopped itself. Only a signed-in renderer can mint a replacement.
+ */
+const events = new EventEmitter();
+const AUTH_REJECTED = /authentication failed|rejected this agent connection/i;
+function noteExit(session) {
+  try { session.flushLog?.(); } catch { /* best effort */ }
+  if (session.authRejected && !session.stopping) {
+    events.emit('auth-rejected', { agentId: session.agentId, handle: session.handle });
+  }
+}
 
 // child_process.spawn's shell:true does NOT escape args on Windows (Node
 // warns about this — DEP0190): it hands cmd.exe a plain space-joined command
@@ -209,6 +224,7 @@ function startLogTail(session, onLog, { fromEnd }) {
       if (fd !== undefined) try { fs.closeSync(fd); } catch { /* ignore */ }
     }
   };
+  session.flushLog = tick;
   session.logTimer = setInterval(tick, LOG_POLL_MS);
   session.logTimer.unref?.();
 }
@@ -307,6 +323,7 @@ function appendLog(session, chunk, onLog) {
   const text = String(chunk || '');
   if (!text) return;
   session.lastLog = (session.lastLog + text).slice(-8000);
+  if (AUTH_REJECTED.test(text)) session.authRejected = true;
   if (/registered|authenticated|online/i.test(text)) {
     session.registeredHint = true;
   }
@@ -500,6 +517,7 @@ async function start(options = {}) {
   });
 
   child.on('exit', (code, signal) => {
+    noteExit(session);
     stopTimers(session);
     session.exitCode = code;
     session.exitSignal = signal;
@@ -591,6 +609,7 @@ function adopt(sidecar, { agentId, handle, name, runtime, connect, stateDir, wan
   // No child handle to listen on, so watch the pid.
   session.exitTimer = setInterval(() => {
     if (pidAlive(session.pid)) return;
+    noteExit(session);
     stopTimers(session);
     session.exited = true;
     session.pid = undefined;
@@ -673,6 +692,7 @@ function releaseAll() {
 }
 
 module.exports = {
+  events,
   releaseAll,
   findAdoptable,
   stateDirFor,

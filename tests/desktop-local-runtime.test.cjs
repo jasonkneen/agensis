@@ -379,3 +379,30 @@ process.on('SIGTERM', () => process.exit(0));
   }
   assert.throws(() => process.kill(pid, 0), 'stopAll stops the daemon');
 });
+
+test('a daemon the hub rejects reports auth-rejected so a new token can be minted', { skip: process.platform === 'win32', timeout: 60_000 }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agensis-home-'));
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'agensis-bin-'));
+  const fake = path.join(bin, 'agensis');
+  fs.writeFileSync(fake, `#!${process.execPath}
+setTimeout(() => {
+  console.log('[agensis] Socket closed (1008: Authentication failed)');
+  console.log('[agensis] Stopping daemon because Agensis rejected this agent connection.');
+  process.exit(1);
+}, 600);
+`, { mode: 0o755 });
+  const savedHome = process.env.HOME;
+  const savedPath = process.env.PATH;
+  process.env.HOME = home;
+  process.env.PATH = `${bin}${path.delimiter}${savedPath}`;
+  try {
+    const seen = new Promise((resolve) => supervisor.events.once('auth-rejected', resolve));
+    await supervisor.start({ agentId: 'agent-2', workspaceId: 'ws-1', token: 't', baseUrl: 'http://127.0.0.1:3142', runtime: 'claude', handle: 'codex', cwd: home });
+    const info = await Promise.race([seen, new Promise((_, rej) => setTimeout(() => rej(new Error('no auth-rejected event')), 8000))]);
+    assert.deepEqual(info, { agentId: 'agent-2', handle: 'codex' });
+  } finally {
+    await supervisor.stopAll();
+    process.env.HOME = savedHome;
+    process.env.PATH = savedPath;
+  }
+});

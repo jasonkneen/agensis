@@ -28,6 +28,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     start: (options) => ipcRenderer.invoke('local-runtime:start', options ?? {}),
     stop: (agentId) => ipcRenderer.invoke('local-runtime:stop', agentId),
     listAutostart: () => ipcRenderer.invoke('local-runtime:list-autostart'),
+    takeAuthRejected: () => ipcRenderer.invoke('local-runtime:take-auth-rejected'),
+    reconnect: (options) => ipcRenderer.invoke('local-runtime:reconnect', options ?? {}),
+    onAuthRejected: (callback) => {
+      const handler = (_event, info) => callback(info);
+      ipcRenderer.on('local-runtime:auth-rejected', handler);
+      return () => ipcRenderer.removeListener('local-runtime:auth-rejected', handler);
+    },
     onLog: (agentId, callback) => {
       const channel = `local-runtime:log:${agentId}`;
       const handler = (_event, line) => callback(line);

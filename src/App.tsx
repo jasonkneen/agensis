@@ -127,6 +127,7 @@ import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { useTheme } from './hooks/useTheme';
 import { useWindowManager } from './providers/WindowManagerProvider';
 import { HuddleDockHost } from './components/huddle/HuddleDockHost';
+import { useDesktopAgentReconnect } from './hooks/useDesktopAgentReconnect';
 import { AccountScopedProviders } from './components/auth/AccountScopedProviders';
 import { useItemPresence } from './hooks/useItemPresence';
 import { useMultiplayerCursors } from './hooks/useMultiplayerCursors';
@@ -711,6 +712,8 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     user,
     signOut,
   } = auth;
+  // Desktop: re-mint a token for a local agent the hub stopped accepting.
+  useDesktopAgentReconnect(true);
   // The update surface (deploy toast + "what's new" dialog + version check +
   // cache-bust reload) is mounted as <AppUpdateManager /> in the tree below.
   // Seeded from the last workspace this browser was in, so a reload lands you

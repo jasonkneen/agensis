@@ -126,6 +126,12 @@ interface Window {
       onLog: (agentId: string, callback: (line: string) => void) => () => void;
       onExit: (callback: (payload: { agentId: string }) => void) => () => void;
       onRestoreComplete: (callback: (report: unknown) => void) => () => void;
+      /** The hub refused an agent's stored token; only a signed-in renderer can mint a new one. */
+      onAuthRejected: (callback: (info: { agentId: string; handle?: string }) => void) => () => void;
+      takeAuthRejected: () => Promise<Array<{ agentId: string; handle?: string }>>;
+      reconnect: (options: { agentId: string; token: string; baseUrl?: string }) => Promise<
+        { ok: true; data: unknown } | { ok: false; error: string }
+      >;
     };
     /**
      * Local RTMP broadcast control surface, backed by the independent Electron

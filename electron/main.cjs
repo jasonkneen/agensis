@@ -752,6 +752,52 @@ ipcMain.handle('local-runtime:start', async (event, options = {}) => {
   }
 });
 
+// A daemon whose stored token the hub refused cannot fix itself: minting a new
+// one needs the signed-in user, who lives in the renderer. Tell every window,
+// and remember the agent for a window that has not loaded yet.
+const authRejectedAgents = new Map();
+localRuntime.events.on('auth-rejected', (info) => {
+  authRejectedAgents.set(info.agentId, info);
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('local-runtime:auth-rejected', info);
+  }
+});
+
+ipcMain.handle('local-runtime:take-auth-rejected', (event) => {
+  if (!trustedIpcSender(event)) return [];
+  const pending = [...authRejectedAgents.values()];
+  authRejectedAgents.clear();
+  return pending;
+});
+
+// Restart a saved agent with a freshly minted token. Everything else (runtime,
+// cwd, model, permissions) comes from the autostart entry, never the renderer.
+ipcMain.handle('local-runtime:reconnect', async (event, options = {}) => {
+  if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
+  try {
+    const agentId = String(options.agentId || '').trim();
+    const token = String(options.token || '').trim();
+    const entry = getLocalRuntimeAutostart().list().find(item => item.agentId === agentId);
+    if (!agentId || !token || !entry) return { ok: false, error: 'No saved settings for this agent' };
+    const baseUrl = String(options.baseUrl || entry.baseUrl || '');
+    getLocalRuntimeAutostart().remember({ ...entry, baseUrl, autoStart: true }, token);
+    invalidateAutostartView();
+    const session = await localRuntime.start({
+      ...entry,
+      token,
+      baseUrl,
+      onLog: createLocalRuntimeLogEmitter(agentId),
+      onExit: ({ agentId: id }) => {
+        if (!event.sender.isDestroyed()) event.sender.send('local-runtime:exit', { agentId: id });
+      },
+    });
+    authRejectedAgents.delete(agentId);
+    return { ok: true, data: { session } };
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
 ipcMain.handle('local-runtime:stop', async (event, agentId) => {
   if (!trustedIpcSender(event)) return { ok: false, error: 'Untrusted renderer' };
   try {
