@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react';
 import { backendClient } from '../lib/backendClient';
-import { cachedFetch, offlineInsert, offlineUpdate } from '../lib/offlineBackend';
+import { cachedFetch, offlineInsertResult, offlineUpdate } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import { useWorkspaceListState } from './useWorkspaceState';
 
@@ -97,7 +97,7 @@ export function useProjects(workspaceId: string | null, userId?: string) {
   const createProject = useCallback(
     async (input: CreateProjectInput) => {
       if (!workspaceId) return null;
-      const data = await offlineInsert(
+      const { data, error } = await offlineInsertResult(
         'projects',
         {
           workspace_id: workspaceId,
@@ -114,6 +114,9 @@ export function useProjects(workspaceId: string | null, userId?: string) {
         },
         `projects_${workspaceId}`,
       );
+      // Surface the server's own reason (for example a missing table on a database that has
+      // not been migrated yet) so the dialog can show it, instead of a bare "could not be saved".
+      if (error) throw new Error(error.message || 'The project could not be saved.');
       if (data) {
         const project = data as unknown as Project;
         setProjects(prev => (prev.some(p => p.id === project.id) ? prev : [...prev, project]));
