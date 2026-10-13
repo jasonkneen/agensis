@@ -105,6 +105,7 @@ import { TaskGantt, TaskKanban } from './TaskBoardViews';
 import { TaskTable } from './TaskTable';
 import { AssigneeOptions } from './AssigneeOptions';
 import { TaskEstimateField, TaskLabelEditor } from './TaskFields';
+import { TaskActivityLog } from './TaskActivityLog';
 import { NewProjectDialog } from '../projects/NewProjectDialog';
 import { TaskCalendar } from './TaskCalendar';
 import { STATUS_LABELS, taskChatSessionId } from './taskPresentation';
@@ -2018,6 +2019,7 @@ function TaskEditPanel({
             onDeleteSubtask={onDeleteSubtask}
             onUploadFiles={onUploadFiles}
           />
+          <TaskActivityLog workspaceId={workspaceId} userId={currentUserId} taskId={task.id} members={members} />
         </div>
       </ScrollArea>
     </aside>
