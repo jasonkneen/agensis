@@ -141,7 +141,16 @@ interface ProjectExtras {
 }
 
 export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBrief, onOpenDocument }: { tasksProps: TasksContentProps } & ProjectExtras) {
-  const { tasks, members, agents, workspaceId, currentUserId, onCreateTask } = tasksProps;
+  const { tasks, members: workspaceMembers, agents, workspaceId, currentUserId, currentUserEmail, onCreateTask } = tasksProps;
+  // The workspace owner is not always a members row, but they are a person here: tasks can be
+  // assigned to them and teams can include them. Add them so they are named, not "Member".
+  const members = useMemo(
+    () =>
+      currentUserId && !workspaceMembers.some(member => member.user_id === currentUserId)
+        ? [{ id: `self-${currentUserId}`, workspace_id: workspaceId ?? '', user_id: currentUserId, role: 'owner' as const, invited_by: null, created_at: '', email: currentUserEmail }, ...workspaceMembers]
+        : workspaceMembers,
+    [workspaceMembers, currentUserId, currentUserEmail, workspaceId],
+  );
   const { projects, createProject, updateProject } = useProjects(workspaceId, currentUserId);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<ProjectStatus | 'all' | 'archived' | 'favourites'>('all');

@@ -639,7 +639,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
       onDragLeave={handleNewAttachmentDragLeave}
       onDrop={handleNewAttachmentDrop}
     >
-      <div className={cn(WINDOW_TOOLBAR, 'task-window-toolbar backdrop-blur-md')}>
+      <div className={cn(WINDOW_TOOLBAR, 'task-window-toolbar h-auto min-h-11 flex-wrap py-1.5 backdrop-blur-md')}>
         <ToggleGroup
           type="single"
           size="sm"

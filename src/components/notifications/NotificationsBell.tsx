@@ -309,7 +309,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" side="top" className="w-80 p-0">
+      <PopoverContent align="end" side="top" className={cn(feeds ? 'w-[26rem]' : 'w-80', 'p-0')}>
         {open && (<>
         <PopoverHeader className="flex flex-row items-center justify-between gap-2 px-3 py-2.5">
           <PopoverTitle className="text-sm">Notifications</PopoverTitle>
@@ -358,7 +358,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
                 type="button"
                 aria-pressed={typeFilter === value}
                 onClick={() => setTypeFilter(value)}
-                className={cn('rounded-full border border-border px-2 py-0.5', typeFilter === value ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground')}
+                className={cn('rounded-full border border-border px-2 py-0.5 whitespace-nowrap', typeFilter === value ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground')}
               >
                 {label}
               </button>
@@ -367,7 +367,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
               type="button"
               disabled={!feeds.unreadCount}
               onClick={() => { for (const group of feeds.groups) if (group.unreadCount > 0) void feeds.onMarkRead(group.key); }}
-              className="ml-auto text-muted-foreground hover:text-foreground disabled:opacity-40"
+              className="ml-auto whitespace-nowrap text-muted-foreground hover:text-foreground disabled:opacity-40"
             >
               Mark all read
             </button>

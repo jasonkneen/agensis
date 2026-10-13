@@ -1,6 +1,6 @@
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, XAxis, YAxis } from 'recharts';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@agensis/ui/components/chart';
-import { STATUS_COLORS } from './reportColors';
+import { SERIES_COLORS, STATUS_COLORS } from './reportColors';
 import type { BurndownPoint, FlowPoint, StatusSlice, VelocityWeek } from '../../lib/pm/reports';
 
 // The charts for the project Reports tab and the Dashboard. Its own module so the
@@ -10,8 +10,8 @@ const shortDay = (ms: number) => new Date(ms).toLocaleDateString(undefined, { mo
 
 export function BurndownChart({ points }: { points: BurndownPoint[] }) {
   const config: ChartConfig = {
-    remaining: { label: 'Remaining', color: 'var(--chart-1)' },
-    ideal: { label: 'Ideal pace', color: 'var(--chart-3)' },
+    remaining: { label: 'Remaining', color: SERIES_COLORS.remaining },
+    ideal: { label: 'Ideal pace', color: SERIES_COLORS.ideal },
   };
   return (
     <ChartContainer config={config} className="h-44 w-full" aria-label="Burndown chart">
@@ -28,7 +28,7 @@ export function BurndownChart({ points }: { points: BurndownPoint[] }) {
 }
 
 export function VelocityChart({ weeks }: { weeks: VelocityWeek[] }) {
-  const config: ChartConfig = { done: { label: 'Done', color: 'var(--chart-1)' } };
+  const config: ChartConfig = { done: { label: 'Done', color: SERIES_COLORS.velocity } };
   return (
     <ChartContainer config={config} className="h-44 w-full" aria-label="Velocity chart">
       <BarChart data={weeks} margin={{ left: 0, right: 8, top: 14 }}>
@@ -47,8 +47,8 @@ export function VelocityChart({ weeks }: { weeks: VelocityWeek[] }) {
 
 export function FlowChart({ points }: { points: FlowPoint[] }) {
   const config: ChartConfig = {
-    created: { label: 'Created', color: 'var(--chart-2)' },
-    completed: { label: 'Completed', color: 'var(--chart-1)' },
+    created: { label: 'Created', color: SERIES_COLORS.created },
+    completed: { label: 'Completed', color: SERIES_COLORS.completed },
   };
   return (
     <ChartContainer config={config} className="h-32 w-full" aria-label="Created versus completed">
