@@ -744,6 +744,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                 selectedTaskId={selectedTaskId}
                 onSelectTask={setSelectedTaskId}
                 onUpdateTask={(id, updates) => onUpdateTask(id, updates)}
+                projects={projects.filter(project => !project.archived)}
               />
             ) : view === 'kanban' ? (
               <TaskKanban

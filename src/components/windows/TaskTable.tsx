@@ -18,7 +18,7 @@ import { STATUS_LABELS } from './taskPresentation';
 // estimate are edited in place on double-click. Clicking elsewhere on a row
 // selects it, which opens the task editor.
 
-type ColumnKey = 'select' | 'title' | 'status' | 'assignee' | 'priority' | 'start' | 'due' | 'labels' | 'estimate' | 'progress';
+type ColumnKey = 'select' | 'title' | 'status' | 'assignee' | 'priority' | 'start' | 'due' | 'labels' | 'project' | 'estimate' | 'progress';
 
 const DEFAULT_WIDTHS: Record<ColumnKey, number> = {
   select: 36,
@@ -29,6 +29,7 @@ const DEFAULT_WIDTHS: Record<ColumnKey, number> = {
   start: 90,
   due: 130,
   labels: 160,
+  project: 140,
   estimate: 90,
   progress: 130,
 };
@@ -49,6 +50,7 @@ export function TaskTable({
   selectedTaskId,
   onSelectTask,
   onUpdateTask,
+  projects = [],
 }: {
   /** Top-level rows to show, already filtered by the toolbar. */
   tasks: Task[];
@@ -59,6 +61,8 @@ export function TaskTable({
   selectedTaskId: string | null;
   onSelectTask: (id: string | null) => void;
   onUpdateTask: (id: string, updates: Partial<Task>) => void;
+  /** Projects a task can be moved into. Empty until the workspace has any. */
+  projects?: { id: string; name: string }[];
 }) {
   const todayStart = useMemo(() => startOfDay(Date.now()), []);
   // Rows ticked for a bulk action. Kept apart from selectedTaskId, which opens the editor.
@@ -197,6 +201,7 @@ export function TaskTable({
               {headCell('start', 'Start')}
               {headCell('due', 'Due')}
               {headCell('labels', 'Labels')}
+              {headCell('project', 'Project')}
               {headCell('estimate', 'Estimate')}
               {headCell('progress', 'Progress')}
             </TableRow>
@@ -262,6 +267,19 @@ export function TaskTable({
                         </span>
                       ))}
                     </span>
+                  </TableCell>
+                  <TableCell onClick={e => e.stopPropagation()}>
+                    <select
+                      aria-label={`Project for ${task.title}`}
+                      className="w-full truncate rounded border border-transparent bg-transparent text-[0.8125rem] hover:border-border"
+                      value={task.project_id ?? ''}
+                      onChange={e => onUpdateTask(task.id, { project_id: e.target.value || null })}
+                    >
+                      <option value="">No project</option>
+                      {projects.map(project => (
+                        <option key={project.id} value={project.id}>{project.name}</option>
+                      ))}
+                    </select>
                   </TableCell>
                   <TableCell
                     className="truncate text-muted-foreground"
