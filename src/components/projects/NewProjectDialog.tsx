@@ -83,6 +83,7 @@ export function NewProjectDialog({
   const [draftAgentId, setDraftAgentId] = useState(firstAgentId);
   const [makeChannel, setMakeChannel] = useState(false);
   const [makeBrief, setMakeBrief] = useState(false);
+  const [isPrivate, setIsPrivate] = useState(false);
   // Set once the project exists but an extra could not be made, so the dialog stays open to say so.
   const [created, setCreated] = useState<Project | null>(null);
   const [busy, setBusy] = useState(false);
@@ -117,6 +118,7 @@ export function NewProjectDialog({
     setDraftAgentId(firstAgentId);
     setMakeChannel(false);
     setMakeBrief(false);
+    setIsPrivate(false);
     setCreated(null);
     setError('');
   }, [open, currentUserId, firstAgentId]);
@@ -139,6 +141,7 @@ export function NewProjectDialog({
         lead_id: leadId || null,
         start_date: dateToIso(startDate),
         due_date: dateToIso(dueDate),
+        visibility: isPrivate ? 'private' : 'workspace',
       })) as Project | null;
       if (!row?.id) throw new Error('The project could not be saved.');
       // Starter tasks belong to the project. In order, so the list keeps the template's sequence.
@@ -383,6 +386,16 @@ export function NewProjectDialog({
               </NativeSelect>
             </div>
           )}
+
+          <label className="flex items-start gap-3 rounded-xl border border-border p-3">
+            <input type="checkbox" className="mt-1 size-3.5 accent-primary" checked={isPrivate} onChange={e => setIsPrivate(e.target.checked)} />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">Make this project private</span>
+              <span className="block text-xs text-muted-foreground">
+                Only you can see it until you add people on its Overview. Agents cannot open a private project or work on its tasks.
+              </span>
+            </span>
+          </label>
 
           {(onCreateChannel || onCreateBrief) && (
             <div>

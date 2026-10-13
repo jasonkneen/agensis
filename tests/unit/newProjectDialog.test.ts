@@ -102,6 +102,19 @@ async function create() {
 }
 
 describe('New project dialog extras', () => {
+  it('creates a workspace project by default and a private one when ticked', async () => {
+    const first = setup();
+    fill('input[aria-label="Project name"]', 'Open one');
+    await create();
+    expect(first.project[0]).toMatchObject({ visibility: 'workspace' });
+
+    const second = setup();
+    fill('input[aria-label="Project name"]', 'Secret one');
+    click(checkbox('Make this project private')!);
+    await create();
+    expect(second.project[0]).toMatchObject({ visibility: 'private' });
+  });
+
   it('offers neither option when it cannot create them', () => {
     setup();
     expect(checkbox('Create a project channel')).toBeUndefined();

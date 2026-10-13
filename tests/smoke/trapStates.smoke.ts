@@ -152,6 +152,19 @@ const TRAPS: TrapCase[] = [
     }),
   },
   {
+    surface: 'Activity',
+    preference: 'activity.actor',
+    stored: 'agent',
+    note: "actor filter 'agent' with only people's events",
+    seeded: ACTIVITY_MARKERS,
+    render: () => createElement(ActivityWindowContent, {
+      events: seedActivity(),
+      loading: false,
+      workspaceId: WORKSPACE_ID,
+      currentUserId: CURRENT_USER_ID,
+    }),
+  },
+  {
     surface: 'Inbox',
     preference: 'inbox.unread-only',
     stored: '1',
@@ -234,6 +247,7 @@ const NOT_A_FILTER: Record<string, string> = {
   'resources.split': 'resource-list/detail divider position, re-clamped against the live container — hides no resources',
   'agents.detail-split': 'agent-list/detail divider position, re-clamped against the live container — hides no agents',
   'applet.split': 'applet editor/preview divider position, re-clamped against the live container — hides no source or preview',
+  'project-favourites': 'the ids of starred projects, used only to mark and sort them — the Favourites chip is a filter that is not persisted',
   'tips.dismissed': 'onboarding tips, not a data list',
   // Also collapses an owner broadcast in that same slot (OwnerMessageCard), so
   // a stored `true` means a message can ARRIVE collapsed. Not a filter and not a

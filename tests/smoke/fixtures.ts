@@ -16,6 +16,7 @@ import type {
   Task,
   WorkspaceAgent,
 } from '../../src/types';
+import type { Project } from '../../src/hooks/useProjects';
 import type { WorkspaceMember } from '../../src/hooks/useSharing';
 import type { WorkspaceUser, WorkspaceInvite } from '../../src/hooks/useWorkspaceUsers';
 import type { TenantAccount } from '../../src/lib/tenants';
@@ -107,6 +108,35 @@ export function seedMessages(): Message[] {
     sender_id: n % 2 === 0 ? 'agent-01' : CURRENT_USER_ID,
     sender_name: n % 2 === 0 ? AGENT_MARKERS[0] : 'Smoke Human',
     created_at: `2026-07-27T05:0${i}:00.000Z`,
+  }));
+}
+
+// --- Projects ----------------------------------------------------------
+
+export const PROJECT_MARKERS = seq().map(n => `SmokeProject${pad(n)}`);
+
+export function seedProjects(): Project[] {
+  return seq().map((n, i) => ({
+    id: `project-${pad(n)}`,
+    workspace_id: WORKSPACE_ID,
+    created_by: OTHER_USER_ID,
+    name: PROJECT_MARKERS[i],
+    project_key: `SP${pad(n)}`,
+    description: '',
+    status: 'active' as const,
+    color: 'indigo',
+    icon: 'folder',
+    lead_id: null,
+    start_date: null,
+    due_date: null,
+    channel_id: null,
+    brief_document_id: null,
+    visibility: 'workspace' as const,
+    member_ids: [],
+    archived: false,
+    version: 1,
+    created_at: NOW,
+    updated_at: NOW,
   }));
 }
 

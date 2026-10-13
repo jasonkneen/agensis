@@ -21,6 +21,7 @@ import {
   MEMBER_MARKERS,
   MEMORY_MARKERS,
   MESSAGE_MARKERS,
+  PROJECT_MARKERS,
   SKILL_MARKERS,
   TASK_MARKERS,
   TENANT_MARKERS,
@@ -36,6 +37,7 @@ import {
   seedMemoryFiles,
   seedMembers,
   seedMessages,
+  seedProjects,
   seedTaskMembers,
   seedTasks,
   seedTenants,
@@ -43,6 +45,7 @@ import {
 
 import { AgentsWindowContent } from '../../src/components/windows/AgentsWindowContent';
 import { TasksWindowContent } from '../../src/components/windows/TasksWindowContent';
+import { ProjectsWindowContent } from '../../src/components/windows/ProjectsWindowContent';
 import { SkillsWindowContent } from '../../src/components/windows/SkillsWindowContent';
 import { ActivityWindowContent } from '../../src/components/windows/ActivityWindowContent';
 import { UsersWindowContent } from '../../src/components/windows/UsersWindowContent';
@@ -111,6 +114,31 @@ describe('smoke: every surface shows its data', () => {
       surface: 'Tasks',
       seeded: TASK_MARKERS,
       emptyStates: ['No tasks here', 'No tasks to chart'],
+    });
+  });
+
+  it('Projects lists every project', async () => {
+    backend.tables.set('projects', seedProjects());
+    mounted = await mount(createElement(ProjectsWindowContent, {
+      tasksProps: {
+        tasks: seedTasks(),
+        members: seedTaskMembers(),
+        agents: seedAgents(),
+        agentConnections: [],
+        currentUserEmail: CURRENT_USER_EMAIL,
+        workspaceId: WORKSPACE_ID,
+        currentUserId: CURRENT_USER_ID,
+        onCreateTask: noop,
+        onUpdateTask: noop,
+        onToggleStatus: noop,
+        onDeleteTask: noop,
+        onUpdateAgent: noop,
+      },
+    }));
+    assertPopulated(mounted, {
+      surface: 'Projects',
+      seeded: PROJECT_MARKERS,
+      emptyStates: ['No projects yet', 'No projects match this filter'],
     });
   });
 
