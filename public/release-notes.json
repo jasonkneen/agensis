@@ -1,5 +1,21 @@
 [
   {
+    "version": "projects-and-reports",
+    "date": "2026-10-13",
+    "title": "Projects, reports, teams and a fuller notifications bell",
+    "summary": "Group tasks into projects, see how they are going on a dashboard and per-project reports, and let agents take part by being assigned a project's tasks.",
+    "highlights": [
+      "Projects window: a dashboard, a project list, and a page per project with Overview, Board, List, Table, Calendar, Timeline, Files, Activity and Reports",
+      "Reports show burndown, tasks done per week, created versus completed, status and workload for people and agents together",
+      "Teams and Members pages group people and agents for workload",
+      "Table and Calendar task views, task labels and estimates, saved views, and reactions on task comments",
+      "The List can be filtered by priority and label and grouped by assignee, priority, project or due week",
+      "The notifications bell now includes Inbox items and your overdue, newly assigned and agent-finished tasks, with filters",
+      "The command palette searches projects and can start a new task or project",
+      "Agents can list, create and update projects, and set a task's project, labels and estimate"
+    ]
+  },
+  {
     "version": "opus-5-5",
     "date": "2026-09-22",
     "title": "Opus 5.5 is in the model list",

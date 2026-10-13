@@ -1121,6 +1121,35 @@ for the daemon repo: [docs/agent-share-policy.md](./docs/agent-share-policy.md).
   from scratch; also clear the `agensis_tour_complete` / `agensis_getstarted_*`
   localStorage keys (or use incognito) — onboarding state is client-side only.
 
+### Projects (`projects`), not canvas layers
+
+A **project** here is a `projects` row (name, key, status, lead, dates, optional
+channel and brief document) that groups **tasks** via `tasks.project_id`. It is
+unrelated to a canvas layer, which the section above also calls a "project".
+
+- **Agents are never attached to a project.** They take part only by being assigned
+  its tasks. There is no tool or column that adds an agent to a project; do not
+  add one. `teams.member_ids` holds people and agents together, but a team groups
+  members for workload only and is likewise never attached to a project.
+- New tables from this work: `projects`, `calendar_events`, `saved_views`, `teams`,
+  `task_comment_reactions`, plus `tasks.labels/estimate/sort_order/project_id` and
+  `uploaded_files.project_id`. Each is in the three schema places and the
+  `shared/backend-core.cjs` allowlists. The hosted backend must run this code
+  before the UI works against it: an older backend answers "Table not allowed".
+- Agent tools: `list_projects`, `create_project`, `update_project`, and
+  `project_id` / `labels` / `estimate` on `create_task` and `update_task`
+  (`project_id` is validated against the workspace; `""` clears it). The label
+  `milestone` makes a task a milestone on the Timeline.
+- Reports (`src/lib/pm/reports.ts`) are derived from each task's `created_at` and
+  `completed_at`. There is no status-change history, so there is no cumulative
+  flow by status; the "created vs completed" chart is the honest substitute.
+- Chart code lives in `src/components/projects/ReportCharts.tsx`, loaded only with
+  `React.lazy` (`tests/unit/usageChartsLazy.test.ts` enforces this, as for Usage).
+- The notification bell (`components/notifications/NotificationsBell.tsx`) merges the
+  Inbox's groups with notifications derived from tasks (overdue, assigned to you,
+  finished by an agent) in `src/lib/pm/taskNotifications.ts`. Those derived entries
+  are not stored, so they have no read state.
+
 ## Release notes (user-visible changes)
 
 `public/release-notes.json` is **hand-maintained** — nothing generates it. It
