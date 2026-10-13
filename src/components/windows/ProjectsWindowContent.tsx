@@ -4,6 +4,8 @@ import { Button } from '@agensis/ui/components/button';
 import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
 import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
+import { useActivity } from '../../hooks/useActivity';
+import { projectActivity } from '../../lib/pm/projectActivity';
 import { useProjects, type Project, type ProjectStatus } from '../../hooks/useProjects';
 import type { Task, WorkspaceAgent } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
@@ -37,7 +39,7 @@ const STATUS_FILTERS: Array<[ProjectStatus | 'all' | 'archived', string]> = [
   ['archived', 'Archived'],
 ];
 
-type LandingTab = 'overview' | TaskView;
+type LandingTab = 'overview' | 'activity' | TaskView;
 const LANDING_TABS: Array<[LandingTab, string]> = [
   ['overview', 'Overview'],
   ['kanban', 'Board'],
@@ -45,6 +47,7 @@ const LANDING_TABS: Array<[LandingTab, string]> = [
   ['table', 'Table'],
   ['calendar', 'Calendar'],
   ['gantt', 'Timeline'],
+  ['activity', 'Activity'],
 ];
 
 function initials(email: string | null | undefined): string {
@@ -353,10 +356,45 @@ function ProjectLanding({
           updateProject={updateProject}
           onViewList={() => setTab('list')}
         />
+      ) : tab === 'activity' ? (
+        <ProjectActivityTab projectTasks={projectTasks} tasksProps={tasksProps} />
       ) : (
         <TasksWindowContent {...tasksProps} projectId={project.id} forcedView={tab} />
       )}
     </div>
+  );
+}
+
+/** The project's task activity, newest first: who did what to which task, and when. */
+function ProjectActivityTab({ projectTasks, tasksProps }: { projectTasks: Task[]; tasksProps: TasksContentProps }) {
+  const { workspaceId, currentUserId, members } = tasksProps;
+  const { events, loading } = useActivity(workspaceId, currentUserId);
+  const items = useMemo(() => projectActivity(events, projectTasks), [events, projectTasks]);
+
+  if (items.length === 0) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 p-6 text-center">
+        <p className="text-sm font-medium">{loading ? 'Loading activity' : 'No activity yet'}</p>
+        {!loading && <p className="text-xs text-muted-foreground">Creating, updating and completing this project's tasks shows up here.</p>}
+      </div>
+    );
+  }
+
+  return (
+    <ul className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
+      {items.map(item => {
+        const member = members.find(candidate => candidate.user_id === item.user_id);
+        return (
+          <li key={item.id} className="flex items-center gap-2.5 border-b border-border py-2.5 text-sm last:border-b-0">
+            <span className="grid size-6 shrink-0 place-items-center rounded-full bg-primary/20 text-[0.5625rem] font-semibold" title={member?.email ?? 'An agent or the system'}>
+              {member ? initials(member.email) : 'AI'}
+            </span>
+            <span className="min-w-0 flex-1 truncate">{item.title}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{timeAgo(item.created_at)}</span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
