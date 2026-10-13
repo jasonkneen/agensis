@@ -13,6 +13,8 @@ import type { WorkspaceMember } from '../../hooks/useSharing';
 import { NewProjectDialog } from '../projects/NewProjectDialog';
 import { ProjectIconTile } from '../projects/projectIcons';
 import { ProjectReports, WorkspaceDashboard } from '../projects/ReportsPanels';
+import { MembersPage, TeamsPage } from '../projects/TeamsPanels';
+import { useTeams } from '../../hooks/useTeams';
 import { projectColor } from '../projects/projectIconMap';
 import { TasksWindowContent, type TaskView } from './TasksWindowContent';
 import { STATUS_LABELS } from './taskPresentation';
@@ -139,7 +141,8 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<ProjectStatus | 'all' | 'archived'>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [page, setPage] = useState<'dashboard' | 'projects'>('projects');
+  const [page, setPage] = useState<'dashboard' | 'projects' | 'teams' | 'members'>('projects');
+  const { teams, createTeam, updateTeam, deleteTeam } = useTeams(workspaceId, currentUserId);
 
   const tasksByProject = useMemo(() => {
     const map = new Map<string, Task[]>();
@@ -199,7 +202,7 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
         <span className="text-sm text-muted-foreground">{projects.filter(project => !project.archived).length}</span>
         <div className="flex-1" />
         <div className="flex gap-1 text-xs" role="group" aria-label="Projects page">
-          {([['dashboard', 'Dashboard'], ['projects', 'All projects']] as const).map(([value, label]) => (
+          {([['dashboard', 'Dashboard'], ['projects', 'All projects'], ['teams', 'Teams'], ['members', 'Members']] as const).map(([value, label]) => (
             <button
               key={value}
               type="button"
@@ -217,6 +220,10 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
       </div>
       {page === 'dashboard' ? (
         <WorkspaceDashboard projects={projects} tasks={tasks} members={members} agents={agents} onOpenProject={id => setSelectedId(id)} />
+      ) : page === 'teams' ? (
+        <TeamsPage teams={teams} actions={{ createTeam, updateTeam, deleteTeam }} members={members} agents={agents} tasks={tasks} />
+      ) : page === 'members' ? (
+        <MembersPage teams={teams} members={members} agents={agents} tasks={tasks} />
       ) : (
       <>
       <div className="flex shrink-0 gap-1 border-b border-border px-4 py-2 text-xs">

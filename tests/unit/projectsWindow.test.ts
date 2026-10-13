@@ -27,6 +27,9 @@ const data = vi.hoisted(() => {
 vi.mock('../../src/hooks/useProjects', () => ({
   useProjects: () => ({ projects: [data.project], createProject: async () => null, updateProject: async () => null, refetch: () => {} }),
 }));
+vi.mock('../../src/hooks/useTeams', () => ({
+  useTeams: () => ({ teams: [], createTeam: async () => null, updateTeam: async () => null, deleteTeam: async () => {}, refetch: () => {} }),
+}));
 vi.mock('../../src/hooks/useProjectFiles', () => ({
   useProjectFiles: () => ({
     files: data.files.list,

@@ -46,6 +46,7 @@ const ALLOWED_TABLES = new Set([
  'calendar_events',
  'projects',
  'saved_views',
+ 'teams',
  'document_comments',
  'task_comments',
  'document_versions',
@@ -191,6 +192,7 @@ const VERSIONED_TABLES = new Set([
  'calendar_events',
  'projects',
  'saved_views',
+ 'teams',
  'document_comments',
  'task_comments',
  'workspace_agents',
@@ -230,6 +232,7 @@ const JSON_COLUMNS_BY_TABLE = {
 // string with a `::<elemType>[]` cast (see toPgArrayLiteral / bindDbParam).
 const ARRAY_COLUMNS_BY_TABLE = {
  tasks: { depends_on: 'uuid', labels: 'text' },
+ teams: { member_ids: 'uuid' },
 };
 
 function arrayColumnElemType(table, column) {
@@ -253,7 +256,7 @@ function toPgArrayLiteral(value) {
 // MUST stay in lockstep with server/index.cjs (parity test enforces this).
 const WORKSPACE_SCOPED_TABLES = new Set([
  'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
- 'canvas_groups', 'canvas_layers', 'canvas_objects', 'tasks', 'calendar_events', 'projects', 'saved_views', 'document_comments',
+ 'canvas_groups', 'canvas_layers', 'canvas_objects', 'tasks', 'calendar_events', 'projects', 'saved_views', 'teams', 'document_comments',
  'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
  'agent_connections', 'cursorbuddy_connection_keys', 'agent_jobs', 'agent_registrations',
  'activity_events', 'workspace_members',
@@ -312,6 +315,7 @@ const DB_TABLE_ACCESS = {
  calendar_events: DEFAULT_TABLE_ACCESS,
  projects: DEFAULT_TABLE_ACCESS,
  saved_views: DEFAULT_TABLE_ACCESS,
+ teams: DEFAULT_TABLE_ACCESS,
  document_versions: DEFAULT_TABLE_ACCESS,
  workspace_agents: DEFAULT_TABLE_ACCESS,
  // Same capabilities as workspace_agents itself, and for the same reason:
@@ -776,6 +780,9 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
  // in ALLOWED_TABLES.
  saved_views: [
   'id', 'workspace_id', 'created_by', 'name', 'config', 'version', 'created_at', 'updated_at',
+ ],
+ teams: [
+  'id', 'workspace_id', 'created_by', 'name', 'description', 'color', 'member_ids', 'version', 'created_at', 'updated_at',
  ],
  projects: [
   'id', 'workspace_id', 'created_by', 'name', 'project_key', 'description', 'status',

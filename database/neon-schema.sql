@@ -1498,6 +1498,20 @@ CREATE TABLE IF NOT EXISTS saved_views (
   updated_at timestamptz DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_saved_views_workspace ON saved_views(workspace_id);
+-- Teams (project-management merge): a named group of people and agents, for grouping and workload.
+CREATE TABLE IF NOT EXISTS teams (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  created_by uuid,
+  name text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  color text NOT NULL DEFAULT 'indigo',
+  member_ids uuid[] NOT NULL DEFAULT '{}',
+  version integer NOT NULL DEFAULT 1,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_teams_workspace ON teams(workspace_id);
 -- Emoji reactions on task comments: { "👍": ["<user id>", ...], ... }. Empty by default.
 ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS reactions jsonb NOT NULL DEFAULT '{}'::jsonb;
 -- Files attached to a project: uploaded_files.project_id, cleared if the project is deleted.
