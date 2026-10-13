@@ -50,10 +50,9 @@ export function TaskCalendar({
     if (task.start_date) updates.start_date = new Date(new Date(task.start_date).getTime() + deltaMs).toISOString();
     onReschedule(taskId, updates);
   };
-  const [month, setMonth] = useState(() => {
-    const d = new Date();
-    return new Date(d.getFullYear(), d.getMonth(), 1);
-  });
+  // One cursor date drives both modes: month shows its month, week shows its Monday-first week.
+  const [mode, setMode] = useState<'month' | 'week'>('month');
+  const [cursor, setCursor] = useState(() => new Date());
 
   const todayMs = useMemo(() => startOfDay(Date.now()), []);
   const todayKey = dayKey(todayMs);
@@ -71,35 +70,67 @@ export function TaskCalendar({
     return map;
   }, [tasks]);
 
-  // Six Monday-first weeks, so every month fits the same grid height.
+  // Month: six Monday-first weeks, so every month fits the same grid height.
+  // Week: the seven days of the cursor's Monday-first week.
   const cells = useMemo(() => {
-    const first = new Date(month);
-    const offset = (first.getDay() + 6) % 7;
-    first.setDate(first.getDate() - offset);
+    const monday = new Date(cursor);
+    monday.setDate(cursor.getDate() - ((cursor.getDay() + 6) % 7));
+    if (mode === 'week') {
+      return Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(monday);
+        d.setDate(monday.getDate() + i);
+        return { date: d, key: dayKey(d.getTime()), inMonth: true };
+      });
+    }
+    const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+    const start = new Date(first);
+    start.setDate(first.getDate() - ((first.getDay() + 6) % 7));
     return Array.from({ length: 42 }, (_, i) => {
-      const d = new Date(first);
-      d.setDate(first.getDate() + i);
-      return { date: d, key: dayKey(d.getTime()), inMonth: d.getMonth() === month.getMonth() };
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      return { date: d, key: dayKey(d.getTime()), inMonth: d.getMonth() === cursor.getMonth() };
     });
-  }, [month]);
+  }, [cursor, mode]);
 
-  const monthLabel = month.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const step = (direction: -1 | 1) =>
+    setCursor(current => {
+      const next = new Date(current);
+      if (mode === 'week') next.setDate(current.getDate() + 7 * direction);
+      else next.setMonth(current.getMonth() + direction, 1);
+      return next;
+    });
+
+  const weekStart = cells[0].date;
+  const headerLabel =
+    mode === 'week'
+      ? `Week of ${weekStart.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
+      : cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-        <span className="text-sm font-semibold">{monthLabel}</span>
+        <span className="text-sm font-semibold">{headerLabel}</span>
         <div className="flex-1" />
-        <Button variant="outline" size="icon-sm" aria-label="Previous month" onClick={() => setMonth(m => new Date(m.getFullYear(), m.getMonth() - 1, 1))}>
+        <div className="flex rounded-md border border-border text-xs">
+          {(['month', 'week'] as const).map(option => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={mode === option}
+              onClick={() => setMode(option)}
+              className={cn('px-2 py-1 capitalize', mode === option ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground')}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+        <Button variant="outline" size="icon-sm" aria-label={mode === 'week' ? 'Previous week' : 'Previous month'} onClick={() => step(-1)}>
           <ChevronLeft />
         </Button>
-        <Button variant="outline" size="sm" onClick={() => {
-          const d = new Date();
-          setMonth(new Date(d.getFullYear(), d.getMonth(), 1));
-        }}>
+        <Button variant="outline" size="sm" onClick={() => setCursor(new Date())}>
           Today
         </Button>
-        <Button variant="outline" size="icon-sm" aria-label="Next month" onClick={() => setMonth(m => new Date(m.getFullYear(), m.getMonth() + 1, 1))}>
+        <Button variant="outline" size="icon-sm" aria-label={mode === 'week' ? 'Next week' : 'Next month'} onClick={() => step(1)}>
           <ChevronRight />
         </Button>
       </div>
@@ -110,7 +141,7 @@ export function TaskCalendar({
         ))}
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-7 grid-rows-6 overflow-auto">
+      <div className={cn('grid min-h-0 flex-1 grid-cols-7 overflow-auto', mode === 'week' ? 'grid-rows-1' : 'grid-rows-6')}>
         {cells.map(cell => {
           const list = byDay.get(cell.key) ?? [];
           const shown = list.slice(0, MAX_CHIPS_PER_DAY);
@@ -130,7 +161,7 @@ export function TaskCalendar({
                 if (taskId) moveTaskTo(taskId, cell.key);
               }}
               className={cn(
-                'min-h-24 border-r border-b border-border p-1.5 last:border-r-0',
+                cn('border-r border-b border-border p-1.5 last:border-r-0', mode === 'week' ? 'min-h-48' : 'min-h-24'),
                 !cell.inMonth && 'bg-muted/40 text-muted-foreground',
                 dropKey === cell.key && 'bg-primary/10 ring-1 ring-inset ring-primary',
               )}
