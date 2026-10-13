@@ -108,6 +108,7 @@ import { TaskTable } from './TaskTable';
 import { AssigneeOptions } from './AssigneeOptions';
 import { TaskEstimateField, TaskLabelEditor } from './TaskFields';
 import { TaskActivityLog } from './TaskActivityLog';
+import { TaskAgentPanel } from './TaskAgentPanel';
 import { REACTION_EMOJIS, reactionChips, toggleReaction } from '../../lib/pm/reactions';
 import { NewProjectDialog } from '../projects/NewProjectDialog';
 import { TaskCalendar } from './TaskCalendar';
@@ -506,6 +507,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
         onChangeDescription={description => onUpdateTask(selectedTask.id, { description })}
         onChangeStatus={status => onUpdateTask(selectedTask.id, { status })}
         onChangePriority={priority => onUpdateTask(selectedTask.id, { priority })}
+        agentConnections={agentConnections}
         onChangeProject={projectId => onUpdateTask(selectedTask.id, { project_id: projectId })}
         onChangeLabels={labels => onUpdateTask(selectedTask.id, { labels })}
         onChangeEstimate={estimate => onUpdateTask(selectedTask.id, { estimate })}
@@ -1895,6 +1897,7 @@ function TaskEditPanel({
   members,
   agents,
   onUpdateAgent,
+  agentConnections,
   onOpenSession,
   workspaceId,
   currentUserId,
@@ -1923,6 +1926,7 @@ function TaskEditPanel({
   members: WorkspaceMember[];
   agents: WorkspaceAgent[];
   onUpdateAgent: (id: string, updates: Partial<WorkspaceAgent>) => void;
+  agentConnections: AgentConnection[];
   onOpenSession?: (sessionId: string) => void;
   workspaceId: string;
   currentUserId?: string;
@@ -2102,6 +2106,13 @@ function TaskEditPanel({
               </Button>
             )}
           </div>
+          <TaskAgentPanel
+            task={task}
+            agents={agents}
+            agentConnections={agentConnections}
+            chatSessionId={chatSessionId}
+            onOpenSession={onOpenSession}
+          />
           <TaskDetail
             task={task}
             subtasks={subtasks}
