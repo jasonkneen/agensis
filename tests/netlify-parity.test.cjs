@@ -422,7 +422,7 @@ test('M7: app_users selects are projected to a safe column set', () => {
   // routing provenance, not task content a generic reader should receive.
   assert.equal(
     core.safeSelectColumns('tasks', '*'),
-    'id, workspace_id, created_by, assignee_id, title, description, status, priority, due_date, source_type, source_id, completed_at, version, created_at, updated_at, parent_id, start_date, depends_on, attachments, labels, estimate, sort_order',
+    'id, workspace_id, created_by, assignee_id, title, description, status, priority, due_date, source_type, source_id, completed_at, version, created_at, updated_at, parent_id, start_date, depends_on, attachments, labels, estimate, sort_order, project_id',
   );
   assert.equal(core.safeSelectColumns('tasks', '*').includes('dispatch_requested_by'), false);
   assert.equal(core.safeSelectColumns('tasks', 'id, title'), 'id, title');
