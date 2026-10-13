@@ -786,6 +786,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
               onChangeDescription={description => onUpdateTask(selectedTask.id, { description })}
               onChangeStatus={status => onUpdateTask(selectedTask.id, { status })}
               onChangePriority={priority => onUpdateTask(selectedTask.id, { priority })}
+              onChangeProject={projectId => onUpdateTask(selectedTask.id, { project_id: projectId })}
+              projects={projects.filter(project => !project.archived)}
               onChangeAssignee={assigneeId => onUpdateTask(selectedTask.id, { assignee_id: assigneeId })}
               onChangeDependsOn={next => onUpdateTask(selectedTask.id, { depends_on: next })}
               onChangeDates={updates => onUpdateTask(selectedTask.id, updates)}
@@ -1747,6 +1749,8 @@ function TaskEditPanel({
   onChangeStatus,
   onChangePriority,
   onChangeAssignee,
+  onChangeProject,
+  projects,
   onChangeDependsOn,
   onChangeDates,
   onAddSubtask,
@@ -1771,6 +1775,8 @@ function TaskEditPanel({
   onChangeStatus: (status: TaskStatus) => void;
   onChangePriority: (priority: TaskPriority) => void;
   onChangeAssignee: (assigneeId: string | null) => void;
+  onChangeProject: (projectId: string | null) => void;
+  projects: { id: string; name: string }[];
   onChangeDependsOn: (next: string[]) => void;
   onChangeDates: (updates: Partial<Task>) => void;
   onAddSubtask: (title: string) => void;
@@ -1908,6 +1914,17 @@ function TaskEditPanel({
               aria-label="Assign task"
             >
               <AssigneeOptions members={members} agents={agents} />
+            </NativeSelect>
+            <NativeSelect
+              value={task.project_id ?? ''}
+              onChange={e => onChangeProject(e.target.value || null)}
+              size="sm"
+              aria-label="Task project"
+            >
+              <NativeSelectOption value="">No project</NativeSelectOption>
+              {projects.map(project => (
+                <NativeSelectOption key={project.id} value={project.id}>{project.name}</NativeSelectOption>
+              ))}
             </NativeSelect>
             {chatSessionId && onOpenSession && (
               <Button
