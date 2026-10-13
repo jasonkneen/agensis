@@ -125,6 +125,17 @@ describe('Gantt chrome', () => {
     expect(container.textContent).toContain('Pricing review');
   });
 
+  it('groups rows under status headers when Group: Status is on', () => {
+    renderGantt();
+    const toggle = Array.from(container.querySelectorAll('button')).find(b => b.textContent === 'Group: Status');
+    expect(toggle).toBeTruthy();
+    act(() => toggle!.click());
+    const headers = Array.from(container.querySelectorAll('div')).filter(d => d.className.includes('uppercase') && d.className.includes('font-semibold'));
+    const labels = headers.map(h => h.textContent);
+    // The fixture has no in-progress task, so that group must not appear.
+    expect(labels).toEqual(['To do', 'Done']);
+  });
+
   it('fills a parent bar by the share of its subtasks that are done', () => {
     renderGantt();
     const fill = container.querySelector<HTMLElement>('[data-gantt-id="p"] span[style*="width: 50%"]');

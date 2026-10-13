@@ -224,6 +224,8 @@ export function TaskKanban({
 // ---------------------------------------------------------------------------
 
 const GANTT_DAY_WIDTH = 32;
+// Order of the status groups when 'Group: Status' is on.
+const STATUS_GROUP_ORDER: Task['status'][] = ['in_progress', 'todo', 'done', 'cancelled'];
 // Month zoom: the same chart compressed so a month of days fits the window.
 const GANTT_DAY_WIDTH_MONTH = 12;
 // One line of text (text-sm, matching the List view) plus room to breathe. The
@@ -289,10 +291,23 @@ export function TaskGantt({
   // Milestones (label 'milestone') are shown in a strip above the rows, not as rows.
   const isMilestone = (task: Task) => Boolean(task.due_date) && Boolean(task.labels?.includes('milestone'));
   const milestones = useMemo(() => rowSource.filter(isMilestone), [rowSource]);
-  const rows = useMemo<GanttRow[]>(
-    () => buildGanttRows(tasks, rowSource).filter(row => !isMilestone(row.task)),
-    [tasks, rowSource],
-  );
+  // Status grouping (the mock's 'Group: Status'): a header row per status, then its tasks.
+  // Headers are synthetic rows whose id starts with 'status-header:'; they draw a label, not a bar.
+  const [groupByStatus, setGroupByStatus] = useState(false);
+  const rows = useMemo<GanttRow[]>(() => {
+    const base = buildGanttRows(tasks, rowSource).filter(row => !isMilestone(row.task));
+    if (!groupByStatus) return base;
+    const out: GanttRow[] = [];
+    for (const status of STATUS_GROUP_ORDER) {
+      const inGroup = base.filter(row => row.task.status === status);
+      if (inGroup.length === 0) continue;
+      const header = { id: `status-header:${status}`, title: STATUS_LABELS[status], status } as Task;
+      out.push({ task: header, depth: 0, hasChildren: false });
+      out.push(...inGroup);
+    }
+    return out;
+  }, [tasks, rowSource, groupByStatus]);
+  const isHeaderRow = (row: GanttRow) => row.task.id.startsWith('status-header:');
   const stripHeight = milestones.length > 0 ? GANTT_ROW_HEIGHT : 0;
   const rowTop = (index: number) => stripHeight + index * GANTT_ROW_HEIGHT;
   // Spans are resolved over ALL tasks so a parent still rolls up over a child
@@ -452,6 +467,17 @@ export function TaskGantt({
         </p>
       )}
       <div className="flex shrink-0 items-center justify-end gap-1 border-b border-border px-3 py-1.5 text-xs">
+        <button
+          type="button"
+          onClick={() => setGroupByStatus(current => !current)}
+          aria-pressed={groupByStatus}
+          className={cn(
+            'rounded-md border px-2 py-0.5',
+            groupByStatus ? 'border-primary/40 bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground',
+          )}
+        >
+          Group: Status
+        </button>
         {(['week', 'month'] as const).map(level => (
           <button
             key={level}
@@ -535,9 +561,10 @@ export function TaskGantt({
                   className={cn(
                     'absolute left-0 cursor-pointer border-b border-border/40',
                     selectedTaskId === row.task.id && 'bg-muted',
+                    isHeaderRow(row) && 'bg-muted/60',
                   )}
                   style={{ top: rowTop(i), height: GANTT_ROW_HEIGHT, width: contentWidth }}
-                  onClick={() => onSelectTask(row.task.id)}
+                  onClick={() => (isHeaderRow(row) ? undefined : onSelectTask(row.task.id))}
                 />
               ))}
 
@@ -567,6 +594,17 @@ export function TaskGantt({
               {/* Bars */}
               {rows.map((row, i) => {
                 const task = row.task;
+                if (isHeaderRow(row)) {
+                  return (
+                    <div
+                      key={task.id}
+                      className="pointer-events-none absolute left-0 flex items-center px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                      style={{ top: rowTop(i), height: GANTT_ROW_HEIGHT, width: contentWidth }}
+                    >
+                      {task.title}
+                    </div>
+                  );
+                }
                 const span = spanOf(task);
                 const isDragging = drag?.taskId === task.id;
                 const shiftDays = isDragging ? previewDays : 0;
