@@ -24,12 +24,32 @@ export function TaskCalendar({
   tasks,
   selectedTaskId,
   onSelectTask,
+  onReschedule,
 }: {
   /** Top-level rows to place, already filtered by the toolbar. */
   tasks: Task[];
   selectedTaskId: string | null;
   onSelectTask: (id: string | null) => void;
+  /** Moves a task's due date (and its start, if it has one) by whole days. */
+  onReschedule: (id: string, updates: Partial<Task>) => void;
 }) {
+  // Drop target: the day under the pointer. Set on dragover so the cell can highlight.
+  const [dropKey, setDropKey] = useState<string | null>(null);
+
+  // Move the task so its due day lands on `targetKey`, keeping the time of day
+  // and the length of the start-to-due gap.
+  const moveTaskTo = (taskId: string, targetKey: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || !task.due_date) return;
+    const due = new Date(task.due_date);
+    const [y, m, d] = targetKey.split('-').map(Number);
+    const target = new Date(y, m - 1, d, due.getHours(), due.getMinutes(), due.getSeconds());
+    if (dayKey(target.getTime()) === dayKey(due.getTime())) return;
+    const deltaMs = target.getTime() - due.getTime();
+    const updates: Partial<Task> = { due_date: new Date(due.getTime() + deltaMs).toISOString() };
+    if (task.start_date) updates.start_date = new Date(new Date(task.start_date).getTime() + deltaMs).toISOString();
+    onReschedule(taskId, updates);
+  };
   const [month, setMonth] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -98,9 +118,21 @@ export function TaskCalendar({
           return (
             <div
               key={cell.key}
+              onDragOver={e => {
+                e.preventDefault();
+                if (dropKey !== cell.key) setDropKey(cell.key);
+              }}
+              onDragLeave={() => setDropKey(current => (current === cell.key ? null : current))}
+              onDrop={e => {
+                e.preventDefault();
+                const taskId = e.dataTransfer.getData('text/plain');
+                setDropKey(null);
+                if (taskId) moveTaskTo(taskId, cell.key);
+              }}
               className={cn(
                 'min-h-24 border-r border-b border-border p-1.5 last:border-r-0',
                 !cell.inMonth && 'bg-muted/40 text-muted-foreground',
+                dropKey === cell.key && 'bg-primary/10 ring-1 ring-inset ring-primary',
               )}
             >
               <div className="mb-1 flex items-center">
@@ -121,6 +153,11 @@ export function TaskCalendar({
                     <button
                       key={task.id}
                       type="button"
+                      draggable
+                      onDragStart={e => {
+                        e.dataTransfer.setData('text/plain', task.id);
+                        e.dataTransfer.effectAllowed = 'move';
+                      }}
                       onClick={() => onSelectTask(task.id)}
                       className={cn(
                         'truncate rounded border-l-2 px-1.5 py-0.5 text-left text-[0.6875rem]',

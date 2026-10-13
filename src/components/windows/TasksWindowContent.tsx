@@ -672,6 +672,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                 tasks={filteredTopLevel}
                 selectedTaskId={selectedTaskId}
                 onSelectTask={setSelectedTaskId}
+                onReschedule={(id, updates) => onUpdateTask(id, updates)}
               />
             ) : view === 'table' ? (
               <TaskTable
@@ -681,6 +682,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                 priorityLabel={priority => PRIORITY_LABELS[priority]}
                 selectedTaskId={selectedTaskId}
                 onSelectTask={setSelectedTaskId}
+                onUpdateTask={(id, updates) => onUpdateTask(id, updates)}
               />
             ) : view === 'kanban' ? (
               <TaskKanban
