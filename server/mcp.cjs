@@ -339,6 +339,26 @@ function optDateArg(args, key) {
  return new Date(ms).toISOString();
 }
 
+const PROJECT_STATUSES = ['planning', 'active', 'at_risk', 'on_hold', 'completed'];
+
+// A project id from an agent must name a project in THIS workspace: validated before the
+// write so a task never points at another workspace's project or at nothing.
+async function resolveProjectId(db, workspaceId, rawProjectId) {
+ const projectId = String(rawProjectId).trim();
+ const rows = await db.unsafe('select id from projects where id = $1 and workspace_id = $2 limit 1', [projectId, workspaceId]);
+ if (!rows[0]) throw new ToolError('Project not found in this workspace');
+ return projectId;
+}
+
+// Labels are free-form tags: trimmed, lower-cased, de-duplicated, capped.
+function optLabelsArg(args) {
+ if (args?.labels === undefined) return null;
+ if (!Array.isArray(args.labels) || args.labels.some(item => typeof item !== 'string')) {
+  throw new ToolError('labels must be an array of strings');
+ }
+ return [...new Set(args.labels.map(item => item.trim().toLowerCase()).filter(Boolean))].slice(0, 20);
+}
+
 // tasks.depends_on is a native uuid[]. Reads come back as a JS array from
 // postgres.js, but be tolerant of a raw PG array literal string so the cycle
 // walk never iterates the CHARACTERS of '{a,b}'.
@@ -1690,6 +1710,7 @@ function buildTools() {
    type: 'object',
    properties: {
     status: { type: 'string', enum: ['todo', 'in_progress', 'done', 'cancelled'], description: 'Filter by status.' },
+    project_id: { type: 'string', description: 'Only tasks in this project (see list_projects).' },
     limit: { type: 'integer', description: 'Max tasks (default 50, max 200).' },
     cursor: CURSOR_PROPERTY,
    },
@@ -1705,10 +1726,15 @@ function buildTools() {
     params.push(status);
     statusClause = `and status = $${params.length}`;
    }
+   let projectClause = '';
+   if (typeof args?.project_id === 'string' && args.project_id.trim()) {
+    params.push(await resolveProjectId(db, identity.workspaceId, args.project_id));
+    projectClause = `and project_id = $${params.length}`;
+   }
    const keyset = keysetClause(cursor, 'created_at', params);
    params.push(limit);
    const rows = await db.unsafe(
-    `select * from tasks where workspace_id = $1 ${statusClause} ${keyset}
+    `select * from tasks where workspace_id = $1 ${statusClause} ${projectClause} ${keyset}
            order by created_at desc, id desc limit $${params.length}`,
     params,
    );
@@ -1735,6 +1761,9 @@ function buildTools() {
      description: 'Task ids that must finish before this one. Must be tasks in this workspace.',
     },
     parent_id: { type: 'string', description: 'Id of the task this is a sub-task of (optional). Must be a task in this workspace.' },
+    project_id: { type: 'string', description: 'Project this task belongs to (optional; see list_projects). Agents join a project only by being assigned its tasks.' },
+    labels: { type: 'array', items: { type: 'string' }, description: 'Free-form tags. The label "milestone" makes the task a milestone on the timeline.' },
+    estimate: { type: 'string', description: 'Rough size such as "2d" or "4h" (optional).' },
    },
    required: ['title'],
    additionalProperties: false,
@@ -1776,9 +1805,14 @@ function buildTools() {
     ? args.assignee_id.trim()
     : null;
    const actorUserId = mcpSubjectUserId(identity) || null;
+   const createProjectId = typeof args?.project_id === 'string' && args.project_id.trim()
+    ? await resolveProjectId(db, identity.workspaceId, args.project_id)
+    : null;
+   const createLabels = optLabelsArg(args) ?? [];
+   const createEstimate = typeof args?.estimate === 'string' && args.estimate.trim() ? args.estimate.trim().slice(0, 40) : null;
    const rows = await db.unsafe(
-    `insert into tasks (workspace_id, created_by, assignee_id, title, description, status, priority, due_date, source_type, source_id, parent_id, start_date, depends_on, dispatch_requested_by)
-         values ($1, $12, $2, $3, $4, $5, $6, $7, 'ai', $8, $9, $10, $11::uuid[], $13) returning *`,
+    `insert into tasks (workspace_id, created_by, assignee_id, title, description, status, priority, due_date, source_type, source_id, parent_id, start_date, depends_on, dispatch_requested_by, project_id, labels, estimate)
+         values ($1, $12, $2, $3, $4, $5, $6, $7, 'ai', $8, $9, $10, $11::uuid[], $13, $14, $15::text[], $16) returning *`,
     [identity.workspaceId,
      assigneeId,
      title,
@@ -1790,7 +1824,10 @@ function buildTools() {
      startDate,
      toPgArrayLiteral(dependsOn),
      actorUserId,
-     assigneeId ? actorUserId : null]);
+     assigneeId ? actorUserId : null,
+     createProjectId,
+     toPgArrayLiteral(createLabels),
+     createEstimate]);
    deps.notifyDbSubscribers('tasks', 'INSERT', rows);
    if (assigneeId && rows[0]?.id && deps.dispatchTaskAssignment) {
     void Promise.resolve(deps.dispatchTaskAssignment({
@@ -1825,6 +1862,9 @@ function buildTools() {
      description: 'REPLACES this task\'s dependency list with these task ids (all must be tasks in this workspace). Pass [] to clear it. A list that would create a cycle is rejected.',
     },
     parent_id: { type: 'string', description: 'Re-parent this task under another task in this workspace. Pass "" to un-nest it back to top level.' },
+    project_id: { type: 'string', description: 'Move this task into a project (see list_projects). Pass "" to take it out of its project.' },
+    labels: { type: 'array', items: { type: 'string' }, description: 'REPLACES the task\'s labels. Pass [] to clear them.' },
+    estimate: { type: 'string', description: 'Rough size such as "2d". Pass "" to clear it.' },
    },
    required: ['task_id'],
    additionalProperties: false,
@@ -1867,6 +1907,16 @@ function buildTools() {
     : [];
    const nextAssigneeId = typeof args?.assignee_id === 'string' ? args.assignee_id.trim() : '';
    const touchesAssignee = Boolean(nextAssigneeId);
+   // project_id, labels and estimate follow the parent_id rule: only written when the caller
+   // mentioned them, so an unrelated update never reverts a concurrent change.
+   const touchesProject = typeof args?.project_id === 'string';
+   const nextProjectId = touchesProject && args.project_id.trim()
+    ? await resolveProjectId(db, identity.workspaceId, args.project_id)
+    : null;
+   const nextLabels = optLabelsArg(args);
+   const touchesLabels = nextLabels !== null;
+   const touchesEstimate = typeof args?.estimate === 'string';
+   const nextEstimate = touchesEstimate && args.estimate.trim() ? args.estimate.trim().slice(0, 40) : null;
    // Only a real human principal owns a private per-human agent conversation.
    // Agent/workspace principals deliberately write null on an actual transition
    // so they cannot inherit a previous human's routing authority.
@@ -1886,6 +1936,9 @@ function buildTools() {
              when $14 and assignee_id is distinct from $7 then $15
              else dispatch_requested_by
            end,
+           project_id = case when $16 then $17::uuid else project_id end,
+           labels = case when $18 then $19::text[] else labels end,
+           estimate = case when $20 then $21 else estimate end,
            completed_at = case when $5 = 'done' then now() else completed_at end,
            version = version + 1,
            updated_at = now()
@@ -1899,7 +1952,10 @@ function buildTools() {
      nextParentId, touchesParent,
      startDate,
      toPgArrayLiteral(nextDependsOn), touchesDependsOn,
-     touchesAssignee, actorUserId]);
+     touchesAssignee, actorUserId,
+     touchesProject, nextProjectId,
+     touchesLabels, toPgArrayLiteral(nextLabels ?? []),
+     touchesEstimate, nextEstimate]);
    deps.notifyDbSubscribers('tasks', 'UPDATE', rows);
    // Assigning a task to an agent dispatches it, exactly as it does from the UI.
    // `existing` was read BEFORE the write, so an agent re-writing the assignee it
@@ -1914,6 +1970,109 @@ function buildTools() {
     })).catch(() => { });
    }
    return { task: rows[0] };
+  },
+ });
+
+ // -- Projects --------------------------------------------------------------
+ // A project groups tasks. Agents are never attached to a project: they take part by being
+ // assigned its tasks, so there is no tool to add an agent to a project.
+
+ add({
+  name: 'list_projects',
+  description: 'List the workspace\'s projects (name, key, status, due date). Use a project id with create_task, update_task or list_tasks to work inside a project.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    include_archived: { type: 'boolean', description: 'Include archived projects (default false).' },
+    limit: { type: 'integer', description: 'Max projects (default 50, max 200).' },
+   },
+   additionalProperties: false,
+  },
+  async run(args, { db, identity }) {
+   const limit = optInt(args?.limit, 50, 200);
+   const rows = await db.unsafe(
+    `select id, name, project_key, description, status, color, due_date, start_date, archived, lead_id, created_at, updated_at
+       from projects where workspace_id = $1 ${args?.include_archived === true ? '' : 'and archived = false'}
+       order by created_at desc, id desc limit $2`,
+    [identity.workspaceId, limit]);
+   return { projects: rows };
+  },
+ });
+
+ add({
+  name: 'create_project',
+  description: 'Create a project in the workspace. Then create tasks inside it with create_task (project_id) and assign them to people or agents.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    name: { type: 'string', description: 'Project name.' },
+    project_key: { type: 'string', description: 'Short key such as "WEB" (optional).' },
+    description: { type: 'string', description: 'What the project is for (optional).' },
+    status: { type: 'string', enum: PROJECT_STATUSES, description: 'Default "active".' },
+    due_date: { type: 'string', description: 'ISO8601 due date (optional).' },
+   },
+   required: ['name'],
+   additionalProperties: false,
+  },
+  async run(args, { db, identity, deps }) {
+   if (identity.kind === 'invite' && !deps.roleHasWorkspaceCapability(identity.role, 'write')) {
+    throw new ToolError('This invite is read-only and cannot create projects');
+   }
+   const status = PROJECT_STATUSES.includes(args?.status) ? args.status : 'active';
+   const rows = await db.unsafe(
+    `insert into projects (workspace_id, created_by, name, project_key, description, status, due_date)
+         values ($1, $2, $3, $4, $5, $6, $7) returning *`,
+    [identity.workspaceId,
+     mcpSubjectUserId(identity) || null,
+     requireString(args, 'name').slice(0, 120),
+     typeof args?.project_key === 'string' ? args.project_key.trim().toUpperCase().slice(0, 12) : '',
+     typeof args?.description === 'string' ? args.description : '',
+     status,
+     optDateArg(args, 'due_date')]);
+   deps.notifyDbSubscribers('projects', 'INSERT', rows);
+   return { project: rows[0] };
+  },
+ });
+
+ add({
+  name: 'update_project',
+  description: 'Update a project: name, description, status, due date, or archive it. Only the fields you pass change.',
+  inputSchema: {
+   type: 'object',
+   properties: {
+    project_id: { type: 'string', description: 'The project id.' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    status: { type: 'string', enum: PROJECT_STATUSES },
+    due_date: { type: 'string', description: 'ISO8601 due date.' },
+    archived: { type: 'boolean', description: 'Archive or restore the project.' },
+   },
+   required: ['project_id'],
+   additionalProperties: false,
+  },
+  async run(args, { db, identity, deps }) {
+   if (identity.kind === 'invite' && !deps.roleHasWorkspaceCapability(identity.role, 'write')) {
+    throw new ToolError('This invite is read-only and cannot modify projects');
+   }
+   const projectId = await resolveProjectId(db, identity.workspaceId, requireString(args, 'project_id'));
+   const rows = await db.unsafe(
+    `update projects set
+           name = coalesce($3, name),
+           description = coalesce($4, description),
+           status = coalesce($5, status),
+           due_date = coalesce($6, due_date),
+           archived = coalesce($7, archived),
+           version = version + 1,
+           updated_at = now()
+         where id = $1 and workspace_id = $2 returning *`,
+    [projectId, identity.workspaceId,
+     typeof args?.name === 'string' && args.name.trim() ? args.name.trim().slice(0, 120) : null,
+     typeof args?.description === 'string' ? args.description : null,
+     PROJECT_STATUSES.includes(args?.status) ? args.status : null,
+     optDateArg(args, 'due_date'),
+     typeof args?.archived === 'boolean' ? args.archived : null]);
+   deps.notifyDbSubscribers('projects', 'UPDATE', rows);
+   return { project: rows[0] };
   },
  });
 

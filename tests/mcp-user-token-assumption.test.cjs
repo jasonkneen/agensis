@@ -100,8 +100,10 @@ test('a login token reaches exactly the tools the agw_ workspace token reaches',
   // a comment authored through them is attributed to an agent, and a user token
   // has no agent id to stamp — so they are absent from both sets and the
   // equality above still holds for the reason it always did.
+  // 48 since list_projects, create_project and update_project: they take the default kinds,
+  // like the task tools they sit beside, so both sets grew by the same three.
   // Queue status and force-drain are operator tools shared by both kinds.
-  assert.equal(byUser.length, 45);
+  assert.equal(byUser.length, 48);
   for (const name of ['force_drain_agent_queue', 'get_agent_queue_status']) {
     assert.ok(byUser.includes(name));
   }
