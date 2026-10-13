@@ -34,6 +34,8 @@ import { TASK_PANEL_MAX_WIDTH, TASK_PANEL_MIN_WIDTH, TASK_PANEL_WIDTH_KEY, clamp
 import { booleanPreference, oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useProjects } from '../../hooks/useProjects';
+import { useSavedViews } from '../../hooks/useSavedViews';
+import type { SavedViewConfig } from '../../lib/pm/savedViews';
 import { useTaskComments } from '../../hooks/useTaskComments';
 import { agentHandle } from '../../lib/agentAccent';
 import { isAssigneeActive, resolveTaskCommentAuthor } from '../../lib/taskAgents';
@@ -245,6 +247,48 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     viewPreferenceKey('tasks.view', workspaceId), TASK_VIEW_PREF, 'list' as TaskView,
   );
   const view = forcedView ?? storedView;
+
+  const currentViewConfig = (): SavedViewConfig => ({
+    filter,
+    hideDone,
+    agentsOnly,
+    overdueOnly,
+    search,
+    sort: sortBy,
+    view: storedView,
+    projectId: projectFilter,
+  });
+
+  // Applying a view sets every control it covers. Inside a project page the layout and the
+  // project are fixed, so those two are left alone.
+  const applySavedView = (id: string) => {
+    const saved = savedViews.find(item => item.id === id);
+    if (!saved) {
+      setActiveViewId('');
+      return;
+    }
+    const config = saved.config;
+    setFilter(config.filter);
+    setHideDone(config.hideDone);
+    setAgentsOnly(config.agentsOnly);
+    setOverdueOnly(config.overdueOnly);
+    setSearch(config.search);
+    setSortBy(config.sort);
+    if (!forcedView) setView(config.view);
+    if (!projectId) setProjectFilter(config.projectId);
+    setActiveViewId(id);
+  };
+
+  const saveCurrentView = async () => {
+    const name = viewName.trim();
+    if (!name) return;
+    const created = await createView(name, currentViewConfig());
+    if (created) {
+      setActiveViewId(created.id);
+      setViewName('');
+      setSavingView(false);
+    }
+  };
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Projects: the toolbar's project filter (session-only) and the New project form.
   const { projects, createProject } = useProjects(workspaceId, currentUserId);
@@ -256,6 +300,11 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   const [search, setSearch] = useState('');
   // Sort from the approved list mock. 'default' keeps the existing order.
   const [sortBy, setSortBy] = useState<TaskSort>('default');
+  // Saved views: a named copy of the toolbar's filters, sort and layout.
+  const { views: savedViews, createView, deleteView } = useSavedViews(workspaceId, currentUserId);
+  const [activeViewId, setActiveViewId] = useState('');
+  const [savingView, setSavingView] = useState(false);
+  const [viewName, setViewName] = useState('');
   const [showProjectForm, setShowProjectForm] = useState(false);
   // Which focus request we widened the filters FOR. Transient on purpose: the
   // widening below used to call setFilter/setHideDone, which are the PERSISTED
@@ -599,6 +648,29 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           <NativeSelectOption value="due">Sort: Due date</NativeSelectOption>
           <NativeSelectOption value="title">Sort: Title</NativeSelectOption>
         </NativeSelect>
+        <NativeSelect size="sm" className="w-32" value={activeViewId} onChange={e => applySavedView(e.target.value)} aria-label="Saved views">
+          <NativeSelectOption value="">Views</NativeSelectOption>
+          {savedViews.map(item => (
+            <NativeSelectOption key={item.id} value={item.id}>{item.name}</NativeSelectOption>
+          ))}
+        </NativeSelect>
+        {activeViewId && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            aria-label="Delete saved view"
+            onClick={() => {
+              void deleteView(activeViewId);
+              setActiveViewId('');
+            }}
+          >
+            Delete view
+          </Button>
+        )}
+        <Button type="button" variant="ghost" size="xs" aria-expanded={savingView} onClick={() => setSavingView(open => !open)}>
+          Save view
+        </Button>
         {!forcedView && (
           <>
         <div className="mx-1 h-5 w-px bg-border" aria-hidden />
@@ -640,6 +712,31 @@ export const TasksWindowContent = memo(function TasksWindowContent({
         )}
         <Badge variant="secondary">{openCount} open</Badge>
       </div>
+
+      {savingView && (
+        <form
+          className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 text-xs"
+          onSubmit={e => {
+            e.preventDefault();
+            void saveCurrentView();
+          }}
+        >
+          <Input
+            autoFocus
+            value={viewName}
+            onChange={e => setViewName(e.target.value)}
+            placeholder="Name this view, e.g. My overdue"
+            aria-label="Saved view name"
+            className="h-7 min-w-48 flex-1"
+          />
+          <Button type="submit" size="sm" disabled={!viewName.trim()}>
+            Save
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setSavingView(false)}>
+            Cancel
+          </Button>
+        </form>
+      )}
 
       {!projectId && (
       <NewProjectDialog
