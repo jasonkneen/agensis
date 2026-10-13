@@ -351,6 +351,8 @@ export interface Task {
  start_date: string | null;
  /** Task ids this task depends on (postgres uuid[]). */
  depends_on?: string[];
+ /** Project this task belongs to, or null. */
+ project_id?: string | null;
  /** Free-form labels (postgres text[]), e.g. 'design', 'backend'. */
  labels?: string[];
  /** Rough size, e.g. '2d' or '4h'. Null when unestimated. */

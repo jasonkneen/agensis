@@ -32,6 +32,7 @@ import type { CreateTaskInput } from '../../hooks/useTasks';
 import { TASK_PANEL_MAX_WIDTH, TASK_PANEL_MIN_WIDTH, TASK_PANEL_WIDTH_KEY, clampTaskPanelWidth, readStoredTaskPanelWidth } from '../../lib/taskPanelWidth';
 import { booleanPreference, oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+import { useProjects } from '../../hooks/useProjects';
 import { useTaskComments } from '../../hooks/useTaskComments';
 import { agentHandle } from '../../lib/agentAccent';
 import { isAssigneeActive, resolveTaskCommentAuthor } from '../../lib/taskAgents';
@@ -245,6 +246,11 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     viewPreferenceKey('tasks.view', workspaceId), TASK_VIEW_PREF, 'list' as TaskView,
   );
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // Projects: the toolbar's project filter (session-only) and the New project form.
+  const { projects, createProject } = useProjects(workspaceId, currentUserId);
+  const [projectFilter, setProjectFilter] = useState<string>('all');
+  const [showProjectForm, setShowProjectForm] = useState(false);
+  const [projectDraft, setProjectDraft] = useState({ name: '', key: '' });
   // Which focus request we widened the filters FOR. Transient on purpose: the
   // widening below used to call setFilter/setHideDone, which are the PERSISTED
   // setters — so arriving from a comment or @mention link on a task that the
@@ -289,8 +295,9 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     }
     // Cascades into `grouped` below, so it covers list/kanban/gantt in one place.
     // "Done" here means closed — done AND cancelled; see isClosedTask.
-    return applyHideDone(list, effectiveHideDone);
-  }, [allTopLevel, effectiveFilter, effectiveHideDone, members, currentUserEmail, currentUserId]);
+    const inProject = projectFilter === 'all' ? list : list.filter(task => task.project_id === projectFilter);
+    return applyHideDone(inProject, effectiveHideDone);
+  }, [allTopLevel, effectiveFilter, effectiveHideDone, projectFilter, members, currentUserEmail, currentUserId]);
 
   const grouped = useMemo(() => {
     const groups: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
@@ -521,8 +528,60 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           <ToggleGroupItem value="gantt" title="Gantt timeline" className={TASK_TOGGLE_ACTIVE}><GanttChart />Timeline</ToggleGroupItem>
         </ToggleGroup>
         <div className="flex-1" />
+        <select
+          aria-label="Filter by project"
+          className="h-7 rounded-md border border-border bg-card px-2 text-xs"
+          value={projectFilter}
+          onChange={e => setProjectFilter(e.target.value)}
+        >
+          <option value="all">All projects</option>
+          {projects.filter(project => !project.archived).map(project => (
+            <option key={project.id} value={project.id}>{project.name}</option>
+          ))}
+        </select>
+        <Button variant="outline" size="sm" onClick={() => setShowProjectForm(open => !open)} aria-expanded={showProjectForm}>
+          New project
+        </Button>
         <Badge variant="secondary">{openCount} open</Badge>
       </div>
+
+      {showProjectForm && (
+        <form
+          className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 text-xs"
+          onSubmit={async e => {
+            e.preventDefault();
+            const name = projectDraft.name.trim();
+            if (!name) return;
+            const created = await createProject({ name, project_key: projectDraft.key.trim().toUpperCase() });
+            if (created) {
+              setProjectDraft({ name: '', key: '' });
+              setShowProjectForm(false);
+            }
+          }}
+        >
+          <Input
+            autoFocus
+            aria-label="Project name"
+            placeholder="Project name"
+            className="h-7 min-w-40 flex-1"
+            value={projectDraft.name}
+            onChange={e => setProjectDraft(current => ({ ...current, name: e.target.value }))}
+          />
+          <Input
+            aria-label="Project key"
+            placeholder="Key (e.g. WEB)"
+            className="h-7 w-28"
+            value={projectDraft.key}
+            onChange={e => setProjectDraft(current => ({ ...current, key: e.target.value }))}
+          />
+          <Button type="submit" size="sm" disabled={!projectDraft.name.trim()}>
+            Add project
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setShowProjectForm(false)}>
+            Cancel
+          </Button>
+        </form>
+      )}
 
       <div className={cn(
         'shrink-0 border-b border-border bg-card/55 p-3 backdrop-blur-md transition-colors',
