@@ -4,6 +4,7 @@ import { Button } from '@agensis/ui/components/button';
 import { cn } from '@/lib/utils';
 import type { Task } from '../../types';
 import { isClosedTask, startOfDay } from './taskSchedule';
+import { useCalendarEvents } from '../../hooks/useCalendarEvents';
 
 // Calendar view from the approved table-and-calendar mock: a Monday-first month
 // grid with each top-level task shown on its due day. Overdue open tasks are
@@ -25,6 +26,8 @@ export function TaskCalendar({
   selectedTaskId,
   onSelectTask,
   onReschedule,
+  workspaceId,
+  userId,
 }: {
   /** Top-level rows to place, already filtered by the toolbar. */
   tasks: Task[];
@@ -32,7 +35,40 @@ export function TaskCalendar({
   onSelectTask: (id: string | null) => void;
   /** Moves a task's due date (and its start, if it has one) by whole days. */
   onReschedule: (id: string, updates: Partial<Task>) => void;
+  workspaceId: string | null;
+  userId?: string;
 }) {
+  const { events, createEvent, deleteEvent } = useCalendarEvents(workspaceId, userId);
+  const [showForm, setShowForm] = useState(false);
+  const [draft, setDraft] = useState({ title: '', date: '', time: '09:00', allDay: false });
+
+  // Events grouped by the local day they start on.
+  const eventsByDay = useMemo(() => {
+    const map = new Map<string, typeof events>();
+    for (const event of events) {
+      const key = dayKey(new Date(event.starts_at).getTime());
+      const list = map.get(key) ?? [];
+      list.push(event);
+      map.set(key, list);
+    }
+    return map;
+  }, [events]);
+
+  const submitEvent = async () => {
+    const title = draft.title.trim();
+    if (!title || !draft.date) return;
+    const [y, m, d] = draft.date.split('-').map(Number);
+    let start: Date;
+    if (draft.allDay) {
+      start = new Date(y, m - 1, d, 0, 0, 0);
+    } else {
+      const [hh, mm] = (draft.time || '09:00').split(':').map(Number);
+      start = new Date(y, m - 1, d, hh, mm, 0);
+    }
+    await createEvent({ title, starts_at: start.toISOString(), all_day: draft.allDay });
+    setDraft(current => ({ ...current, title: '' }));
+    setShowForm(false);
+  };
   // Drop target: the day under the pointer. Set on dragover so the cell can highlight.
   const [dropKey, setDropKey] = useState<string | null>(null);
 
@@ -111,6 +147,9 @@ export function TaskCalendar({
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
         <span className="text-sm font-semibold">{headerLabel}</span>
         <div className="flex-1" />
+        <Button variant="outline" size="sm" onClick={() => setShowForm(open => !open)} aria-expanded={showForm}>
+          New event
+        </Button>
         <div className="flex rounded-md border border-border text-xs">
           {(['month', 'week'] as const).map(option => (
             <button
@@ -135,6 +174,55 @@ export function TaskCalendar({
         </Button>
       </div>
 
+      {showForm && (
+        <form
+          className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-xs"
+          onSubmit={e => {
+            e.preventDefault();
+            submitEvent();
+          }}
+        >
+          <input
+            autoFocus
+            aria-label="Event title"
+            placeholder="Event title"
+            className="min-w-40 flex-1 rounded-md border border-border bg-card px-2 py-1 outline-none focus:border-primary"
+            value={draft.title}
+            onChange={e => setDraft(current => ({ ...current, title: e.target.value }))}
+          />
+          <input
+            type="date"
+            aria-label="Event date"
+            className="rounded-md border border-border bg-card px-2 py-1"
+            value={draft.date}
+            onChange={e => setDraft(current => ({ ...current, date: e.target.value }))}
+          />
+          {!draft.allDay && (
+            <input
+              type="time"
+              aria-label="Event time"
+              className="rounded-md border border-border bg-card px-2 py-1"
+              value={draft.time}
+              onChange={e => setDraft(current => ({ ...current, time: e.target.value }))}
+            />
+          )}
+          <label className="flex items-center gap-1 text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={draft.allDay}
+              onChange={e => setDraft(current => ({ ...current, allDay: e.target.checked }))}
+            />
+            All day
+          </label>
+          <Button type="submit" size="sm" disabled={!draft.title.trim() || !draft.date}>
+            Add
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setShowForm(false)}>
+            Cancel
+          </Button>
+        </form>
+      )}
+
       <div className="grid shrink-0 grid-cols-7 border-b border-border bg-card text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
         {WEEKDAYS.map(day => (
           <div key={day} className="border-r border-border px-2 py-1.5 last:border-r-0">{day}</div>
@@ -144,7 +232,12 @@ export function TaskCalendar({
       <div className={cn('grid min-h-0 flex-1 grid-cols-7 overflow-auto', mode === 'week' ? 'grid-rows-1' : 'grid-rows-6')}>
         {cells.map(cell => {
           const list = byDay.get(cell.key) ?? [];
-          const shown = list.slice(0, MAX_CHIPS_PER_DAY);
+          const dayEvents = eventsByDay.get(cell.key) ?? [];
+          const items = [
+            ...dayEvents.map(event => ({ kind: 'event' as const, event })),
+            ...list.map(task => ({ kind: 'task' as const, task })),
+          ];
+          const shown = items.slice(0, MAX_CHIPS_PER_DAY);
           const isToday = cell.key === todayKey;
           return (
             <div
@@ -177,7 +270,29 @@ export function TaskCalendar({
                 </span>
               </div>
               <div className="flex flex-col gap-0.5">
-                {shown.map(task => {
+                {shown.map(item => {
+                  if (item.kind === 'event') {
+                    const { event } = item;
+                    const time = event.all_day ? '' : `${new Date(event.starts_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} `;
+                    return (
+                      <div
+                        key={`event-${event.id}`}
+                        className="flex items-center gap-1 rounded border border-dashed border-muted-foreground/60 px-1.5 py-0.5 text-[0.6875rem]"
+                        title={event.title}
+                      >
+                        <span className="min-w-0 flex-1 truncate">{time}{event.title}</span>
+                        <button
+                          type="button"
+                          aria-label={`Delete ${event.title}`}
+                          className="text-muted-foreground hover:text-destructive"
+                          onClick={() => deleteEvent(event.id)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  }
+                  const task = item.task;
                   const overdue = !isClosedTask(task) && startOfDay(new Date(task.due_date as string).getTime()) < todayMs;
                   const done = task.status === 'done';
                   return (
@@ -202,8 +317,8 @@ export function TaskCalendar({
                     </button>
                   );
                 })}
-                {list.length > MAX_CHIPS_PER_DAY && (
-                  <span className="px-1 text-[0.6875rem] text-muted-foreground">+{list.length - MAX_CHIPS_PER_DAY} more</span>
+                {items.length > MAX_CHIPS_PER_DAY && (
+                  <span className="px-1 text-[0.6875rem] text-muted-foreground">+{items.length - MAX_CHIPS_PER_DAY} more</span>
                 )}
               </div>
             </div>

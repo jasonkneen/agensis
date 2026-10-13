@@ -673,6 +673,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                 selectedTaskId={selectedTaskId}
                 onSelectTask={setSelectedTaskId}
                 onReschedule={(id, updates) => onUpdateTask(id, updates)}
+                workspaceId={workspaceId}
+                userId={currentUserId}
               />
             ) : view === 'table' ? (
               <TaskTable
