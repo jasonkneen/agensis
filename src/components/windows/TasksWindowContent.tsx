@@ -700,6 +700,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                 selectedTaskId={selectedTaskId}
                 onSelectTask={setSelectedTaskId}
                 onReschedule={(id, updates) => onUpdateTask(id, updates)}
+                isAgentAssignee={assigneeId => Boolean(assigneeId) && agents.some(agent => agent.id === assigneeId)}
               />
             )}
           </div>

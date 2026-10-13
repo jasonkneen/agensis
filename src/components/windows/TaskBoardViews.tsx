@@ -224,6 +224,8 @@ export function TaskKanban({
 // ---------------------------------------------------------------------------
 
 const GANTT_DAY_WIDTH = 32;
+// Month zoom: the same chart compressed so a month of days fits the window.
+const GANTT_DAY_WIDTH_MONTH = 12;
 // One line of text (text-sm, matching the List view) plus room to breathe. The
 // old 36px held two jammed lines because the name lived in a side column; the
 // name now rides the bar, so a row is a single line again — just a taller one.
@@ -260,6 +262,7 @@ export function TaskGantt({
   selectedTaskId,
   onSelectTask,
   onReschedule,
+  isAgentAssignee,
 }: {
   /** Rows to chart (already assignment-filtered, top-level only). */
   tasks: Task[];
@@ -271,7 +274,11 @@ export function TaskGantt({
   selectedTaskId: string | null;
   onSelectTask: (id: string | null) => void;
   onReschedule: (id: string, updates: Partial<Task>) => void;
+  /** True when an assignee id is an agent rather than a person; those bars are striped. */
+  isAgentAssignee?: (assigneeId: string | null) => boolean;
 }) {
+  const [zoom, setZoom] = useState<'week' | 'month'>('week');
+  const dayWidth = zoom === 'month' ? GANTT_DAY_WIDTH_MONTH : GANTT_DAY_WIDTH;
   const [drag, setDrag] = useState<GanttDrag | null>(null);
   // Preview offset (in snapped days) applied to the dragging bar before commit.
   const [previewDays, setPreviewDays] = useState(0);
@@ -310,7 +317,7 @@ export function TaskGantt({
     return map;
   }, [rows]);
 
-  const dayToX = (ms: number) => ((startOfDay(ms) - windowStart) / DAY_MS) * GANTT_DAY_WIDTH;
+  const dayToX = (ms: number) => ((startOfDay(ms) - windowStart) / DAY_MS) * dayWidth;
   const todayStart = startOfDay(Date.now());
   // Subtask rows are the children of a task (parent_id). Their done share fills the parent bar.
   const childrenByParent = useMemo(() => {
@@ -330,18 +337,18 @@ export function TaskGantt({
   };
   const isOverdue = (task: Task) =>
     Boolean(task.due_date) && !isClosedTask(task) && startOfDay(new Date(task.due_date as string).getTime()) < todayStart;
-  const gridWidth = dayCount * GANTT_DAY_WIDTH;
+  const gridWidth = dayCount * dayWidth;
   const contentWidth = gridWidth + GANTT_LABEL_GUTTER;
   const gridHeight = rows.length * GANTT_ROW_HEIGHT;
 
   useEffect(() => {
     if (!drag) return;
     const onMove = (e: PointerEvent) => {
-      const deltaDays = Math.round((e.clientX - drag.originX) / GANTT_DAY_WIDTH);
+      const deltaDays = Math.round((e.clientX - drag.originX) / dayWidth);
       setPreviewDays(deltaDays);
     };
     const onUp = (e: PointerEvent) => {
-      const deltaDays = Math.round((e.clientX - drag.originX) / GANTT_DAY_WIDTH);
+      const deltaDays = Math.round((e.clientX - drag.originX) / dayWidth);
       if (deltaDays === 0) {
         // No movement — treat a plain (non-resize) press as a click that opens
         // the editor. The resize handle should never open the panel.
@@ -370,7 +377,7 @@ export function TaskGantt({
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [drag, onReschedule, onSelectTask]);
+  }, [drag, dayWidth, onReschedule, onSelectTask]);
 
   if (rows.length === 0) {
     return (
@@ -410,7 +417,7 @@ export function TaskGantt({
     const ms = windowStart + i * DAY_MS;
     const d = new Date(ms);
     if (d.getDate() !== 1 && i !== 0 && i % 7 !== 0) continue;
-    const x = i * GANTT_DAY_WIDTH;
+    const x = i * dayWidth;
     const previous = ticks[ticks.length - 1];
     if (previous && x - previous.x < GANTT_TICK_MIN_GAP) continue;
     ticks.push({ x, label: d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) });
@@ -430,6 +437,22 @@ export function TaskGantt({
           along the timeline — and it draws as a bar.
         </p>
       )}
+      <div className="flex shrink-0 items-center justify-end gap-1 border-b border-border px-3 py-1.5 text-xs">
+        {(['week', 'month'] as const).map(level => (
+          <button
+            key={level}
+            type="button"
+            onClick={() => setZoom(level)}
+            aria-pressed={zoom === level}
+            className={cn(
+              'rounded-md border px-2 py-0.5 capitalize',
+              zoom === level ? 'border-primary/40 bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {level}
+          </button>
+        ))}
+      </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex" style={{ width: contentWidth }}>
           {/* Timeline grid. There is no separate name column: every task's name
@@ -467,7 +490,7 @@ export function TaskGantt({
                   <div
                     key={`weekend-${i}`}
                     className="pointer-events-none absolute top-0 bg-muted/40"
-                    style={{ left: i * GANTT_DAY_WIDTH, width: GANTT_DAY_WIDTH, height: gridHeight }}
+                    style={{ left: i * dayWidth, width: dayWidth, height: gridHeight }}
                     aria-hidden
                   />
                 ))}
@@ -520,7 +543,7 @@ export function TaskGantt({
                 const resizeShift = isDragging && drag?.mode === 'resize' ? shiftDays : 0;
                 const left = dayToX(span.startMs + moveShift * DAY_MS);
                 const days = Math.max(1, (span.endMs - span.startMs) / DAY_MS + resizeShift);
-                const width = days * GANTT_DAY_WIDTH;
+                const width = days * dayWidth;
                 const assigneeLabel = memberLabel(task.assignee_id);
                 const deps = taskDependsOn(task);
                 const violation = deps.some(depId => {
@@ -538,7 +561,7 @@ export function TaskGantt({
                 const labelInside = span.kind === 'span' && labelFitsInsideBar(task.title, width, row.depth);
                 const labelPlacement = labelInside ? 'inside' : 'outside';
                 // Width of the shape the alongside label has to clear.
-                const shapeWidth = span.kind === 'point' ? GANTT_DAY_WIDTH : width;
+                const shapeWidth = span.kind === 'point' ? dayWidth : width;
                 const statusTint = task.status === 'done'
                   ? 'border-emerald-500/40 bg-emerald-500/25'
                   : task.status === 'cancelled'
@@ -584,7 +607,7 @@ export function TaskGantt({
                       // must not look like a real one-day span.
                       <span
                         className="pointer-events-auto grid cursor-pointer place-items-center"
-                        style={{ width: GANTT_DAY_WIDTH, height: GANTT_ROW_HEIGHT }}
+                        style={{ width: dayWidth, height: GANTT_ROW_HEIGHT }}
                         title={tooltip}
                         onPointerDown={e => startDrag(e, 'move')}
                       >
@@ -641,7 +664,13 @@ export function TaskGantt({
                           selectedTaskId === task.id && 'ring-2 ring-primary',
                           isDragging && 'opacity-80',
                         )}
-                        style={{ width, height: GANTT_BAR_HEIGHT }}
+                        style={{
+                          width,
+                          height: GANTT_BAR_HEIGHT,
+                          ...(isAgentAssignee?.(task.assignee_id)
+                            ? { backgroundImage: 'repeating-linear-gradient(45deg, transparent 0 6px, color-mix(in srgb, var(--primary) 22%, transparent) 6px 12px)' }
+                            : {}),
+                        }}
                         title={tooltip}
                         onPointerDown={e => startDrag(e, 'move')}
                       >
