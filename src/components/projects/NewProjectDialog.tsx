@@ -47,6 +47,9 @@ export function NewProjectDialog({
   currentUserId,
   createProject,
   createTask,
+  updateProject,
+  onCreateChannel,
+  onCreateBrief,
   onCreated,
 }: {
   open: boolean;
@@ -56,6 +59,12 @@ export function NewProjectDialog({
   currentUserId?: string;
   createProject: (input: CreateProjectInput) => Promise<unknown>;
   createTask: (input: CreateTaskInput) => unknown;
+  /** Saves the channel and brief ids on the project. Needed for the two options below. */
+  updateProject?: (id: string, updates: Partial<Pick<Project, 'channel_id' | 'brief_document_id'>>) => unknown;
+  /** Creates a channel and returns its id, or null if it could not be made. Hides the option when absent. */
+  onCreateChannel?: (name: string, description: string) => Promise<string | null>;
+  /** Creates a brief document and returns its id, or null. Hides the option when absent. */
+  onCreateBrief?: (title: string, content: string) => Promise<string | null>;
   onCreated?: (project: Project) => void;
 }) {
   const activeAgents = useMemo(() => agents.filter(agent => agent.enabled !== false), [agents]);
@@ -72,6 +81,10 @@ export function NewProjectDialog({
   const [starters, setStarters] = useState<StarterTask[]>([]);
   const [draftPlan, setDraftPlan] = useState(false);
   const [draftAgentId, setDraftAgentId] = useState(firstAgentId);
+  const [makeChannel, setMakeChannel] = useState(false);
+  const [makeBrief, setMakeBrief] = useState(false);
+  // Set once the project exists but an extra could not be made, so the dialog stays open to say so.
+  const [created, setCreated] = useState<Project | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -102,6 +115,9 @@ export function NewProjectDialog({
     setTemplateId('blank');
     setDraftPlan(false);
     setDraftAgentId(firstAgentId);
+    setMakeChannel(false);
+    setMakeBrief(false);
+    setCreated(null);
     setError('');
   }, [open, currentUserId, firstAgentId]);
 
@@ -133,7 +149,27 @@ export function NewProjectDialog({
       if (draftPlan && draftAgentId) {
         await createTask({ title: 'Draft project plan', project_id: row.id, assignee_id: draftAgentId, priority: 'high' });
       }
-      onCreated?.(row);
+      // The optional extras come after the project and its tasks exist, so a failure here can
+      // never lose the project. It is reported, and the dialog stays open to say which one failed.
+      const failed: string[] = [];
+      const links: Partial<Pick<Project, 'channel_id' | 'brief_document_id'>> = {};
+      if (makeChannel && onCreateChannel) {
+        const id = await onCreateChannel(trimmed, description.trim()).catch(() => null);
+        if (id) links.channel_id = id;
+        else failed.push('the channel');
+      }
+      if (makeBrief && onCreateBrief) {
+        const id = await onCreateBrief(`${trimmed} brief`, description.trim()).catch(() => null);
+        if (id) links.brief_document_id = id;
+        else failed.push('the brief document');
+      }
+      if (Object.keys(links).length && updateProject) await updateProject(row.id, links);
+      if (failed.length) {
+        setCreated({ ...row, ...links });
+        setError(`The project was created, but ${failed.join(' and ')} could not be made. You can add ${failed.length > 1 ? 'them' : 'it'} later.`);
+        return;
+      }
+      onCreated?.({ ...row, ...links });
       onOpenChange(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create the project.');
@@ -348,18 +384,58 @@ export function NewProjectDialog({
             </div>
           )}
 
+          {(onCreateChannel || onCreateBrief) && (
+            <div>
+              <span className="mb-1.5 block text-sm font-medium">Set up alongside</span>
+              <div className="flex flex-col gap-2">
+                {onCreateChannel && (
+                  <label className="flex items-start gap-3 rounded-xl border border-border p-3">
+                    <input type="checkbox" className="mt-1 size-3.5 accent-primary" checked={makeChannel} onChange={e => setMakeChannel(e.target.checked)} />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium">Create a project channel</span>
+                      <span className="block text-xs text-muted-foreground">A channel named after the project, linked from its page.</span>
+                    </span>
+                  </label>
+                )}
+                {onCreateBrief && (
+                  <label className="flex items-start gap-3 rounded-xl border border-border p-3">
+                    <input type="checkbox" className="mt-1 size-3.5 accent-primary" checked={makeBrief} onChange={e => setMakeBrief(e.target.checked)} />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium">Create a project brief document</span>
+                      <span className="block text-xs text-muted-foreground">Starts from your description, and agents can read it as context.</span>
+                    </span>
+                  </label>
+                )}
+              </div>
+            </div>
+          )}
+
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         </form>
 
         <DialogFooter className="items-center border-t border-border px-6 py-3.5 sm:justify-between">
           <span className="text-xs text-muted-foreground">Everything here can be changed later</span>
           <div className="flex gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-              Cancel
-            </Button>
-            <Button type="button" onClick={() => void submit()} disabled={!name.trim() || busy}>
-              {busy ? 'Creating…' : 'Create project'}
-            </Button>
+            {created ? (
+              <Button
+                type="button"
+                onClick={() => {
+                  onCreated?.(created);
+                  onOpenChange(false);
+                }}
+              >
+                Open the project
+              </Button>
+            ) : (
+              <>
+                <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+                  Cancel
+                </Button>
+                <Button type="button" onClick={() => void submit()} disabled={!name.trim() || busy}>
+                  {busy ? 'Creating…' : 'Create project'}
+                </Button>
+              </>
+            )}
           </div>
         </DialogFooter>
       </DialogContent>

@@ -1384,6 +1384,25 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     });
   }, [createDocument, openWindow, activeLayerId, user?.id, logEvent]);
 
+  // The New project dialog's optional extras. Unlike a normal "new channel" or "new document",
+  // these do not open a window: the project page links to them instead. A null return means
+  // it could not be made, and the dialog says so without losing the project.
+  const createProjectChannel = useCallback(async (title: string, description: string) => {
+    const { session } = await createSession('auto', {
+      canvas_id: activeLayerId,
+      title,
+      ...(description ? { description } : {}),
+    } as Partial<import('./types').ChatSession>);
+    return session?.id ?? null;
+  }, [createSession, activeLayerId]);
+
+  const createProjectBrief = useCallback(async (title: string, content: string) => {
+    const doc = await createDocument(title);
+    if (!doc) return null;
+    if (content) await saveDocument(doc.id, { content });
+    return doc.id;
+  }, [createDocument, saveDocument]);
+
   // Tenants is a WINDOW, not a full-screen overlay. It used to render as
   // `absolute inset-0` at modal z-index over the whole workspace, so opening it
   // took the entire surface and nothing else could be reached — unlike every
@@ -2840,6 +2859,8 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
                   onAddToCanvasApplet={handleCreateDocApp}
                   fetchDocumentContent={fetchDocumentContent}
                   onOpenDocumentById={handleOpenDocumentById}
+                  onCreateProjectChannel={createProjectChannel}
+                  onCreateProjectBrief={createProjectBrief}
                   documentLibrary={documentLibrary}
                   onToggleFavorite={toggleFavorite}
                   onAddFact={handleAddFactFromScene}
@@ -3222,6 +3243,8 @@ function CanvasLayerScene({
   onAddToCanvasApplet,
   fetchDocumentContent,
   onOpenDocumentById,
+  onCreateProjectChannel,
+  onCreateProjectBrief,
   documentLibrary,
   onToggleFavorite,
   onAddFact,
@@ -3335,6 +3358,8 @@ function CanvasLayerScene({
   onAddToCanvasApplet: (doc: Document) => void;
   fetchDocumentContent: (id: string, force?: boolean) => Promise<string>;
   onOpenDocumentById: (documentId: string) => void;
+  onCreateProjectChannel: (title: string, description: string) => Promise<string | null>;
+  onCreateProjectBrief: (title: string, content: string) => Promise<string | null>;
   documentLibrary: DocumentLibrary;
   onToggleFavorite: (id: string, current: boolean) => void;
   onAddFact: (fact: string, category: string) => void;
@@ -3771,6 +3796,9 @@ function CanvasLayerScene({
             >
               <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
                 <ProjectsWindowContent
+                  onCreateChannel={onCreateProjectChannel}
+                  onCreateBrief={onCreateProjectBrief}
+                  onOpenDocument={onOpenDocumentById}
                   tasksProps={{
                     tasks,
                     members,

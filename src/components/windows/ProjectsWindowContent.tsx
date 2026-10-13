@@ -122,7 +122,16 @@ function AssigneeChip({ task, members, agents }: { task: Task; members: Workspac
   );
 }
 
-export function ProjectsWindowContent({ tasksProps }: { tasksProps: TasksContentProps }) {
+interface ProjectExtras {
+  /** Creates a channel for a new project and returns its id. */
+  onCreateChannel?: (name: string, description: string) => Promise<string | null>;
+  /** Creates a brief document for a new project and returns its id. */
+  onCreateBrief?: (title: string, content: string) => Promise<string | null>;
+  /** Opens a document by id, for the project's brief. */
+  onOpenDocument?: (documentId: string) => void;
+}
+
+export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBrief, onOpenDocument }: { tasksProps: TasksContentProps } & ProjectExtras) {
   const { tasks, members, agents, workspaceId, currentUserId, onCreateTask } = tasksProps;
   const { projects, createProject, updateProject } = useProjects(workspaceId, currentUserId);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -157,6 +166,9 @@ export function ProjectsWindowContent({ tasksProps }: { tasksProps: TasksContent
       currentUserId={currentUserId}
       createProject={createProject}
       createTask={onCreateTask}
+      updateProject={updateProject}
+      onCreateChannel={onCreateChannel}
+      onCreateBrief={onCreateBrief}
       onCreated={project => setSelectedId(project.id)}
     />
   );
@@ -169,6 +181,7 @@ export function ProjectsWindowContent({ tasksProps }: { tasksProps: TasksContent
           projectTasks={tasksByProject.get(selected.id) ?? []}
           tasksProps={tasksProps}
           updateProject={updateProject}
+          onOpenDocument={onOpenDocument}
           onBack={() => setSelectedId(null)}
         />
         {dialog}
@@ -273,12 +286,14 @@ function ProjectLanding({
   projectTasks,
   tasksProps,
   updateProject,
+  onOpenDocument,
   onBack,
 }: {
   project: Project;
   projectTasks: Task[];
   tasksProps: TasksContentProps;
   updateProject: ReturnType<typeof useProjects>['updateProject'];
+  onOpenDocument?: (documentId: string) => void;
   onBack: () => void;
 }) {
   const { members } = tasksProps;
@@ -356,6 +371,7 @@ function ProjectLanding({
           lead={lead}
           tasksProps={tasksProps}
           updateProject={updateProject}
+          onOpenDocument={onOpenDocument}
           onViewList={() => setTab('list')}
         />
       ) : tab === 'files' ? (
@@ -501,6 +517,7 @@ function OverviewTab({
   lead,
   tasksProps,
   updateProject,
+  onOpenDocument,
   onViewList,
 }: {
   project: Project;
@@ -510,6 +527,7 @@ function OverviewTab({
   lead: WorkspaceMember | undefined;
   tasksProps: TasksContentProps;
   updateProject: ReturnType<typeof useProjects>['updateProject'];
+  onOpenDocument?: (documentId: string) => void;
   onViewList: () => void;
 }) {
   const { members, agents } = tasksProps;
@@ -648,6 +666,26 @@ function OverviewTab({
             <dd>
               <input type="date" aria-label="Due date" className="rounded-md border border-border bg-transparent px-2 py-1 text-sm" value={dateInputValue(project.due_date)} onChange={e => void updateProject(project.id, { due_date: dateFromInput(e.target.value) })} />
             </dd>
+            {project.channel_id && tasksProps.onOpenSession && (
+              <>
+                <dt className="text-muted-foreground">Channel</dt>
+                <dd>
+                  <button type="button" className="text-primary hover:underline" onClick={() => tasksProps.onOpenSession?.(project.channel_id as string)}>
+                    Open channel
+                  </button>
+                </dd>
+              </>
+            )}
+            {project.brief_document_id && onOpenDocument && (
+              <>
+                <dt className="text-muted-foreground">Brief</dt>
+                <dd>
+                  <button type="button" className="text-primary hover:underline" onClick={() => onOpenDocument(project.brief_document_id as string)}>
+                    Open brief
+                  </button>
+                </dd>
+              </>
+            )}
           </dl>
         </Card>
 
