@@ -280,6 +280,8 @@ export interface UploadedFile {
  size: number;
  type: string;
  storage_path: string;
+ /** The project this file is attached to, if any. */
+ project_id?: string | null;
  version?: number;
  created_at: string;
 }

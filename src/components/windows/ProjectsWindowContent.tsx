@@ -1,10 +1,11 @@
 import { useMemo, useState, type ComponentProps, type ReactNode } from 'react';
-import { ArrowLeft, Pencil } from 'lucide-react';
+import { ArrowLeft, File as FileIcon, Paperclip, Pencil } from 'lucide-react';
 import { Button } from '@agensis/ui/components/button';
 import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
 import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
 import { useActivity } from '../../hooks/useActivity';
+import { useProjectFiles } from '../../hooks/useProjectFiles';
 import { projectActivity } from '../../lib/pm/projectActivity';
 import { useProjects, type Project, type ProjectStatus } from '../../hooks/useProjects';
 import type { Task, WorkspaceAgent } from '../../types';
@@ -39,7 +40,7 @@ const STATUS_FILTERS: Array<[ProjectStatus | 'all' | 'archived', string]> = [
   ['archived', 'Archived'],
 ];
 
-type LandingTab = 'overview' | 'activity' | TaskView;
+type LandingTab = 'overview' | 'files' | 'activity' | TaskView;
 const LANDING_TABS: Array<[LandingTab, string]> = [
   ['overview', 'Overview'],
   ['kanban', 'Board'],
@@ -47,6 +48,7 @@ const LANDING_TABS: Array<[LandingTab, string]> = [
   ['table', 'Table'],
   ['calendar', 'Calendar'],
   ['gantt', 'Timeline'],
+  ['files', 'Files'],
   ['activity', 'Activity'],
 ];
 
@@ -356,10 +358,91 @@ function ProjectLanding({
           updateProject={updateProject}
           onViewList={() => setTab('list')}
         />
+      ) : tab === 'files' ? (
+        <ProjectFilesTab project={project} tasksProps={tasksProps} />
       ) : tab === 'activity' ? (
         <ProjectActivityTab projectTasks={projectTasks} tasksProps={tasksProps} />
       ) : (
         <TasksWindowContent {...tasksProps} projectId={project.id} forcedView={tab} />
+      )}
+    </div>
+  );
+}
+
+function fileSize(bytes: number | string | null | undefined): string {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Files attached to the project. Attaching uploads through the app's normal upload and links the file; removing only unlinks it. */
+function ProjectFilesTab({ project, tasksProps }: { project: Project; tasksProps: TasksContentProps }) {
+  const { workspaceId, onUploadFiles } = tasksProps;
+  const { files, attach, detach } = useProjectFiles(workspaceId, project.id);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const onPick = async (picked: FileList | null) => {
+    const list = picked ? Array.from(picked) : [];
+    if (!list.length || !onUploadFiles) return;
+    setBusy(true);
+    setError('');
+    try {
+      const uploaded = await onUploadFiles(list);
+      if (!uploaded.length) throw new Error('The upload did not go through.');
+      await attach(uploaded);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not attach the file.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2">
+        <span className="text-sm font-medium">Files</span>
+        <span className="text-xs text-muted-foreground">{files.length}</span>
+        <div className="flex-1" />
+        {onUploadFiles && (
+          <label className={cn('flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs hover:bg-muted', busy && 'pointer-events-none opacity-60')}>
+            <Paperclip className="size-3.5" />
+            {busy ? 'Attaching…' : 'Attach files'}
+            <input
+              type="file"
+              multiple
+              className="sr-only"
+              aria-label="Attach files"
+              onChange={e => {
+                void onPick(e.target.files);
+                e.target.value = '';
+              }}
+            />
+          </label>
+        )}
+      </div>
+      {error && <p role="alert" className="shrink-0 px-4 pt-2 text-xs text-destructive">{error}</p>}
+      {files.length === 0 ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 p-6 text-center">
+          <p className="text-sm font-medium">No files yet</p>
+          <p className="text-xs text-muted-foreground">Attach the briefs, designs and documents this project works from.</p>
+        </div>
+      ) : (
+        <ul className="min-h-0 flex-1 overflow-y-auto px-4 py-1">
+          {files.map(file => (
+            <li key={file.id} className="flex items-center gap-2.5 border-b border-border py-2.5 text-sm last:border-b-0">
+              <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+              <span className="min-w-0 flex-1 truncate">{file.name}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">{fileSize(file.size)}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">{formatDate(file.created_at)}</span>
+              <button type="button" className="shrink-0 text-xs text-muted-foreground hover:text-destructive" onClick={() => void detach(file.id)} aria-label={`Remove ${file.name} from this project`}>
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
