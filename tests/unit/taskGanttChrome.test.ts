@@ -105,7 +105,7 @@ describe('Gantt chrome', () => {
     expect(onTimeBar).toBeNull();
   });
 
-  it('draws a task labelled milestone as a single-day marker on its due date', () => {
+  it('shows a task labelled milestone in the strip above the rows, not as a row', () => {
     const milestone = makeTask({ id: 'm', title: 'Pricing review', labels: ['milestone'], due_date: iso(3), start_date: iso(-2) });
     act(() => {
       root.render(
@@ -120,8 +120,9 @@ describe('Gantt chrome', () => {
         }),
       );
     });
-    const row = container.querySelector<HTMLElement>('[data-gantt-id="m"]');
-    expect(row?.dataset.ganttKind).toBe('point');
+    // Milestones sit in a strip above the rows, so they are not rows any more.
+    expect(container.querySelector('[data-gantt-id="m"]')).toBeNull();
+    expect(container.textContent).toContain('Pricing review');
   });
 
   it('fills a parent bar by the share of its subtasks that are done', () => {

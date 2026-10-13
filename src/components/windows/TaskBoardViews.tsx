@@ -286,7 +286,15 @@ export function TaskGantt({
   // Only the ROWS honour "hide done" — spans below still resolve over every
   // task, so a parent's rollup keeps spanning the children it is hiding.
   const rowSource = useMemo(() => applyHideDone(allTasks, Boolean(hideDone)), [allTasks, hideDone]);
-  const rows = useMemo<GanttRow[]>(() => buildGanttRows(tasks, rowSource), [tasks, rowSource]);
+  // Milestones (label 'milestone') are shown in a strip above the rows, not as rows.
+  const isMilestone = (task: Task) => Boolean(task.due_date) && Boolean(task.labels?.includes('milestone'));
+  const milestones = useMemo(() => rowSource.filter(isMilestone), [rowSource]);
+  const rows = useMemo<GanttRow[]>(
+    () => buildGanttRows(tasks, rowSource).filter(row => !isMilestone(row.task)),
+    [tasks, rowSource],
+  );
+  const stripHeight = milestones.length > 0 ? GANTT_ROW_HEIGHT : 0;
+  const rowTop = (index: number) => stripHeight + index * GANTT_ROW_HEIGHT;
   // Spans are resolved over ALL tasks so a parent still rolls up over a child
   // the assignment filter hides.
   const spans = useMemo(() => buildTaskSpans(allTasks), [allTasks]);
@@ -345,7 +353,7 @@ export function TaskGantt({
     Boolean(task.due_date) && !isClosedTask(task) && startOfDay(new Date(task.due_date as string).getTime()) < todayStart;
   const gridWidth = dayCount * dayWidth;
   const contentWidth = gridWidth + GANTT_LABEL_GUTTER;
-  const gridHeight = rows.length * GANTT_ROW_HEIGHT;
+  const gridHeight = stripHeight + rows.length * GANTT_ROW_HEIGHT;
 
   useEffect(() => {
     if (!drag) return;
@@ -385,7 +393,7 @@ export function TaskGantt({
     };
   }, [drag, dayWidth, onReschedule, onSelectTask]);
 
-  if (rows.length === 0) {
+  if (rows.length === 0 && milestones.length === 0) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-sm text-muted-foreground">
         No tasks to chart. Add one above.
@@ -406,9 +414,9 @@ export function TaskGantt({
       arrows.push({
         key: `${depId}->${row.task.id}`,
         x1: dayToX(depEnd),
-        y1: fromRow * GANTT_ROW_HEIGHT + GANTT_ROW_HEIGHT / 2,
+        y1: rowTop(fromRow) + GANTT_ROW_HEIGHT / 2,
         x2: dayToX(taskStart),
-        y2: toRow * GANTT_ROW_HEIGHT + GANTT_ROW_HEIGHT / 2,
+        y2: rowTop(toRow) + GANTT_ROW_HEIGHT / 2,
         violation: taskStart < depEnd,
       });
     }
@@ -486,6 +494,23 @@ export function TaskGantt({
             </div>
 
             <div className="relative" style={{ width: contentWidth, height: gridHeight }}>
+              {/* Milestone strip: one diamond and its title per milestone, on its due day. */}
+              {milestones.length > 0 && (
+                <div className="absolute top-0 left-0 border-b border-border bg-muted/30" style={{ width: contentWidth, height: stripHeight }}>
+                  {milestones.map(milestone => (
+                    <span
+                      key={milestone.id}
+                      className="absolute top-0 flex h-full items-center whitespace-nowrap text-xs text-muted-foreground"
+                      style={{ left: dayToX(new Date(milestone.due_date as string).getTime()) + dayWidth / 2 }}
+                      title={`${milestone.title} — ${new Date(milestone.due_date as string).toLocaleDateString()}`}
+                    >
+                      <span className="-ml-1.5 mr-1.5 size-2.5 shrink-0 rotate-45 bg-primary/70" aria-hidden />
+                      {milestone.title}
+                    </span>
+                  ))}
+                </div>
+              )}
+
               {/* Weekend columns. Painted before the rows so bars and labels sit on top. */}
               {Array.from({ length: dayCount }, (_, i) => i)
                 .filter(i => {
@@ -511,7 +536,7 @@ export function TaskGantt({
                     'absolute left-0 cursor-pointer border-b border-border/40',
                     selectedTaskId === row.task.id && 'bg-muted',
                   )}
-                  style={{ top: i * GANTT_ROW_HEIGHT, height: GANTT_ROW_HEIGHT, width: contentWidth }}
+                  style={{ top: rowTop(i), height: GANTT_ROW_HEIGHT, width: contentWidth }}
                   onClick={() => onSelectTask(row.task.id)}
                 />
               ))}
@@ -597,7 +622,7 @@ export function TaskGantt({
                     // Spans the full row rather than starting at the bar, so the
                     // alongside label below can be `sticky` — see its comment.
                     className="pointer-events-none absolute left-0 flex items-center"
-                    style={{ top: i * GANTT_ROW_HEIGHT, height: GANTT_ROW_HEIGHT, width: contentWidth }}
+                    style={{ top: rowTop(i), height: GANTT_ROW_HEIGHT, width: contentWidth }}
                     // Which of the three shapes this row drew, and where its title
                     // ended up. Asserted by tests/unit/tasksWindowRender.test.ts —
                     // "every bar is a narrow block with a one-character label" is
