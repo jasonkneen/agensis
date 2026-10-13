@@ -108,6 +108,7 @@ import { TaskTable } from './TaskTable';
 import { AssigneeOptions } from './AssigneeOptions';
 import { TaskEstimateField, TaskLabelEditor } from './TaskFields';
 import { TaskActivityLog } from './TaskActivityLog';
+import { REACTION_EMOJIS, reactionChips, toggleReaction } from '../../lib/pm/reactions';
 import { NewProjectDialog } from '../projects/NewProjectDialog';
 import { TaskCalendar } from './TaskCalendar';
 import { STATUS_LABELS, taskChatSessionId } from './taskPresentation';
@@ -1353,7 +1354,7 @@ function TaskDetail({
   const [mentionStart, setMentionStart] = useState(-1);
   const [pendingMentionAgent, setPendingMentionAgent] = useState<WorkspaceAgent | null>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
-  const { comments, createComment, deleteComment } = useTaskComments(task.id, workspaceId, currentUserId);
+  const { comments, createComment, updateComment, deleteComment } = useTaskComments(task.id, workspaceId, currentUserId);
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
@@ -1698,6 +1699,10 @@ function TaskDetail({
                 currentUserId={currentUserId}
                 currentUserEmail={currentUserEmail}
                 onDelete={() => deleteComment(comment.id)}
+                onReact={emoji => {
+                  if (!currentUserId) return;
+                  void updateComment(comment.id, { reactions: toggleReaction(comment.reactions, emoji, currentUserId) });
+                }}
               />
             ))}
           </ItemGroup>
@@ -2130,6 +2135,7 @@ function TaskCommentItem({
   currentUserId,
   currentUserEmail,
   onDelete,
+  onReact,
 }: {
   comment: TaskComment;
   members: WorkspaceMember[];
@@ -2137,9 +2143,12 @@ function TaskCommentItem({
   currentUserId?: string;
   currentUserEmail: string;
   onDelete: () => void;
+  onReact: (emoji: string) => void;
 }) {
   const author = resolveTaskCommentAuthor(comment, { members, agents, currentUserId, currentUserEmail });
   const isAgent = author.kind === 'agent';
+  const [picking, setPicking] = useState(false);
+  const chips = reactionChips(comment.reactions, currentUserId);
 
   return (
     <Item size="xs" variant="muted" className="task-comment-row items-start">
@@ -2163,6 +2172,49 @@ function TaskCommentItem({
           <span className="shrink-0 text-3xs text-muted-foreground">{formatRelativeTime(comment.created_at)}</span>
         </div>
         <ItemTitle className="max-w-full whitespace-normal text-xs font-normal leading-snug">{comment.content}</ItemTitle>
+        <div className="flex flex-wrap items-center gap-1" data-testid="comment-reactions">
+          {chips.map(chip => (
+            <button
+              key={chip.emoji}
+              type="button"
+              aria-pressed={chip.mine}
+              aria-label={`${chip.emoji} ${chip.count}${chip.mine ? ', you reacted' : ''}`}
+              onClick={() => onReact(chip.emoji)}
+              className={cn(
+                'rounded-full border px-1.5 text-2xs',
+                chip.mine ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {chip.emoji} {chip.count}
+            </button>
+          ))}
+          {currentUserId && (
+            <button
+              type="button"
+              aria-label="Add reaction"
+              aria-expanded={picking}
+              onClick={() => setPicking(open => !open)}
+              className="rounded-full border border-dashed border-border px-1.5 text-2xs text-muted-foreground hover:text-foreground"
+            >
+              +
+            </button>
+          )}
+          {picking &&
+            REACTION_EMOJIS.map(emoji => (
+              <button
+                key={emoji}
+                type="button"
+                aria-label={`React with ${emoji}`}
+                onClick={() => {
+                  onReact(emoji);
+                  setPicking(false);
+                }}
+                className="rounded-full px-1 text-xs hover:bg-muted"
+              >
+                {emoji}
+              </button>
+            ))}
+        </div>
       </ItemContent>
       <ItemActions className="ml-1">
         <Button type="button" variant="ghost" size="icon-xs" onClick={onDelete} aria-label="Delete comment">

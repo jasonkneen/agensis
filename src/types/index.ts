@@ -407,6 +407,8 @@ export interface TaskComment {
  parent_id: string | null;
  content: string;
  resolved: boolean;
+ /** Emoji reactions: { emoji: [user ids] }. Absent on rows from before the column existed. */
+ reactions?: Record<string, string[]>;
  version?: number;
  created_at: string;
  updated_at: string;
