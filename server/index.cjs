@@ -1874,6 +1874,9 @@ async function ensureRuntimeSchema() {
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_date timestamptz;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[] DEFAULT '{}';
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS labels text[] NOT NULL DEFAULT '{}';
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimate text;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS sort_order double precision NOT NULL DEFAULT 0;
     -- Sub-tasks / nesting. The column shipped in database/neon-schema.sql only,
     -- so a DB built from migrations + this bootstrap never got it; MCP now
     -- writes parent_id, which would fail there. Idempotent, so a no-op on any

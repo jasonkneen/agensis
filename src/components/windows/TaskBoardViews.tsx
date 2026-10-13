@@ -21,6 +21,7 @@ import {
   buildGanttRows,
   buildTaskSpans,
   dueDateFromExclusiveEnd,
+  isClosedTask,
   labelFitsInsideBar,
   startOfDay,
   taskDependsOn,
@@ -310,6 +311,25 @@ export function TaskGantt({
   }, [rows]);
 
   const dayToX = (ms: number) => ((startOfDay(ms) - windowStart) / DAY_MS) * GANTT_DAY_WIDTH;
+  const todayStart = startOfDay(Date.now());
+  // Subtask rows are the children of a task (parent_id). Their done share fills the parent bar.
+  const childrenByParent = useMemo(() => {
+    const map = new Map<string, Task[]>();
+    for (const t of allTasks) {
+      if (!t.parent_id) continue;
+      const list = map.get(t.parent_id) ?? [];
+      list.push(t);
+      map.set(t.parent_id, list);
+    }
+    return map;
+  }, [allTasks]);
+  const progressPercent = (task: Task): number | null => {
+    const kids = childrenByParent.get(task.id);
+    if (!kids?.length) return null;
+    return Math.round((100 * kids.filter(k => k.status === 'done').length) / kids.length);
+  };
+  const isOverdue = (task: Task) =>
+    Boolean(task.due_date) && !isClosedTask(task) && startOfDay(new Date(task.due_date as string).getTime()) < todayStart;
   const gridWidth = dayCount * GANTT_DAY_WIDTH;
   const contentWidth = gridWidth + GANTT_LABEL_GUTTER;
   const gridHeight = rows.length * GANTT_ROW_HEIGHT;
@@ -426,9 +446,32 @@ export function TaskGantt({
                   {tick.label}
                 </div>
               ))}
+              {todayVisible && (
+                <div
+                  className="absolute top-0 flex h-full items-center pl-1.5 text-xs font-medium text-primary"
+                  style={{ left: todayX }}
+                >
+                  Today
+                </div>
+              )}
             </div>
 
             <div className="relative" style={{ width: contentWidth, height: gridHeight }}>
+              {/* Weekend columns. Painted before the rows so bars and labels sit on top. */}
+              {Array.from({ length: dayCount }, (_, i) => i)
+                .filter(i => {
+                  const weekday = new Date(windowStart + i * DAY_MS).getDay();
+                  return weekday === 0 || weekday === 6;
+                })
+                .map(i => (
+                  <div
+                    key={`weekend-${i}`}
+                    className="pointer-events-none absolute top-0 bg-muted/40"
+                    style={{ left: i * GANTT_DAY_WIDTH, width: GANTT_DAY_WIDTH, height: gridHeight }}
+                    aria-hidden
+                  />
+                ))}
+
               {/* Row backgrounds. Also the row's click target: with the name
                   column gone, clicking anywhere on the band selects the task,
                   so selection no longer depends on hitting a 12px diamond. */}
@@ -578,15 +621,23 @@ export function TaskGantt({
                           )}
                           aria-hidden
                         />
+                        {progressPercent(task) !== null && (
+                          <span
+                            className="absolute top-1/2 left-0 h-1.5 -translate-y-1/2 rounded-sm bg-foreground/35"
+                            style={{ width: `${progressPercent(task)}%` }}
+                            aria-hidden
+                          />
+                        )}
                         <span className="absolute top-1/2 left-0 size-2 -translate-y-1/2 rotate-45 bg-foreground/60" aria-hidden />
                         <span className="absolute top-1/2 right-0 size-2 -translate-y-1/2 rotate-45 bg-foreground/60" aria-hidden />
                       </span>
                     ) : (
                       <span
                         className={cn(
-                          'pointer-events-auto flex cursor-pointer items-center overflow-hidden rounded-md border text-xs shadow-sm',
+                          'pointer-events-auto relative flex cursor-pointer items-center overflow-hidden rounded-md border text-xs shadow-sm',
                           statusTint,
                           violation && 'ring-1 ring-destructive/60',
+                          isOverdue(task) && 'outline outline-1 outline-offset-1 outline-destructive/70',
                           selectedTaskId === task.id && 'ring-2 ring-primary',
                           isDragging && 'opacity-80',
                         )}
@@ -594,6 +645,13 @@ export function TaskGantt({
                         title={tooltip}
                         onPointerDown={e => startDrag(e, 'move')}
                       >
+                        {progressPercent(task) !== null && (
+                          <span
+                            className="pointer-events-none absolute inset-y-0 left-0 bg-foreground/10"
+                            style={{ width: `${progressPercent(task)}%` }}
+                            aria-hidden
+                          />
+                        )}
                         {labelInside && (
                           <span className="pointer-events-none flex min-w-0 flex-1 items-center gap-1 truncate px-2">
                             {row.depth > 0 && <CornerDownRight className="size-3.5 shrink-0 opacity-70" aria-hidden />}

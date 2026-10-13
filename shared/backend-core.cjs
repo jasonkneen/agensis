@@ -221,7 +221,7 @@ const JSON_COLUMNS_BY_TABLE = {
 // literal `{a,b}`. So these columns are bound as an explicit PG array literal
 // string with a `::<elemType>[]` cast (see toPgArrayLiteral / bindDbParam).
 const ARRAY_COLUMNS_BY_TABLE = {
- tasks: { depends_on: 'uuid' },
+ tasks: { depends_on: 'uuid', labels: 'text' },
 };
 
 function arrayColumnElemType(table, column) {
@@ -767,7 +767,7 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
   'id', 'workspace_id', 'created_by', 'assignee_id', 'title', 'description',
   'status', 'priority', 'due_date', 'source_type', 'source_id', 'completed_at',
   'version', 'created_at', 'updated_at', 'parent_id', 'start_date',
-  'depends_on', 'attachments',
+  'depends_on', 'attachments', 'labels', 'estimate', 'sort_order',
  ],
  // gateway_configs became selectable so its realtime subscription could work at
  // all (authorizeRealtimeBinding authorizes a db_changes binding as a SELECT), and

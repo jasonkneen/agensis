@@ -1439,6 +1439,11 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachments jsonb NOT NULL DEFAULT '[
 -- queued assignment. This is deliberately separate from created_by: a task can
 -- be created by one person and assigned by another.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS dispatch_requested_by uuid;
+-- Project-management fields (gr8r merge): labels, a t-shirt style estimate, and a
+-- manual ordering key for board columns. All additive and nullable-or-defaulted.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS labels text[] NOT NULL DEFAULT '{}';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimate text;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS sort_order double precision NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_id ON tasks(assignee_id);
