@@ -102,6 +102,7 @@ import { MENTION_TILE, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { TaskGantt, TaskKanban } from './TaskBoardViews';
 import { TaskTable } from './TaskTable';
 import { AssigneeOptions } from './AssigneeOptions';
+import { TaskEstimateField, TaskLabelEditor } from './TaskFields';
 import { NewProjectDialog } from '../projects/NewProjectDialog';
 import { TaskCalendar } from './TaskCalendar';
 import { STATUS_LABELS, taskChatSessionId } from './taskPresentation';
@@ -749,6 +750,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
               onChangeStatus={status => onUpdateTask(selectedTask.id, { status })}
               onChangePriority={priority => onUpdateTask(selectedTask.id, { priority })}
               onChangeProject={projectId => onUpdateTask(selectedTask.id, { project_id: projectId })}
+              onChangeLabels={labels => onUpdateTask(selectedTask.id, { labels })}
+              onChangeEstimate={estimate => onUpdateTask(selectedTask.id, { estimate })}
               projects={projects.filter(project => !project.archived)}
               onChangeAssignee={assigneeId => onUpdateTask(selectedTask.id, { assignee_id: assigneeId })}
               onChangeDependsOn={next => onUpdateTask(selectedTask.id, { depends_on: next })}
@@ -1712,6 +1715,8 @@ function TaskEditPanel({
   onChangePriority,
   onChangeAssignee,
   onChangeProject,
+  onChangeLabels,
+  onChangeEstimate,
   projects,
   onChangeDependsOn,
   onChangeDates,
@@ -1738,6 +1743,8 @@ function TaskEditPanel({
   onChangePriority: (priority: TaskPriority) => void;
   onChangeAssignee: (assigneeId: string | null) => void;
   onChangeProject: (projectId: string | null) => void;
+  onChangeLabels: (labels: string[]) => void;
+  onChangeEstimate: (estimate: string | null) => void;
   projects: { id: string; name: string }[];
   onChangeDependsOn: (next: string[]) => void;
   onChangeDates: (updates: Partial<Task>) => void;
@@ -1888,6 +1895,8 @@ function TaskEditPanel({
                 <NativeSelectOption key={project.id} value={project.id}>{project.name}</NativeSelectOption>
               ))}
             </NativeSelect>
+            <TaskEstimateField key={task.id} value={task.estimate} onCommit={onChangeEstimate} />
+            <TaskLabelEditor key={`labels-${task.id}`} labels={task.labels ?? []} onChange={onChangeLabels} />
             {chatSessionId && onOpenSession && (
               <Button
                 type="button"
