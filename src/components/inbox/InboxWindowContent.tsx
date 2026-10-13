@@ -1,14 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, RotateCw } from 'lucide-react';
+import { RotateCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@agensis/ui/components/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from '@agensis/ui/components/dropdown-menu';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Skeleton } from '@agensis/ui/components/skeleton';
 import { cn } from '@/lib/utils';
@@ -21,7 +14,8 @@ import { FOCUS_RING, LIST_COLUMN_CLASS, PANE_HEADER, SCROLL_VIEWPORT_BLOCK } fro
 import { booleanPreference, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useSplitResize } from '../../hooks/useSplitResize';
-import { buildInboxRows, inboxEmptyState, type InboxRowModel } from './inboxModel';
+import { buildInboxRows, inboxEmptyState, pinRank, type InboxRowModel } from './inboxModel';
+import type { InboxCategory } from '../../types';
 import type { InboxOpenSession } from './inboxNavigation';
 import type { WorkspaceAgent } from '../../types';
 import {
@@ -141,6 +135,16 @@ interface InboxWindowContentProps {
   onOpenSession?: InboxOpenSession;
 }
 
+const INBOX_CATEGORY_TABS: Array<[InboxCategory | 'all', string]> = [
+  ['all', 'All'],
+  ['approval', 'Approvals'],
+  ['blocker', 'Blockers'],
+  ['mention', 'Mentions'],
+  ['thread', 'Threads'],
+  ['comment', 'Comments'],
+  ['error', 'Errors'],
+];
+
 export const InboxWindowContent = React.memo(function InboxWindowContent({
   workspaceId,
   agents,
@@ -162,6 +166,8 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
     viewPreferenceKey('inbox.unread-only', workspaceId), booleanPreference, false,
   );
   const [listWidth, setListWidth] = useState(readStoredWidth);
+  // Category tabs from the approved inbox mock. Session-only: which tab you are on is a view state.
+  const [category, setCategory] = useState<InboxCategory | 'all'>('all');
 
   // `now` is sampled here and nowhere else — one timestamp per data load, no
   // interval, no per-second re-render.
@@ -171,9 +177,21 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
   }, [groups]);
 
   const visibleRows = useMemo(
-    () => (unreadOnly ? rows.filter(row => row.group.unreadCount > 0) : rows),
-    [rows, unreadOnly],
+    () =>
+      rows.filter(
+        row =>
+          (!unreadOnly || row.group.unreadCount > 0) &&
+          (category === 'all' || row.group.category === category),
+      ),
+    [rows, unreadOnly, category],
   );
+
+  // Items per category, for the tab counts. Not filtered by the Unread toggle, so the numbers are stable.
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<InboxCategory | 'all', number>([['all', rows.length]]);
+    for (const row of rows) counts.set(row.group.category, (counts.get(row.group.category) ?? 0) + 1);
+    return counts;
+  }, [rows]);
 
   const selected = useMemo(
     () => (selectedKey ? groups.find(group => group.key === selectedKey) ?? null : null),
@@ -338,42 +356,40 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
           />
         ) : (
         <div className={PANE_HEADER}>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className={cn(
-                  'relative -ml-1 flex h-6 items-center gap-1 rounded-md px-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/70',
-                  FOCUS_RING,
-                )}
-              >
-                <span>{unreadOnly ? 'Unread' : 'All'}</span>
-                <ChevronDown className="size-3.5 text-muted-foreground" />
-                {unreadCount > 0 && !unreadOnly && (
-                  <span
-                    aria-hidden="true"
-                    className="absolute right-0 top-0 size-1.5 rounded-full bg-primary ring-2 ring-card"
-                  />
-                )}
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-44">
-              <DropdownMenuRadioGroup
-                value={unreadOnly ? 'unread' : 'all'}
-                onValueChange={value => setUnreadOnly(value === 'unread')}
-              >
-                <DropdownMenuRadioItem value="all">All</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="unread">
-                  Unread
-                  {unreadCount > 0 && (
-                    <span className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[0.65rem] font-semibold leading-none text-primary-foreground">
-                      {unreadCount > 99 ? '99+' : unreadCount}
-                    </span>
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            {INBOX_CATEGORY_TABS.map(([value, label]) => {
+              const count = categoryCounts.get(value) ?? 0;
+              const active = category === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setCategory(value)}
+                  className={cn(
+                    'flex h-6 shrink-0 items-center gap-1 rounded-md px-2 text-sm transition-colors',
+                    active ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
+                    FOCUS_RING,
                   )}
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                >
+                  {label}
+                  {count > 0 && <span className="text-xs text-muted-foreground">{count}</span>}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={() => setUnreadOnly(!unreadOnly)}
+            aria-pressed={unreadOnly}
+            className={cn(
+              'h-6 shrink-0 rounded-md px-2 text-xs transition-colors',
+              unreadOnly ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground',
+              FOCUS_RING,
+            )}
+          >
+            Unread{unreadCount > 0 ? ` ${unreadCount > 99 ? '99+' : unreadCount}` : ''}
+          </button>
 
           <div className="flex-1" />
 
@@ -519,25 +535,38 @@ export function InboxList({
     );
   }
 
+  const pinned = rows.filter(row => pinRank(row.group.category) < 2);
+  const earlier = rows.filter(row => pinRank(row.group.category) >= 2);
+  const renderRows = (list: InboxRowModel[]) =>
+    list.map(row => (
+      <InboxRow
+        key={row.group.key}
+        row={row}
+        selected={row.group.key === selectedKey}
+        selectionMode={selectionMode}
+        checked={selectedKeys.has(row.group.key)}
+        onSelect={onSelect}
+        onToggleSelect={onToggleSelect}
+        onMarkRead={onMarkRead}
+        onOpenSession={onOpenSession}
+      />
+    ));
+
   return (
     <ScrollArea className={cn('min-h-0 flex-1', SCROLL_VIEWPORT_BLOCK)}>
-      {/* One flat stream, newest first, blockers pinned above it. Nothing is
-          drawn between rows — see InboxRow. Capped and centred (LIST_COLUMN_CLASS)
+      {/* Approvals and blockers sit under "Needs you now", everything else under
+          "Earlier", both newest first, as in the approved inbox mock. Rows draw no
+          dividers of their own — see InboxRow. Capped and centred (LIST_COLUMN_CLASS)
           so a wide window doesn't stretch rows into a thin edge-to-edge ribbon. */}
       <div className={cn('flex flex-col pb-2', LIST_COLUMN_CLASS)} onKeyDown={handleKeyDown}>
-        {rows.map(row => (
-          <InboxRow
-            key={row.group.key}
-            row={row}
-            selected={row.group.key === selectedKey}
-            selectionMode={selectionMode}
-            checked={selectedKeys.has(row.group.key)}
-            onSelect={onSelect}
-            onToggleSelect={onToggleSelect}
-            onMarkRead={onMarkRead}
-            onOpenSession={onOpenSession}
-          />
-        ))}
+        {pinned.length > 0 && (
+          <p className="px-4 pt-2 pb-1 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">Needs you now</p>
+        )}
+        {renderRows(pinned)}
+        {earlier.length > 0 && pinned.length > 0 && (
+          <p className="px-4 pt-4 pb-1 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">Earlier</p>
+        )}
+        {renderRows(earlier)}
       </div>
     </ScrollArea>
   );
