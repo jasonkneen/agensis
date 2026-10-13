@@ -47,6 +47,7 @@ import {
   dependencyCandidates as resolveDependencyCandidates,
   fromDateInputValue,
   isClosedTask,
+  startOfDay,
   resolveTaskFocus,
   WIDEST_TASK_FILTERS,
   taskDependsOn,
@@ -229,6 +230,11 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   // Projects: the toolbar's project filter (session-only) and the New project form.
   const { projects, createProject } = useProjects(workspaceId, currentUserId);
   const [projectFilter, setProjectFilter] = useState<string>('all');
+  // Extra toolbar filters from the approved task list mock. Session-only, and ignored while a
+  // task is being focused so a focused task is never hidden by them.
+  const [agentsOnly, setAgentsOnly] = useState(false);
+  const [overdueOnly, setOverdueOnly] = useState(false);
+  const [search, setSearch] = useState('');
   const [showProjectForm, setShowProjectForm] = useState(false);
   // Which focus request we widened the filters FOR. Transient on purpose: the
   // widening below used to call setFilter/setHideDone, which are the PERSISTED
@@ -276,8 +282,18 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     // "Done" here means closed — done AND cancelled; see isClosedTask.
     const activeProject = projectId ?? projectFilter;
     const inProject = activeProject === 'all' ? list : list.filter(task => task.project_id === activeProject);
-    return applyHideDone(inProject, effectiveHideDone);
-  }, [allTopLevel, effectiveFilter, effectiveHideDone, projectFilter, projectId, members, currentUserEmail, currentUserId]);
+    let narrowed = inProject;
+    if (!focusWidened) {
+      if (agentsOnly) narrowed = narrowed.filter(task => task.assignee_id && agents.some(agent => agent.id === task.assignee_id));
+      if (overdueOnly) {
+        const today = startOfDay(Date.now());
+        narrowed = narrowed.filter(task => !isClosedTask(task) && task.due_date && startOfDay(new Date(task.due_date).getTime()) < today);
+      }
+      const query = search.trim().toLowerCase();
+      if (query) narrowed = narrowed.filter(task => task.title.toLowerCase().includes(query) || (task.description ?? '').toLowerCase().includes(query));
+    }
+    return applyHideDone(narrowed, effectiveHideDone);
+  }, [allTopLevel, effectiveFilter, effectiveHideDone, projectFilter, projectId, agentsOnly, overdueOnly, search, focusWidened, agents, members, currentUserEmail, currentUserId]);
 
   const grouped = useMemo(() => {
     const groups: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
@@ -527,6 +543,35 @@ export const TasksWindowContent = memo(function TasksWindowContent({
         >
           {hideDone ? 'Show done' : 'Hide done'}
         </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          aria-pressed={agentsOnly}
+          onClick={() => setAgentsOnly(v => !v)}
+          title="Only tasks assigned to an agent"
+          className={cn(agentsOnly && 'text-primary')}
+        >
+          Agent-assigned
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          aria-pressed={overdueOnly}
+          onClick={() => setOverdueOnly(v => !v)}
+          title="Only open tasks past their due date"
+          className={cn(overdueOnly && 'text-primary')}
+        >
+          Overdue
+        </Button>
+        <Input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search tasks"
+          aria-label="Search tasks"
+          className="h-7 w-36 text-xs"
+        />
         {!forcedView && (
           <>
         <div className="mx-1 h-5 w-px bg-border" aria-hidden />
