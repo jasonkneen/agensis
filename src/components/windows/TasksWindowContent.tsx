@@ -138,6 +138,9 @@ interface TasksWindowContentProps {
   projectId?: string;
   /** Show this one view and hide the view switcher. Used by the project page's tabs. */
   forcedView?: TaskView;
+  /** Lets the New project dialog also create a channel and a brief for the project. */
+  onCreateProjectChannel?: (name: string, description: string) => Promise<string | null>;
+  onCreateProjectBrief?: (title: string, content: string) => Promise<string | null>;
   /**
    * Uploads to the SAME workspace file store the chat composer uses (see
    * useFiles in App.tsx) — a task attachment and a chat attachment are both
@@ -224,6 +227,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   onFocusTaskConsumed,
   projectId,
   forcedView,
+  onCreateProjectChannel,
+  onCreateProjectBrief,
   onUploadFiles,
 }: TasksWindowContentProps) {
   const [newTitle, setNewTitle] = useState('');
@@ -750,6 +755,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
         currentUserId={currentUserId}
         createProject={createProject}
         createTask={onCreateTask}
+        onCreateChannel={onCreateProjectChannel}
+        onCreateBrief={onCreateProjectBrief}
         onCreated={project => setProjectFilter(project.id)}
       />
       )}

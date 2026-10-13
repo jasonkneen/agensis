@@ -3861,6 +3861,8 @@ function CanvasLayerScene({
                   onUpdateAgent={onUpdateAgent}
                   onOpenSession={onOpenSessionById}
                   focusTaskId={win.focusTaskId}
+                  onCreateProjectChannel={onCreateProjectChannel}
+                  onCreateProjectBrief={onCreateProjectBrief}
                   onUploadFiles={onUploadFiles}
                 />
               </Suspense>
