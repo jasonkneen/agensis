@@ -43,6 +43,7 @@ const ALLOWED_TABLES = new Set([
  'canvas_layers',
  'canvas_objects',
  'tasks',
+ 'calendar_events',
  'document_comments',
  'task_comments',
  'document_versions',
@@ -185,6 +186,7 @@ const VERSIONED_TABLES = new Set([
  'canvas_layers',
  'canvas_objects',
  'tasks',
+ 'calendar_events',
  'document_comments',
  'task_comments',
  'workspace_agents',
@@ -245,7 +247,7 @@ function toPgArrayLiteral(value) {
 // MUST stay in lockstep with server/index.cjs (parity test enforces this).
 const WORKSPACE_SCOPED_TABLES = new Set([
  'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
- 'canvas_groups', 'canvas_layers', 'canvas_objects', 'tasks', 'document_comments',
+ 'canvas_groups', 'canvas_layers', 'canvas_objects', 'tasks', 'calendar_events', 'document_comments',
  'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
  'agent_connections', 'cursorbuddy_connection_keys', 'agent_jobs', 'agent_registrations',
  'activity_events', 'workspace_members',
@@ -301,6 +303,7 @@ const DB_TABLE_ACCESS = {
  canvas_layers: DEFAULT_TABLE_ACCESS,
  canvas_objects: DEFAULT_TABLE_ACCESS,
  tasks: DEFAULT_TABLE_ACCESS,
+ calendar_events: DEFAULT_TABLE_ACCESS,
  document_versions: DEFAULT_TABLE_ACCESS,
  workspace_agents: DEFAULT_TABLE_ACCESS,
  // Same capabilities as workspace_agents itself, and for the same reason:
@@ -763,6 +766,10 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
  // is an authorization input, not task content, and a future internal task
  // column must not become browser-readable merely because tasks already exist
  // in ALLOWED_TABLES.
+ calendar_events: [
+  'id', 'workspace_id', 'created_by', 'title', 'description', 'starts_at', 'ends_at',
+  'all_day', 'version', 'created_at', 'updated_at',
+ ],
  tasks: [
   'id', 'workspace_id', 'created_by', 'assignee_id', 'title', 'description',
   'status', 'priority', 'due_date', 'source_type', 'source_id', 'completed_at',
