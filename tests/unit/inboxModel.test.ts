@@ -5,9 +5,9 @@
 //   * a burst of replies on one thread collapses to ONE row, keyed by a stable
 //     conversation id (contextKey) — so a new arrival cannot move the selection;
 //   * blockers sort above everything else, however recent the rest is;
-//   * the list renders as a FLAT stream — no section headers, no reply counts —
-//     and its timestamps are absolute, so nothing in this feature ever needs a
-//     timer to stay truthful.
+//   * the list groups pinned items (approvals, blockers) under "Needs you now" and
+//     the rest under "Earlier", with no reply counts, and its timestamps are
+//     absolute, so nothing in this feature ever needs a timer to stay truthful.
 //
 // Written with createElement rather than JSX so it stays a .ts file and vitest's
 // existing `tests/unit/**/*.test.ts` include needs no config change.
@@ -298,10 +298,39 @@ describe('InboxList rendering', () => {
     expect(html).toContain('Needs your decision');
   });
 
-  it('is a flat stream — no section headers, no reply counts', () => {
+  it('groups pinned items under "Needs you now" and the rest under "Earlier"', () => {
     const html = render(mixed());
-    expect(html).not.toContain('Everything else');
-    expect(html).not.toContain('>Needs you<');
+    expect(html).toContain('Needs you now');
+    expect(html).toContain('Earlier');
+    // Order: pinned header, the blocker, the Earlier header, then the newer comment.
+    expect(html.indexOf('Needs you now')).toBeLessThan(html.indexOf('Ship or wait?'));
+    expect(html.indexOf('Ship or wait?')).toBeLessThan(html.indexOf('>Earlier<'));
+    expect(html.indexOf('>Earlier<')).toBeLessThan(html.indexOf('Nice work'));
+  });
+
+  it('puts an approval in the pinned group too', () => {
+    const html = render([
+      item({ id: 'ap1', createdAt: T(5), contextKey: 'approval:1', category: 'approval', title: 'Run migration 0042' }),
+      item({ id: 'm1', createdAt: T(1), contextKey: 'thread:m', category: 'mention', title: 'Sarah mentioned you' }),
+    ]);
+    expect(html.indexOf('Needs you now')).toBeLessThan(html.indexOf('Run migration 0042'));
+    expect(html.indexOf('Run migration 0042')).toBeLessThan(html.indexOf('>Earlier<'));
+  });
+
+  it('draws no group headers when nothing is pinned', () => {
+    const html = render([item({ id: 'c1', createdAt: T(1), contextKey: 'thread:c', category: 'comment', title: 'Just a comment' })]);
+    expect(html).not.toContain('Needs you now');
+    expect(html).not.toContain('>Earlier<');
+  });
+
+  it('draws no Earlier header when only pinned items exist', () => {
+    const html = render([item({ id: 'k1', createdAt: T(1), contextKey: 'blocker:1', category: 'blocker', title: 'Ship or wait?' })]);
+    expect(html).toContain('Needs you now');
+    expect(html).not.toContain('>Earlier<');
+  });
+
+  it('shows no reply counts', () => {
+    const html = render(mixed());
     expect(html).not.toMatch(/>\+\d+</);
   });
 
