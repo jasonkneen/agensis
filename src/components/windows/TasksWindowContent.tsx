@@ -11,6 +11,7 @@ import {
   ExternalLink,
   FileText,
   Flag,
+  CalendarDays,
   GanttChart,
   Table2,
   Link2,
@@ -100,6 +101,7 @@ import { ResizeHandle } from '@/components/common/ResizeHandle';
 import { MENTION_TILE, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { TaskGantt, TaskKanban } from './TaskBoardViews';
 import { TaskTable } from './TaskTable';
+import { TaskCalendar } from './TaskCalendar';
 import { STATUS_LABELS, taskChatSessionId } from './taskPresentation';
 
 interface TasksWindowContentProps {
@@ -159,14 +161,14 @@ const TASK_TOGGLE_ACTIVE =
 
 type AssignmentFilter = TaskAssignmentFilter;
 
-type TaskView = 'list' | 'kanban' | 'gantt' | 'table';
+type TaskView = 'list' | 'kanban' | 'gantt' | 'table' | 'calendar';
 
 // Remembered per workspace: reopening Tasks and being shown every completed
 // item again, every single time, is the whole complaint these three answer.
 // Search text and the selected task stay in memory — a search box that survives
 // a reload shows a filtered list with nothing on screen explaining why.
 const ASSIGNMENT_FILTER_PREF = oneOf<AssignmentFilter>(['all', 'mine', 'others']);
-const TASK_VIEW_PREF = oneOf<TaskView>(['list', 'kanban', 'gantt', 'table']);
+const TASK_VIEW_PREF = oneOf<TaskView>(['list', 'kanban', 'gantt', 'table', 'calendar']);
 
 // A task dispatched to an agent records the chat it is being worked in:
 // source_type 'chat' + the session id. Every other source_type stores a
@@ -515,6 +517,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           <ToggleGroupItem value="list" title="List view" className={TASK_TOGGLE_ACTIVE}><List />List</ToggleGroupItem>
           <ToggleGroupItem value="kanban" title="Kanban board" className={TASK_TOGGLE_ACTIVE}><Columns3 />Board</ToggleGroupItem>
           <ToggleGroupItem value="table" title="Table view" className={TASK_TOGGLE_ACTIVE}><Table2 />Table</ToggleGroupItem>
+          <ToggleGroupItem value="calendar" title="Calendar view" className={TASK_TOGGLE_ACTIVE}><CalendarDays />Calendar</ToggleGroupItem>
           <ToggleGroupItem value="gantt" title="Gantt timeline" className={TASK_TOGGLE_ACTIVE}><GanttChart />Timeline</ToggleGroupItem>
         </ToggleGroup>
         <div className="flex-1" />
@@ -664,7 +667,13 @@ export const TasksWindowContent = memo(function TasksWindowContent({
       ) : (
         <div className="flex min-h-0 flex-1 overflow-hidden">
           <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-            {view === 'table' ? (
+            {view === 'calendar' ? (
+              <TaskCalendar
+                tasks={filteredTopLevel}
+                selectedTaskId={selectedTaskId}
+                onSelectTask={setSelectedTaskId}
+              />
+            ) : view === 'table' ? (
               <TaskTable
                 tasks={filteredTopLevel}
                 allTasks={tasks}
