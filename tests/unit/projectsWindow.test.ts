@@ -123,7 +123,28 @@ describe('Projects window', () => {
   it('opens the project page with every tab', () => {
     openProject();
     const names = Array.from(container.querySelectorAll('[role="tab"]')).map(t => t.textContent?.trim());
-    expect(names).toEqual(['Overview', 'Board', 'List', 'Table', 'Calendar', 'Timeline', 'Files', 'Activity']);
+    expect(names).toEqual(['Overview', 'Board', 'List', 'Table', 'Calendar', 'Timeline', 'Files', 'Activity', 'Reports']);
+  });
+
+  it('shows the Reports tab panels for the project', () => {
+    openProject();
+    click(tab('Reports'));
+    expect(container.querySelector('[data-testid="project-reports"]')).toBeTruthy();
+    for (const title of ['Burndown', 'Velocity', 'Created vs completed', 'By status', 'Workload']) {
+      expect(container.textContent).toContain(title);
+    }
+  });
+
+  it('switches the list to the workspace Dashboard and opens a project from its portfolio', () => {
+    const dashboard = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.trim() === 'Dashboard') as HTMLElement;
+    click(dashboard);
+    expect(container.querySelector('[data-testid="workspace-dashboard"]')).toBeTruthy();
+    for (const label of ['Active projects', 'Open tasks', 'Overdue', 'Upcoming deadlines', 'Agents at work']) {
+      expect(container.textContent).toContain(label);
+    }
+    const link = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.trim() === 'Website Redesign') as HTMLElement;
+    click(link);
+    expect(container.querySelector('[role="tab"]')).toBeTruthy();
   });
 
   it('shows only this project task activity on the Activity tab', () => {

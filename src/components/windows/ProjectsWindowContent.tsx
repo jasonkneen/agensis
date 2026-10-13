@@ -12,6 +12,7 @@ import type { Task, WorkspaceAgent } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
 import { NewProjectDialog } from '../projects/NewProjectDialog';
 import { ProjectIconTile } from '../projects/projectIcons';
+import { ProjectReports, WorkspaceDashboard } from '../projects/ReportsPanels';
 import { projectColor } from '../projects/projectIconMap';
 import { TasksWindowContent, type TaskView } from './TasksWindowContent';
 import { STATUS_LABELS } from './taskPresentation';
@@ -40,7 +41,7 @@ const STATUS_FILTERS: Array<[ProjectStatus | 'all' | 'archived', string]> = [
   ['archived', 'Archived'],
 ];
 
-type LandingTab = 'overview' | 'files' | 'activity' | TaskView;
+type LandingTab = 'overview' | 'files' | 'activity' | 'reports' | TaskView;
 const LANDING_TABS: Array<[LandingTab, string]> = [
   ['overview', 'Overview'],
   ['kanban', 'Board'],
@@ -50,6 +51,7 @@ const LANDING_TABS: Array<[LandingTab, string]> = [
   ['gantt', 'Timeline'],
   ['files', 'Files'],
   ['activity', 'Activity'],
+  ['reports', 'Reports'],
 ];
 
 function initials(email: string | null | undefined): string {
@@ -137,6 +139,7 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<ProjectStatus | 'all' | 'archived'>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [page, setPage] = useState<'dashboard' | 'projects'>('projects');
 
   const tasksByProject = useMemo(() => {
     const map = new Map<string, Task[]>();
@@ -195,10 +198,27 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
         <h1 className="text-base font-semibold">Projects</h1>
         <span className="text-sm text-muted-foreground">{projects.filter(project => !project.archived).length}</span>
         <div className="flex-1" />
+        <div className="flex gap-1 text-xs" role="group" aria-label="Projects page">
+          {([['dashboard', 'Dashboard'], ['projects', 'All projects']] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={page === value}
+              onClick={() => setPage(value)}
+              className={cn('rounded-full border border-border px-2.5 py-1', page === value ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground')}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <Button size="sm" onClick={() => setDialogOpen(true)}>
           New project
         </Button>
       </div>
+      {page === 'dashboard' ? (
+        <WorkspaceDashboard projects={projects} tasks={tasks} members={members} agents={agents} onOpenProject={id => setSelectedId(id)} />
+      ) : (
+      <>
       <div className="flex shrink-0 gap-1 border-b border-border px-4 py-2 text-xs">
         {STATUS_FILTERS.map(([value, label]) => (
           <button
@@ -276,6 +296,8 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
           );
         })}
       </div>
+      </>
+      )}
       {dialog}
     </div>
   );
@@ -378,6 +400,8 @@ function ProjectLanding({
         <ProjectFilesTab project={project} tasksProps={tasksProps} />
       ) : tab === 'activity' ? (
         <ProjectActivityTab projectTasks={projectTasks} tasksProps={tasksProps} />
+      ) : tab === 'reports' ? (
+        <ProjectReports project={project} projectTasks={projectTasks} members={tasksProps.members} agents={tasksProps.agents} />
       ) : (
         <TasksWindowContent {...tasksProps} projectId={project.id} forcedView={tab} />
       )}
