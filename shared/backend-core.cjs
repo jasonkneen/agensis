@@ -45,6 +45,7 @@ const ALLOWED_TABLES = new Set([
  'tasks',
  'calendar_events',
  'projects',
+ 'saved_views',
  'document_comments',
  'task_comments',
  'document_versions',
@@ -189,6 +190,7 @@ const VERSIONED_TABLES = new Set([
  'tasks',
  'calendar_events',
  'projects',
+ 'saved_views',
  'document_comments',
  'task_comments',
  'workspace_agents',
@@ -211,6 +213,7 @@ const JSON_COLUMNS_BY_TABLE = {
  // uploaded_files rows, never file bytes. See lib/messageAttachments.ts,
  // reused as-is for tasks since the column is generic.
  tasks: new Set(['attachments']),
+ saved_views: new Set(['config']),
  feedback_reports: new Set(['page', 'selections', 'diagnostics']),
  workspace_agent_templates: new Set(['tools', 'skills', 'resource_facets', 'origin']),
  workspace_skills: new Set(['origin']),
@@ -249,7 +252,7 @@ function toPgArrayLiteral(value) {
 // MUST stay in lockstep with server/index.cjs (parity test enforces this).
 const WORKSPACE_SCOPED_TABLES = new Set([
  'documents', 'chat_sessions', 'memory_facts', 'uploaded_files',
- 'canvas_groups', 'canvas_layers', 'canvas_objects', 'tasks', 'calendar_events', 'projects', 'document_comments',
+ 'canvas_groups', 'canvas_layers', 'canvas_objects', 'tasks', 'calendar_events', 'projects', 'saved_views', 'document_comments',
  'task_comments', 'document_versions', 'workspace_agents', 'agent_webhooks',
  'agent_connections', 'cursorbuddy_connection_keys', 'agent_jobs', 'agent_registrations',
  'activity_events', 'workspace_members',
@@ -307,6 +310,7 @@ const DB_TABLE_ACCESS = {
  tasks: DEFAULT_TABLE_ACCESS,
  calendar_events: DEFAULT_TABLE_ACCESS,
  projects: DEFAULT_TABLE_ACCESS,
+ saved_views: DEFAULT_TABLE_ACCESS,
  document_versions: DEFAULT_TABLE_ACCESS,
  workspace_agents: DEFAULT_TABLE_ACCESS,
  // Same capabilities as workspace_agents itself, and for the same reason:
@@ -769,6 +773,9 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
  // is an authorization input, not task content, and a future internal task
  // column must not become browser-readable merely because tasks already exist
  // in ALLOWED_TABLES.
+ saved_views: [
+  'id', 'workspace_id', 'created_by', 'name', 'config', 'version', 'created_at', 'updated_at',
+ ],
  projects: [
   'id', 'workspace_id', 'created_by', 'name', 'project_key', 'description', 'status',
   'color', 'due_date', 'archived', 'icon', 'lead_id', 'start_date', 'channel_id', 'brief_document_id', 'version', 'created_at', 'updated_at',
