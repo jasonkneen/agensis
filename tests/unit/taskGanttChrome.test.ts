@@ -105,6 +105,25 @@ describe('Gantt chrome', () => {
     expect(onTimeBar).toBeNull();
   });
 
+  it('draws a task labelled milestone as a single-day marker on its due date', () => {
+    const milestone = makeTask({ id: 'm', title: 'Pricing review', labels: ['milestone'], due_date: iso(3), start_date: iso(-2) });
+    act(() => {
+      root.render(
+        createElement(TaskGantt, {
+          tasks: [milestone],
+          allTasks: [milestone],
+          hideDone: false,
+          memberLabel: () => null,
+          selectedTaskId: null,
+          onSelectTask: () => {},
+          onReschedule: () => {},
+        }),
+      );
+    });
+    const row = container.querySelector<HTMLElement>('[data-gantt-id="m"]');
+    expect(row?.dataset.ganttKind).toBe('point');
+  });
+
   it('fills a parent bar by the share of its subtasks that are done', () => {
     renderGantt();
     const fill = container.querySelector<HTMLElement>('[data-gantt-id="p"] span[style*="width: 50%"]');

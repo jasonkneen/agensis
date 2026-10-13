@@ -291,6 +291,12 @@ export function TaskGantt({
   // the assignment filter hides.
   const spans = useMemo(() => buildTaskSpans(allTasks), [allTasks]);
   const spanOf = (task: Task): TaskSpan => {
+    // A milestone is a single-day marker on its due date, whatever its start is.
+    // Tagged with the 'milestone' label, so it needs no schema of its own.
+    if (task.due_date && task.labels?.includes('milestone')) {
+      const day = startOfDay(new Date(task.due_date).getTime());
+      return { startMs: day, endMs: day + DAY_MS, kind: 'point' };
+    }
     const span = spans.get(task.id);
     if (span) return span;
     const day = startOfDay(new Date(task.created_at).getTime());
