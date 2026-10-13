@@ -224,6 +224,22 @@ const preview: WireframeScene = {
   ],
 };
 
+/** The projects dashboard: totals along the top, then progress bars and a chart. */
+const projectsDashboard: WireframeScene = {
+  id: 'projects-dashboard',
+  alt: 'A projects dashboard fills in: four totals, project progress bars, and a bar chart of tasks done each week.',
+  shapes: [
+    { kind: 'panel', x: 10, y: 8, w: 140, h: 84, tone: 'muted', motion: 'fade', delay: 0 },
+    { kind: 'chip', x: 18, y: 16, w: 40, h: 14, tone: 'base', motion: 'pop', delay: 0.3 },
+    { kind: 'chip', x: 102, y: 16, w: 40, h: 14, tone: 'accent', motion: 'pop', delay: 0.5 },
+    { kind: 'bar', x: 18, y: 44, w: 60, h: 5, tone: 'accent', motion: 'slide-right', delay: 0.9 },
+    { kind: 'bar', x: 18, y: 58, w: 40, h: 5, tone: 'accent', motion: 'slide-right', delay: 1.1 },
+    { kind: 'bar', x: 98, y: 66, w: 10, h: 18, tone: 'base', motion: 'slide-up', delay: 1.1 },
+    { kind: 'bar', x: 112, y: 56, w: 10, h: 28, tone: 'base', motion: 'slide-up', delay: 1.25 },
+    { kind: 'bar', x: 126, y: 62, w: 10, h: 22, tone: 'accent', motion: 'pulse', delay: 1.4 },
+  ],
+};
+
 /** Windows dropping away to reveal the desktop. */
 const showDesktop: WireframeScene = {
   id: 'show-desktop',
@@ -451,7 +467,7 @@ const streamingChannel: WireframeScene = {
 
 export const WIREFRAME_SCENES = {
   // In the gallery today.
-  streamingChannel, agentMarketplace, socialSignInGuard, automationRule, codexRuntime, connectionResources, stewardedResourceWork, auditLog, typingDots, stopReason, toolLoop,
+  projectsDashboard, streamingChannel, agentMarketplace, socialSignInGuard, automationRule, codexRuntime, connectionResources, stewardedResourceWork, auditLog, typingDots, stopReason, toolLoop,
   // Retired from the gallery when their feature stopped being news. Kept as
   // authored vocabulary — a scene costs nothing and is the reference for how
   // this format is meant to read.
@@ -474,10 +490,10 @@ export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
  */
 export const GALLERY_SLIDES: GallerySlide[] = [
   {
-    note: 'link-preview-loading',
-    title: 'More reliable link previews',
-    body: 'Previews use less memory as you browse conversations, load in batches, and stop waiting when a request times out.',
-    scene: preview,
+    note: 'projects-and-reports',
+    title: 'Projects, with reports',
+    body: 'Group tasks into projects, track progress on a dashboard, and see workload for people and agents together. Agents join by being assigned tasks.',
+    scene: projectsDashboard,
   },
   {
     note: 'streaming-channel-refresh',
