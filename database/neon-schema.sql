@@ -1480,6 +1480,12 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id);
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_id uuid REFERENCES projects(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
+-- Project fields from the approved New project dialog and landing page.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS icon text NOT NULL DEFAULT 'folder';
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS lead_id uuid;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS start_date timestamptz;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS channel_id uuid;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS brief_document_id uuid;
 
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_id ON tasks(assignee_id);

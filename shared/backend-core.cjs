@@ -771,7 +771,7 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
  // in ALLOWED_TABLES.
  projects: [
   'id', 'workspace_id', 'created_by', 'name', 'project_key', 'description', 'status',
-  'color', 'due_date', 'archived', 'version', 'created_at', 'updated_at',
+  'color', 'due_date', 'archived', 'icon', 'lead_id', 'start_date', 'channel_id', 'brief_document_id', 'version', 'created_at', 'updated_at',
  ],
  calendar_events: [
   'id', 'workspace_id', 'created_by', 'title', 'description', 'starts_at', 'ends_at',

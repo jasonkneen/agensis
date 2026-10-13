@@ -1912,6 +1912,12 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id);
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_id uuid REFERENCES projects(id) ON DELETE SET NULL;
     CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
+    -- Project fields from the approved New project dialog and landing page.
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS icon text NOT NULL DEFAULT 'folder';
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS lead_id uuid;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS start_date timestamptz;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS channel_id uuid;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS brief_document_id uuid;
     -- Sub-tasks / nesting. The column shipped in database/neon-schema.sql only,
     -- so a DB built from migrations + this bootstrap never got it; MCP now
     -- writes parent_id, which would fail there. Idempotent, so a no-op on any
