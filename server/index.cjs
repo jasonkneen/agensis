@@ -1932,6 +1932,9 @@ async function ensureRuntimeSchema() {
     CREATE INDEX IF NOT EXISTS idx_saved_views_workspace ON saved_views(workspace_id);
     -- Emoji reactions on task comments: { "👍": ["<user id>", ...], ... }. Empty by default.
     ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS reactions jsonb NOT NULL DEFAULT '{}'::jsonb;
+    -- Files attached to a project: uploaded_files.project_id, cleared if the project is deleted.
+    ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS project_id uuid REFERENCES projects(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_uploaded_files_project_id ON uploaded_files(project_id);
     -- Sub-tasks / nesting. The column shipped in database/neon-schema.sql only,
     -- so a DB built from migrations + this bootstrap never got it; MCP now
     -- writes parent_id, which would fail there. Idempotent, so a no-op on any
