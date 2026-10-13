@@ -1147,6 +1147,25 @@ unrelated to a canvas layer, which the section above also calls a "project".
   remembering to. Tasks created before the trigger existed have no rows; the report
   places them from their created and updated dates. The table is read-only to
   people (`manage` for writes); do not write to it from application code.
+- **Task statuses are six**: `backlog`, `todo`, `in_progress`, `in_review`, `done`,
+  `cancelled` (`tasks_status_check`; `TASK_STATUS_ORDER` in `taskPresentation.ts` is
+  the UI order, `TASK_STATUSES` in `server/mcp.cjs` the agent one). Open means
+  "not done or cancelled", so the new two count as open everywhere. The dispatch
+  queue only picks up `todo` + agent-assigned tasks, and `dispatchTaskAssignment`
+  refuses `backlog` (reason `backlog`): an agent starts when the task moves to To do.
+- **Project sharing**: `projects.visibility` (`workspace` | `private`) and
+  `projects.member_ids` (people only). A private project, its tasks, their comments
+  and status history are readable only by the creator and `member_ids` (a task's
+  assignee also keeps their task). Enforced in four places that must stay in step:
+  `privateProjectAccessClause` (REST select), `fanoutProjectRows` in
+  `server/realtime.cjs`, `readableProjectSql` / `resolveProjectId` in `server/mcp.cjs`,
+  and the creator-only write guard in `enforceDbOperationAccess`. Agents and
+  workspace keys never see a private project and cannot change sharing.
+- **Activity actor**: browser-logged events carry `metadata.actor_kind = 'person'`;
+  task changes made over MCP are logged server-side (`logTaskActivity`) with
+  `actor_kind: 'agent'`, `actor_id`, `actor_name`. `activityActor()` in
+  `src/lib/activityFamily.ts` reads it (older rows fall back to the event family) and
+  drives the Anyone / People / Agents control in the Activity window.
 - Chart code lives in `src/components/projects/ReportCharts.tsx`, loaded only with
   `React.lazy` (`tests/unit/usageChartsLazy.test.ts` enforces this, as for Usage).
 - The notification bell (`components/notifications/NotificationsBell.tsx`) merges the

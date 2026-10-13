@@ -34,6 +34,31 @@ const { emitReactionFlowEventsForUpdate } = require('../shared/reaction-events.c
 // race with new traffic and widen a thread-scoped page to the whole session.
 // Best-effort by design: a receipt is a courtesy signal, never a reason to fail
 // the tool that was actually asked for.
+// Task changes made through MCP are logged here, server-side, because the browser only
+// logs the changes a person makes in the UI. Each row records who acted so the Activity
+// feed can be filtered to agents or people. Best effort: a failed audit write never fails
+// the task change the caller already made.
+async function logTaskActivity(db, deps, identity, { eventType, task, title }) {
+ try {
+  if (!task?.id || !identity?.workspaceId) return;
+  const actorKind = identity.kind === 'agent' ? 'agent' : 'person';
+  const metadata = {
+   actor_kind: actorKind,
+   actor_id: identity.agentId ? String(identity.agentId) : null,
+   actor_name: identity.name || null,
+   via: 'mcp',
+  };
+  const inserted = await db.unsafe(
+   `insert into activity_events (workspace_id, user_id, event_type, entity_type, entity_id, title, metadata, created_at)
+      values ($1, $2, $3, 'task', $4, $5, $6::jsonb, now()) returning *`,
+   [identity.workspaceId, mcpSubjectUserId(identity) || null, eventType, String(task.id), String(title).slice(0, 160), metadata],
+  );
+  if (inserted.length > 0) deps.notifyDbSubscribers('activity_events', 'INSERT', inserted);
+ } catch (error) {
+  console.warn('[mcp] task activity write failed:', error?.message || error);
+ }
+}
+
 async function advanceAgentReadMarker(
  db,
  deps,
@@ -339,15 +364,54 @@ function optDateArg(args, key) {
  return new Date(ms).toISOString();
 }
 
+const TASK_STATUSES = ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled'];
 const PROJECT_STATUSES = ['planning', 'active', 'at_risk', 'on_hold', 'completed'];
 
-// A project id from an agent must name a project in THIS workspace: validated before the
-// write so a task never points at another workspace's project or at nothing.
-async function resolveProjectId(db, workspaceId, rawProjectId) {
+// Private projects are visible to their creator and member_ids only. Over MCP only a signed-in
+// person can be one of those; agents, integrations and workspace keys never see a private project
+// (an agent reaches a task inside one only when the task is assigned to it).
+function mcpViewerUserId(identity) {
+ return identity?.kind === 'user' ? (mcpSubjectUserId(identity) || null) : null;
+}
+
+// SQL that keeps only projects the caller may see. Pushes the viewer id onto `params`.
+function readableProjectSql(identity, params, alias = 'projects') {
+ params.push(mcpViewerUserId(identity));
+ const me = `$${params.length}::uuid`;
+ return `(${alias}.visibility = 'workspace' or ${alias}.created_by = ${me} or ${me} = any(${alias}.member_ids))`;
+}
+
+// A project id from an agent must name a project in THIS workspace that the caller may see:
+// validated before the write so a task never points at another workspace's project, at a
+// private one the caller cannot read, or at nothing.
+async function resolveProjectId(db, workspaceId, rawProjectId, identity) {
  const projectId = String(rawProjectId).trim();
- const rows = await db.unsafe('select id from projects where id = $1 and workspace_id = $2 limit 1', [projectId, workspaceId]);
+ const params = [projectId, workspaceId];
+ const readable = readableProjectSql(identity, params);
+ const rows = await db.unsafe(`select id from projects where id = $1 and workspace_id = $2 and ${readable} limit 1`, params);
  if (!rows[0]) throw new ToolError('Project not found in this workspace');
  return projectId;
+}
+
+// Sharing settings on create/update_project. Only a signed-in person may set them: an agent
+// cannot make a project private (it could lock people out) or widen who sees one.
+function optSharingArgs(args, identity) {
+ const touches = args?.visibility !== undefined || args?.member_ids !== undefined;
+ if (!touches) return { visibility: null, memberIds: null };
+ if (identity?.kind !== 'user') throw new ToolError('Only a person can change who a project is shared with');
+ let visibility = null;
+ if (args.visibility !== undefined) {
+  if (!['workspace', 'private'].includes(args.visibility)) throw new ToolError('visibility must be "workspace" or "private"');
+  visibility = args.visibility;
+ }
+ let memberIds = null;
+ if (args.member_ids !== undefined) {
+  if (!Array.isArray(args.member_ids) || args.member_ids.some(item => typeof item !== 'string')) {
+   throw new ToolError('member_ids must be an array of user ids');
+  }
+  memberIds = [...new Set(args.member_ids.map(item => item.trim()).filter(Boolean))].slice(0, 100);
+ }
+ return { visibility, memberIds };
 }
 
 // Labels are free-form tags: trimmed, lower-cased, de-duplicated, capped.
@@ -1709,7 +1773,7 @@ function buildTools() {
   inputSchema: {
    type: 'object',
    properties: {
-    status: { type: 'string', enum: ['todo', 'in_progress', 'done', 'cancelled'], description: 'Filter by status.' },
+    status: { type: 'string', enum: TASK_STATUSES, description: 'Filter by status.' },
     project_id: { type: 'string', description: 'Only tasks in this project (see list_projects).' },
     limit: { type: 'integer', description: 'Max tasks (default 50, max 200).' },
     cursor: CURSOR_PROPERTY,
@@ -1728,13 +1792,17 @@ function buildTools() {
    }
    let projectClause = '';
    if (typeof args?.project_id === 'string' && args.project_id.trim()) {
-    params.push(await resolveProjectId(db, identity.workspaceId, args.project_id));
+    params.push(await resolveProjectId(db, identity.workspaceId, args.project_id, identity));
     projectClause = `and project_id = $${params.length}`;
    }
+   // Tasks in a private project the caller cannot read are hidden, unless assigned to the caller.
+   params.push(identity.agentId ? String(identity.agentId) : null);
+   const assignedParam = `$${params.length}`;
+   const privacyClause = `and (project_id is null or assignee_id::text = ${assignedParam} or exists (select 1 from projects pr where pr.id = tasks.project_id and ${readableProjectSql(identity, params, 'pr')}))`;
    const keyset = keysetClause(cursor, 'created_at', params);
    params.push(limit);
    const rows = await db.unsafe(
-    `select * from tasks where workspace_id = $1 ${statusClause} ${projectClause} ${keyset}
+    `select * from tasks where workspace_id = $1 ${statusClause} ${projectClause} ${privacyClause} ${keyset}
            order by created_at desc, id desc limit $${params.length}`,
     params,
    );
@@ -1750,7 +1818,7 @@ function buildTools() {
    properties: {
     title: { type: 'string', description: 'Task title.' },
     description: { type: 'string', description: 'Task details.' },
-    status: { type: 'string', enum: ['todo', 'in_progress', 'done', 'cancelled'], description: 'Default "todo".' },
+    status: { type: 'string', enum: TASK_STATUSES, description: 'Default "todo".' },
     priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'], description: 'Default "normal".' },
     assignee_id: { type: 'string', description: 'User id to assign to (optional).' },
     start_date: { type: 'string', description: 'ISO8601 date work starts (optional). Without it the timeline can only draw an undated marker.' },
@@ -1777,7 +1845,7 @@ function buildTools() {
    // is deliberately timid.
    const normalizedTitle = normalizeTaskTitle(requireString(args, 'title'));
    const title = normalizedTitle.title;
-   const status = ['todo', 'in_progress', 'done', 'cancelled'].includes(args?.status) ? args.status : 'todo';
+   const status = TASK_STATUSES.includes(args?.status) ? args.status : 'todo';
    const priority = ['low', 'normal', 'high', 'urgent'].includes(args?.priority) ? args.priority : 'normal';
    // Validated before the insert: a bad parent must not create an orphan row.
    let parentId = typeof args?.parent_id === 'string' && args.parent_id.trim()
@@ -1806,7 +1874,7 @@ function buildTools() {
     : null;
    const actorUserId = mcpSubjectUserId(identity) || null;
    const createProjectId = typeof args?.project_id === 'string' && args.project_id.trim()
-    ? await resolveProjectId(db, identity.workspaceId, args.project_id)
+    ? await resolveProjectId(db, identity.workspaceId, args.project_id, identity)
     : null;
    const createLabels = optLabelsArg(args) ?? [];
    const createEstimate = typeof args?.estimate === 'string' && args.estimate.trim() ? args.estimate.trim().slice(0, 40) : null;
@@ -1829,6 +1897,7 @@ function buildTools() {
      toPgArrayLiteral(createLabels),
      createEstimate]);
    deps.notifyDbSubscribers('tasks', 'INSERT', rows);
+   await logTaskActivity(db, deps, identity, { eventType: 'task_created', task: rows[0], title: `Task created: ${rows[0]?.title}` });
    if (assigneeId && rows[0]?.id && deps.dispatchTaskAssignment) {
     void Promise.resolve(deps.dispatchTaskAssignment({
      workspaceId: identity.workspaceId,
@@ -1849,7 +1918,7 @@ function buildTools() {
    type: 'object',
    properties: {
     task_id: { type: 'string', description: 'The task id.' },
-    status: { type: 'string', enum: ['todo', 'in_progress', 'done', 'cancelled'] },
+    status: { type: 'string', enum: TASK_STATUSES },
     title: { type: 'string' },
     description: { type: 'string' },
     priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
@@ -1875,9 +1944,17 @@ function buildTools() {
    }
    const taskId = requireString(args, 'task_id');
    const existing = await db.unsafe(
-    'select id, parent_id, assignee_id from tasks where id = $1 and workspace_id = $2 limit 1', [taskId, identity.workspaceId]);
+    'select id, parent_id, assignee_id, status, project_id from tasks where id = $1 and workspace_id = $2 limit 1', [taskId, identity.workspaceId]);
    if (!existing[0]) throw new ToolError('Task not found in this workspace');
-   const status = ['todo', 'in_progress', 'done', 'cancelled'].includes(args?.status) ? args.status : null;
+   // A task inside a private project is invisible to a caller who cannot read that project,
+   // unless it is assigned to them.
+   if (existing[0].project_id && !(identity.agentId && String(existing[0].assignee_id || '') === String(identity.agentId))) {
+    const params = [existing[0].project_id];
+    const readable = readableProjectSql(identity, params);
+    const visible = await db.unsafe(`select 1 from projects where id = $1 and ${readable} limit 1`, params);
+    if (!visible[0]) throw new ToolError('Task not found in this workspace');
+   }
+   const status = TASK_STATUSES.includes(args?.status) ? args.status : null;
    const priority = ['low', 'normal', 'high', 'urgent'].includes(args?.priority) ? args.priority : null;
    // parent_id can't ride the coalesce() pattern: null there means "leave
    // alone", but an explicit "" has to mean "un-nest to top level". Resolve the
@@ -1911,7 +1988,7 @@ function buildTools() {
    // mentioned them, so an unrelated update never reverts a concurrent change.
    const touchesProject = typeof args?.project_id === 'string';
    const nextProjectId = touchesProject && args.project_id.trim()
-    ? await resolveProjectId(db, identity.workspaceId, args.project_id)
+    ? await resolveProjectId(db, identity.workspaceId, args.project_id, identity)
     : null;
    const nextLabels = optLabelsArg(args);
    const touchesLabels = nextLabels !== null;
@@ -1957,6 +2034,14 @@ function buildTools() {
      touchesLabels, toPgArrayLiteral(nextLabels ?? []),
      touchesEstimate, nextEstimate]);
    deps.notifyDbSubscribers('tasks', 'UPDATE', rows);
+   if (rows[0]) {
+    const finished = rows[0].status === 'done' && existing[0].status !== 'done';
+    await logTaskActivity(db, deps, identity, {
+     eventType: finished ? 'task_completed' : 'task_updated',
+     task: rows[0],
+     title: `${finished ? 'Task completed' : 'Task updated'}: ${rows[0].title}`,
+    });
+   }
    // Assigning a task to an agent dispatches it, exactly as it does from the UI.
    // `existing` was read BEFORE the write, so an agent re-writing the assignee it
    // already had (or updating only status/title as it works) never re-runs it.
@@ -1990,11 +2075,14 @@ function buildTools() {
   },
   async run(args, { db, identity }) {
    const limit = optInt(args?.limit, 50, 200);
+   const params = [identity.workspaceId];
+   const readable = readableProjectSql(identity, params);
+   params.push(limit);
    const rows = await db.unsafe(
-    `select id, name, project_key, description, status, color, due_date, start_date, archived, lead_id, created_at, updated_at
-       from projects where workspace_id = $1 ${args?.include_archived === true ? '' : 'and archived = false'}
-       order by created_at desc, id desc limit $2`,
-    [identity.workspaceId, limit]);
+    `select id, name, project_key, description, status, color, due_date, start_date, archived, lead_id, visibility, created_at, updated_at
+       from projects where workspace_id = $1 and ${readable} ${args?.include_archived === true ? '' : 'and archived = false'}
+       order by created_at desc, id desc limit $${params.length}`,
+    params);
    return { projects: rows };
   },
  });
@@ -2010,6 +2098,8 @@ function buildTools() {
     description: { type: 'string', description: 'What the project is for (optional).' },
     status: { type: 'string', enum: PROJECT_STATUSES, description: 'Default "active".' },
     due_date: { type: 'string', description: 'ISO8601 due date (optional).' },
+    visibility: { type: 'string', enum: ['workspace', 'private'], description: 'Who can see the project. Only a person can make one private.' },
+    member_ids: { type: 'array', items: { type: 'string' }, description: 'Users who can see a private project (people only).' },
    },
    required: ['name'],
    additionalProperties: false,
@@ -2019,16 +2109,19 @@ function buildTools() {
     throw new ToolError('This invite is read-only and cannot create projects');
    }
    const status = PROJECT_STATUSES.includes(args?.status) ? args.status : 'active';
+   const sharing = optSharingArgs(args, identity);
    const rows = await db.unsafe(
-    `insert into projects (workspace_id, created_by, name, project_key, description, status, due_date)
-         values ($1, $2, $3, $4, $5, $6, $7) returning *`,
+    `insert into projects (workspace_id, created_by, name, project_key, description, status, due_date, visibility, member_ids)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid[]) returning *`,
     [identity.workspaceId,
      mcpSubjectUserId(identity) || null,
      requireString(args, 'name').slice(0, 120),
      typeof args?.project_key === 'string' ? args.project_key.trim().toUpperCase().slice(0, 12) : '',
      typeof args?.description === 'string' ? args.description : '',
      status,
-     optDateArg(args, 'due_date')]);
+     optDateArg(args, 'due_date'),
+     sharing.visibility ?? 'workspace',
+     toPgArrayLiteral(sharing.memberIds ?? [])]);
    deps.notifyDbSubscribers('projects', 'INSERT', rows);
    return { project: rows[0] };
   },
@@ -2046,6 +2139,8 @@ function buildTools() {
     status: { type: 'string', enum: PROJECT_STATUSES },
     due_date: { type: 'string', description: 'ISO8601 due date.' },
     archived: { type: 'boolean', description: 'Archive or restore the project.' },
+    visibility: { type: 'string', enum: ['workspace', 'private'], description: 'Who can see the project. Only a person can change this.' },
+    member_ids: { type: 'array', items: { type: 'string' }, description: 'Users who can see a private project (people only). Replaces the list.' },
    },
    required: ['project_id'],
    additionalProperties: false,
@@ -2054,7 +2149,8 @@ function buildTools() {
    if (identity.kind === 'invite' && !deps.roleHasWorkspaceCapability(identity.role, 'write')) {
     throw new ToolError('This invite is read-only and cannot modify projects');
    }
-   const projectId = await resolveProjectId(db, identity.workspaceId, requireString(args, 'project_id'));
+   const projectId = await resolveProjectId(db, identity.workspaceId, requireString(args, 'project_id'), identity);
+   const sharing = optSharingArgs(args, identity);
    const rows = await db.unsafe(
     `update projects set
            name = coalesce($3, name),
@@ -2062,6 +2158,8 @@ function buildTools() {
            status = coalesce($5, status),
            due_date = coalesce($6, due_date),
            archived = coalesce($7, archived),
+           visibility = coalesce($8, visibility),
+           member_ids = case when $9 then $10::uuid[] else member_ids end,
            version = version + 1,
            updated_at = now()
          where id = $1 and workspace_id = $2 returning *`,
@@ -2070,7 +2168,10 @@ function buildTools() {
      typeof args?.description === 'string' ? args.description : null,
      PROJECT_STATUSES.includes(args?.status) ? args.status : null,
      optDateArg(args, 'due_date'),
-     typeof args?.archived === 'boolean' ? args.archived : null]);
+     typeof args?.archived === 'boolean' ? args.archived : null,
+     sharing.visibility,
+     sharing.memberIds !== null,
+     toPgArrayLiteral(sharing.memberIds ?? [])]);
    deps.notifyDbSubscribers('projects', 'UPDATE', rows);
    return { project: rows[0] };
   },
@@ -3539,5 +3640,6 @@ module.exports = {
   toolContent, toolError, MCP_TOOL_TEXT_MAX_CHARS,
   buildTools, ToolError, toolAllowedForIdentity, runToolForIdentity, KINDS_TO_RECORD,
   encodeCursor, decodeCursor, keysetClause, nextCursor, mcpSessionScopeSql,
+  optSharingArgs, readableProjectSql, mcpViewerUserId, TASK_STATUSES,
  },
 };

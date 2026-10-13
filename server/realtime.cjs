@@ -58,6 +58,9 @@ function createRealtime(deps = {}) {
   // Workspace-scoped rows derived from a session inherit that session's
   // audience. Null means the session could not be proven: fail closed.
   sessionRealtimeAudience = async () => null,
+  // Private projects: given project ids, the users allowed to see each PRIVATE one (ids that are
+  // not private are absent from the map). Throws on failure, which drops the row (fail closed).
+  privateProjectAudiences = async () => new Map(),
   sessionRealtimeAudiences = async () => new Map(),
   authorizeResourceOperationRealtime = async () => {
    throw forbidden('Resource operation realtime is unavailable');
@@ -535,7 +538,15 @@ function createRealtime(deps = {}) {
   const sessionAudienceRows = hasSessionAudience || isActivityFeed
    ? rowList.filter((row) => sessionAudienceId(table, row))
    : [];
-  const openRows = isActivityFeed
+  // Rows of a private project, and tasks that belong to a project, take the async lane so a
+  // private project's data reaches only its people.
+  const projectRows = table === 'projects' ? rowList.filter((row) => row?.visibility === 'private') : [];
+  const projectTaskRows = table === 'tasks' ? rowList.filter((row) => row?.project_id) : [];
+  const openRows = table === 'projects'
+   ? rowList.filter((row) => row?.visibility !== 'private')
+   : table === 'tasks'
+   ? rowList.filter((row) => !row?.project_id)
+   : isActivityFeed
    ? rowList.filter((row) => row?.event_type !== 'message_sent' && row?.event_type !== 'chat_created')
    : hasSessionAudience
    ? (WORKSPACE_VISIBLE_WITHOUT_SESSION.has(table)
@@ -572,9 +583,52 @@ function createRealtime(deps = {}) {
    }
   }
 
+  if (projectRows.length > 0 || projectTaskRows.length > 0) {
+   void fanoutProjectRows(table, projectRows.length > 0 ? projectRows : projectTaskRows, eventType, deliver);
+  }
   if (privateRows.length > 0) void fanoutPrivateSessionRows(privateRows, eventType, deliver);
   if (sessionAudienceRows.length > 0) {
    void fanoutSessionAudienceRows(table, sessionAudienceRows, eventType, deliver);
+  }
+ }
+
+ /**
+  * Fan project rows, and the tasks inside projects, according to the project's visibility.
+  * A workspace-visible project's rows go to everyone; a private project's go to its creator and
+  * member_ids only, plus the assignee for a task. A lookup failure sends nothing (fail closed).
+  */
+ async function fanoutProjectRows(table, rows, eventType, deliver) {
+  let audiences;
+  try {
+   if (table === 'projects') {
+    audiences = new Map(rows.map((row) => [String(row.id), new Set([row.created_by, ...(Array.isArray(row.member_ids) ? row.member_ids : [])].filter(Boolean).map(String))]));
+   } else {
+    audiences = await privateProjectAudiences([...new Set(rows.map((row) => String(row.project_id)))]);
+   }
+  } catch (error) {
+   console.error('project fanout audience lookup failed', error?.message || error);
+   return;
+  }
+  if (!(audiences instanceof Map)) return;
+  for (const row of rows) {
+   const key = String(table === 'projects' ? row.id : row.project_id);
+   const members = audiences.get(key);
+   // Absent from the map: the project is shared with the whole workspace, so the task is too.
+   for (const ws of websocketClients) {
+    const userId = ws.userId ? String(ws.userId) : '';
+    if (members) {
+     const assignee = table === 'tasks' && row.assignee_id ? String(row.assignee_id) : null;
+     if (!userId || !(members.has(userId) || assignee === userId)) continue;
+    }
+    for (const subscription of ws.subscriptions || []) {
+     if (subscription.type !== 'db_changes') continue;
+     if (subscription.table && subscription.table !== table) continue;
+     if (subscription.schema && subscription.schema !== 'public') continue;
+     if (subscription.event && subscription.event !== '*' && subscription.event !== eventType) continue;
+     if (!matchesFilter(subscription.filter, row)) continue;
+     deliver(ws, row);
+    }
+   }
   }
  }
 

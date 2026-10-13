@@ -333,7 +333,7 @@ export type ActiveView = 'chat' | 'document' | 'memory' | 'skills' | 'library' |
 
 export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'library' | 'tasks' | 'activity' | 'agents' | 'resources' | 'users' | 'schedules' | 'automations' | 'inbox' | 'tenants' | 'browser' | 'terminal' | 'projects';
 
-export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
+export type TaskStatus = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 /** Mirrors the `tasks_source_type_check` constraint — keep the two in step. */
 export type TaskSourceType = 'manual' | 'chat' | 'document' | 'canvas' | 'ai' | 'feedback';

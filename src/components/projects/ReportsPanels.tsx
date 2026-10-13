@@ -18,6 +18,7 @@ import type { Task, WorkspaceAgent } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
 import type { Project } from '../../hooks/useProjects';
 import { STATUS_COLORS } from './reportColors';
+import { STATUS_LABELS } from '../windows/taskPresentation';
 
 // Dashboard and Reports screens from the approved Section 7 mock. Charts load on
 // demand; the numbers and bars drawn in plain markup render immediately.
@@ -92,13 +93,12 @@ export function WorkloadBars({ rows, members, agents }: { rows: WorkloadRow[]; m
 }
 
 function StatusLegend({ counts }: { counts: ReturnType<typeof statusBreakdown> }) {
-  const labels = { todo: 'To do', in_progress: 'In progress', done: 'Done', cancelled: 'Cancelled' } as const;
   return (
     <div className="mt-2 flex flex-wrap gap-x-3.5 gap-y-1 text-xs text-muted-foreground">
       {counts.map(slice => (
         <span key={slice.status} className="flex items-center gap-1.5">
           <span className="size-2 rounded-sm" style={{ backgroundColor: STATUS_COLORS[slice.status] }} />
-          {labels[slice.status]} {slice.count}
+          {STATUS_LABELS[slice.status]} {slice.count}
         </span>
       ))}
     </div>

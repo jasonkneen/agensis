@@ -12,7 +12,10 @@
       "The List can be filtered by priority and label and grouped by assignee, priority, project or due week",
       "The notifications bell now includes Inbox items and your overdue, newly assigned and agent-finished tasks, with filters",
       "The command palette searches projects and can start a new task or project",
-      "Agents can list, create and update projects, and set a task's project, labels and estimate"
+      "Agents can list, create and update projects, and set a task's project, labels and estimate",
+      "Tasks now have Backlog and In review statuses alongside To do, In progress, Done and Cancelled",
+      "Projects can be private: only their creator and the people you choose see the project and its tasks",
+      "Activity can be narrowed to what people did or what agents did"
     ]
   },
   {

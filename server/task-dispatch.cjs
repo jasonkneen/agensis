@@ -239,7 +239,7 @@ function createTaskDispatch(deps = {}) {
 
  // Dispatch refusals that are about THIS task, not the agent: move to the next
  // candidate. (The drain's own SQL already filters most of them out.)
- const TASK_QUEUE_SKIP_REASONS = new Set(['task_not_found', 'terminal', 'stale_assignee', 'not_an_agent', 'missing_input', 'no_workspace']);
+ const TASK_QUEUE_SKIP_REASONS = new Set(['task_not_found', 'terminal', 'stale_assignee', 'not_an_agent', 'missing_input', 'no_workspace', 'backlog']);
 
  // Dispatch refusals that are about the AGENT: stop the whole drain, since no
  // task of this agent's could start either.
@@ -323,6 +323,8 @@ function createTaskDispatch(deps = {}) {
    if (!wsId) return { dispatched: false, reason: 'no_workspace' };
    // A finished task must never be resurrected by an assignment.
    if (task.status === 'done' || task.status === 'cancelled') return { dispatched: false, reason: 'terminal' };
+   // Backlog means "not yet": the agent starts when the task moves to To do.
+   if (task.status === 'backlog') return { dispatched: false, reason: 'backlog' };
    // The row is read AFTER the write that triggered this, so a later update that
    // re-assigned the task wins — never run an agent that is no longer the assignee.
    if (String(task.assignee_id || '') !== String(agentId)) return { dispatched: false, reason: 'stale_assignee' };

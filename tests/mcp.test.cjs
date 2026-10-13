@@ -101,13 +101,13 @@ function makeDb() {
       }
       if (n.startsWith('update chat_sessions set updated_at')) return [];
       // Tasks. Tree in WS: t-root -> t-child -> t-grand. t-other lives in OTHER_WS.
-      if (n.startsWith('select id, parent_id, assignee_id from tasks where id = $1 and workspace_id = $2')
+      if (n.startsWith('select id, parent_id, assignee_id, status, project_id from tasks where id = $1 and workspace_id = $2')
         || n.startsWith('select id, parent_id from tasks where id = $1 and workspace_id = $2')
         || n.startsWith('select parent_id from tasks where id = $1 and workspace_id = $2')) {
         const [id, ws] = params;
         const row = TASK_ROWS[id];
         return (row && row.workspace_id === ws)
-          ? [{ id: row.id, parent_id: row.parent_id, assignee_id: row.assignee_id ?? null }]
+          ? [{ id: row.id, parent_id: row.parent_id, assignee_id: row.assignee_id ?? null, status: row.status ?? 'todo', project_id: row.project_id ?? null }]
           : [];
       }
       if (n.startsWith('insert into tasks')) {

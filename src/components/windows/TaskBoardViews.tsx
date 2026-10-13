@@ -14,7 +14,7 @@ import {
   } from 'lucide-react';
 import type { Task, TaskStatus } from '../../types';
 import { TaskActivityChip } from './TaskActivityChip';
-import { STATUS_LABELS, taskChatSessionId } from './taskPresentation';
+import { STATUS_LABELS, TASK_STATUS_ORDER, taskChatSessionId } from './taskPresentation';
 import {
   DAY_MS,
   applyHideDone,
@@ -32,7 +32,7 @@ import { Badge } from '@agensis/ui/components/badge';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { cn } from '@/lib/utils';
 
-const KANBAN_COLUMNS: TaskStatus[] = ['todo', 'in_progress', 'done', 'cancelled'];
+const KANBAN_COLUMNS: TaskStatus[] = TASK_STATUS_ORDER;
 
 export function TaskKanban({
   columns,
@@ -225,7 +225,7 @@ export function TaskKanban({
 
 const GANTT_DAY_WIDTH = 32;
 // Order of the status groups when 'Group: Status' is on.
-const STATUS_GROUP_ORDER: Task['status'][] = ['in_progress', 'todo', 'done', 'cancelled'];
+const STATUS_GROUP_ORDER: Task['status'][] = ['in_progress', 'in_review', 'todo', 'backlog', 'done', 'cancelled'];
 // Month zoom: the same chart compressed so a month of days fits the window.
 const GANTT_DAY_WIDTH_MONTH = 12;
 // One line of text (text-sm, matching the List view) plus room to breathe. The

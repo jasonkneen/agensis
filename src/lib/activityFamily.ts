@@ -1,4 +1,5 @@
 import type { ActivityEventType } from '../types';
+import { activityMetadata } from './activityEntry';
 
 /**
  * The family a given `activity_events` row belongs to, mapped from its
@@ -99,4 +100,22 @@ export function familyDotColor(
   family: Exclude<ActivityFilter, 'all'> | 'all' | undefined,
 ): string {
   return ACTIVITY_SOURCE_OF_TRUTH[family ?? 'all'];
+}
+
+/** Who caused an event: a person, or an agent acting on its own. */
+export type ActivityActor = 'person' | 'agent';
+export type ActivityActorFilter = 'anyone' | ActivityActor;
+
+/**
+ * The actor recorded on the event (`metadata.actor_kind`, written by the browser for what a
+ * person does and by the server for what an agent does through MCP). Older rows carry none:
+ * those fall back to the family, so agent connections read as agents and everything else as a
+ * person.
+ */
+export function activityActor(
+  event: { event_type: ActivityEventType; metadata?: unknown },
+): ActivityActor {
+  const kind = activityMetadata(event.metadata)?.actor_kind;
+  if (kind === 'agent' || kind === 'person') return kind;
+  return ACTIVITY_FAMILY[event.event_type] === 'agents' ? 'agent' : 'person';
 }

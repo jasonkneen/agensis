@@ -27,6 +27,9 @@ export interface Project {
   /** The project's channel (a chat session) and brief (a document), when created. */
   channel_id: string | null;
   brief_document_id: string | null;
+  /** 'private' limits the project (and its tasks) to its creator and member_ids. */
+  visibility: 'workspace' | 'private';
+  member_ids: string[];
   archived: boolean;
   version: number;
   created_at: string;
@@ -43,6 +46,8 @@ export interface CreateProjectInput {
   lead_id?: string | null;
   start_date?: string | null;
   due_date?: string | null;
+  visibility?: 'workspace' | 'private';
+  member_ids?: string[];
 }
 
 export function useProjects(workspaceId: string | null, userId?: string) {
@@ -116,6 +121,8 @@ export function useProjects(workspaceId: string | null, userId?: string) {
           lead_id: input.lead_id ?? null,
           start_date: input.start_date ?? null,
           due_date: input.due_date ?? null,
+          visibility: input.visibility ?? 'workspace',
+          member_ids: input.member_ids ?? [],
         },
         `projects_${workspaceId}`,
       );

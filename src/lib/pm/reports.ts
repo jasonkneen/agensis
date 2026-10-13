@@ -123,7 +123,7 @@ export interface StatusSlice {
 }
 
 export function statusBreakdown(tasks: Pick<Task, 'status'>[]): StatusSlice[] {
-  const counts: Record<Task['status'], number> = { todo: 0, in_progress: 0, done: 0, cancelled: 0 };
+  const counts: Record<Task['status'], number> = { backlog: 0, todo: 0, in_progress: 0, in_review: 0, done: 0, cancelled: 0 };
   for (const task of tasks) if (task.status in counts) counts[task.status] += 1;
   return (Object.keys(counts) as Task['status'][]).map(status => ({ status, count: counts[status] }));
 }
@@ -189,13 +189,15 @@ export interface StatusEvent {
 
 export interface StatusFlowPoint {
   day: number;
+  backlog: number;
   todo: number;
   in_progress: number;
+  in_review: number;
   done: number;
   cancelled: number;
 }
 
-const STATUSES: Task['status'][] = ['todo', 'in_progress', 'done', 'cancelled'];
+const STATUSES: Task['status'][] = ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled'];
 
 /**
  * The status each task was in at a moment. Tasks with recorded changes use them. Tasks created
@@ -229,7 +231,7 @@ export function cumulativeFlow(tasks: Task[], events: StatusEvent[], from: numbe
   const points: StatusFlowPoint[] = [];
   for (let day = startOfDay(from); day <= startOfDay(now); day += DAY) {
     const dayEnd = day + DAY - 1;
-    const point: StatusFlowPoint = { day, todo: 0, in_progress: 0, done: 0, cancelled: 0 };
+    const point: StatusFlowPoint = { day, backlog: 0, todo: 0, in_progress: 0, in_review: 0, done: 0, cancelled: 0 };
     for (const timeline of timelines) {
       let current: Task['status'] | null = null;
       for (const step of timeline) {

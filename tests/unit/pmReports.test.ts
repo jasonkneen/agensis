@@ -71,7 +71,7 @@ describe('createdVsCompleted', () => {
 
 describe('statusBreakdown and workload', () => {
   it('counts every status including empty ones', () => {
-    expect(statusBreakdown([task({ id: 'a', status: 'done' }), task({ id: 'b' })]).map(s => s.count)).toEqual([1, 0, 1, 0]);
+    expect(statusBreakdown([task({ id: 'a', status: 'done' }), task({ id: 'b' })]).map(s => s.count)).toEqual([0, 1, 0, 0, 1, 0]);
   });
 
   it('puts people and agents in one list, busiest first, ignoring closed and unassigned', () => {
@@ -127,6 +127,13 @@ describe('cumulativeFlow', () => {
     const tasks = [task({ id: 'old', created_at: iso(1), status: 'done', completed_at: iso(3), updated_at: iso(3) })];
     const points = cumulativeFlow(tasks, [], day(1), day(4));
     expect(points.map(p => [p.todo, p.done])).toEqual([[1, 0], [1, 0], [0, 1], [0, 1]]);
+  });
+
+  it('tracks backlog and in review as their own bands', () => {
+    const tasks = [task({ id: 'a', created_at: iso(1), status: 'in_review' })];
+    const events = [ev('a', null, 'backlog', 1), ev('a', 'backlog', 'in_review', 2)];
+    const points = cumulativeFlow(tasks, events, day(1), day(2));
+    expect(points.map(p => [p.backlog, p.in_review])).toEqual([[1, 0], [0, 1]]);
   });
 
   it('does not count a task before it was created', () => {

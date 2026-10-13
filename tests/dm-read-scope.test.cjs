@@ -452,8 +452,25 @@ test('appendSessionAccessClause constrains every workspace-wide session-bearing 
  // Untouched tables must come back byte-identical, or this helper would start
  // silently filtering things that have nothing to do with sessions.
  const other = { clause: ' WHERE x = $1', params: ['v'] };
- const passthrough = core.appendSessionAccessClause(other, OWNER, 'tasks');
+ const passthrough = core.appendSessionAccessClause(other, OWNER, 'documents');
  assert.equal(passthrough, other);
+});
+
+test('private projects hide their tasks, comments and history from people outside them', () => {
+ const base = (table) => ({ clause: ` WHERE "${table}"."workspace_id" = $1`, params: ['w1'] });
+ const projects = core.appendSessionAccessClause(base('projects'), OWNER, 'projects');
+ assert.match(projects.clause, /"projects"\."visibility" = 'workspace' OR "projects"\."created_by" = \$2::uuid OR \$2::uuid = ANY\("projects"\."member_ids"\)/);
+ assert.deepEqual(projects.params, ['w1', OWNER], 'the viewer id is bound, never interpolated');
+
+ const tasks = core.appendSessionAccessClause(base('tasks'), OWNER, 'tasks');
+ assert.match(tasks.clause, /"tasks"\."project_id" IS NULL/, 'unprojected tasks stay open');
+ assert.match(tasks.clause, /"tasks"\."assignee_id" = \$2::uuid/, 'the assignee keeps access to their own task');
+ assert.match(tasks.clause, /pr\.visibility = 'workspace'/);
+
+ for (const [table, joinColumn] of [['task_comments', 'task_id'], ['task_status_events', 'task_id']]) {
+  const scoped = core.appendSessionAccessClause(base(table), OWNER, table);
+  assert.match(scoped.clause, new RegExp(`tk\\.id = "${table}"\\."${joinColumn}"`), `${table} follows its task`);
+ }
 });
 
 // ---------------------------------------------------------------------------

@@ -41,7 +41,9 @@ import {
 } from '../../lib/activityEntry';
 import {
   ACTIVITY_FAMILY,
+  ActivityActorFilter,
   ActivityFilter,
+  activityActor,
   activityFamilyFor,
   familyDotColor,
   familyTagClass,
@@ -209,6 +211,47 @@ function ActivityFilterTabs({
             {counts[tab.id] > 0 && (
               <span className="tabular-nums text-muted-foreground/70">{counts[tab.id]}</span>
             )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const ACTOR_TABS: Array<{ id: ActivityActorFilter; label: string }> = [
+  { id: 'anyone', label: 'Anyone' },
+  { id: 'person', label: 'People' },
+  { id: 'agent', label: 'Agents' },
+];
+
+/** Narrows the log to what people did or what agents did. */
+function ActivityActorTabs({
+  filter,
+  counts,
+  onChange,
+}: {
+  filter: ActivityActorFilter;
+  counts: Record<ActivityActorFilter, number>;
+  onChange: (filter: ActivityActorFilter) => void;
+}) {
+  return (
+    <div role="group" aria-label="Filter activity by who did it" className="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/70 p-0.5">
+      {ACTOR_TABS.map(tab => {
+        const active = tab.id === filter;
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => onChange(tab.id)}
+            aria-pressed={active}
+            className={cn(
+              'flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-xs font-medium transition-colors',
+              'focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2',
+              active ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {tab.label}
+            <span className="tabular-nums text-muted-foreground/70">{counts[tab.id]}</span>
           </button>
         );
       })}
@@ -437,11 +480,24 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
   // an empty log under a tab that no longer exists.
   const activeFilter = tabs.some(tab => tab.id === filter) ? filter : 'all';
 
+  const [actorFilter, setActorFilter] = usePersistedPreference(
+    viewPreferenceKey('activity.actor', workspaceId), oneOf<ActivityActorFilter>(['anyone', 'person', 'agent']), 'anyone' as ActivityActorFilter,
+  );
+  const actorCounts = useMemo(() => {
+    const counts = { anyone: events.length, person: 0, agent: 0 };
+    for (const event of events) counts[activityActor(event)] += 1;
+    return counts;
+  }, [events]);
+  // Same rule as the family tabs: a side with nothing in the log is not offered, and a stored
+  // choice that has run dry falls back to everyone.
+  const activeActor: ActivityActorFilter = actorFilter !== 'anyone' && actorCounts[actorFilter] === 0 ? 'anyone' : actorFilter;
+
   const filtered = useMemo(
-    () => (activeFilter === 'all'
-      ? events
-      : events.filter(event => ACTIVITY_FAMILY[event.event_type] === activeFilter)),
-    [events, activeFilter],
+    () => events.filter(event => (
+      (activeFilter === 'all' || ACTIVITY_FAMILY[event.event_type] === activeFilter)
+      && (activeActor === 'anyone' || activityActor(event) === activeActor)
+    )),
+    [events, activeFilter, activeActor],
   );
 
   // Live search across every row's label text, the event type, and its metadata —
@@ -527,6 +583,9 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
       <div className="activity-tray-toolbar">
         {tabs.length > 1 && (
           <ActivityFilterTabs tabs={tabs} filter={activeFilter} counts={counts} onChange={setFilter} />
+        )}
+        {actorCounts.person > 0 && actorCounts.agent > 0 && (
+          <ActivityActorTabs filter={activeActor} counts={actorCounts} onChange={setActorFilter} />
         )}
         <div className="activity-tray-search">
           <Search className="size-3 shrink-0" aria-hidden="true" />

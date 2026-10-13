@@ -123,7 +123,8 @@ export function useActivity(workspaceId: string | null, userId?: string) {
       entity_type: input.entity_type ?? null,
       entity_id: input.entity_id ?? null,
       title: input.title,
-      metadata: input.metadata ?? {},
+      // The browser only logs what a person does; agents are logged server-side.
+      metadata: { actor_kind: 'person', ...(input.metadata ?? {}) },
     });
   }, [workspaceId, userId]);
 

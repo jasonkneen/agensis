@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
-import { ArrowLeft, File as FileIcon, Paperclip, Pencil } from 'lucide-react';
+import { ArrowLeft, File as FileIcon, Lock, Paperclip, Pencil } from 'lucide-react';
 import { Button } from '@agensis/ui/components/button';
 import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
 import { Textarea } from '@agensis/ui/components/textarea';
@@ -23,6 +23,7 @@ import { viewPreferenceKey } from '../../lib/viewPreferences';
 import { projectColor } from '../projects/projectIconMap';
 import { TasksWindowContent, type TaskView } from './TasksWindowContent';
 import { STATUS_LABELS } from './taskPresentation';
+import { STATUS_COLORS } from '../projects/reportColors';
 import { DAY_MS, isClosedTask, startOfDay } from './taskSchedule';
 
 // The Projects window, from the approved project mocks: a list of project cards,
@@ -104,9 +105,73 @@ interface ProjectStats {
   byStatus: Record<Task['status'], number>;
 }
 
+/**
+ * Who can see a project. Everyone in the workspace by default; private limits it, and its tasks,
+ * to the creator and the people ticked here. Agents are not shared with: they only ever reach a
+ * private project's tasks by being assigned them.
+ */
+function SharingCard({
+  project,
+  members,
+  currentUserId,
+  updateProject,
+}: {
+  project: Project;
+  members: WorkspaceMember[];
+  currentUserId?: string;
+  updateProject: ReturnType<typeof useProjects>['updateProject'];
+}) {
+  const isPrivate = project.visibility === 'private';
+  const canEdit = !!currentUserId && project.created_by === currentUserId;
+  const chosen = new Set(project.member_ids ?? []);
+  const others = members.filter(member => member.user_id !== project.created_by);
+  const toggle = (userId: string) => {
+    const next = new Set(chosen);
+    if (next.has(userId)) next.delete(userId);
+    else next.add(userId);
+    void updateProject(project.id, { member_ids: [...next] });
+  };
+  return (
+    <Card title="Sharing">
+      <div className="flex flex-col gap-3 text-sm">
+        {canEdit ? (
+          <NativeSelect size="sm" value={project.visibility} onChange={e => void updateProject(project.id, { visibility: e.target.value as Project['visibility'] })} aria-label="Who can see this project">
+            <NativeSelectOption value="workspace">Everyone in the workspace</NativeSelectOption>
+            <NativeSelectOption value="private">Only people I choose</NativeSelectOption>
+          </NativeSelect>
+        ) : (
+          <p className="flex items-center gap-1.5 text-muted-foreground">
+            {isPrivate && <Lock className="size-3.5" aria-hidden />}
+            {isPrivate ? 'Private. Only the creator and chosen people can see it.' : 'Everyone in the workspace can see this project.'}
+          </p>
+        )}
+        {isPrivate && (
+          <>
+            <p className="text-xs text-muted-foreground">Their tasks, comments and history are hidden from everyone else. Agents only see tasks assigned to them.</p>
+            {others.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No other people in this workspace yet.</p>
+            ) : (
+              <ul className="flex flex-col">
+                {others.map(member => (
+                  <li key={member.user_id} className="border-t border-border first:border-t-0">
+                    <label className="flex items-center gap-2.5 py-1.5">
+                      <input type="checkbox" checked={chosen.has(member.user_id)} disabled={!canEdit} onChange={() => toggle(member.user_id)} />
+                      <span className="min-w-0 flex-1 truncate">{member.email?.split('@')[0] || 'Member'}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 function statsFor(projectTasks: Task[]): ProjectStats {
   const today = startOfDay(Date.now());
-  const byStatus: Record<Task['status'], number> = { todo: 0, in_progress: 0, done: 0, cancelled: 0 };
+  const byStatus: Record<Task['status'], number> = { backlog: 0, todo: 0, in_progress: 0, in_review: 0, done: 0, cancelled: 0 };
   let overdue = 0;
   for (const task of projectTasks) {
     if (task.status in byStatus) byStatus[task.status] += 1;
@@ -310,6 +375,7 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
               <span className="flex items-center gap-2.5">
                 <ProjectIconTile icon={project.icon} color={project.color} size="sm" />
                 <span className="truncate font-semibold">{project.name}</span>
+                {project.visibility === 'private' && <Lock className="size-3 shrink-0 text-muted-foreground" aria-label="Private project" />}
                 {project.project_key && <span className="font-mono text-[0.6875rem] text-muted-foreground">{project.project_key}</span>}
                 <span
                   className={cn(
@@ -642,10 +708,12 @@ function OverviewTab({
     : 'No target date';
 
   const statusKeys: Array<[Task['status'], string, string]> = [
-    ['todo', STATUS_LABELS.todo, '#8a867e'],
-    ['in_progress', STATUS_LABELS.in_progress, '#d98a24'],
-    ['done', STATUS_LABELS.done, '#2f9e6a'],
-    ['cancelled', STATUS_LABELS.cancelled, '#6b7280'],
+    ['backlog', STATUS_LABELS.backlog, STATUS_COLORS.backlog],
+    ['todo', STATUS_LABELS.todo, STATUS_COLORS.todo],
+    ['in_progress', STATUS_LABELS.in_progress, STATUS_COLORS.in_progress],
+    ['in_review', STATUS_LABELS.in_review, STATUS_COLORS.in_review],
+    ['done', STATUS_LABELS.done, STATUS_COLORS.done],
+    ['cancelled', STATUS_LABELS.cancelled, STATUS_COLORS.cancelled],
   ];
 
   return (
@@ -769,6 +837,8 @@ function OverviewTab({
             )}
           </dl>
         </Card>
+
+        <SharingCard project={project} members={members} currentUserId={tasksProps.currentUserId} updateProject={updateProject} />
 
         <Card title="Milestones">
           {milestones.length === 0 ? (

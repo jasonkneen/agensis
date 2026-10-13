@@ -234,6 +234,7 @@ const JSON_COLUMNS_BY_TABLE = {
 const ARRAY_COLUMNS_BY_TABLE = {
  tasks: { depends_on: 'uuid', labels: 'text' },
  teams: { member_ids: 'uuid' },
+ projects: { member_ids: 'uuid' },
 };
 
 function arrayColumnElemType(table, column) {
@@ -790,7 +791,7 @@ const SELECTABLE_COLUMNS_BY_TABLE = {
  ],
  projects: [
   'id', 'workspace_id', 'created_by', 'name', 'project_key', 'description', 'status',
-  'color', 'due_date', 'archived', 'icon', 'lead_id', 'start_date', 'channel_id', 'brief_document_id', 'version', 'created_at', 'updated_at',
+  'color', 'due_date', 'archived', 'icon', 'lead_id', 'start_date', 'channel_id', 'brief_document_id', 'visibility', 'member_ids', 'version', 'created_at', 'updated_at',
  ],
  calendar_events: [
   'id', 'workspace_id', 'created_by', 'title', 'description', 'starts_at', 'ends_at',
@@ -2161,6 +2162,18 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
   if (table === 'messages') {
    await enforceMessageAuthorship({ userId, op, filters: flt, values, db });
   }
+  // Only a project's creator decides who it is shared with.
+  if (table === 'projects' && op === 'update' && values && ('visibility' in values || 'member_ids' in values)) {
+   const projectId = findFilterValue(flt, 'id');
+   if (!projectId) throw badRequest('Changing project sharing requires an exact id filter');
+   const rows = await db('select created_by from projects where id = $1 limit 1', [projectId]);
+   if (!rows[0] || String(rows[0].created_by || '') !== String(userId)) {
+    throw forbidden('Only the project creator can change who it is shared with');
+   }
+  }
+  if (table === 'projects' && op === 'insert' && values && values.visibility === 'private' && String(values.created_by || '') !== String(userId)) {
+   throw forbidden('A private project must be created by you');
+  }
   if (table === 'thread_items') {
    await enforceThreadItemSessionMutation({
     userId, op, filters: flt, values, db,
@@ -2246,7 +2259,35 @@ async function enforceDbOperationAccess({ userId, table, op, filters, payload, d
 // chat_sessions itself; worth it because there is then exactly ONE spelling of
 // the readability rule to keep correct. Legacy permission rows with no session
 // retain their workspace visibility; a non-null orphan is withheld.
+// Private projects (projects.visibility = 'private') are readable only by their creator and the
+// people in member_ids. Tasks inherit that: a task in a private project is withheld from everyone
+// else, except the person it is assigned to. Comments and status history follow their task.
+// Returns null for tables this rule does not cover.
+function privateProjectAccessClause(table, userParam) {
+ const me = `${userParam}::uuid`;
+ const projectReadable = (projectId) => `EXISTS (SELECT 1 FROM projects pr WHERE pr.id = ${projectId} AND (pr.visibility = 'workspace' OR pr.created_by = ${me} OR ${me} = ANY(pr.member_ids)))`;
+ if (table === 'projects') {
+  return `("projects"."visibility" = 'workspace' OR "projects"."created_by" = ${me} OR ${me} = ANY("projects"."member_ids"))`;
+ }
+ const taskVisible = (taskId) => `EXISTS (SELECT 1 FROM tasks tk WHERE tk.id = ${taskId} AND (tk.project_id IS NULL OR tk.assignee_id = ${me} OR ${projectReadable('tk.project_id')}))`;
+ if (table === 'tasks') {
+  return `("tasks"."project_id" IS NULL OR "tasks"."assignee_id" = ${me} OR ${projectReadable('"tasks"."project_id"')})`;
+ }
+ if (table === 'task_comments') return taskVisible('"task_comments"."task_id"');
+ if (table === 'task_status_events') return taskVisible('"task_status_events"."task_id"');
+ return null;
+}
+
 function appendSessionAccessClause(where, userId, table) {
+ if (['projects', 'tasks', 'task_comments', 'task_status_events'].includes(table)) {
+  const params = where.params || [];
+  params.push(userId);
+  const accessClause = privateProjectAccessClause(table, `$${params.length}`);
+  return {
+   clause: where.clause ? `${where.clause} AND ${accessClause}` : ` WHERE ${accessClause}`,
+   params,
+  };
+ }
  if (table === 'activity_events') {
   const params = where.params || [];
   params.push(userId);
@@ -3679,6 +3720,7 @@ module.exports = {
  createTokenVersionCache,
  appendWorkspaceAccessClause,
  appendSessionAccessClause,
+ privateProjectAccessClause,
  DELETED_MESSAGE_ACTIVITY_TITLE,
  EDITED_MESSAGE_ACTIVITY_TITLE,
  logMessageActivityIdempotent,

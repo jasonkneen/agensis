@@ -67,8 +67,10 @@ export function FlowChart({ points }: { points: FlowPoint[] }) {
 export function StatusFlowChart({ points }: { points: StatusFlowPoint[] }) {
   const config: ChartConfig = {
     done: { label: 'Done', color: STATUS_COLORS.done },
+    in_review: { label: 'In review', color: STATUS_COLORS.in_review },
     in_progress: { label: 'In progress', color: STATUS_COLORS.in_progress },
     todo: { label: 'To do', color: STATUS_COLORS.todo },
+    backlog: { label: 'Backlog', color: STATUS_COLORS.backlog },
     cancelled: { label: 'Cancelled', color: STATUS_COLORS.cancelled },
   };
   return (
@@ -78,7 +80,7 @@ export function StatusFlowChart({ points }: { points: StatusFlowPoint[] }) {
         <XAxis dataKey="day" tickFormatter={shortDay} tickLine={false} axisLine={false} tick={{ fontSize: 10 }} minTickGap={24} />
         <YAxis width={26} allowDecimals={false} tickLine={false} axisLine={false} tick={{ fontSize: 10 }} />
         <ChartTooltip content={<ChartTooltipContent labelFormatter={value => shortDay(Number(value))} />} />
-        {(['done', 'in_progress', 'todo', 'cancelled'] as const).map(status => (
+        {(['done', 'in_review', 'in_progress', 'todo', 'backlog', 'cancelled'] as const).map(status => (
           <Area key={status} dataKey={status} type="stepAfter" stackId="flow" stroke={`var(--color-${status})`} fill={`var(--color-${status})`} fillOpacity={0.55} strokeWidth={1.5} />
         ))}
       </AreaChart>

@@ -7,11 +7,16 @@ import type { Task, TaskStatus } from '../../types';
 
 /** Column headings on the board, and the status line in the list. */
 export const STATUS_LABELS: Record<TaskStatus, string> = {
+  backlog: 'Backlog',
   todo: 'To do',
   in_progress: 'In progress',
+  in_review: 'In review',
   done: 'Done',
   cancelled: 'Cancelled',
 };
+
+/** Every status in workflow order. The board columns, filters and reports all follow this. */
+export const TASK_STATUS_ORDER: TaskStatus[] = ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled'];
 
 /**
  * The chat session a task came from, or null. Only a task whose source IS a

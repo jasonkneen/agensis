@@ -397,7 +397,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   }, [allTopLevel, effectiveFilter, effectiveHideDone, projectFilter, projectId, agentsOnly, overdueOnly, priorityFilter, labelFilter, search, sortBy, focusWidened, agents, members, currentUserEmail, currentUserId]);
 
   const grouped = useMemo(() => {
-    const groups: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
+    const groups: Record<TaskStatus, Task[]> = { backlog: [], todo: [], in_progress: [], in_review: [], done: [], cancelled: [] };
     filteredTopLevel.forEach(task => {
       // Defensive: a task with an unknown/legacy status (e.g. from an offline
       // cache or a future migration) would make groups[status] undefined and
@@ -411,7 +411,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   // The List's sections: the status buckets in their usual order, or whatever the user grouped by.
   const listGroups = useMemo(() => {
     if (groupBy === 'status') {
-      return (['in_progress', 'todo', 'done', 'cancelled'] as TaskStatus[]).map(status => ({
+      return (['in_progress', 'in_review', 'todo', 'backlog', 'done', 'cancelled'] as TaskStatus[]).map(status => ({
         key: status,
         label: STATUS_LABELS[status],
         tasks: grouped[status],
