@@ -12,6 +12,7 @@ import {
   FileText,
   Flag,
   GanttChart,
+  Table2,
   Link2,
   List,
   MessageSquare,
@@ -98,6 +99,7 @@ import { cn } from '@/lib/utils';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
 import { MENTION_TILE, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { TaskGantt, TaskKanban } from './TaskBoardViews';
+import { TaskTable } from './TaskTable';
 import { STATUS_LABELS, taskChatSessionId } from './taskPresentation';
 
 interface TasksWindowContentProps {
@@ -157,14 +159,14 @@ const TASK_TOGGLE_ACTIVE =
 
 type AssignmentFilter = TaskAssignmentFilter;
 
-type TaskView = 'list' | 'kanban' | 'gantt';
+type TaskView = 'list' | 'kanban' | 'gantt' | 'table';
 
 // Remembered per workspace: reopening Tasks and being shown every completed
 // item again, every single time, is the whole complaint these three answer.
 // Search text and the selected task stay in memory — a search box that survives
 // a reload shows a filtered list with nothing on screen explaining why.
 const ASSIGNMENT_FILTER_PREF = oneOf<AssignmentFilter>(['all', 'mine', 'others']);
-const TASK_VIEW_PREF = oneOf<TaskView>(['list', 'kanban', 'gantt']);
+const TASK_VIEW_PREF = oneOf<TaskView>(['list', 'kanban', 'gantt', 'table']);
 
 // A task dispatched to an agent records the chat it is being worked in:
 // source_type 'chat' + the session id. Every other source_type stores a
@@ -507,11 +509,12 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           variant="outline"
           value={view}
           onValueChange={value => {
-            if (value) setView(value as 'list' | 'kanban' | 'gantt');
+            if (value) setView(value as TaskView);
           }}
         >
           <ToggleGroupItem value="list" title="List view" className={TASK_TOGGLE_ACTIVE}><List />List</ToggleGroupItem>
           <ToggleGroupItem value="kanban" title="Kanban board" className={TASK_TOGGLE_ACTIVE}><Columns3 />Board</ToggleGroupItem>
+          <ToggleGroupItem value="table" title="Table view" className={TASK_TOGGLE_ACTIVE}><Table2 />Table</ToggleGroupItem>
           <ToggleGroupItem value="gantt" title="Gantt timeline" className={TASK_TOGGLE_ACTIVE}><GanttChart />Timeline</ToggleGroupItem>
         </ToggleGroup>
         <div className="flex-1" />
@@ -661,7 +664,16 @@ export const TasksWindowContent = memo(function TasksWindowContent({
       ) : (
         <div className="flex min-h-0 flex-1 overflow-hidden">
           <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-            {view === 'kanban' ? (
+            {view === 'table' ? (
+              <TaskTable
+                tasks={filteredTopLevel}
+                allTasks={tasks}
+                memberLabel={memberLabel}
+                priorityLabel={priority => PRIORITY_LABELS[priority]}
+                selectedTaskId={selectedTaskId}
+                onSelectTask={setSelectedTaskId}
+              />
+            ) : view === 'kanban' ? (
               <TaskKanban
                 columns={grouped}
                 memberLabel={memberLabel}

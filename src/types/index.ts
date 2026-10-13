@@ -351,6 +351,12 @@ export interface Task {
  start_date: string | null;
  /** Task ids this task depends on (postgres uuid[]). */
  depends_on?: string[];
+ /** Free-form labels (postgres text[]), e.g. 'design', 'backend'. */
+ labels?: string[];
+ /** Rough size, e.g. '2d' or '4h'. Null when unestimated. */
+ estimate?: string | null;
+ /** Manual ordering key within a column or group. */
+ sort_order?: number;
  source_type: TaskSourceType | null;
  source_id: string | null;
  /**
