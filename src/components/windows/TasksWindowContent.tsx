@@ -91,7 +91,6 @@ import {
 } from '@agensis/ui/components/marker';
 import {
   NativeSelect,
-  NativeSelectOptGroup,
   NativeSelectOption,
 } from '@agensis/ui/components/native-select';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
@@ -102,6 +101,8 @@ import { ResizeHandle } from '@/components/common/ResizeHandle';
 import { MENTION_TILE, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { TaskGantt, TaskKanban } from './TaskBoardViews';
 import { TaskTable } from './TaskTable';
+import { AssigneeOptions } from './AssigneeOptions';
+import { NewProjectDialog } from '../projects/NewProjectDialog';
 import { TaskCalendar } from './TaskCalendar';
 import { STATUS_LABELS, taskChatSessionId } from './taskPresentation';
 
@@ -125,6 +126,10 @@ interface TasksWindowContentProps {
   focusTaskId?: string;
   /** Called once the focus has been applied, so the caller can clear it. */
   onFocusTaskConsumed?: () => void;
+  /** Show only this project's tasks, and create new tasks inside it. Used by the project page. */
+  projectId?: string;
+  /** Show this one view and hide the view switcher. Used by the project page's tabs. */
+  forcedView?: TaskView;
   /**
    * Uploads to the SAME workspace file store the chat composer uses (see
    * useFiles in App.tsx) — a task attachment and a chat attachment are both
@@ -162,7 +167,7 @@ const TASK_TOGGLE_ACTIVE =
 
 type AssignmentFilter = TaskAssignmentFilter;
 
-type TaskView = 'list' | 'kanban' | 'gantt' | 'table' | 'calendar';
+export type TaskView = 'list' | 'kanban' | 'gantt' | 'table' | 'calendar';
 
 // Remembered per workspace: reopening Tasks and being shown every completed
 // item again, every single time, is the whole complaint these three answer.
@@ -175,36 +180,6 @@ const TASK_VIEW_PREF = oneOf<TaskView>(['list', 'kanban', 'gantt', 'table', 'cal
 // source_type 'chat' + the session id. Every other source_type stores a
 // different kind of id (an agent id for 'ai', a canvas object id for 'canvas'),
 // so only 'chat' is safe to open as a session.
-// Assignee options: people AND agents. Assigning an agent dispatches the task to
-// it — that's the point of the picker, so agents can't be missing from it.
-// Disabled agents are left out: they can't run.
-function AssigneeOptions({ members, agents }: { members: WorkspaceMember[]; agents: WorkspaceAgent[] }) {
-  const activeAgents = agents.filter(agent => agent.enabled !== false);
-  return (
-    <>
-      <NativeSelectOption value="">Unassigned</NativeSelectOption>
-      {members.length > 0 && (
-        <NativeSelectOptGroup label="People">
-          {members.map(member => (
-            <NativeSelectOption key={member.user_id} value={member.user_id}>
-              {member.email?.split('@')[0] || 'Member'}
-            </NativeSelectOption>
-          ))}
-        </NativeSelectOptGroup>
-      )}
-      {activeAgents.length > 0 && (
-        <NativeSelectOptGroup label="Agents">
-          {activeAgents.map(agent => (
-            <NativeSelectOption key={agent.id} value={agent.id}>
-              @{agentHandle(agent)}
-            </NativeSelectOption>
-          ))}
-        </NativeSelectOptGroup>
-      )}
-    </>
-  );
-}
-
 export const TasksWindowContent = memo(function TasksWindowContent({
   tasks,
   members,
@@ -221,6 +196,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   onOpenSession,
   focusTaskId,
   onFocusTaskConsumed,
+  projectId,
+  forcedView,
   onUploadFiles,
 }: TasksWindowContentProps) {
   const [newTitle, setNewTitle] = useState('');
@@ -242,15 +219,15 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   const [hideDone, setHideDone] = usePersistedPreference(
     viewPreferenceKey('tasks.hide-done', workspaceId), booleanPreference, false,
   );
-  const [view, setView] = usePersistedPreference(
+  const [storedView, setView] = usePersistedPreference(
     viewPreferenceKey('tasks.view', workspaceId), TASK_VIEW_PREF, 'list' as TaskView,
   );
+  const view = forcedView ?? storedView;
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Projects: the toolbar's project filter (session-only) and the New project form.
   const { projects, createProject } = useProjects(workspaceId, currentUserId);
   const [projectFilter, setProjectFilter] = useState<string>('all');
   const [showProjectForm, setShowProjectForm] = useState(false);
-  const [projectDraft, setProjectDraft] = useState({ name: '', key: '' });
   // Which focus request we widened the filters FOR. Transient on purpose: the
   // widening below used to call setFilter/setHideDone, which are the PERSISTED
   // setters — so arriving from a comment or @mention link on a task that the
@@ -295,9 +272,10 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     }
     // Cascades into `grouped` below, so it covers list/kanban/gantt in one place.
     // "Done" here means closed — done AND cancelled; see isClosedTask.
-    const inProject = projectFilter === 'all' ? list : list.filter(task => task.project_id === projectFilter);
+    const activeProject = projectId ?? projectFilter;
+    const inProject = activeProject === 'all' ? list : list.filter(task => task.project_id === activeProject);
     return applyHideDone(inProject, effectiveHideDone);
-  }, [allTopLevel, effectiveFilter, effectiveHideDone, projectFilter, members, currentUserEmail, currentUserId]);
+  }, [allTopLevel, effectiveFilter, effectiveHideDone, projectFilter, projectId, members, currentUserEmail, currentUserId]);
 
   const grouped = useMemo(() => {
     const groups: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
@@ -328,6 +306,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
         assignee_id: newAssignee || null,
         source_type: 'manual',
         attachments: newAttachments,
+        ...(projectId ? { project_id: projectId } : {}),
       });
       if (creationWorkspace.current !== ownerWorkspace) return;
       if (!task) { setCreateError(true); return; }
@@ -511,6 +490,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
         >
           {hideDone ? 'Show done' : 'Hide done'}
         </Button>
+        {!forcedView && (
+          <>
         <div className="mx-1 h-5 w-px bg-border" aria-hidden />
         <ToggleGroup
           type="single"
@@ -527,7 +508,11 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           <ToggleGroupItem value="calendar" title="Calendar view" className={TASK_TOGGLE_ACTIVE}><CalendarDays />Calendar</ToggleGroupItem>
           <ToggleGroupItem value="gantt" title="Gantt timeline" className={TASK_TOGGLE_ACTIVE}><GanttChart />Timeline</ToggleGroupItem>
         </ToggleGroup>
+          </>
+        )}
         <div className="flex-1" />
+        {!projectId && (
+          <>
         <select
           aria-label="Filter by project"
           className="h-7 rounded-md border border-border bg-card px-2 text-xs"
@@ -539,48 +524,25 @@ export const TasksWindowContent = memo(function TasksWindowContent({
             <option key={project.id} value={project.id}>{project.name}</option>
           ))}
         </select>
-        <Button variant="outline" size="sm" onClick={() => setShowProjectForm(open => !open)} aria-expanded={showProjectForm}>
+        <Button variant="outline" size="sm" onClick={() => setShowProjectForm(true)}>
           New project
         </Button>
+          </>
+        )}
         <Badge variant="secondary">{openCount} open</Badge>
       </div>
 
-      {showProjectForm && (
-        <form
-          className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 text-xs"
-          onSubmit={async e => {
-            e.preventDefault();
-            const name = projectDraft.name.trim();
-            if (!name) return;
-            const created = await createProject({ name, project_key: projectDraft.key.trim().toUpperCase() });
-            if (created) {
-              setProjectDraft({ name: '', key: '' });
-              setShowProjectForm(false);
-            }
-          }}
-        >
-          <Input
-            autoFocus
-            aria-label="Project name"
-            placeholder="Project name"
-            className="h-7 min-w-40 flex-1"
-            value={projectDraft.name}
-            onChange={e => setProjectDraft(current => ({ ...current, name: e.target.value }))}
-          />
-          <Input
-            aria-label="Project key"
-            placeholder="Key (e.g. WEB)"
-            className="h-7 w-28"
-            value={projectDraft.key}
-            onChange={e => setProjectDraft(current => ({ ...current, key: e.target.value }))}
-          />
-          <Button type="submit" size="sm" disabled={!projectDraft.name.trim()}>
-            Add project
-          </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setShowProjectForm(false)}>
-            Cancel
-          </Button>
-        </form>
+      {!projectId && (
+      <NewProjectDialog
+        open={showProjectForm}
+        onOpenChange={setShowProjectForm}
+        members={members}
+        agents={agents}
+        currentUserId={currentUserId}
+        createProject={createProject}
+        createTask={onCreateTask}
+        onCreated={project => setProjectFilter(project.id)}
+      />
       )}
 
       <div className={cn(
@@ -870,11 +832,11 @@ function TaskRow({
     <div id={`task-row-${task.id}`} className={`task-card ${expanded ? 'task-card-expanded' : ''}`}>
       <Item variant="outline" className="task-row items-center">
         <ItemActions className="gap-1">
-          <Button type="button" variant="ghost" size="icon-xs" onClick={() => setExpanded(value => !value)} aria-label={expanded ? 'Collapse task' : 'Expand task'}>
-            {expanded ? <ChevronDown /> : <ChevronRight />}
+          <Button type="button" variant="ghost" size="icon-xs" className="size-[30px]" onClick={() => setExpanded(value => !value)} aria-label={expanded ? 'Collapse task' : 'Expand task'}>
+            {expanded ? <ChevronDown className="size-[15px]" /> : <ChevronRight className="size-[15px]" />}
           </Button>
-          <Button type="button" variant="ghost" size="icon-xs" onClick={onToggle} aria-label={done ? 'Mark incomplete' : 'Mark complete'}>
-            {done ? <CheckCircle2 /> : <Circle />}
+          <Button type="button" variant="ghost" size="icon-xs" className="size-[30px]" onClick={onToggle} aria-label={done ? 'Mark incomplete' : 'Mark complete'}>
+            {done ? <CheckCircle2 className="size-[15px]" /> : <Circle className="size-[15px]" />}
           </Button>
         </ItemActions>
         <ItemContent className="min-w-0 cursor-pointer" onClick={() => setExpanded(value => !value)}>
@@ -963,8 +925,8 @@ function TaskRow({
               <NativeSelectOption key={status} value={status}>{STATUS_LABELS[status]}</NativeSelectOption>
             ))}
           </NativeSelect>
-          <Button type="button" variant="ghost" size="icon-xs" onClick={onDelete} aria-label="Delete task">
-            <Trash2 />
+          <Button type="button" variant="ghost" size="icon-xs" className="size-[30px]" onClick={onDelete} aria-label="Delete task">
+            <Trash2 className="size-[15px]" />
           </Button>
         </ItemActions>
       </Item>

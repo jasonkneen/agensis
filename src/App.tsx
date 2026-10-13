@@ -177,7 +177,7 @@ const SkillsWindowContent = lazy(() => import('./components/windows/SkillsWindow
 const DocumentLibraryWindowContent = lazy(() => import('./components/windows/DocumentLibraryWindowContent').then(m => ({ default: m.DocumentLibraryWindowContent })));
 const TenantsWindowContent = lazy(() => import('./components/tenants/TenantsWindowContent').then(m => ({ default: m.TenantsWindowContent })));
 const SettingsDialog = lazy(() => import('./components/settings/SettingsDialog').then(m => ({ default: m.SettingsDialog })));
-import { ProjectsWindowContent } from './components/windows/ProjectsWindowContent';
+const ProjectsWindowContent = lazy(() => import('./components/windows/ProjectsWindowContent').then(m => ({ default: m.ProjectsWindowContent })));
 const TasksWindowBody = lazy(() => import('./components/windows/TasksWindowBody').then(m => ({ default: m.TasksWindowBody })));
 const InboxWindowContent = lazy(() => import('./components/inbox/InboxWindowContent').then(m => ({ default: m.InboxWindowContent })));
 
@@ -2998,6 +2998,7 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
         )}
 
         <CommandPalette
+          onOpenProjects={handleOpenProjects}
           open={commandPaletteOpen}
           onClose={() => setCommandPaletteOpen(false)}
           documents={documents}
@@ -3769,7 +3770,24 @@ function CanvasLayerScene({
               breadcrumb={workspaceName}
             >
               <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
-                <ProjectsWindowContent workspaceId={workspaceId} userId={userId} />
+                <ProjectsWindowContent
+                  tasksProps={{
+                    tasks,
+                    members,
+                    agents,
+                    agentConnections,
+                    currentUserEmail: userEmail,
+                    workspaceId,
+                    currentUserId: userId,
+                    onCreateTask,
+                    onUpdateTask,
+                    onToggleStatus: onToggleTaskStatus,
+                    onDeleteTask,
+                    onUpdateAgent,
+                    onOpenSession: onOpenSessionById,
+                    onUploadFiles,
+                  }}
+                />
               </Suspense>
             </FloatingWindowShell>
           );

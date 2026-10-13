@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   FileText,
   MessageSquare,
+  Layers3,
   Plus,
 } from 'lucide-react';
 import type { ActiveView, ChatSession, Document, MemoryFact, Task } from '../../types';
@@ -33,6 +34,8 @@ interface CommandPaletteProps {
   onSessionOpen: (session: ChatSession) => void;
   onTaskOpen?: (task: Task) => void;
   onViewChange: (view: ActiveView) => void;
+  /** Opens the Projects window. Optional so callers without windows still work. */
+  onOpenProjects?: () => void;
 }
 
 interface ResultItem {
@@ -71,6 +74,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   onSessionOpen,
   onTaskOpen,
   onViewChange,
+  onOpenProjects,
 }) => {
   const [query, setQuery] = useState('');
 
@@ -159,6 +163,17 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
         },
       },
       {
+        id: 'action-go-projects',
+        type: 'action' as const,
+        label: 'Go to Projects',
+        icon: <Layers3 data-icon="inline-start" className="size-4" />,
+        badge: 'Action',
+        onSelect: () => {
+          onOpenProjects?.();
+          onClose();
+        },
+      },
+      {
         id: 'action-go-activity',
         type: 'action' as const,
         label: 'Go to Activity',
@@ -181,7 +196,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
         },
       },
     ],
-    [onViewChange, onClose],
+    [onViewChange, onClose, onOpenProjects],
   );
 
   const catalog = useMemo(() => {

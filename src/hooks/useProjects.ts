@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react';
 import { backendClient } from '../lib/backendClient';
-import { cachedFetch, offlineInsert } from '../lib/offlineBackend';
+import { cachedFetch, offlineInsert, offlineUpdate } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
 import { useWorkspaceListState } from './useWorkspaceState';
 
@@ -19,7 +19,14 @@ export interface Project {
   description: string;
   status: ProjectStatus;
   color: string;
+  /** Lucide icon name from PROJECT_ICONS. */
+  icon: string;
+  lead_id: string | null;
+  start_date: string | null;
   due_date: string | null;
+  /** The project's channel (a chat session) and brief (a document), when created. */
+  channel_id: string | null;
+  brief_document_id: string | null;
   archived: boolean;
   version: number;
   created_at: string;
@@ -31,6 +38,11 @@ export interface CreateProjectInput {
   project_key?: string;
   description?: string;
   status?: ProjectStatus;
+  icon?: string;
+  color?: string;
+  lead_id?: string | null;
+  start_date?: string | null;
+  due_date?: string | null;
 }
 
 export function useProjects(workspaceId: string | null, userId?: string) {
@@ -93,7 +105,12 @@ export function useProjects(workspaceId: string | null, userId?: string) {
           name: input.name,
           project_key: input.project_key ?? '',
           description: input.description ?? '',
-          status: input.status ?? 'active',
+          status: input.status ?? 'planning',
+          icon: input.icon ?? 'folder',
+          color: input.color ?? 'indigo',
+          lead_id: input.lead_id ?? null,
+          start_date: input.start_date ?? null,
+          due_date: input.due_date ?? null,
         },
         `projects_${workspaceId}`,
       );
@@ -106,5 +123,15 @@ export function useProjects(workspaceId: string | null, userId?: string) {
     [setProjects, userId, workspaceId],
   );
 
-  return { projects, createProject, refetch: fetchProjects };
+  const updateProject = useCallback(
+    async (id: string, updates: Partial<Omit<Project, 'id' | 'workspace_id' | 'created_at' | 'updated_at'>>) => {
+      if (!workspaceId) return null;
+      // Apply locally first so the UI does not wait on the round trip; realtime then confirms it.
+      setProjects(prev => prev.map(p => (p.id === id ? { ...p, ...updates } : p)));
+      return offlineUpdate('projects', id, updates as Record<string, unknown>, `projects_${workspaceId}`);
+    },
+    [setProjects, workspaceId],
+  );
+
+  return { projects, createProject, updateProject, refetch: fetchProjects };
 }
