@@ -70,3 +70,6 @@ scripts/local/
 src/dev-local/*
 !src/dev-local/DevLocalHosts.tsx
 .claude-inspector/
+
+# Local inspector tool state (holds an access token; never publish)
+/.data/
