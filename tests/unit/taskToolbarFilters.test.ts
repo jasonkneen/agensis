@@ -140,3 +140,58 @@ describe('task toolbar filters', () => {
     expect(titles()).toEqual([]);
   });
 });
+
+describe('task toolbar sort', () => {
+  const SORT_TASKS: Task[] = [
+    makeTask({ id: 'a', title: 'Charlie', priority: 'low', due_date: day(5) }),
+    makeTask({ id: 'b', title: 'Alpha', priority: 'urgent' }),
+    makeTask({ id: 'c', title: 'Bravo', priority: 'high', due_date: day(1) }),
+  ];
+
+  function renderSorted(sort: 'default' | 'priority' | 'due' | 'title') {
+    act(() => {
+      root.render(
+        createElement(TasksWindowContent, {
+          tasks: SORT_TASKS,
+          members: [],
+          agents: [],
+          agentConnections: [],
+          currentUserEmail: 'a@b.c',
+          workspaceId: 'ws-1',
+          onCreateTask: () => null,
+          onUpdateTask: () => {},
+          onToggleStatus: () => {},
+          onDeleteTask: () => {},
+          onUpdateAgent: () => {},
+          forcedView: 'table',
+        } as never),
+      );
+    });
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="Sort tasks"]')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(select, sort);
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+
+  it('keeps the existing order by default', () => {
+    renderSorted('default');
+    expect(titles()).toEqual(['Charlie', 'Alpha', 'Bravo']);
+  });
+
+  it('sorts by priority, most urgent first', () => {
+    renderSorted('priority');
+    expect(titles()).toEqual(['Alpha', 'Bravo', 'Charlie']);
+  });
+
+  it('sorts by due date, soonest first, with undated tasks last', () => {
+    renderSorted('due');
+    expect(titles()).toEqual(['Bravo', 'Charlie', 'Alpha']);
+  });
+
+  it('sorts by title', () => {
+    renderSorted('title');
+    expect(titles()).toEqual(['Alpha', 'Bravo', 'Charlie']);
+  });
+});

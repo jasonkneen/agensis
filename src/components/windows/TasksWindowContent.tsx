@@ -176,6 +176,24 @@ export type TaskView = 'list' | 'kanban' | 'gantt' | 'table' | 'calendar';
 // item again, every single time, is the whole complaint these three answer.
 // Search text and the selected task stay in memory — a search box that survives
 // a reload shows a filtered list with nothing on screen explaining why.
+type TaskSort = 'default' | 'priority' | 'due' | 'title';
+
+const PRIORITY_RANK: Record<TaskPriority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+
+/** Sorted copy of the tasks. 'default' returns them untouched; ties keep their existing order. */
+function sortTasks(list: Task[], sortBy: TaskSort): Task[] {
+  if (sortBy === 'default') return list;
+  const sorted = [...list];
+  if (sortBy === 'priority') sorted.sort((a, b) => (PRIORITY_RANK[a.priority] ?? 2) - (PRIORITY_RANK[b.priority] ?? 2));
+  else if (sortBy === 'title') sorted.sort((a, b) => a.title.localeCompare(b.title));
+  else {
+    // Soonest due first; tasks without a due date go last.
+    const when = (task: Task) => (task.due_date ? new Date(task.due_date).getTime() : Number.POSITIVE_INFINITY);
+    sorted.sort((a, b) => when(a) - when(b));
+  }
+  return sorted;
+}
+
 const ASSIGNMENT_FILTER_PREF = oneOf<AssignmentFilter>(['all', 'mine', 'others']);
 const TASK_VIEW_PREF = oneOf<TaskView>(['list', 'kanban', 'gantt', 'table', 'calendar']);
 
@@ -235,6 +253,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   const [agentsOnly, setAgentsOnly] = useState(false);
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [search, setSearch] = useState('');
+  // Sort from the approved list mock. 'default' keeps the existing order.
+  const [sortBy, setSortBy] = useState<TaskSort>('default');
   const [showProjectForm, setShowProjectForm] = useState(false);
   // Which focus request we widened the filters FOR. Transient on purpose: the
   // widening below used to call setFilter/setHideDone, which are the PERSISTED
@@ -292,8 +312,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
       const query = search.trim().toLowerCase();
       if (query) narrowed = narrowed.filter(task => task.title.toLowerCase().includes(query) || (task.description ?? '').toLowerCase().includes(query));
     }
-    return applyHideDone(narrowed, effectiveHideDone);
-  }, [allTopLevel, effectiveFilter, effectiveHideDone, projectFilter, projectId, agentsOnly, overdueOnly, search, focusWidened, agents, members, currentUserEmail, currentUserId]);
+    return sortTasks(applyHideDone(narrowed, effectiveHideDone), sortBy);
+  }, [allTopLevel, effectiveFilter, effectiveHideDone, projectFilter, projectId, agentsOnly, overdueOnly, search, sortBy, focusWidened, agents, members, currentUserEmail, currentUserId]);
 
   const grouped = useMemo(() => {
     const groups: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
@@ -572,6 +592,12 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           aria-label="Search tasks"
           className="h-7 w-36 text-xs"
         />
+        <NativeSelect size="sm" className="w-32" value={sortBy} onChange={e => setSortBy(e.target.value as TaskSort)} aria-label="Sort tasks">
+          <NativeSelectOption value="default">Sort: Default</NativeSelectOption>
+          <NativeSelectOption value="priority">Sort: Priority</NativeSelectOption>
+          <NativeSelectOption value="due">Sort: Due date</NativeSelectOption>
+          <NativeSelectOption value="title">Sort: Title</NativeSelectOption>
+        </NativeSelect>
         {!forcedView && (
           <>
         <div className="mx-1 h-5 w-px bg-border" aria-hidden />
