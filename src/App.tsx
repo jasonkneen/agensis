@@ -177,6 +177,7 @@ const SkillsWindowContent = lazy(() => import('./components/windows/SkillsWindow
 const DocumentLibraryWindowContent = lazy(() => import('./components/windows/DocumentLibraryWindowContent').then(m => ({ default: m.DocumentLibraryWindowContent })));
 const TenantsWindowContent = lazy(() => import('./components/tenants/TenantsWindowContent').then(m => ({ default: m.TenantsWindowContent })));
 const SettingsDialog = lazy(() => import('./components/settings/SettingsDialog').then(m => ({ default: m.SettingsDialog })));
+import { ProjectsWindowContent } from './components/windows/ProjectsWindowContent';
 const TasksWindowBody = lazy(() => import('./components/windows/TasksWindowBody').then(m => ({ default: m.TasksWindowBody })));
 const InboxWindowContent = lazy(() => import('./components/inbox/InboxWindowContent').then(m => ({ default: m.InboxWindowContent })));
 
@@ -206,6 +207,7 @@ function windowDockIcon(type: FloatingWindow['type']) {
   if (type === 'skills') return <Sparkles className="size-4" />;
   if (type === 'library') return <Library className="size-4" />;
   if (type === 'tasks') return <CheckCircle2 className="size-4" />;
+  if (type === 'projects') return <Layers3 className="size-4" />;
   if (type === 'activity') return <Activity className="size-4" />;
   if (type === 'agents') return <Bot className="size-4" />;
   if (type === 'resources') return <Database className="size-4" />;
@@ -1467,6 +1469,16 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     openWindow('tasks', { title: 'Tasks', canvasId: activeLayerId, ownerUserId: user?.id, focusTaskId: taskId });
   }, [windows, openWindow, focusWindow, minimizeWindow, updateWindow, activeLayerId, user?.id]);
 
+  const handleOpenProjects = useCallback(() => {
+    const existing = windows.find(w => w.type === 'projects');
+    if (existing) {
+      focusWindow(existing.id);
+      if (existing.minimized) minimizeWindow(existing.id);
+      return;
+    }
+    openWindow('projects', { title: 'Projects', canvasId: activeLayerId, ownerUserId: user?.id });
+  }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
+
   const handleOpenActivity = useCallback(() => {
     const existing = windows.find(w => w.type === 'activity');
     if (existing) {
@@ -2243,13 +2255,14 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     else if (win.type === 'skills') handleOpenSkills();
     else if (win.type === 'library') handleOpenLibrary();
     else if (win.type === 'tasks') handleOpenTasks();
+    else if (win.type === 'projects') handleOpenProjects();
     else if (win.type === 'activity') handleOpenActivity();
     else if (win.type === 'agents') handleOpenAgents();
     else if (win.type === 'resources') handleOpenResources();
     else if (win.type === 'inbox') handleOpenInbox();
     else if (win.type === 'schedules') handleOpenSchedules();
     else if (win.type === 'automations') handleOpenAutomations();
-  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenAutomations, handleOpenInbox, handleOpenMemory, handleOpenLibrary, handleOpenResources, handleOpenSchedules, handleOpenSkills, handleOpenTasks, handleSessionOpen, sessions]);
+  }, [documents, handleDocumentOpen, handleOpenActivity, handleOpenAgents, handleOpenAutomations, handleOpenInbox, handleOpenMemory, handleOpenLibrary, handleOpenProjects, handleOpenResources, handleOpenSchedules, handleOpenSkills, handleOpenTasks, handleSessionOpen, sessions]);
 
   const [useWorkspaceCtx, setUseWorkspaceCtx] = useState(() => getSetting('ai_use_workspace_context'));
   const extractedMessageIdsRef = useRef<Set<string>>(new Set());
@@ -2599,6 +2612,7 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
             onOpenLibrary={handleOpenLibrary}
             libraryEntries={documentLibrary.entries}
             onOpenTasks={handleOpenTasks}
+            onOpenProjects={handleOpenProjects}
             onOpenActivity={handleOpenActivity}
             onOpenAgents={handleOpenAgents}
             onOpenResources={handleOpenResources}
@@ -3727,6 +3741,35 @@ function CanvasLayerScene({
                   onFocusConsumed={() => onUpdateWindow(win.id, { focusLibraryKey: undefined })}
                   onOpenWorkspaceDocument={onOpenDocumentById}
                 />
+              </Suspense>
+            </FloatingWindowShell>
+          );
+        }
+
+        if (win.type === 'projects') {
+          return (
+            <FloatingWindowShell
+              key={win.id}
+              window={win}
+              isSelected={selectedWindowIds.includes(win.id)}
+              adjacentEdges={adjacentEdges}
+              groupRole={groupRole}
+              isMobile={isMobile}
+              isFullExpand={isFullExpandMode}
+              onToggleFullExpand={toggleFullExpand}
+              onClose={onCloseWindow}
+              onFocus={onFocusWindow}
+              onUpdate={onUpdateWindow}
+              onMinimize={onMinimizeWindow}
+              onShare={() => onShareWindow(win.title)}
+              presenceMode={presenceMode}
+              currentUserId={userId}
+              canControl={canControlWindow}
+              titleIcon={<Layers3 size={13} />}
+              breadcrumb={workspaceName}
+            >
+              <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
+                <ProjectsWindowContent workspaceId={workspaceId} userId={userId} />
               </Suspense>
             </FloatingWindowShell>
           );

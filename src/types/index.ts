@@ -329,7 +329,7 @@ export type CanvasTool = 'select' | 'pen' | 'rect' | 'ellipse' | 'diamond' | 'li
 
 export type ActiveView = 'chat' | 'document' | 'memory' | 'skills' | 'library' | 'files' | 'tasks' | 'activity' | 'agents' | 'users' | 'schedules' | 'automations';
 
-export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'library' | 'tasks' | 'activity' | 'agents' | 'resources' | 'users' | 'schedules' | 'automations' | 'inbox' | 'tenants' | 'browser' | 'terminal';
+export type FloatingWindowType = 'chat' | 'document' | 'memory' | 'skills' | 'library' | 'tasks' | 'activity' | 'agents' | 'resources' | 'users' | 'schedules' | 'automations' | 'inbox' | 'tenants' | 'browser' | 'terminal' | 'projects';
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';

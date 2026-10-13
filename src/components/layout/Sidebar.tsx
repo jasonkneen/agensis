@@ -209,6 +209,7 @@ interface SidebarProps {
  onOpenBrowser?: () => void;
  onOpenTerminal?: () => void;
  onOpenTasks?: () => void;
+ onOpenProjects?: () => void;
  onOpenActivity?: () => void;
  onOpenAgents?: () => void;
  onOpenResources?: () => void;
@@ -283,6 +284,7 @@ export const Sidebar = React.memo(function Sidebar({
  onOpenBrowser,
  onOpenTerminal,
  onOpenTasks,
+ onOpenProjects,
  onOpenActivity,
  onOpenAgents,
  onOpenResources,
@@ -789,6 +791,7 @@ export const Sidebar = React.memo(function Sidebar({
           sections whose height changes every time one is opened, so their
           position on screen was never twice the same. */}
       {onOpenTasks && <ActionTile icon={<RotateCcw />} label="Tasks" count={openTaskCount} active={focusedWindowType === 'tasks'} onClick={onOpenTasks} />}
+      {onOpenProjects && <ActionTile icon={<Layers3 />} label="Projects" active={focusedWindowType === 'projects'} onClick={onOpenProjects} />}
       <ActionTile icon={<Brain />} label="Memory" active={focusedWindowType === 'memory'} onClick={onOpenMemory} />
       {/* Closes the fixed block. Below it everything is a collapsible section;
           above it, nothing moves. See .sidebar-group-divider. */}

@@ -1,4 +1,4 @@
-import { Activity, Bot, Brain, Clock, Database, FileText, Globe, Inbox, Library, SquareTerminal, ListTodo, Menu, MessageSquare, Sparkles, Users, X, Zap, type LucideIcon , Building2 } from 'lucide-react';
+import { Activity, Bot, Brain, Clock, Layers3, Database, FileText, Globe, Inbox, Library, SquareTerminal, ListTodo, Menu, MessageSquare, Sparkles, Users, X, Zap, type LucideIcon , Building2 } from 'lucide-react';
 import type { FloatingWindow, FloatingWindowType } from '../../types';
 import { cn } from '@/lib/utils';
 
@@ -9,6 +9,7 @@ const TYPE_ICON: Record<FloatingWindowType, LucideIcon> = {
   skills: Sparkles,
   library: Library,
   tasks: ListTodo,
+  projects: Layers3,
   activity: Activity,
   agents: Bot,
   resources: Database,
