@@ -30,6 +30,7 @@ vi.mock('../../src/hooks/useProjects', () => ({
 vi.mock('../../src/hooks/useTeams', () => ({
   useTeams: () => ({ teams: [], createTeam: async () => null, updateTeam: async () => null, deleteTeam: async () => {}, refetch: () => {} }),
 }));
+vi.mock('../../src/hooks/useTaskStatusEvents', () => ({ useTaskStatusEvents: () => ({ events: [], refetch: () => {} }) }));
 vi.mock('../../src/hooks/useProjectFiles', () => ({
   useProjectFiles: () => ({
     files: data.files.list,
@@ -133,7 +134,7 @@ describe('Projects window', () => {
     openProject();
     click(tab('Reports'));
     expect(container.querySelector('[data-testid="project-reports"]')).toBeTruthy();
-    for (const title of ['Burndown', 'Velocity', 'Created vs completed', 'By status', 'Workload']) {
+    for (const title of ['Burndown', 'Velocity', 'Cumulative flow', 'Created vs completed', 'By status', 'Workload']) {
       expect(container.textContent).toContain(title);
     }
   });

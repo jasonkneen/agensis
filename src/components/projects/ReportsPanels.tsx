@@ -6,10 +6,12 @@ import {
   averageVelocity,
   burndown,
   createdVsCompleted,
+  cumulativeFlow,
   statusBreakdown,
   velocity,
   workload,
   workspaceTotals,
+  type StatusEvent,
   type WorkloadRow,
 } from '../../lib/pm/reports';
 import type { Task, WorkspaceAgent } from '../../types';
@@ -24,6 +26,7 @@ const Charts = {
   Burndown: lazy(() => import('./ReportCharts').then(m => ({ default: m.BurndownChart }))),
   Velocity: lazy(() => import('./ReportCharts').then(m => ({ default: m.VelocityChart }))),
   Flow: lazy(() => import('./ReportCharts').then(m => ({ default: m.FlowChart }))),
+  StatusFlow: lazy(() => import('./ReportCharts').then(m => ({ default: m.StatusFlowChart }))),
   Ring: lazy(() => import('./ReportCharts').then(m => ({ default: m.StatusRing }))),
 };
 
@@ -105,7 +108,7 @@ function StatusLegend({ counts }: { counts: ReturnType<typeof statusBreakdown> }
 type Range = 7 | 30 | 'all';
 
 /** The Reports tab on a project page: burndown, velocity, created vs completed, status, workload. */
-export function ProjectReports({ project, projectTasks, members, agents }: { project: Project; projectTasks: Task[]; members: WorkspaceMember[]; agents: WorkspaceAgent[] }) {
+export function ProjectReports({ project, projectTasks, members, agents, statusEvents }: { project: Project; projectTasks: Task[]; members: WorkspaceMember[]; agents: WorkspaceAgent[]; statusEvents: StatusEvent[] }) {
   const [range, setRange] = useState<Range>(30);
   const now = Date.now();
   const agentIds = useMemo(() => new Set(agents.map(agent => agent.id)), [agents]);
@@ -118,6 +121,10 @@ export function ProjectReports({ project, projectTasks, members, agents }: { pro
   const weeks = useMemo(() => velocity(projectTasks, 4, now), [projectTasks, now]);
   const flow = useMemo(() => createdVsCompleted(projectTasks, from, now, now), [projectTasks, from, now]);
   const counts = useMemo(() => statusBreakdown(projectTasks), [projectTasks]);
+  const statusFlow = useMemo(() => {
+    const ids = new Set(projectTasks.map(task => task.id));
+    return cumulativeFlow(projectTasks, statusEvents.filter(event => ids.has(event.task_id)), from, now);
+  }, [projectTasks, statusEvents, from, now]);
   const rows = useMemo(() => workload(projectTasks, agentIds), [projectTasks, agentIds]);
 
   const total = projectTasks.length;
@@ -163,12 +170,19 @@ export function ProjectReports({ project, projectTasks, members, agents }: { pro
         </Panel>
       </div>
 
+      <Panel title="Cumulative flow" aside="Tasks in each status">
+        <Suspense fallback={<ChartFallback />}>
+          <Charts.StatusFlow points={statusFlow} />
+        </Suspense>
+        <StatusLegend counts={counts} />
+        <p className="mt-2 text-xs text-muted-foreground">Built from recorded status changes. Tasks from before changes were recorded are placed from their created and updated dates.</p>
+      </Panel>
+
       <div className="grid gap-4 md:grid-cols-3">
         <Panel title="Created vs completed">
           <Suspense fallback={<ChartFallback />}>
             <Charts.Flow points={flow} />
           </Suspense>
-          <p className="mt-2 text-xs text-muted-foreground">A flow chart by status needs a record of status changes, which is not kept yet.</p>
         </Panel>
         <Panel title="By status">
           <Suspense fallback={<ChartFallback />}>
@@ -190,12 +204,15 @@ export function WorkspaceDashboard({
   tasks,
   members,
   agents,
+  loading = false,
   onOpenProject,
 }: {
   projects: Project[];
   tasks: Task[];
   members: WorkspaceMember[];
   agents: WorkspaceAgent[];
+  /** True until the projects have loaded, so the empty message is not shown too early. */
+  loading?: boolean;
   onOpenProject: (id: string) => void;
 }) {
   const now = Date.now();
@@ -225,7 +242,7 @@ export function WorkspaceDashboard({
   if (live.length === 0) {
     return (
       <div className="flex-1 p-4">
-        <Empty>The dashboard fills in once you have a project.</Empty>
+        <Empty>{loading ? 'Loading…' : 'The dashboard fills in once you have a project.'}</Empty>
       </div>
     );
   }

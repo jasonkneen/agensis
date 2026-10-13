@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { backendClient } from '../lib/backendClient';
 import { cachedFetch, offlineInsertResult, offlineUpdate } from '../lib/offlineBackend';
 import { useTableSubscription, useRealtimeDeduper } from './useTableSubscription';
@@ -47,6 +47,8 @@ export interface CreateProjectInput {
 
 export function useProjects(workspaceId: string | null, userId?: string) {
   const [projects, setProjects, beginRequest] = useWorkspaceListState<Project>(workspaceId, []);
+  // Which workspace the list has loaded for, so a screen can tell "none yet" from "not loaded yet".
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
 
   const fetchProjects = useCallback(async () => {
     const isCurrent = beginRequest();
@@ -62,7 +64,10 @@ export function useProjects(workspaceId: string | null, userId?: string) {
         .order('created_at', { ascending: true });
       return data;
     });
-    if (isCurrent() && data) setProjects(data);
+    if (isCurrent()) {
+      if (data) setProjects(data);
+      setLoadedFor(workspaceId);
+    }
   }, [beginRequest, setProjects, workspaceId]);
 
   useEffect(() => {
@@ -136,5 +141,5 @@ export function useProjects(workspaceId: string | null, userId?: string) {
     [setProjects, workspaceId],
   );
 
-  return { projects, createProject, updateProject, refetch: fetchProjects };
+  return { projects, loading: loadedFor !== workspaceId, createProject, updateProject, refetch: fetchProjects };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from '../../src/types';
-import { averageVelocity, burndown, createdVsCompleted, statusBreakdown, velocity, workload, workspaceTotals } from '../../src/lib/pm/reports';
+import { averageVelocity, burndown, createdVsCompleted, cumulativeFlow, statusBreakdown, velocity, workload, workspaceTotals } from '../../src/lib/pm/reports';
 
 const day = (n: number) => new Date(2026, 9, n, 12).getTime(); // October 2026, noon
 const iso = (n: number) => new Date(day(n)).toISOString();
@@ -105,5 +105,32 @@ describe('workspaceTotals', () => {
       day(13),
     );
     expect(totals).toEqual({ openTasks: 2, agentTasks: 1, doneThisWeek: 1, overdue: 1 });
+  });
+});
+
+describe('cumulativeFlow', () => {
+  const ev = (task_id: string, from_status: string | null, to_status: string, d: number) => ({ task_id, from_status, to_status, changed_at: iso(d) });
+
+  it('counts tasks in each status per day from recorded changes', () => {
+    const tasks = [task({ id: 'a', created_at: iso(1), status: 'done' }), task({ id: 'b', created_at: iso(2), status: 'in_progress' })];
+    const events = [ev('a', null, 'todo', 1), ev('a', 'todo', 'in_progress', 2), ev('a', 'in_progress', 'done', 4), ev('b', null, 'todo', 2), ev('b', 'todo', 'in_progress', 3)];
+    const points = cumulativeFlow(tasks, events, day(1), day(4));
+    expect(points.map(p => [p.todo, p.in_progress, p.done])).toEqual([
+      [1, 0, 0], // day 1: a is todo
+      [1, 1, 0], // day 2: a in progress, b todo
+      [0, 2, 0], // day 3: both in progress
+      [0, 1, 1], // day 4: a done
+    ]);
+  });
+
+  it('falls back to creation then current status for tasks with no recorded changes', () => {
+    const tasks = [task({ id: 'old', created_at: iso(1), status: 'done', completed_at: iso(3), updated_at: iso(3) })];
+    const points = cumulativeFlow(tasks, [], day(1), day(4));
+    expect(points.map(p => [p.todo, p.done])).toEqual([[1, 0], [1, 0], [0, 1], [0, 1]]);
+  });
+
+  it('does not count a task before it was created', () => {
+    const points = cumulativeFlow([task({ id: 'late', created_at: iso(3) })], [], day(1), day(3));
+    expect(points.map(p => p.todo)).toEqual([0, 0, 1]);
   });
 });

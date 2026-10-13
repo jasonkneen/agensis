@@ -1,7 +1,7 @@
-import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, XAxis, YAxis } from 'recharts';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@agensis/ui/components/chart';
 import { SERIES_COLORS, STATUS_COLORS } from './reportColors';
-import type { BurndownPoint, FlowPoint, StatusSlice, VelocityWeek } from '../../lib/pm/reports';
+import type { BurndownPoint, FlowPoint, StatusFlowPoint, StatusSlice, VelocityWeek } from '../../lib/pm/reports';
 
 // The charts for the project Reports tab and the Dashboard. Its own module so the
 // Projects window lazy-imports it: recharts is large and only these views draw it.
@@ -59,6 +59,29 @@ export function FlowChart({ points }: { points: FlowPoint[] }) {
         <Line dataKey="created" type="monotone" stroke="var(--color-created)" dot={false} strokeWidth={2} />
         <Line dataKey="completed" type="monotone" stroke="var(--color-completed)" dot={false} strokeWidth={2} />
       </LineChart>
+    </ChartContainer>
+  );
+}
+
+/** Tasks in each status over time, stacked: the cumulative flow diagram. */
+export function StatusFlowChart({ points }: { points: StatusFlowPoint[] }) {
+  const config: ChartConfig = {
+    done: { label: 'Done', color: STATUS_COLORS.done },
+    in_progress: { label: 'In progress', color: STATUS_COLORS.in_progress },
+    todo: { label: 'To do', color: STATUS_COLORS.todo },
+    cancelled: { label: 'Cancelled', color: STATUS_COLORS.cancelled },
+  };
+  return (
+    <ChartContainer config={config} className="h-44 w-full" aria-label="Cumulative flow by status">
+      <AreaChart data={points} margin={{ left: 0, right: 8, top: 8 }}>
+        <CartesianGrid vertical={false} strokeOpacity={0.4} />
+        <XAxis dataKey="day" tickFormatter={shortDay} tickLine={false} axisLine={false} tick={{ fontSize: 10 }} minTickGap={24} />
+        <YAxis width={26} allowDecimals={false} tickLine={false} axisLine={false} tick={{ fontSize: 10 }} />
+        <ChartTooltip content={<ChartTooltipContent labelFormatter={value => shortDay(Number(value))} />} />
+        {(['done', 'in_progress', 'todo', 'cancelled'] as const).map(status => (
+          <Area key={status} dataKey={status} type="stepAfter" stackId="flow" stroke={`var(--color-${status})`} fill={`var(--color-${status})`} fillOpacity={0.55} strokeWidth={1.5} />
+        ))}
+      </AreaChart>
     </ChartContainer>
   );
 }

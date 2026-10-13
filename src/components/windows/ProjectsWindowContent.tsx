@@ -15,6 +15,7 @@ import { ProjectIconTile } from '../projects/projectIcons';
 import { ProjectReports, WorkspaceDashboard } from '../projects/ReportsPanels';
 import { MembersPage, TeamsPage } from '../projects/TeamsPanels';
 import { useTeams } from '../../hooks/useTeams';
+import { useTaskStatusEvents } from '../../hooks/useTaskStatusEvents';
 import { onProjectsIntent, takeProjectsIntent } from '../../lib/pm/projectsIntent';
 import { favouritesCodec, toggleFavourite } from '../../lib/pm/favourites';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
@@ -151,7 +152,7 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
         : workspaceMembers,
     [workspaceMembers, currentUserId, currentUserEmail, workspaceId],
   );
-  const { projects, createProject, updateProject } = useProjects(workspaceId, currentUserId);
+  const { projects, loading: projectsLoading, createProject, updateProject } = useProjects(workspaceId, currentUserId);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<ProjectStatus | 'all' | 'archived' | 'favourites'>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -254,7 +255,7 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
         </Button>
       </div>
       {page === 'dashboard' ? (
-        <WorkspaceDashboard projects={projects} tasks={tasks} members={members} agents={agents} onOpenProject={id => setSelectedId(id)} />
+        <WorkspaceDashboard projects={projects} tasks={tasks} members={members} agents={agents} loading={projectsLoading} onOpenProject={id => setSelectedId(id)} />
       ) : page === 'teams' ? (
         <TeamsPage teams={teams} actions={{ createTeam, updateTeam, deleteTeam }} members={members} agents={agents} tasks={tasks} />
       ) : page === 'members' ? (
@@ -276,7 +277,8 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {visible.length === 0 && (
+        {visible.length === 0 && projectsLoading && <p className="px-6 py-16 text-center text-sm text-muted-foreground">Loading projects…</p>}
+        {visible.length === 0 && !projectsLoading && (
           <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
             <p className="text-sm font-medium">{projects.length === 0 ? 'No projects yet' : 'No projects match this filter'}</p>
             {projects.length === 0 && (
@@ -373,6 +375,8 @@ function ProjectLanding({
 }) {
   const { members } = tasksProps;
   const [tab, setTab] = useState<LandingTab>('overview');
+  // Status history loads only once the Reports tab is opened.
+  const { events: statusEvents } = useTaskStatusEvents(tasksProps.workspaceId ?? null, tab === 'reports');
   const stats = useMemo(() => statsFor(projectTasks), [projectTasks]);
   const progress = stats.total ? Math.round((100 * stats.done) / stats.total) : 0;
   const lead = members.find(member => member.user_id === project.lead_id);
@@ -454,7 +458,7 @@ function ProjectLanding({
       ) : tab === 'activity' ? (
         <ProjectActivityTab projectTasks={projectTasks} tasksProps={tasksProps} />
       ) : tab === 'reports' ? (
-        <ProjectReports project={project} projectTasks={projectTasks} members={tasksProps.members} agents={tasksProps.agents} />
+        <ProjectReports project={project} projectTasks={projectTasks} members={tasksProps.members} agents={tasksProps.agents} statusEvents={statusEvents} />
       ) : (
         <TasksWindowContent {...tasksProps} projectId={project.id} forcedView={tab} />
       )}

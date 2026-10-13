@@ -179,3 +179,66 @@ export function workspaceTotals(tasks: Task[], agentIds: Set<string>, now: numbe
   }
   return { openTasks, agentTasks, doneThisWeek, overdue };
 }
+
+export interface StatusEvent {
+  task_id: string;
+  from_status: string | null;
+  to_status: string;
+  changed_at: string;
+}
+
+export interface StatusFlowPoint {
+  day: number;
+  todo: number;
+  in_progress: number;
+  done: number;
+  cancelled: number;
+}
+
+const STATUSES: Task['status'][] = ['todo', 'in_progress', 'done', 'cancelled'];
+
+/**
+ * The status each task was in at a moment. Tasks with recorded changes use them. Tasks created
+ * before history existed have none, so they are treated as To do from creation and moved to
+ * their current status when they were last updated (or completed, for Done).
+ */
+function statusTimeline(task: Task, events: StatusEvent[]): Array<{ at: number; status: Task['status'] }> {
+  if (events.length > 0) {
+    return events
+      .map(event => ({ at: new Date(event.changed_at).getTime(), status: event.to_status as Task['status'] }))
+      .sort((a, b) => a.at - b.at);
+  }
+  const created = new Date(task.created_at).getTime();
+  const timeline: Array<{ at: number; status: Task['status'] }> = [{ at: created, status: 'todo' }];
+  if (task.status !== 'todo') {
+    const movedAt = new Date(task.status === 'done' && task.completed_at ? task.completed_at : task.updated_at).getTime();
+    timeline.push({ at: Math.max(movedAt, created), status: task.status });
+  }
+  return timeline;
+}
+
+/** How many tasks were in each status at the end of each day from `from` up to `now`. */
+export function cumulativeFlow(tasks: Task[], events: StatusEvent[], from: number, now: number): StatusFlowPoint[] {
+  const byTask = new Map<string, StatusEvent[]>();
+  for (const event of events) {
+    const list = byTask.get(event.task_id) ?? [];
+    list.push(event);
+    byTask.set(event.task_id, list);
+  }
+  const timelines = tasks.map(task => statusTimeline(task, byTask.get(task.id) ?? []));
+  const points: StatusFlowPoint[] = [];
+  for (let day = startOfDay(from); day <= startOfDay(now); day += DAY) {
+    const dayEnd = day + DAY - 1;
+    const point: StatusFlowPoint = { day, todo: 0, in_progress: 0, done: 0, cancelled: 0 };
+    for (const timeline of timelines) {
+      let current: Task['status'] | null = null;
+      for (const step of timeline) {
+        if (step.at <= dayEnd) current = step.status;
+        else break;
+      }
+      if (current && STATUSES.includes(current)) point[current] += 1;
+    }
+    points.push(point);
+  }
+  return points;
+}
