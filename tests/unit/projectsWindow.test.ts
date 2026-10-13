@@ -224,6 +224,29 @@ describe('project Files tab', () => {
   });
 });
 
+describe('Projects window: favourites', () => {
+  const star = () => container.querySelector('button[aria-label^="Add Website Redesign to favourites"]') as HTMLElement;
+
+  it('stars a project and lists it under the Favourites filter', () => {
+    const favouritesTab = () => Array.from(container.querySelectorAll('button')).find(b => b.textContent?.trim() === 'Favourites') as HTMLElement;
+    click(favouritesTab());
+    expect(container.textContent).toContain('No projects match this filter');
+    click(Array.from(container.querySelectorAll('button')).find(b => b.textContent?.trim() === 'All') as HTMLElement);
+    click(star());
+    click(favouritesTab());
+    expect(container.textContent).toContain('Website Redesign');
+    expect(container.textContent).not.toContain('No projects match this filter');
+    click(container.querySelector('button[aria-label^="Remove Website Redesign from favourites"]') as HTMLElement);
+    expect(container.textContent).toContain('No projects match this filter');
+  });
+
+  it('remembers the star for this workspace', () => {
+    click(star());
+    const stored = Object.entries(window.localStorage).find(([key]) => key.includes('project-favourites'));
+    expect(stored?.[1]).toContain('p1');
+  });
+});
+
 describe('Projects window: requests from the command palette', () => {
   it('opens the Dashboard page when asked to', async () => {
     const { requestProjectsIntent } = await import('../../src/lib/pm/projectsIntent');

@@ -16,6 +16,9 @@ import { ProjectReports, WorkspaceDashboard } from '../projects/ReportsPanels';
 import { MembersPage, TeamsPage } from '../projects/TeamsPanels';
 import { useTeams } from '../../hooks/useTeams';
 import { onProjectsIntent, takeProjectsIntent } from '../../lib/pm/projectsIntent';
+import { favouritesCodec, toggleFavourite } from '../../lib/pm/favourites';
+import { usePersistedPreference } from '../../hooks/usePersistedPreference';
+import { viewPreferenceKey } from '../../lib/viewPreferences';
 import { projectColor } from '../projects/projectIconMap';
 import { TasksWindowContent, type TaskView } from './TasksWindowContent';
 import { STATUS_LABELS } from './taskPresentation';
@@ -36,8 +39,9 @@ const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
   completed: 'Completed',
 };
 
-const STATUS_FILTERS: Array<[ProjectStatus | 'all' | 'archived', string]> = [
+const STATUS_FILTERS: Array<[ProjectStatus | 'all' | 'archived' | 'favourites', string]> = [
   ['all', 'All'],
+  ['favourites', 'Favourites'],
   ['active', 'Active'],
   ['at_risk', 'At risk'],
   ['completed', 'Completed'],
@@ -140,10 +144,11 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
   const { tasks, members, agents, workspaceId, currentUserId, onCreateTask } = tasksProps;
   const { projects, createProject, updateProject } = useProjects(workspaceId, currentUserId);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<ProjectStatus | 'all' | 'archived'>('all');
+  const [filter, setFilter] = useState<ProjectStatus | 'all' | 'archived' | 'favourites'>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [page, setPage] = useState<'dashboard' | 'projects' | 'teams' | 'members'>('projects');
   const { teams, createTeam, updateTeam, deleteTeam } = useTeams(workspaceId, currentUserId);
+  const [favourites, setFavourites] = usePersistedPreference(viewPreferenceKey('project-favourites', workspaceId), favouritesCodec, []);
 
   // Requests from the command palette: show a page, open a project, or start a new one.
   useEffect(() => {
@@ -180,6 +185,7 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
   const visible = projects.filter(project => {
     if (filter === 'archived') return project.archived;
     if (project.archived) return false;
+    if (filter === 'favourites') return favourites.includes(project.id);
     return filter === 'all' || project.status === filter;
   });
 
@@ -282,12 +288,13 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
             .map(id => members.find(member => member.user_id === id))
             .filter((member): member is WorkspaceMember => Boolean(member))
             .slice(0, 4);
+          const starred = favourites.includes(project.id);
           return (
+            <div key={project.id} className="relative">
             <button
-              key={project.id}
               type="button"
               onClick={() => setSelectedId(project.id)}
-              className="flex w-full flex-col gap-2 border-b border-border px-4 py-3 text-left transition-colors hover:bg-muted/50"
+              className="flex w-full flex-col gap-2 border-b border-border py-3 pr-11 pl-4 text-left transition-colors hover:bg-muted/50"
             >
               <span className="flex items-center gap-2.5">
                 <ProjectIconTile icon={project.icon} color={project.color} size="sm" />
@@ -320,6 +327,16 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
                 <span className="block h-full" style={{ width: `${progress}%`, backgroundColor: hex }} />
               </span>
             </button>
+            <button
+              type="button"
+              aria-label={starred ? `Remove ${project.name} from favourites` : `Add ${project.name} to favourites`}
+              aria-pressed={starred}
+              onClick={() => setFavourites(prev => toggleFavourite(prev, project.id))}
+              className={cn('absolute top-2.5 right-3 grid size-6 place-items-center rounded-md text-base leading-none hover:bg-muted', starred ? 'text-amber-500' : 'text-muted-foreground')}
+            >
+              {starred ? '★' : '☆'}
+            </button>
+            </div>
           );
         })}
       </div>
