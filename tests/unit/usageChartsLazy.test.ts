@@ -33,11 +33,19 @@ describe('usage charts stay out of the main bundle', () => {
         // so Rollup drops it from the production build entirely.
         if (rel.startsWith('src/showcase/')) continue;
         if (rel === 'src/components/settings/UsageCharts.tsx') continue;
+        // The project reports' charts: same rule, checked below.
+        if (rel === 'src/components/projects/ReportCharts.tsx') continue;
         if (/from ['"]recharts['"]/.test(read(rel))) offenders.push(rel);
       }
     })(path.resolve(process.cwd(), 'src'));
 
     expect(offenders).toEqual([]);
+  });
+
+  it('loads the project report charts with React.lazy, never statically', () => {
+    const panels = read('src/components/projects/ReportsPanels.tsx');
+    expect(panels).toMatch(/lazy\(\(\) => import\(['"]\.\/ReportCharts['"]\)/);
+    expect(panels).not.toMatch(/^import .*from ['"]\.\/ReportCharts['"]/m);
   });
 
   it('renders numbers the panel already computed, not its own maths', () => {

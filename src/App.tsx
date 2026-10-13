@@ -38,6 +38,8 @@ import { RegistrationApprovalPopup } from './components/agents/RegistrationAppro
 import { WebMcpBridge } from './components/webmcp/WebMcpBridge';
 import { FeedbackButton, type FeedbackHandle } from './components/feedback/FeedbackButton';
 import { NotificationsBell } from './components/notifications/NotificationsBell';
+import { taskNotifications } from './lib/pm/taskNotifications';
+import { agentHandle } from './lib/agentAccent';
 import { Separator } from '@agensis/ui/components/separator';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
 import { Avatar, AvatarFallback, AvatarImage } from '@agensis/ui/components/avatar';
@@ -1106,7 +1108,20 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
   // passed so a pending approval counts (and is named) here exactly as it is in
   // the window; a badge that ignored parked tool calls would be silent about the
   // one thing in the inbox that expires.
-  const { unreadCount: inboxUnreadCount } = useInbox(activeWorkspaceId || null, 'all', agents);
+  const { unreadCount: inboxUnreadCount, groups: inboxGroups, markRead: markInboxRead } = useInbox(activeWorkspaceId || null, 'all', agents);
+
+  // Notifications that come from tasks rather than the Inbox: yours that are overdue,
+  // ones just handed to you, and ones an agent just finished. Derived, nothing stored.
+  const taskNotes = useMemo(
+    () => taskNotifications(tasks, { userId: user?.id, agentIds: new Set(agents.map(agent => agent.id)), now: Date.now() }),
+    [tasks, agents, user?.id],
+  );
+  const notifyActorName = useCallback((id: string | null) => {
+    if (!id) return 'Someone';
+    const agent = agents.find(item => item.id === id);
+    if (agent) return `@${agentHandle(agent)}`;
+    return members.find(member => member.user_id === id)?.email?.split('@')[0] || 'Someone';
+  }, [agents, members]);
 
   const {
     webhooks: agentWebhooks,
@@ -2688,7 +2703,22 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
                 onInvite={handleOpenUsers}
               />
             )}
-            notificationsSlot={<NotificationsBell workspaceId={activeWorkspaceId || null} variant="inline" updateNotif={updateNotification} />}
+            notificationsSlot={(
+              <NotificationsBell
+                workspaceId={activeWorkspaceId || null}
+                variant="inline"
+                updateNotif={updateNotification}
+                feeds={{
+                  groups: inboxGroups,
+                  unreadCount: inboxUnreadCount,
+                  taskNotes,
+                  actorName: notifyActorName,
+                  onMarkRead: markInboxRead,
+                  onOpenInbox: handleOpenInbox,
+                  onOpenTask: handleOpenTasks,
+                }}
+              />
+            )}
             presenceSlot={(
               <PresenceRoster
                 users={workspacePresenceUsers}

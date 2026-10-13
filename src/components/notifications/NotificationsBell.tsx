@@ -7,6 +7,10 @@ import { Separator } from '@agensis/ui/components/separator';
 import { cn } from '@/lib/utils';
 import { useAgentRegistrations } from '../../hooks/useAgentRegistrations';
 import { useActivity } from '../../hooks/useActivity';
+import type { InboxGroup } from '../inbox/inboxModel';
+import { inboxTimestamp } from '../inbox/inboxModel';
+import { BELL_FILTERS, bellEntries, splitByDay, type BellEntry, type BellFilter } from '../inbox/notificationsModel';
+import type { TaskNotification } from '../../lib/pm/taskNotifications';
 
 // A notification is one of:
 //  - approval: a pending agent-registration request (needs the owner's decision;
@@ -76,8 +80,25 @@ export interface UpdateNotification {
   onShowNotes?: () => void;
 }
 
-export function NotificationsBell({ workspaceId, variant = 'floating', updateNotif }: { workspaceId: string | null; variant?: 'floating' | 'inline'; updateNotif?: UpdateNotification | null }) {
+/** What the Inbox and the task list add to the bell: items to read, and ways to open them. */
+export interface BellFeeds {
+  groups: InboxGroup[];
+  unreadCount: number;
+  taskNotes: TaskNotification[];
+  actorName: (id: string | null) => string;
+  onMarkRead: (contextKey: string) => Promise<boolean>;
+  onOpenInbox: () => void;
+  onOpenTask: (taskId: string) => void;
+}
+
+export function NotificationsBell({ workspaceId, variant = 'floating', updateNotif, feeds }: { workspaceId: string | null; variant?: 'floating' | 'inline'; updateNotif?: UpdateNotification | null; feeds?: BellFeeds | null }) {
   const { pending } = useAgentRegistrations(workspaceId);
+  const [typeFilter, setTypeFilter] = useState<BellFilter>('all');
+  const entries = useMemo(
+    () => (feeds ? bellEntries(feeds.groups, feeds.taskNotes, typeFilter, feeds.actorName) : []),
+    [feeds, typeFilter],
+  );
+  const overdueCount = feeds ? feeds.taskNotes.filter(note => note.kind === 'overdue').length : 0;
   const { events } = useActivity(workspaceId);
 
   const items = useMemo<NotificationItem[]>(() => {
@@ -149,7 +170,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
   // Connection events are informational, so they never light the red badge;
   // instead, activity you haven't opened the bell to see yet drives a soft
   // pulse ring (visually distinct from the approvals badge).
-  const badgeCount = pending.length;
+  const badgeCount = pending.length + (feeds?.unreadCount ?? 0) + overdueCount;
 
   // "Unseen" = the newest surfaced event (connection or important activity) is
   // newer than the last time this workspace's bell was opened. Keyed per
@@ -329,14 +350,62 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
             </Button>
           </div>
         </PopoverHeader>
+        {feeds && (
+          <div className="flex gap-1 border-t border-border px-3 py-2 text-2xs" role="group" aria-label="Notification filter">
+            {BELL_FILTERS.map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={typeFilter === value}
+                onClick={() => setTypeFilter(value)}
+                className={cn('rounded-full border border-border px-2 py-0.5', typeFilter === value ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground')}
+              >
+                {label}
+              </button>
+            ))}
+            <button
+              type="button"
+              disabled={!feeds.unreadCount}
+              onClick={() => { for (const group of feeds.groups) if (group.unreadCount > 0) void feeds.onMarkRead(group.key); }}
+              className="ml-auto text-muted-foreground hover:text-foreground disabled:opacity-40"
+            >
+              Mark all read
+            </button>
+          </div>
+        )}
         <Separator />
         <div className="max-h-80 overflow-y-auto py-1">
-          {filteredItems.length === 0 ? (
+          {(typeFilter === 'all' ? filteredItems.length === 0 && entries.length === 0 : entries.length === 0) ? (
             <p className="px-3 py-6 text-center text-xs text-muted-foreground">
               {showUnreadOnly ? 'No unread notifications.' : "You're all caught up."}
             </p>
           ) : (
-            filteredItems.map((item) => (
+            <>
+            {feeds && entries.length > 0 && (() => {
+              const { today, earlier } = splitByDay(entries, Date.now());
+              const rows = (label: string, list: BellEntry[]) => list.length === 0 ? null : (
+                <div key={label}>
+                  <div className="px-3 pt-2 pb-0.5 text-3xs font-medium tracking-wide text-muted-foreground uppercase">{label}</div>
+                  {list.map(entry => (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      onClick={() => { setOpen(false); if (entry.source === 'task') feeds.onOpenTask(entry.target); else feeds.onOpenInbox(); }}
+                      className="flex w-full items-start gap-2.5 px-3 py-2 text-left text-sm hover:bg-muted/60"
+                    >
+                      <span aria-hidden className={cn('mt-1.5 size-2 shrink-0 rounded-full', entry.unread ? (entry.tone === 'urgent' ? 'bg-red-500' : 'bg-primary') : 'bg-transparent')} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate leading-snug">{entry.heading}</span>
+                        <span className="block truncate text-2xs text-muted-foreground">{entry.detail}</span>
+                      </span>
+                      <span className="shrink-0 pt-0.5 text-2xs text-muted-foreground">{inboxTimestamp(entry.at, Date.now())}</span>
+                    </button>
+                  ))}
+                </div>
+              );
+              return <>{rows('Today', today)}{rows('Earlier', earlier)}</>;
+            })()}
+            {typeFilter === 'all' && filteredItems.map((item) => (
               <div key={item.id} className="flex items-start gap-2.5 px-3 py-2 text-sm">
                 <StatusDot
                   tone={
@@ -412,9 +481,15 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
                   {item.at && <p className="mt-0.5 text-2xs text-muted-foreground">{relative(item.at)}</p>}
                 </div>
               </div>
-            ))
+            ))}
+            </>
           )}
         </div>
+        {feeds && (
+          <button type="button" onClick={() => { setOpen(false); feeds.onOpenInbox(); }} className="w-full border-t border-border px-3 py-2 text-left text-2xs text-muted-foreground hover:text-foreground">
+            Open Inbox
+          </button>
+        )}
         </>)}
       </PopoverContent>
     </Popover>
