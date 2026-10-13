@@ -25,6 +25,7 @@ import {
   User,
   UserPlus,
   X,
+  PanelRightOpen,
 } from 'lucide-react';
 import type { AgentConnection, MessageAttachment, Task, TaskComment, TaskPriority, TaskStatus, UploadedFile, WorkspaceAgent } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
@@ -397,6 +398,41 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     [selectedTaskId, tasks],
   );
 
+  // The side panel, shared by every view: the Board, Table, Calendar and Timeline render it
+  // beside their content, and so does the List, through each row's Open button.
+  const renderEditPanel = () =>
+    selectedTask && (
+      <TaskEditPanel
+        task={selectedTask}
+        subtasks={childrenMap[selectedTask.id] || []}
+        allTasks={tasks}
+        members={members}
+        agents={agents}
+        onUpdateAgent={onUpdateAgent}
+        onOpenSession={onOpenSession}
+        workspaceId={workspaceId}
+        currentUserId={currentUserId}
+        currentUserEmail={currentUserEmail}
+        hideDone={hideDone}
+        onClose={() => setSelectedTaskId(null)}
+        onChangeTitle={title => onUpdateTask(selectedTask.id, { title })}
+        onChangeDescription={description => onUpdateTask(selectedTask.id, { description })}
+        onChangeStatus={status => onUpdateTask(selectedTask.id, { status })}
+        onChangePriority={priority => onUpdateTask(selectedTask.id, { priority })}
+        onChangeProject={projectId => onUpdateTask(selectedTask.id, { project_id: projectId })}
+        onChangeLabels={labels => onUpdateTask(selectedTask.id, { labels })}
+        onChangeEstimate={estimate => onUpdateTask(selectedTask.id, { estimate })}
+        projects={projects.filter(project => !project.archived)}
+        onChangeAssignee={assigneeId => onUpdateTask(selectedTask.id, { assignee_id: assigneeId })}
+        onChangeDependsOn={next => onUpdateTask(selectedTask.id, { depends_on: next })}
+        onChangeDates={updates => onUpdateTask(selectedTask.id, updates)}
+        onAddSubtask={title => onCreateTask({ title, parent_id: selectedTask.id, source_type: 'manual' })}
+        onToggleSubtask={sub => onToggleStatus(sub)}
+        onDeleteSubtask={id => onDeleteTask(id)}
+        onUploadFiles={onUploadFiles}
+      />
+    );
+
   // Drag-to-subtask: reparent `draggedId` under `targetId`. Guards self-drop and
   // cycles (can't nest a task under one of its own descendants).
   const handleReparent = (draggedId: string, targetId: string) => {
@@ -628,7 +664,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
       </div>
 
       {view === 'list' ? (
-        <ScrollArea className="min-h-0 flex-1">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+        <ScrollArea className="min-h-0 min-w-0 flex-1">
           <div className="flex flex-col gap-3 p-3">
             {filteredTopLevel.length === 0 ? (
               <Empty className="min-h-80 border-0">
@@ -668,6 +705,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                           hideDone={hideDone}
                           autoExpand={task.id === focusRowId}
                           onToggle={() => onToggleStatus(task)}
+                          onOpenPanel={() => setSelectedTaskId(task.id)}
                           onDelete={() => onDeleteTask(task.id)}
                           onChangeStatus={newStatus => onUpdateTask(task.id, { status: newStatus })}
                           onChangeAssignee={assigneeId => onUpdateTask(task.id, { assignee_id: assigneeId })}
@@ -686,6 +724,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
             )}
           </div>
         </ScrollArea>
+        {renderEditPanel()}
+        </div>
       ) : (
         <div className="flex min-h-0 flex-1 overflow-hidden">
           <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -731,37 +771,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
               />
             )}
           </div>
-          {selectedTask && (
-            <TaskEditPanel
-              task={selectedTask}
-              subtasks={childrenMap[selectedTask.id] || []}
-              allTasks={tasks}
-              members={members}
-              agents={agents}
-              onUpdateAgent={onUpdateAgent}
-              onOpenSession={onOpenSession}
-              workspaceId={workspaceId}
-              currentUserId={currentUserId}
-              currentUserEmail={currentUserEmail}
-              hideDone={hideDone}
-              onClose={() => setSelectedTaskId(null)}
-              onChangeTitle={title => onUpdateTask(selectedTask.id, { title })}
-              onChangeDescription={description => onUpdateTask(selectedTask.id, { description })}
-              onChangeStatus={status => onUpdateTask(selectedTask.id, { status })}
-              onChangePriority={priority => onUpdateTask(selectedTask.id, { priority })}
-              onChangeProject={projectId => onUpdateTask(selectedTask.id, { project_id: projectId })}
-              onChangeLabels={labels => onUpdateTask(selectedTask.id, { labels })}
-              onChangeEstimate={estimate => onUpdateTask(selectedTask.id, { estimate })}
-              projects={projects.filter(project => !project.archived)}
-              onChangeAssignee={assigneeId => onUpdateTask(selectedTask.id, { assignee_id: assigneeId })}
-              onChangeDependsOn={next => onUpdateTask(selectedTask.id, { depends_on: next })}
-              onChangeDates={updates => onUpdateTask(selectedTask.id, updates)}
-              onAddSubtask={title => onCreateTask({ title, parent_id: selectedTask.id, source_type: 'manual' })}
-              onToggleSubtask={sub => onToggleStatus(sub)}
-              onDeleteSubtask={id => onDeleteTask(id)}
-              onUploadFiles={onUploadFiles}
-            />
-          )}
+          {renderEditPanel()}
         </div>
       )}
     </div>
@@ -784,6 +794,7 @@ function TaskRow({
   hideDone,
   autoExpand,
   onToggle,
+  onOpenPanel,
   onDelete,
   onChangeStatus,
   onChangeAssignee,
@@ -810,6 +821,8 @@ function TaskRow({
   hideDone?: boolean;
   autoExpand?: boolean;
   onToggle: () => void;
+  /** Opens the shared side panel for this task. */
+  onOpenPanel?: () => void;
   onDelete: () => void;
   onChangeStatus: (status: TaskStatus) => void;
   onChangeAssignee: (assigneeId: string | null) => void;
@@ -841,6 +854,11 @@ function TaskRow({
           <Button type="button" variant="ghost" size="icon-xs" className="size-[30px]" onClick={onToggle} aria-label={done ? 'Mark incomplete' : 'Mark complete'}>
             {done ? <CheckCircle2 className="size-[15px]" /> : <Circle className="size-[15px]" />}
           </Button>
+          {onOpenPanel && (
+            <Button type="button" variant="ghost" size="icon-xs" className="size-[30px]" onClick={onOpenPanel} aria-label="Open task panel" title="Open in the side panel">
+              <PanelRightOpen className="size-[15px]" />
+            </Button>
+          )}
         </ItemActions>
         <ItemContent className="min-w-0 cursor-pointer" onClick={() => setExpanded(value => !value)}>
           <ItemTitle className={done ? 'max-w-full whitespace-normal text-muted-foreground line-through' : 'max-w-full whitespace-normal'}>

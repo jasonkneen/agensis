@@ -60,7 +60,7 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-function renderWindow(tasks: Task[], updates: Update[]) {
+function renderWindow(tasks: Task[], updates: Update[], view: 'table' | 'list' = 'table') {
   act(() => {
     root.render(
       createElement(TasksWindowContent, {
@@ -77,8 +77,8 @@ function renderWindow(tasks: Task[], updates: Update[]) {
         onToggleStatus: () => {},
         onDeleteTask: () => {},
         onUpdateAgent: () => {},
-        // The side panel is the editor the Board, Table, Calendar and Timeline share.
-        forcedView: 'table',
+        // The side panel is the editor every view shares. 'list' leaves the saved default, which is the List.
+        ...(view === 'table' ? { forcedView: 'table' } : {}),
       } as never),
     );
   });
@@ -178,5 +178,32 @@ describe('task editor: labels', () => {
       remove.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
     expect(updates).toEqual([{ id: 'a', updates: { labels: ['backend'] } }]);
+  });
+});
+
+describe('task editor: the List view opens the same side panel', () => {
+  it('has no estimate field until the row is opened in the panel', () => {
+    renderWindow([makeTask({ id: 'a', title: 'List task' })], [], 'list');
+    expect(container.querySelector('input[aria-label="Estimate"]')).toBeNull();
+    const open = container.querySelector<HTMLButtonElement>('button[aria-label="Open task panel"]');
+    expect(open).toBeTruthy();
+    act(() => {
+      open!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+    expect(container.querySelector('input[aria-label="Estimate"]')).toBeTruthy();
+    expect(container.querySelector('input[aria-label="Add label"]')).toBeTruthy();
+    expect(container.querySelector('select[aria-label="Task project"]')).toBeTruthy();
+  });
+
+  it('saves an estimate typed in the panel opened from the List', () => {
+    const updates: Update[] = [];
+    renderWindow([makeTask({ id: 'a', title: 'List task' })], updates, 'list');
+    act(() => {
+      container.querySelector('button[aria-label="Open task panel"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+    const input = field<HTMLInputElement>('input[aria-label="Estimate"]');
+    setValue(input, '1w');
+    pressEnter(input);
+    expect(updates).toEqual([{ id: 'a', updates: { estimate: '1w' } }]);
   });
 });
