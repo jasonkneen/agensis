@@ -214,6 +214,7 @@ const JSON_COLUMNS_BY_TABLE = {
  // reused as-is for tasks since the column is generic.
  tasks: new Set(['attachments']),
  saved_views: new Set(['config']),
+ task_comments: new Set(['reactions']),
  feedback_reports: new Set(['page', 'selections', 'diagnostics']),
  workspace_agent_templates: new Set(['tools', 'skills', 'resource_facets', 'origin']),
  workspace_skills: new Set(['origin']),

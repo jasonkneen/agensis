@@ -1498,6 +1498,8 @@ CREATE TABLE IF NOT EXISTS saved_views (
   updated_at timestamptz DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_saved_views_workspace ON saved_views(workspace_id);
+-- Emoji reactions on task comments: { "👍": ["<user id>", ...], ... }. Empty by default.
+ALTER TABLE task_comments ADD COLUMN IF NOT EXISTS reactions jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee_id ON tasks(assignee_id);
