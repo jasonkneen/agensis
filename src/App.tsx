@@ -39,6 +39,8 @@ import { WebMcpBridge } from './components/webmcp/WebMcpBridge';
 import { FeedbackButton, type FeedbackHandle } from './components/feedback/FeedbackButton';
 import { NotificationsBell } from './components/notifications/NotificationsBell';
 import { taskNotifications } from './lib/pm/taskNotifications';
+import { requestProjectsIntent } from './lib/pm/projectsIntent';
+import { useProjects } from './hooks/useProjects';
 import { agentHandle } from './lib/agentAccent';
 import { Separator } from '@agensis/ui/components/separator';
 import { apiAuthHeaders, apiUrl, getSystemCapabilities, type SystemCapabilities } from './lib/backendClient';
@@ -1109,6 +1111,9 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
   // the window; a badge that ignored parked tool calls would be silent about the
   // one thing in the inbox that expires.
   const { unreadCount: inboxUnreadCount, groups: inboxGroups, markRead: markInboxRead } = useInbox(activeWorkspaceId || null, 'all', agents);
+
+  // Projects for the command palette's search.
+  const { projects: paletteProjects } = useProjects(activeWorkspaceId || null, user?.id);
 
   // Notifications that come from tasks rather than the Inbox: yours that are overdue,
   // ones just handed to you, and ones an agent just finished. Derived, nothing stored.
@@ -3050,6 +3055,11 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
 
         <CommandPalette
           onOpenProjects={handleOpenProjects}
+          projects={paletteProjects}
+          onProjectOpen={id => { requestProjectsIntent({ openProject: id }); handleOpenProjects(); }}
+          onNewTask={() => handleOpenTasks()}
+          onNewProject={() => { requestProjectsIntent({ newProject: true }); handleOpenProjects(); }}
+          onOpenProjectsDashboard={() => { requestProjectsIntent({ page: 'dashboard' }); handleOpenProjects(); }}
           open={commandPaletteOpen}
           onClose={() => setCommandPaletteOpen(false)}
           documents={documents}

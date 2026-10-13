@@ -7,8 +7,22 @@ describe('normalizeViewConfig', () => {
   });
 
   it('keeps valid settings', () => {
-    const config = { filter: 'mine', hideDone: true, agentsOnly: true, overdueOnly: true, search: 'pricing', sort: 'due', view: 'kanban', projectId: 'p1' };
+    const config = { filter: 'mine', hideDone: true, agentsOnly: true, overdueOnly: true, search: 'pricing', sort: 'due', view: 'kanban', projectId: 'p1', priorities: ['high'], labels: ['design'], groupBy: 'assignee' };
     expect(normalizeViewConfig(config)).toEqual(config);
+  });
+
+  it('gives a view saved before priority, label and group filters existed their defaults', () => {
+    const result = normalizeViewConfig({ filter: 'mine', sort: 'due' });
+    expect(result.priorities).toEqual([]);
+    expect(result.labels).toEqual([]);
+    expect(result.groupBy).toBe('status');
+  });
+
+  it('drops unknown priorities, non-string labels and an unknown group', () => {
+    const result = normalizeViewConfig({ priorities: ['high', 'nope'], labels: ['a', 3, null], groupBy: 'colour' });
+    expect(result.priorities).toEqual(['high']);
+    expect(result.labels).toEqual(['a']);
+    expect(result.groupBy).toBe('status');
   });
 
   it('replaces an unknown filter, sort or layout with the default', () => {

@@ -1,3 +1,6 @@
+import { GROUP_BYS, PRIORITIES, type TaskGroupBy } from './taskFilters';
+import type { TaskPriority } from '../../types';
+
 // A saved task view: the toolbar's filters, sort and view layout under a name.
 // The settings are stored as JSON, so anything read back is validated field by field
 // and falls back to the default. A saved view can never put the toolbar in a state it
@@ -17,6 +20,11 @@ export interface SavedViewConfig {
   view: SavedViewLayout;
   /** 'all' or a project id. */
   projectId: string;
+  /** Selected priorities; empty means any. */
+  priorities: TaskPriority[];
+  /** Selected labels; empty means any. */
+  labels: string[];
+  groupBy: TaskGroupBy;
 }
 
 export const DEFAULT_VIEW_CONFIG: SavedViewConfig = {
@@ -28,6 +36,9 @@ export const DEFAULT_VIEW_CONFIG: SavedViewConfig = {
   sort: 'default',
   view: 'list',
   projectId: 'all',
+  priorities: [],
+  labels: [],
+  groupBy: 'status',
 };
 
 const FILTERS: SavedViewFilter[] = ['all', 'mine', 'others'];
@@ -52,6 +63,9 @@ export function normalizeViewConfig(raw: unknown): SavedViewConfig {
     sort: oneOf(source.sort, SORTS, DEFAULT_VIEW_CONFIG.sort),
     view: oneOf(source.view, LAYOUTS, DEFAULT_VIEW_CONFIG.view),
     projectId,
+    priorities: Array.isArray(source.priorities) ? PRIORITIES.filter(item => (source.priorities as unknown[]).includes(item)) : [],
+    labels: Array.isArray(source.labels) ? (source.labels as unknown[]).filter((item): item is string => typeof item === 'string').slice(0, 20) : [],
+    groupBy: oneOf(source.groupBy, GROUP_BYS, DEFAULT_VIEW_CONFIG.groupBy),
   };
 }
 
@@ -63,6 +77,9 @@ export function describeViewConfig(config: SavedViewConfig): string {
   if (config.overdueOnly) parts.push('Overdue');
   if (config.hideDone) parts.push('Hide done');
   if (config.search) parts.push(`"${config.search}"`);
+  if (config.priorities.length) parts.push(`Priority: ${config.priorities.join('/')}`);
+  if (config.labels.length) parts.push(`Labels: ${config.labels.join('/')}`);
+  if (config.groupBy !== 'status') parts.push(`Group: ${config.groupBy}`);
   if (config.sort !== 'default') parts.push(`Sort: ${config.sort}`);
   parts.push(config.view);
   return parts.join(' · ');

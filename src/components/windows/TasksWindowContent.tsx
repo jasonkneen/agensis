@@ -36,6 +36,17 @@ import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useProjects } from '../../hooks/useProjects';
 import { useSavedViews } from '../../hooks/useSavedViews';
 import type { SavedViewConfig } from '../../lib/pm/savedViews';
+import { Popover, PopoverContent, PopoverTrigger } from '@agensis/ui/components/popover';
+import {
+  GROUP_BYS,
+  GROUP_BY_LABELS,
+  PRIORITIES,
+  activeExtraFilterCount,
+  allLabels,
+  groupTasks,
+  matchesExtraFilters,
+  type TaskGroupBy,
+} from '../../lib/pm/taskFilters';
 import { useTaskComments } from '../../hooks/useTaskComments';
 import { agentHandle } from '../../lib/agentAccent';
 import { isAssigneeActive, resolveTaskCommentAuthor } from '../../lib/taskAgents';
@@ -264,6 +275,9 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     sort: sortBy,
     view: storedView,
     projectId: projectFilter,
+    priorities: priorityFilter,
+    labels: labelFilter,
+    groupBy,
   });
 
   // Applying a view sets every control it covers. Inside a project page the layout and the
@@ -281,6 +295,9 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     setOverdueOnly(config.overdueOnly);
     setSearch(config.search);
     setSortBy(config.sort);
+    setPriorityFilter(config.priorities);
+    setLabelFilter(config.labels);
+    setGroupBy(config.groupBy);
     if (!forcedView) setView(config.view);
     if (!projectId) setProjectFilter(config.projectId);
     setActiveViewId(id);
@@ -307,6 +324,10 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   const [search, setSearch] = useState('');
   // Sort from the approved list mock. 'default' keeps the existing order.
   const [sortBy, setSortBy] = useState<TaskSort>('default');
+  // Priority and label filters and the List's grouping, from the approved filter popover mock.
+  const [priorityFilter, setPriorityFilter] = useState<TaskPriority[]>([]);
+  const [labelFilter, setLabelFilter] = useState<string[]>([]);
+  const [groupBy, setGroupBy] = useState<TaskGroupBy>('status');
   // Saved views: a named copy of the toolbar's filters, sort and layout.
   const { views: savedViews, createView, deleteView } = useSavedViews(workspaceId, currentUserId);
   const [activeViewId, setActiveViewId] = useState('');
@@ -366,11 +387,14 @@ export const TasksWindowContent = memo(function TasksWindowContent({
         const today = startOfDay(Date.now());
         narrowed = narrowed.filter(task => !isClosedTask(task) && task.due_date && startOfDay(new Date(task.due_date).getTime()) < today);
       }
+      if (priorityFilter.length || labelFilter.length) {
+        narrowed = narrowed.filter(task => matchesExtraFilters(task, { priorities: priorityFilter, labels: labelFilter }));
+      }
       const query = search.trim().toLowerCase();
       if (query) narrowed = narrowed.filter(task => task.title.toLowerCase().includes(query) || (task.description ?? '').toLowerCase().includes(query));
     }
     return sortTasks(applyHideDone(narrowed, effectiveHideDone), sortBy);
-  }, [allTopLevel, effectiveFilter, effectiveHideDone, projectFilter, projectId, agentsOnly, overdueOnly, search, sortBy, focusWidened, agents, members, currentUserEmail, currentUserId]);
+  }, [allTopLevel, effectiveFilter, effectiveHideDone, projectFilter, projectId, agentsOnly, overdueOnly, priorityFilter, labelFilter, search, sortBy, focusWidened, agents, members, currentUserEmail, currentUserId]);
 
   const grouped = useMemo(() => {
     const groups: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], done: [], cancelled: [] };
@@ -383,6 +407,24 @@ export const TasksWindowContent = memo(function TasksWindowContent({
     });
     return groups;
   }, [filteredTopLevel]);
+
+  // The List's sections: the status buckets in their usual order, or whatever the user grouped by.
+  const listGroups = useMemo(() => {
+    if (groupBy === 'status') {
+      return (['in_progress', 'todo', 'done', 'cancelled'] as TaskStatus[]).map(status => ({
+        key: status,
+        label: STATUS_LABELS[status],
+        tasks: grouped[status],
+      }));
+    }
+    return groupTasks(filteredTopLevel, groupBy, {
+      assigneeLabel: id => (id ? (members.find(m => m.user_id === id)?.email?.split('@')[0] ?? (agents.find(a => a.id === id)?.name ?? 'Someone')) : 'Unassigned'),
+      projectName: id => projects.find(project => project.id === id)?.name ?? 'Project',
+      now: Date.now(),
+    });
+  }, [groupBy, grouped, filteredTopLevel, members, agents, projects]);
+  const labelOptions = useMemo(() => allLabels(allTopLevel), [allTopLevel]);
+  const extraFilterCount = activeExtraFilterCount({ priorities: priorityFilter, labels: labelFilter }, groupBy);
 
   useEffect(() => {
     setNewTitle(''); setNewPriority('normal'); setNewAssignee(''); setNewAttachments([]);
@@ -650,6 +692,75 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           aria-label="Search tasks"
           className="h-7 w-36 text-xs"
         />
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button type="button" variant="ghost" size="xs" aria-label="Filter and group" className={cn(extraFilterCount > 0 && 'text-primary')}>
+              Filter{extraFilterCount > 0 ? ` · ${extraFilterCount}` : ''}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-80 space-y-3 p-3" data-testid="filter-popover">
+            <div>
+              <div className="mb-1.5 text-3xs font-medium tracking-wide text-muted-foreground uppercase">Priority</div>
+              <div className="flex flex-wrap gap-1.5">
+                {PRIORITIES.map(priority => (
+                  <button
+                    key={priority}
+                    type="button"
+                    aria-pressed={priorityFilter.includes(priority)}
+                    onClick={() => setPriorityFilter(prev => (prev.includes(priority) ? prev.filter(item => item !== priority) : [...prev, priority]))}
+                    className={cn('rounded-full border border-border px-2.5 py-0.5 text-xs capitalize', priorityFilter.includes(priority) ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground')}
+                  >
+                    {priority}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {labelOptions.length > 0 && (
+              <div>
+                <div className="mb-1.5 text-3xs font-medium tracking-wide text-muted-foreground uppercase">Labels</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {labelOptions.map(label => (
+                    <button
+                      key={label}
+                      type="button"
+                      aria-pressed={labelFilter.includes(label)}
+                      onClick={() => setLabelFilter(prev => (prev.includes(label) ? prev.filter(item => item !== label) : [...prev, label]))}
+                      className={cn('rounded-full border border-border px-2.5 py-0.5 text-xs', labelFilter.includes(label) ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground')}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div>
+              <div className="mb-1.5 text-3xs font-medium tracking-wide text-muted-foreground uppercase">Group the List by</div>
+              <div className="flex flex-wrap gap-1.5">
+                {GROUP_BYS.map(by => (
+                  <button
+                    key={by}
+                    type="button"
+                    aria-pressed={groupBy === by}
+                    onClick={() => setGroupBy(by)}
+                    className={cn('rounded-full border border-border px-2.5 py-0.5 text-xs', groupBy === by ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground')}
+                  >
+                    {GROUP_BY_LABELS[by]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center border-t border-border pt-2 text-xs">
+              <button
+                type="button"
+                disabled={extraFilterCount === 0}
+                onClick={() => { setPriorityFilter([]); setLabelFilter([]); setGroupBy('status'); }}
+                className="text-muted-foreground hover:text-foreground disabled:opacity-40"
+              >
+                Clear all
+              </button>
+            </div>
+          </PopoverContent>
+        </Popover>
         <NativeSelect size="sm" className="w-32" value={sortBy} onChange={e => setSortBy(e.target.value as TaskSort)} aria-label="Sort tasks">
           <NativeSelectOption value="default">Sort: Default</NativeSelectOption>
           <NativeSelectOption value="priority">Sort: Priority</NativeSelectOption>
@@ -857,13 +968,13 @@ export const TasksWindowContent = memo(function TasksWindowContent({
                 </EmptyHeader>
               </Empty>
             ) : (
-              (['in_progress', 'todo', 'done', 'cancelled'] as TaskStatus[]).map(status => {
-                const items = grouped[status];
+              listGroups.map(group => {
+                const items = group.tasks;
                 if (items.length === 0) return null;
                 return (
-                  <section key={status} className="flex flex-col gap-1.5">
+                  <section key={group.key} className="flex flex-col gap-1.5" aria-label={group.label}>
                     <Marker variant="separator" className="min-h-0 text-xs">
-                      <MarkerContent>{STATUS_LABELS[status]} ({items.length})</MarkerContent>
+                      <MarkerContent>{group.label} ({items.length})</MarkerContent>
                     </Marker>
                     <ItemGroup className="gap-1">
                       {items.map(task => (

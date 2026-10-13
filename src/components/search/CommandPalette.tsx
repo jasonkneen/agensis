@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import type { ActiveView, ChatSession, Document, MemoryFact, Task } from '../../types';
 import { stripHtml } from '../../lib/utils';
+import type { Project } from '../../hooks/useProjects';
 import { backendClient } from '../../lib/backendClient';
 import { Badge } from '@agensis/ui/components/badge';
 import {
@@ -36,11 +37,18 @@ interface CommandPaletteProps {
   onViewChange: (view: ActiveView) => void;
   /** Opens the Projects window. Optional so callers without windows still work. */
   onOpenProjects?: () => void;
+  /** Projects to search, and what to do with one. */
+  projects?: Project[];
+  onProjectOpen?: (projectId: string) => void;
+  /** Actions: start a task, start a project, jump to the dashboard. */
+  onNewTask?: () => void;
+  onNewProject?: () => void;
+  onOpenProjectsDashboard?: () => void;
 }
 
 interface ResultItem {
   id: string;
-  type: 'document' | 'chat' | 'memory' | 'task' | 'action';
+  type: 'document' | 'chat' | 'memory' | 'task' | 'project' | 'action';
   label: string;
   detail?: string;
   icon: React.ReactNode;
@@ -75,6 +83,11 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   onTaskOpen,
   onViewChange,
   onOpenProjects,
+  projects = [],
+  onProjectOpen,
+  onNewTask,
+  onNewProject,
+  onOpenProjectsDashboard,
 }) => {
   const [query, setQuery] = useState('');
 
@@ -173,6 +186,45 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
           onClose();
         },
       },
+      ...(onNewTask
+        ? [{
+          id: 'action-new-task',
+          type: 'action' as const,
+          label: 'New task',
+          icon: <Plus data-icon="inline-start" className="size-4" />,
+          badge: 'Action',
+          onSelect: () => {
+            onNewTask();
+            onClose();
+          },
+        }]
+        : []),
+      ...(onNewProject
+        ? [{
+          id: 'action-new-project',
+          type: 'action' as const,
+          label: 'New project',
+          icon: <Plus data-icon="inline-start" className="size-4" />,
+          badge: 'Action',
+          onSelect: () => {
+            onNewProject();
+            onClose();
+          },
+        }]
+        : []),
+      ...(onOpenProjectsDashboard
+        ? [{
+          id: 'action-go-projects-dashboard',
+          type: 'action' as const,
+          label: 'Go to Projects dashboard',
+          icon: <Layers3 data-icon="inline-start" className="size-4" />,
+          badge: 'Action',
+          onSelect: () => {
+            onOpenProjectsDashboard();
+            onClose();
+          },
+        }]
+        : []),
       {
         id: 'action-go-activity',
         type: 'action' as const,
@@ -196,7 +248,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
         },
       },
     ],
-    [onViewChange, onClose, onOpenProjects],
+    [onViewChange, onClose, onOpenProjects, onNewTask, onNewProject, onOpenProjectsDashboard],
   );
 
   const catalog = useMemo(() => {
@@ -267,10 +319,28 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
       haystack: `${task.title} ${task.description || ''}`,
     }));
 
+    const projectItems = projects
+      .filter(project => !project.archived)
+      .map(project => ({
+        item: {
+          id: `project-${project.id}`,
+          type: 'project' as const,
+          label: project.name,
+          detail: project.project_key ? `${project.project_key} · ${project.status.replace('_', ' ')}` : project.status.replace('_', ' '),
+          icon: <Layers3 data-icon="inline-start" className="size-4" />,
+          badge: 'Project',
+          onSelect: () => {
+            onProjectOpen?.(project.id);
+            onClose();
+          },
+        } as ResultItem,
+        haystack: `${project.name} ${project.project_key ?? ''} ${project.description ?? ''}`,
+      }));
+
     const actionItems = actions.map(a => ({ item: a, haystack: a.label }));
 
-    return [...docs, ...chats, ...memories, ...taskItems, ...actionItems];
-  }, [open, documents, currentBodies, sessions, facts, tasks, actions, onDocumentOpen, onSessionOpen, onTaskOpen, onViewChange, onClose]);
+    return [...docs, ...chats, ...memories, ...taskItems, ...projectItems, ...actionItems];
+  }, [open, documents, currentBodies, sessions, facts, tasks, projects, actions, onDocumentOpen, onSessionOpen, onTaskOpen, onProjectOpen, onViewChange, onClose]);
 
   const filteredResults = useMemo(() => {
     const q = query.trim();
@@ -287,12 +357,14 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
     const docItems = filteredResults.filter(r => r.type === 'document');
     const chatItems = filteredResults.filter(r => r.type === 'chat');
     const taskItems = filteredResults.filter(r => r.type === 'task');
+    const projectResultItems = filteredResults.filter(r => r.type === 'project');
     const memoryItems = filteredResults.filter(r => r.type === 'memory');
     const actionItems = filteredResults.filter(r => r.type === 'action');
 
     if (docItems.length > 0) groups.push({ label: 'Documents', items: docItems });
     if (chatItems.length > 0) groups.push({ label: 'Channels', items: chatItems });
     if (taskItems.length > 0) groups.push({ label: 'Tasks', items: taskItems });
+    if (projectResultItems.length > 0) groups.push({ label: 'Projects', items: projectResultItems });
     if (memoryItems.length > 0) groups.push({ label: 'Memory', items: memoryItems });
     if (actionItems.length > 0) groups.push({ label: 'Actions', items: actionItems });
 

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentProps, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from 'react';
 import { ArrowLeft, File as FileIcon, Paperclip, Pencil } from 'lucide-react';
 import { Button } from '@agensis/ui/components/button';
 import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
@@ -15,6 +15,7 @@ import { ProjectIconTile } from '../projects/projectIcons';
 import { ProjectReports, WorkspaceDashboard } from '../projects/ReportsPanels';
 import { MembersPage, TeamsPage } from '../projects/TeamsPanels';
 import { useTeams } from '../../hooks/useTeams';
+import { onProjectsIntent, takeProjectsIntent } from '../../lib/pm/projectsIntent';
 import { projectColor } from '../projects/projectIconMap';
 import { TasksWindowContent, type TaskView } from './TasksWindowContent';
 import { STATUS_LABELS } from './taskPresentation';
@@ -143,6 +144,25 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
   const [dialogOpen, setDialogOpen] = useState(false);
   const [page, setPage] = useState<'dashboard' | 'projects' | 'teams' | 'members'>('projects');
   const { teams, createTeam, updateTeam, deleteTeam } = useTeams(workspaceId, currentUserId);
+
+  // Requests from the command palette: show a page, open a project, or start a new one.
+  useEffect(() => {
+    const apply = () => {
+      const intent = takeProjectsIntent();
+      if (!intent) return;
+      if ('page' in intent) {
+        setSelectedId(null);
+        setPage(intent.page);
+      } else if ('newProject' in intent) {
+        setDialogOpen(true);
+      } else {
+        setPage('projects');
+        setSelectedId(intent.openProject);
+      }
+    };
+    apply();
+    return onProjectsIntent(apply);
+  }, []);
 
   const tasksByProject = useMemo(() => {
     const map = new Map<string, Task[]>();

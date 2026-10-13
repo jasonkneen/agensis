@@ -223,3 +223,17 @@ describe('project Files tab', () => {
     expect(container.querySelector('input[type="file"]')).toBeNull();
   });
 });
+
+describe('Projects window: requests from the command palette', () => {
+  it('opens the Dashboard page when asked to', async () => {
+    const { requestProjectsIntent } = await import('../../src/lib/pm/projectsIntent');
+    act(() => requestProjectsIntent({ page: 'dashboard' }));
+    expect(container.querySelector('[data-testid="workspace-dashboard"]')).toBeTruthy();
+  });
+
+  it('opens a project page when asked to', async () => {
+    const { requestProjectsIntent } = await import('../../src/lib/pm/projectsIntent');
+    act(() => requestProjectsIntent({ openProject: 'p1' }));
+    expect(container.querySelector('[role="tab"]')).toBeTruthy();
+  });
+});
