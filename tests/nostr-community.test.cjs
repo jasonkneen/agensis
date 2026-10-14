@@ -255,6 +255,29 @@ test('credentialed query and publish revalidate the exact stored endpoint before
   );
 });
 
+test('Netlify function cold start and Nostr preview never eagerly require nostr-tools CJS', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const netlifyToml = fs.readFileSync(path.join(__dirname, '../netlify.toml'), 'utf8');
+  assert.doesNotMatch(
+    netlifyToml,
+    /external_node_modules\s*=\s*\[\s*["']nostr-tools["']\s*\]/,
+    'nostr-tools must not be marked external in netlify.toml or Lambda throws ERR_REQUIRE_ESM on @noble/curves',
+  );
+  const backendMjs = fs.readFileSync(path.join(__dirname, '../netlify/functions/backend.mjs'), 'utf8');
+  assert.doesNotMatch(
+    backendMjs,
+    /^\s*import\s+['"]nostr-tools['"]/m,
+    'netlify/functions/backend.mjs must not eagerly import nostr-tools at cold start',
+  );
+  const nostrSource = fs.readFileSync(path.join(__dirname, '../server/nostr-community.cjs'), 'utf8');
+  assert.doesNotMatch(
+    nostrSource,
+    /^\s*const\s+\w+\s*=\s*require\(\s*['"]nostr-tools['"]\s*\)/m,
+    'server/nostr-community.cjs must load nostr-tools lazily so Netlify cold-start and previewInvite never require it',
+  );
+});
+
 function event({ kind, tags = [], pubkey = 'f'.repeat(64), content = '', created_at = 1 }) {
   return { id: crypto.randomBytes(32).toString('hex'), kind, tags, pubkey, content, created_at, sig: '0'.repeat(128) };
 }

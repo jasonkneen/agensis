@@ -8,7 +8,16 @@
 // communities, channels, members and messages to the rest of agensis.
 
 const crypto = require('node:crypto');
-const nostr = require('nostr-tools');
+// Loaded lazily when event signing/verification runs. The Netlify serverless
+// mirror imports `createNostrProtocol` solely for `previewInvite` (plain HTTP
+// fetch + JSON validation), and AWS Lambda's Node runtime throws ERR_REQUIRE_ESM
+// if `nostr-tools`'s CJS build eagerly `require()`s `@noble/curves/secp256k1.js`
+// at module evaluation time.
+let nostrToolsInstance = null;
+function getNostrTools() {
+ if (!nostrToolsInstance) nostrToolsInstance = require('nostr-tools');
+ return nostrToolsInstance;
+}
 
 const NOSTR_MESSAGE_KINDS = Object.freeze([9, 40002, 40008, 45001, 45003]);
 const NIP98_KIND = 27235;
@@ -68,7 +77,7 @@ function buildNip98Header({ method, url, body = null, secretKeyHex, now = () => 
   ['nonce', crypto.randomUUID()],
  ];
  if (body != null) tags.push(['payload', sha256Hex(Buffer.from(String(body)))]);
- const event = nostr.finalizeEvent({
+ const event = getNostrTools().finalizeEvent({
   kind: NIP98_KIND,
   created_at: now(),
   tags,
@@ -79,7 +88,7 @@ function buildNip98Header({ method, url, body = null, secretKeyHex, now = () => 
 
 function buildNip42AuthEvent({ challenge, relayUrl, secretKeyHex, now = () => Math.floor(Date.now() / 1000) }) {
  if (!challenge || String(challenge).length > 1024) throw inputError('Nostr relay sent an invalid authentication challenge', 502);
- return nostr.finalizeEvent({
+ return getNostrTools().finalizeEvent({
   kind: NIP42_AUTH_KIND,
   created_at: now(),
   tags: [['relay', String(relayUrl)], ['challenge', String(challenge)]],
@@ -432,7 +441,7 @@ function buildOutboundMessageEvent({
  if (/^[0-9a-f]{64}$/i.test(String(parentEventId || ''))) tags.push(['e', String(parentEventId).toLowerCase(), '', 'reply']);
  const who = String(authorName || '').trim();
  const isForum = String(channelType || '').toLowerCase() === 'forum';
- return nostr.finalizeEvent({
+ return getNostrTools().finalizeEvent({
   kind: isForum ? (parentEventId ? 45003 : 45001) : 9,
   created_at: Number(createdAt) || Math.floor(Date.now() / 1000),
   tags,
@@ -455,7 +464,7 @@ function mapInboundNostrEvent(event, mappedChannelIds) {
   content: String(event.content || ''),
   sig: String(event.sig || ''),
  };
- if (!nostr.verifyEvent(candidate)) return null;
+ if (!getNostrTools().verifyEvent(candidate)) return null;
  const channelId = tagValue(candidate, 'h');
  if (!channelId || !mappedChannelIds?.has(channelId)) return null;
  const content = truncateUtf8(candidate.content.trim(), INBOUND_MESSAGE_MAX_BYTES);
@@ -491,7 +500,7 @@ function verifiedNostrEvents(events, { authors = null, kinds = null } = {}) {
   };
   if (authorSet && !authorSet.has(candidate.pubkey.toLowerCase())) continue;
   if (kindSet && !kindSet.has(candidate.kind)) continue;
-  if (nostr.verifyEvent(candidate)) verified.push(candidate);
+  if (getNostrTools().verifyEvent(candidate)) verified.push(candidate);
  }
  return verified;
 }

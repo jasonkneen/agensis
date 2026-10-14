@@ -148,10 +148,6 @@ import {
 } from '../../shared/session-lineage.cjs';
 import { createNostrProtocol } from '../../server/nostr-community.cjs';
 import { assertSafeOutboundUrl } from '../../server/lib/net-guard.cjs';
-// Keep the adapter's nested CommonJS require resolvable in Netlify's nft
-// archive. The explicit side-effect import makes the package part of the
-// function trace; the adapter still owns the actual protocol calls.
-import 'nostr-tools';
 
 // Nostr invite preview is intentionally shared with the Fly protocol adapter.
 // The preview performs the remote metadata fetch, so this mirror must carry the
@@ -507,11 +503,16 @@ async function forwardLongRunningControl(req, pathname, body, {
   if (accept) requestHeaders.accept = accept;
   const idempotencyKey = req.headers.get('idempotency-key');
   if (idempotencyKey) requestHeaders['idempotency-key'] = idempotencyKey;
+  const serializedBody = body === undefined
+   ? undefined
+   : typeof body === 'string'
+    ? body
+    : JSON.stringify(body);
   const response = await fetch(`${baseUrl}${pathname}`, {
    method: req.method,
    headers: requestHeaders,
    redirect: 'error',
-   ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+   ...(serializedBody === undefined ? {} : { body: serializedBody }),
   });
   const responseHeaders = { ...CORS_HEADERS };
   for (const name of [
@@ -609,7 +610,12 @@ function isFlyOwnedControlPath(pathname) {
 }
 
 async function forwardCanonicalRoute(req, requestUrl) {
- const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await readBody(req);
+ const contentType = String(req.headers.get('content-type') || '').toLowerCase();
+ const body = req.method === 'GET' || req.method === 'HEAD'
+  ? undefined
+  : contentType.includes('application/x-www-form-urlencoded')
+   ? await req.text().catch(() => '')
+   : await readBody(req);
  return forwardLongRunningControl(
   req,
   `${requestUrl.pathname}${requestUrl.search}`,
