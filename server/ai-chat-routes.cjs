@@ -30,6 +30,8 @@ const {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PENDING_AI_REPLY = 'Thinking …';
 const EMPTY_AI_REPLY = 'AI response finished without content.';
+const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS = 60_000;
+const DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS = 120_000;
 
 function streamedText(chunk) {
  if (!chunk || typeof chunk !== 'object') return '';
@@ -44,6 +46,69 @@ function statusError(status, error) {
  const issue = error instanceof Error ? error : new Error(String(error || 'AI request failed'));
  issue.status = status;
  return issue;
+}
+
+function timeoutError(phase, timeoutMs) {
+ const issue = new Error(`Upstream AI ${phase} timed out after ${timeoutMs}ms`);
+ issue.name = 'TimeoutError';
+ issue.code = `ai_chat_${phase}_timeout`;
+ issue.phase = phase;
+ issue.status = 504;
+ return issue;
+}
+
+async function fetchWithConnectTimeout(url, options, controller, timeoutMs) {
+ const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS;
+ let timedOut = false;
+ const timer = setTimeout(() => {
+  timedOut = true;
+  controller.abort(timeoutError('connect', ms));
+ }, ms);
+ timer.unref?.();
+ try {
+  return await fetch(url, options);
+ } catch (error) {
+  if (timedOut) throw timeoutError('connect', ms);
+  throw error;
+ } finally {
+  clearTimeout(timer);
+ }
+}
+
+async function readStreamWithIdleTimeout(body, controller, timeoutMs, onChunk) {
+ const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS;
+ let timedOut = false;
+ let timer = null;
+ const arm = () => {
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(() => {
+   timedOut = true;
+   controller.abort(timeoutError('stream', ms));
+  }, ms);
+  timer.unref?.();
+ };
+ arm();
+ try {
+  if (typeof body?.getReader === 'function') {
+   const reader = body.getReader();
+   while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    arm();
+    onChunk(value);
+   }
+  } else {
+   for await (const value of body) {
+    arm();
+    onChunk(value);
+   }
+  }
+ } catch (error) {
+  if (timedOut) throw timeoutError('stream', ms);
+  throw error;
+ } finally {
+  if (timer) clearTimeout(timer);
+ }
 }
 
 function mountAiChatRoutes(app, deps = {}) {
@@ -68,6 +133,8 @@ function mountAiChatRoutes(app, deps = {}) {
   recordAnthropicUsage, createAnthropicUsageAccumulator,
   enforceSessionRead, sessionReadableSql, getDb, notifyDbSubscribers,
   logMessageActivity, parseJsonArray, aiStreamErrorText,
+  upstreamConnectTimeoutMs = DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS,
+  upstreamIdleTimeoutMs = DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS,
  } = deps;
 
  app.post('/backend/ai-chat', requireAuth, async (req, res) => {
@@ -466,7 +533,7 @@ function mountAiChatRoutes(app, deps = {}) {
     bindInferenceAbort(req, res, controller, () => completed);
     let upstream;
     try {
-     upstream = await fetch(`${route.baseUrl}/chat/completions`, {
+     upstream = await fetchWithConnectTimeout(`${route.baseUrl}/chat/completions`, {
       dispatcher: guardedFetchAgent(),
       method: 'POST',
       // H1 — never follow redirects: base_url is validated as public at write time,
@@ -486,9 +553,10 @@ function mountAiChatRoutes(app, deps = {}) {
         ...chat.messages,
        ],
       }),
-     });
+     }, controller, upstreamConnectTimeoutMs);
     } catch (error) {
      completed = true;
+     if (error?.phase === 'connect') throw error;
      if (controller.signal.aborted) {
       throw statusError(499, new Error('AI request was cancelled before it could reply'));
      }
@@ -529,13 +597,13 @@ function mountAiChatRoutes(app, deps = {}) {
     try {
      // The upstream already emits OpenAI `data: {chunk}` SSE framing (including the
      // terminal `data: [DONE]`), so pass its bytes straight through to the client.
-     for await (const bytes of upstream.body) {
-     collect(bytes);
-     res.write(bytes);
-    }
-    collect(new Uint8Array(), true);
-    if (streamedReplyError) throw statusError(502, new Error(streamedReplyError));
-    if (replyPersistence) await replyPersistence.finalize(streamedReplyContent);
+     await readStreamWithIdleTimeout(upstream.body, controller, upstreamIdleTimeoutMs, (bytes) => {
+      collect(bytes);
+      res.write(bytes);
+     });
+     collect(new Uint8Array(), true);
+     if (streamedReplyError) throw statusError(502, new Error(streamedReplyError));
+     if (replyPersistence) await replyPersistence.finalize(streamedReplyContent);
     } finally {
      completed = true;
     }
@@ -603,7 +671,7 @@ function mountAiChatRoutes(app, deps = {}) {
    bindInferenceAbort(req, res, anthropicController, () => anthropicCompleted);
    let response;
    try {
-    response = await fetch('https://api.anthropic.com/v1/messages', {
+    response = await fetchWithConnectTimeout('https://api.anthropic.com/v1/messages', {
      method: 'POST',
      redirect: 'error',
      signal: anthropicController.signal,
@@ -620,8 +688,9 @@ function mountAiChatRoutes(app, deps = {}) {
       messages: chat.messages,
       system: systemPrompt,
      }),
-    });
+    }, anthropicController, upstreamConnectTimeoutMs);
    } catch (error) {
+    if (error?.phase === 'connect') throw error;
     if (anthropicController.signal.aborted) {
      throw statusError(499, new Error('AI request was cancelled before it could reply'));
     }
@@ -636,14 +705,14 @@ function mountAiChatRoutes(app, deps = {}) {
    res.setHeader('Cache-Control', 'no-cache');
    res.setHeader('Connection', 'keep-alive');
 
-   const reader = response.body.getReader();
    const decoder = new TextDecoder();
    let buffer = '';
    // The browser only ever sees text deltas — the usage frames are stripped out
    // of the relay. They are read HERE, on the way past, which is the only place
    // this turn's token counts exist at all.
    const usage = createAnthropicUsageAccumulator();
-   const consumeAnthropicLine = (line) => {
+   const consumeAnthropicLine = (rawLine) => {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
     if (!line.startsWith('data: ')) return;
     const data = line.slice(6);
     if (data === '[DONE]') return;
@@ -659,9 +728,7 @@ function mountAiChatRoutes(app, deps = {}) {
      // ignore malformed chunks
     }
    };
-   while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+   await readStreamWithIdleTimeout(response.body, anthropicController, upstreamIdleTimeoutMs, (value) => {
     // stream:true keeps multibyte chars intact across chunk boundaries.
     buffer += decoder.decode(value, { stream: true });
     // Process only complete lines; keep any trailing partial line buffered
@@ -669,7 +736,7 @@ function mountAiChatRoutes(app, deps = {}) {
     const lines = buffer.split('\n');
     buffer = lines.pop() ?? '';
     for (const line of lines) consumeAnthropicLine(line);
-   }
+   });
    buffer += decoder.decode();
    for (const line of buffer.split('\n')) consumeAnthropicLine(line);
    // Recorded before res.end() but after the stream drains: a client that

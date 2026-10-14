@@ -16,6 +16,7 @@ async function applySessionClosureRuntimeEffects(effects, deps = {}) {
   sendToConnection,
   scheduleTaskQueueDrain,
   endHuddleRoom,
+  notifyDispatcherOfFailure = () => {},
   onWarn = () => {},
  } = deps;
  for (const [name, value] of Object.entries({
@@ -66,6 +67,11 @@ async function applySessionClosureRuntimeEffects(effects, deps = {}) {
   }
   if (job.workspace_id && job.agent_id) {
    drains.add(`${job.workspace_id}\u0000${job.agent_id}`);
+  }
+  try {
+   await notifyDispatcherOfFailure(job, { status: 'cancelled', reason: 'Conversation deleted' });
+  } catch (error) {
+   onWarn(`could not notify parent dispatcher for job ${jobId}: ${error?.message || error}`);
   }
  }
 

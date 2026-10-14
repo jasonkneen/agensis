@@ -377,7 +377,7 @@ test('a tool result is bounded — a huge one is truncated with a visible marker
   const huge = 'x'.repeat(__test.BUILTIN_TOOL_RESULT_MAX_CHARS + 5_000);
   const text = __test.toolResultText(huge);
   assert.ok(text.length < huge.length);
-  assert.match(text, /\[truncated: result was \d+ characters\]/);
+  assert.match(text, /\[truncated: result was \d+ characters, 5000 elided\. Re-call with a narrower filter or smaller limit\.\]/);
   // A normal result is passed through untouched.
   assert.equal(__test.toolResultText('short'), 'short');
   assert.equal(__test.toolResultText({ a: 1 }), JSON.stringify({ a: 1 }, null, 2));

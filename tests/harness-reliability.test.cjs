@@ -168,3 +168,382 @@ test('reaping a builtin aborts its request and rejects late tool work', async ()
  assert.equal(fixture.state(), 'error');
  assert.equal(fixture.toolCalls(), 0);
 });
+
+test('finalizeAgentJobResult treats non-completed stopReason with empty output as error and notifies parent dispatcher', async () => {
+ const { createAgentJobs } = require('../server/agent-jobs.cjs');
+ const jobUpdates = [];
+ const parentMessages = [];
+ const db = {
+  async unsafe(sql, params) {
+   const normalized = String(sql).replace(/\s+/g, ' ').trim();
+   if (normalized.startsWith('update agent_jobs set status = $2')) {
+    jobUpdates.push({ status: params[1], response: params[2], error: params[3], metadata: params[4] });
+    return [{ id: params[0], status: params[1], metadata: params[4] }];
+   }
+   if (normalized.startsWith('insert into messages (session_id, role, content, sender_kind, sender_name)')) {
+    parentMessages.push(params[1]);
+    return [{ id: 'sys-msg-1', content: params[1] }];
+   }
+   if (normalized.includes('from messages')) return [{ id: 'msg-1' }];
+   if (normalized.includes('update messages') || normalized.includes('insert into messages')) return [{ id: 'msg-1' }];
+   return [];
+  },
+ };
+ const jobs = createAgentJobs({
+  getDb: () => db,
+  parseJsonObject: value => (value && typeof value === 'object' ? value : {}),
+  textFromValue: value => String(value || ''),
+  slugHandle: value => String(value || 'agent').toLowerCase(),
+  notifyDbSubscribers() {},
+  scheduleTaskQueueDrain() {},
+  drainAgentTaskQueue: async () => {},
+  drainPendingChatTurn: async () => {},
+  settleCapturedChatTask: async () => {},
+  logMessageActivity: async () => {},
+  mirrorAgentReplyToTaskComment: async () => {},
+  continueConversation: async () => {},
+  PLACEHOLDER_CONTENT_RE: '^Thinking( [0-9]|…)',
+ });
+
+ await jobs.finalizeAgentJobResult(
+  {
+   id: 'child-job-1',
+   workspace_id: 'ws-1',
+   session_id: 'child-sess-1',
+   agent_id: 'agent-1',
+   agent_name: 'Coder',
+   agent_handle: 'coder',
+   metadata: {
+    handle: 'coder',
+    responseMessageId: 'msg-1',
+    dispatchedBy: { agentId: 'parent-1', sessionId: 'parent-sess-1', jobId: 'parent-job-1' },
+   },
+  },
+  {
+   responseText: '',
+   errorText: '',
+   resultStop: { stopReason: 'max_turns' },
+  },
+ );
+
+ assert.equal(jobUpdates.length, 1);
+ assert.equal(jobUpdates[0].status, 'error', 'max_turns with no output must not be marked done');
+ assert.match(jobUpdates[0].error, /allowed steps for one turn/);
+ assert.equal(parentMessages.length, 1, 'parent session must receive [child-failure] notice');
+ assert.match(parentMessages[0], /^\[child-failure:child-job-1\] @coder ended with status error:/);
+});
+
+test('finalizeAgentJobResult with partial output and max_turns notifies parent dispatcher of incomplete stopReason', async () => {
+ const { createAgentJobs } = require('../server/agent-jobs.cjs');
+ const parentMessages = [];
+ const db = {
+  async unsafe(sql, params) {
+   const normalized = String(sql).replace(/\s+/g, ' ').trim();
+   if (normalized.startsWith('update agent_jobs set status = $2')) {
+    return [{ id: params[0], status: params[1], metadata: params[4] }];
+   }
+   if (normalized.startsWith('insert into messages (session_id, role, content, sender_kind, sender_name)')) {
+    parentMessages.push(params[1]);
+    return [{ id: 'sys-msg-2', content: params[1] }];
+   }
+   if (normalized.includes('update messages') || normalized.includes('insert into messages')) return [{ id: 'msg-1' }];
+   return [];
+  },
+ };
+ const jobs = createAgentJobs({
+  getDb: () => db,
+  parseJsonObject: value => (value && typeof value === 'object' ? value : {}),
+  textFromValue: value => String(value || ''),
+  slugHandle: value => String(value || 'agent').toLowerCase(),
+  notifyDbSubscribers() {},
+  scheduleTaskQueueDrain() {},
+  drainAgentTaskQueue: async () => {},
+  drainPendingChatTurn: async () => {},
+  settleCapturedChatTask: async () => {},
+  logMessageActivity: async () => {},
+  mirrorAgentReplyToTaskComment: async () => {},
+  continueConversation: async () => {},
+  PLACEHOLDER_CONTENT_RE: '^Thinking( [0-9]|…)',
+ });
+
+ await jobs.finalizeAgentJobResult(
+  {
+   id: 'child-job-2',
+   workspace_id: 'ws-1',
+   session_id: 'child-sess-1',
+   agent_id: 'agent-1',
+   agent_name: 'Coder',
+   agent_handle: 'coder',
+   metadata: {
+    handle: 'coder',
+    responseMessageId: 'msg-1',
+    dispatchedBy: { agentId: 'parent-1', sessionId: 'parent-sess-1', jobId: 'parent-job-1' },
+   },
+  },
+  {
+   responseText: 'Partial work before hitting step cap.',
+   errorText: '',
+   resultStop: { stopReason: 'max_turns' },
+  },
+ );
+
+ assert.equal(parentMessages.length, 1, 'parent session must be notified even when partial text was produced');
+ assert.match(parentMessages[0], /^\[child-failure:child-job-2\] @coder ended with status max_turns:/);
+});
+
+test('builtin turn failure drains pending chat turn and notifies parent dispatcher', async () => {
+ const drainedChat = [];
+ const parentNotices = [];
+ let state = 'running';
+ const db = {
+  async begin(work) { return work(db); },
+  async unsafe(sql, params) {
+   if (/select status from agent_jobs/.test(sql)) return [{ status: state }];
+   if (/update agent_jobs set status = 'error'/.test(sql)) {
+    state = 'error';
+    return [{ id: 'job-err-1', status: 'error' }];
+   }
+   if (/update messages|insert into messages/.test(sql)) return [{ id: params[0] || 'msg-1' }];
+   return [];
+  },
+ };
+ const noop = () => {};
+ const jobRow = {
+  id: 'job-err-1',
+  workspace_id: 'ws-1',
+  session_id: 'sess-1',
+  agent_id: 'agent-1',
+  metadata: {
+   handle: 'scout',
+   dispatchedBy: { agentId: 'parent-1', sessionId: 'parent-sess-1', jobId: 'parent-job-1' },
+  },
+ };
+ const turn = createBuiltinTurn({
+  recordAudit: noop,
+  drainAgentTaskQueue: noop,
+  drainPendingChatTurn: (sessionId, agentId, cause) => { drainedChat.push({ sessionId, agentId, cause }); },
+  notifyDispatcherOfFailure: (row, info) => { parentNotices.push({ id: row.id, ...info }); },
+  enforceWorkspaceRole: noop,
+  getDb: () => db,
+  isAgentEnabled: () => true,
+  slugHandle: x => x,
+  resolveRunTarget: () => 'builtin',
+  buildAgentTurnContextSnapshot: async () => ({ messages: [{ role: 'user', content: 'hi' }], lastSeenMessageId: null }),
+  resolveWorkThreadParent: async () => ({ parentId: null, broadcast: true }),
+  agentContextFromRow: () => ({ systemPrompt: '' }),
+  buildAgentActivityDigest: async () => '',
+  sessionHasLiveHuddle: async () => false,
+  loadChannelIntentNote: async () => '',
+  loadSandboxSkillNote: async () => '',
+  hasMcpPresence: () => false,
+  insertActiveAgentJob: async () => [jobRow],
+  notifyDbSubscribers: noop,
+  createBuiltinToolset: () => ({ specs: () => [], call: async () => ({ ok: true, value: '' }) }),
+  agentStepParts: x => x,
+  agentStepContent: () => 'tool',
+  formatElapsedMs: () => '1s',
+  agentRuntimePayload: () => ({}),
+  scheduleTaskQueueDrain: noop,
+  getAnthropicApiKey: async () => 'fixture',
+  resolveAnthropicModel: x => x,
+  buildSystemPrompt: () => '',
+  createAnthropicUsageAccumulator,
+  recordAnthropicUsage: async () => {},
+  anthropicFetch: async () => { throw new Error('provider down'); },
+ });
+
+ const result = await turn.runAgentTurn(
+  { id: 'agent-1', workspace_id: 'ws-1', name: 'Scout', handle: 'scout' },
+  { workspaceId: 'ws-1', sessionId: 'sess-1' },
+ );
+ assert.equal(result.ok, false);
+ assert.equal(drainedChat.length, 1);
+ assert.equal(drainedChat[0].cause, 'builtin_error');
+ assert.equal(parentNotices.length, 1);
+ assert.equal(parentNotices[0].id, 'job-err-1');
+ assert.match(parentNotices[0].reason, /provider down/);
+});
+
+test('ai-chat route enforces upstream stream idle timeout and finalizes reserved placeholder', async () => {
+ const { mountAiChatRoutes } = require('../server/ai-chat-routes.cjs');
+ let handler = null;
+ const app = {
+  post(path, _auth, fn) {
+   if (path === '/backend/ai-chat') handler = fn;
+  },
+ };
+ mountAiChatRoutes(app, {
+  requireAuth: (_req, _res, next) => next(),
+  jsonError: (res, status, error) => res.status(status).json({ error: error?.message }),
+  enforceWorkspaceRole: async () => {},
+  dbRateLimitBlocked: async () => false,
+  clientIpFromReq: () => '127.0.0.1',
+  aiChatRateLimiter: {},
+  aiChatDbRateLimiter: {},
+  dbQuery: async () => [],
+  inferenceBroker: {},
+  liveSharedModelRoutes: async () => [],
+  bindInferenceAbort: () => {},
+  getAnthropicApiKey: async () => 'test-key',
+  resolveAnthropicModel: m => m || 'claude-sonnet-4-6',
+  buildSystemPrompt: () => '',
+  normalizeAiChatMessages: msgs => ({ ok: true, messages: msgs || [{ role: 'user', content: 'hi' }] }),
+  assertSafeOutboundUrl: async () => {},
+  guardedFetchAgent: () => undefined,
+  resolveGatewayRoute: async () => ({
+   id: 'gw-1',
+   name: 'Stalled Gateway',
+   baseUrl: 'https://gateway.example.com/v1',
+   model: 'gpt-test',
+   apiKey: 'secret',
+   headers: {},
+  }),
+  emitBridgeOutbound: async () => {},
+  recordAnthropicUsage: async () => {},
+  createAnthropicUsageAccumulator,
+  enforceSessionRead: async () => {},
+  sessionReadableSql: () => 'true',
+  getDb: () => ({ unsafe: async () => [] }),
+  notifyDbSubscribers: () => {},
+  logMessageActivity: async () => {},
+  parseJsonArray: () => [],
+  aiStreamErrorText: () => '',
+  upstreamConnectTimeoutMs: 50,
+  upstreamIdleTimeoutMs: 25,
+ });
+
+ const originalFetch = global.fetch;
+ global.fetch = async (_url, options) => ({
+  ok: true,
+  status: 200,
+  body: {
+   [Symbol.asyncIterator]() {
+    return {
+     next: () => new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => {
+       reject(options.signal.reason || new Error('aborted'));
+      });
+     }),
+    };
+   },
+  },
+ });
+ try {
+  const chunks = [];
+  const res = {
+   headersSent: false,
+   statusCode: 200,
+   setHeader() {},
+   write(chunk) {
+    this.headersSent = true;
+    chunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+   },
+   end() {},
+   status(code) { this.statusCode = code; return this; },
+   json(payload) { this.body = payload; return this; },
+  };
+  await handler({
+   userId: 'user-1',
+   body: {
+    workspaceId: 'ws-1',
+    model: 'gateway:gw-1',
+    messages: [{ role: 'user', content: 'hello' }],
+   },
+  }, res);
+  assert.equal(res.statusCode, 504);
+  assert.match(res.body?.error || '', /timed out/i);
+ } finally {
+  global.fetch = originalFetch;
+ }
+});
+
+test('cancelFarmAgentJob expires pending permission requests and notifies parent dispatcher', async () => {
+ const { createAgentJobs } = require('../server/agent-jobs.cjs');
+ const expiredRows = [];
+ const parentNotices = [];
+ const sent = [];
+ const connWs = { readyState: 1 };
+ const connectedAgents = new Map([
+  ['conn-farm-1', { connectionId: 'conn-farm-1', workspaceId: 'ws-farm', agentId: 'agent-farm', ws: connWs }],
+ ]);
+ const db = {
+  async unsafe(sql, params = []) {
+   if (/select \* from agent_jobs where id = \$1/.test(sql)) {
+    return [{
+     id: 'job-farm-1',
+     workspace_id: 'ws-farm',
+     agent_id: 'agent-farm',
+     connection_id: 'conn-farm-1',
+     session_id: 'sess-farm-1',
+     status: 'running',
+     metadata: {
+      mode: 'farm',
+      handle: 'farmer',
+      dispatchedBy: { agentId: 'parent-1', sessionId: 'parent-sess-1', jobId: 'parent-job-1' },
+     },
+    }];
+   }
+   if (/update agent_jobs set status = 'cancelled'/.test(sql)) {
+    return [{
+     id: 'job-farm-1',
+     workspace_id: 'ws-farm',
+     agent_id: 'agent-farm',
+     connection_id: 'conn-farm-1',
+     session_id: 'sess-farm-1',
+     status: 'cancelled',
+     error: 'Cancelled by Farm',
+     metadata: {
+      mode: 'farm',
+      handle: 'farmer',
+      dispatchedBy: { agentId: 'parent-1', sessionId: 'parent-sess-1', jobId: 'parent-job-1' },
+     },
+    }];
+   }
+   if (/update agent_permission_requests/.test(sql)) {
+    const row = {
+     id: 'perm-farm-1',
+     job_id: 'job-farm-1',
+     workspace_id: 'ws-farm',
+     session_id: 'sess-farm-1',
+     connection_id: 'conn-farm-1',
+     status: 'expired',
+    };
+    expiredRows.push(row);
+    return [row];
+   }
+   if (/insert into messages[\s\S]*child-failure/.test(sql) || (params[1] && String(params[1]).includes('[child-failure:'))) {
+    parentNotices.push({ sessionId: params[0], content: params[1] });
+    return [{ id: 'msg-parent-1', session_id: params[0], content: params[1] }];
+   }
+   return [];
+  },
+ };
+ const jobs = createAgentJobs({
+  getDb: () => db,
+  parseJsonObject: value => (value && typeof value === 'object' ? value : {}),
+  textFromValue: value => String(value || ''),
+  slugHandle: value => String(value || 'agent').toLowerCase(),
+  notifyDbSubscribers() {},
+  scheduleTaskQueueDrain() {},
+  drainAgentTaskQueue: async () => {},
+  drainPendingChatTurn: async () => {},
+  settleCapturedChatTask: async () => {},
+  logMessageActivity: async () => {},
+  mirrorAgentReplyToTaskComment: async () => {},
+  continueConversation: async () => {},
+  getConnectedAgents: () => connectedAgents,
+  findConnectedAgent: () => null,
+  sendWs: (_ws, payload) => { sent.push(payload); return true; },
+  PLACEHOLDER_CONTENT_RE: '^Thinking( [0-9]|…)',
+ });
+ const out = await jobs.cancelFarmAgentJob({ workspaceId: 'ws-farm', jobId: 'job-farm-1' });
+ await new Promise((resolve) => setImmediate(resolve));
+ assert.equal(out.status, 'cancelled');
+ assert.equal(expiredRows.length, 1);
+ assert.equal(sent.some((m) => m.type === 'agent_permission_abort' && m.requestId === 'perm-farm-1'), true);
+ assert.equal(sent.some((m) => m.type === 'agent_job_cancel' && m.jobId === 'job-farm-1'), true);
+ assert.equal(parentNotices.length, 1);
+ assert.match(parentNotices[0].content, /\[child-failure:job-farm-1\]/);
+});
+
+

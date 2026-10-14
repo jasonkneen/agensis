@@ -881,13 +881,25 @@ function createAgentJobs(deps = {}) {
    ? afterCommit
    : (callback) => callback();
   const jobMetadata = parseJsonObject(job.metadata);
-  const validatedAmp = validateAmpJobResult(jobMetadata, resultMetadata, errorText);
+  const stopMetadata = stopResultMetadata(resultStop);
+  // A daemon that reports a non-completed stop reason (e.g. max_turns,
+  // max_budget, max_tokens, refused, permission_denied) without an explicit
+  // error string and without any response text still ended in an incomplete /
+  // failed state (Invariant 9: max_turns != completed). Synthesize the stop
+  // sentence so status becomes 'error' rather than silently claiming 'done'.
+  const inferredStopError = !errorText
+   && !textFromValue(responseText).trim()
+   && !textFromValue(jobMetadata.lastSegmentText).trim()
+   && stopMetadata.stopReason
+   && stopMetadata.stopReason !== 'completed'
+   ? (STOP_REASON_TEXT[stopMetadata.stopReason] || stopMetadata.stopReason)
+   : '';
+  const validatedAmp = validateAmpJobResult(jobMetadata, resultMetadata, errorText || inferredStopError);
   const finalErrorText = validatedAmp.errorText;
-  const storedResponseText = !errorText && finalErrorText ? '' : responseText;
+  const storedResponseText = !(errorText || inferredStopError) && finalErrorText ? '' : responseText;
   const status = finalErrorText ? 'error' : 'done';
   // {} for a daemon that reported no reason, so an OLD daemon against this
   // server produces byte-identical metadata to what it produced before.
-  const stopMetadata = stopResultMetadata(resultStop);
   const mergedMetadata = { ...jobMetadata, ...validatedAmp.metadata, ...stopMetadata };
   // Terminal states are monotonic. In particular, an MCP timeout is recorded as
   // `error`; a worker result arriving after that reaper commit must not resurrect
@@ -947,6 +959,16 @@ function createAgentJobs(deps = {}) {
   afterDurableWrite(() => { void settleCapturedChatTask(job.id, status); });
   if (status === 'error') {
    afterDurableWrite(() => { void notifyDispatcherOfFailure({ ...job, metadata: mergedMetadata }, { status, reason: finalErrorText }); });
+  } else if (stopMetadata.stopReason && stopMetadata.stopReason !== 'completed') {
+   // Even when partial responseText was produced before hitting max_turns /
+   // max_budget / max_tokens, a parent dispatcher must be told the child did
+   // not complete normally (Invariant 9).
+   afterDurableWrite(() => {
+    void notifyDispatcherOfFailure(
+     { ...job, metadata: mergedMetadata },
+     { status: stopMetadata.stopReason, reason: STOP_REASON_TEXT[stopMetadata.stopReason] || stopMetadata.stopReason },
+    );
+   });
   }
 
   // Farm-originated coding jobs are control-plane work, not chat turns. They
@@ -1350,8 +1372,43 @@ function createAgentJobs(deps = {}) {
    return publicFarmAgentJob(current[0] || job);
   }
   notifyDbSubscribers('agent_jobs', 'UPDATE', updated);
+  try {
+   const expiredRequests = await getDb().unsafe(
+    `update agent_permission_requests
+        set status = 'expired',
+            decided_at = coalesce(decided_at, now())
+      where job_id = $1::uuid
+        and status in ('pending', 'allowing', 'denying')
+      returning *`,
+    [job.id],
+   );
+   if (Array.isArray(expiredRequests) && expiredRequests.length > 0) {
+    notifyDbSubscribers('agent_permission_requests', 'UPDATE', expiredRequests);
+    for (const request of expiredRequests) {
+     const conn = request.connection_id ? getConnectedAgents().get(request.connection_id) : null;
+     if (conn?.ws?.readyState === 1) {
+      sendWs(conn.ws, {
+       type: 'agent_permission_abort',
+       requestId: request.id,
+       jobId: request.job_id,
+       reason: 'cancelled',
+      });
+     }
+    }
+   }
+  } catch (permError) {
+   console.error('cancelFarmAgentJob permission cleanup failed', permError);
+  }
+  void Promise.resolve(notifyDispatcherOfFailure(updated[0] || job, { status: 'cancelled', reason: 'Cancelled by Farm' })).catch((notifyError) => {
+   console.error('cancelFarmAgentJob child-failure notice failed', notifyError);
+  });
   // Cancelling frees the agent exactly like finishing does.
   scheduleTaskQueueDrain(job.workspace_id, job.agent_id, 'job_cancelled');
+  if (job.session_id) {
+   void Promise.resolve(drainPendingChatTurn(job.session_id, job.agent_id, 'job_cancelled')).catch((drainError) => {
+    console.error('cancelFarmAgentJob chat-turn drain failed', drainError);
+   });
+  }
   const exactConnection = getConnectedAgents().get(job.connection_id);
   const target = connection || (exactConnection?.ws?.readyState === 1 ? exactConnection : null) || findConnectedAgent(String(workspaceId), String(job.agent_id), '');
   if (target) sendWs(target.ws, { type: 'agent_job_cancel', jobId: job.id, reason: 'Cancelled by Farm' });

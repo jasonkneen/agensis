@@ -232,3 +232,83 @@ test('a rate-limited call never reaches the database', async () => {
   await call();
   assert.equal(events.length, 0);
 });
+
+test('cancelling rewrites the Thinking placeholder, expires permission requests, and notifies a parent dispatcher', async () => {
+  const sqlCalls = [];
+  const wsFrames = [];
+  const parentNotices = [];
+  const clearedPlaceholders = [];
+  let handler = null;
+  const app = {
+    post(path, _auth, fn) {
+      if (path === '/backend/agent-jobs/:jobId/cancel') handler = fn;
+    },
+  };
+
+  const jobWithMeta = {
+    ...RUNNING_JOB,
+    metadata: {
+      handle: 'coder',
+      responseMessageId: 'msg-placeholder-1',
+      broadcastToChannel: true,
+      dispatchedBy: { agentId: 'parent-1', sessionId: 'parent-sess-1', jobId: 'parent-job-1' },
+    },
+  };
+
+  mountAgentJobCancelRoutes(app, {
+    requireAuth: (_req, _res, next) => next(),
+    jsonError: (res, status, error) => res.status(status).json({ error: error?.message }),
+    badRequest: message => Object.assign(new Error(message), { status: 400 }),
+    getDb: () => ({
+      unsafe: async (sql, params) => {
+        sqlCalls.push({ sql: String(sql).replace(/\s+/g, ' ').trim(), params });
+        if (/from agent_jobs j/.test(sql)) return [jobWithMeta];
+        if (/update agent_jobs/.test(sql)) return [{ ...jobWithMeta, status: 'cancelled', finished_at: 'now' }];
+        if (/update messages set content = \$2/.test(sql)) return [{ id: 'msg-placeholder-1', content: params[1] }];
+        if (/update agent_permission_requests/.test(sql)) {
+          return [{ id: 'perm-1', connection_id: 'conn-1', request_key: 'req-key-1', status: 'expired' }];
+        }
+        return [];
+      },
+    }),
+    notifyDbSubscribers: () => {},
+    enforceWorkspaceRole: async () => {},
+    enforceSessionRead: async () => {},
+    cancelBuiltinJob: () => true,
+    sendToConnection: (connId, frame) => { wsFrames.push({ connId, frame }); return true; },
+    scheduleTaskQueueDrain: () => {},
+    drainPendingChatTurn: () => {},
+    clearStrandedPlaceholders: async (row, keepId) => { clearedPlaceholders.push({ id: row.id, keepId }); },
+    notifyDispatcherOfFailure: async (row, info) => { parentNotices.push({ id: row.id, ...info }); },
+    rateLimitBlocked: () => false,
+    agentJobCancelRateLimiter: {},
+  });
+
+  const res = {
+    statusCode: 200,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(payload) { this.body = payload; return this; },
+  };
+  await handler({ params: { jobId: 'job-1' }, userId: 'user-1', body: {} }, res);
+
+  assert.equal(res.statusCode, 200);
+  const placeholderUpdate = sqlCalls.find(c => c.sql.startsWith('update messages set content = $2'));
+  assert.ok(placeholderUpdate, 'placeholder message must be rewritten on cancel');
+  assert.equal(placeholderUpdate.params[0], 'msg-placeholder-1');
+  assert.match(placeholderUpdate.params[1], /@coder stopped: the turn was cancelled\./);
+
+  assert.equal(clearedPlaceholders.length, 1);
+  assert.equal(clearedPlaceholders[0].keepId, 'msg-placeholder-1');
+
+  const permUpdate = sqlCalls.find(c => c.sql.startsWith('update agent_permission_requests'));
+  assert.ok(permUpdate, 'pending/interim permission requests for the job must be expired');
+  assert.ok(
+    wsFrames.some(f => f.frame.type === 'agent_permission_abort' && f.frame.requestId === 'req-key-1'),
+    'daemon must receive agent_permission_abort for expired permission request',
+  );
+
+  assert.equal(parentNotices.length, 1);
+  assert.equal(parentNotices[0].status, 'cancelled');
+});
+

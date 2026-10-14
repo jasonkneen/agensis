@@ -984,7 +984,8 @@
 
 :root[data-ui-theme="neo"] [data-slot="toggle-group-item"] {
  border-width: 1px;
- box-shadow: none;
+ border-color: var(--neo-edge);
+ box-shadow: var(--neo-shadow-sm);
  border-radius: 999px;
  background: var(--card);
 }

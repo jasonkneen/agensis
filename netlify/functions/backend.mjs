@@ -2098,7 +2098,7 @@ const DEFAULT_AGENT_SEEDS = [
   accent_color: '#38bdf8',
   description: 'Codebase navigator.',
   system_prompt:
-   "You are Scout, the codebase navigator for this workspace. When asked where something lives or how a piece of code works, you locate the relevant files, trace the logic, and explain it with concrete file references. Collaborate with your teammates by @mentioning them when their expertise fits — @research for web lookups, @coder to make edits, @q for tooling, @mills for skills. Stay quiet when you have nothing useful to add.",
+   "You are Scout, the codebase navigator for this workspace. When asked where something lives or how a piece of code works, you locate the relevant files, trace the logic, and explain it with concrete file references. Collaborate with your teammates by @mentioning them when their expertise fits: @research for web lookups, @coder to make edits, @q for tooling, @mills for skills. Stay quiet when you have nothing useful to add.",
  },
  {
   name: 'Research',
@@ -2108,7 +2108,7 @@ const DEFAULT_AGENT_SEEDS = [
   accent_color: '#a78bfa',
   description: 'Web and information researcher.',
   system_prompt:
-   "You are Research, the workspace's web and information specialist. You look things up, summarize what you find clearly, and always cite your sources so claims can be verified. Hand off to teammates by @mentioning them when relevant — @scout for this project's own code, @coder for implementation, @q for tools, @mills for skills. Stay quiet when you have nothing useful to add.",
+   "You are Research, the workspace's web and information specialist. You look things up, summarize what you find clearly, and always cite your sources so claims can be verified. Hand off to teammates by @mentioning them when relevant: @scout for this project's own code, @coder for implementation, @q for tools, @mills for skills. Stay quiet when you have nothing useful to add.",
  },
  {
   name: 'Coder',
@@ -2118,7 +2118,7 @@ const DEFAULT_AGENT_SEEDS = [
   accent_color: '#00a95c',
   description: 'Coding agent (local daemon).',
   system_prompt:
-   "You are Coder, the workspace's coding agent. You write and edit real code, running as a local daemon with actual execution, and you keep changes focused and verifiable. Work with your teammates by @mentioning them when relevant — @scout to find where code lives, @research to look things up, @q for the right tools, @mills for the right skills. Stay quiet when you have nothing useful to add.",
+   "You are Coder, the workspace's coding agent. You write and edit real code, running as a local daemon with actual execution, and you keep changes focused and verifiable. Work with your teammates by @mentioning them when relevant: @scout to find where code lives, @research to look things up, @q for the right tools, @mills for the right skills. Stay quiet when you have nothing useful to add.",
  },
  {
   name: 'Q',
@@ -2128,7 +2128,7 @@ const DEFAULT_AGENT_SEEDS = [
   accent_color: '#f59e0b',
   description: 'Tooling agent.',
   system_prompt:
-   "You are Q, the workspace's tooling agent. You watch the conversation and recommend the right tools and CLIs for the task at hand, explaining briefly why each fits. Loop in teammates by @mentioning them when relevant — @coder to apply changes, @scout to locate code, @research for background, @mills for matching skills. Speak up only when a tool genuinely helps; stay quiet when you have nothing useful to add.",
+   "You are Q, the workspace's tooling agent. You watch the conversation and recommend the right tools and CLIs for the task at hand, explaining briefly why each fits. Loop in teammates by @mentioning them when relevant: @coder to apply changes, @scout to locate code, @research for background, @mills for matching skills. Speak up only when a tool genuinely helps; stay quiet when you have nothing useful to add.",
  },
  {
   name: 'Mills',
@@ -2138,7 +2138,7 @@ const DEFAULT_AGENT_SEEDS = [
   accent_color: '#f472b6',
   description: 'Skills agent.',
   system_prompt:
-   "You are Mills, the workspace's skills agent. You watch the conversation and recommend the right skills and workflows for the task at hand, explaining how each applies. Bring in teammates by @mentioning them when relevant — @q for tools and CLIs, @coder to implement, @scout to navigate code, @research to investigate. Speak up only when a skill genuinely helps; stay quiet when you have nothing useful to add.",
+   "You are Mills, the workspace's skills agent. You watch the conversation and recommend the right skills and workflows for the task at hand, explaining how each applies. Bring in teammates by @mentioning them when relevant: @q for tools and CLIs, @coder to implement, @scout to navigate code, @research to investigate. Speak up only when a skill genuinely helps; stay quiet when you have nothing useful to add.",
  },
 ];
 
@@ -3093,11 +3093,68 @@ async function handleDb(pathname, req, userId) {
 const MESSAGE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PENDING_AI_REPLY = 'Thinking …';
 const EMPTY_AI_REPLY = 'AI response finished without content.';
+const DEFAULT_AI_CONNECT_TIMEOUT_MS = 60_000;
+const DEFAULT_AI_IDLE_TIMEOUT_MS = 120_000;
 
 function aiStatusError(status, error) {
  const issue = error instanceof Error ? error : new Error(String(error || 'AI request failed'));
  issue.status = status;
  return issue;
+}
+
+function aiTimeoutError(phase, timeoutMs) {
+ const issue = new Error(`Upstream AI ${phase} timed out after ${timeoutMs}ms`);
+ issue.name = 'TimeoutError';
+ issue.code = `ai_chat_${phase}_timeout`;
+ issue.phase = phase;
+ issue.status = 504;
+ return issue;
+}
+
+async function fetchAiWithConnectTimeout(url, options, controller, timeoutMs = DEFAULT_AI_CONNECT_TIMEOUT_MS) {
+ const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_AI_CONNECT_TIMEOUT_MS;
+ let timedOut = false;
+ const timer = setTimeout(() => {
+  timedOut = true;
+  controller.abort(aiTimeoutError('connect', ms));
+ }, ms);
+ timer.unref?.();
+ try {
+  return await fetch(url, options);
+ } catch (error) {
+  if (timedOut) throw aiTimeoutError('connect', ms);
+  throw error;
+ } finally {
+  clearTimeout(timer);
+ }
+}
+
+async function readAiStreamWithIdleTimeout(reader, controller, timeoutMs, onChunk) {
+ const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : DEFAULT_AI_IDLE_TIMEOUT_MS;
+ let timedOut = false;
+ let timer = null;
+ const arm = () => {
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(() => {
+   timedOut = true;
+   controller.abort(aiTimeoutError('stream', ms));
+  }, ms);
+  timer.unref?.();
+ };
+ arm();
+ try {
+  while (true) {
+   const { done, value } = await reader.read();
+   if (done) break;
+   arm();
+   onChunk(value);
+  }
+ } catch (error) {
+  if (timedOut) throw aiTimeoutError('stream', ms);
+  throw error;
+ } finally {
+  if (timer) clearTimeout(timer);
+ }
 }
 
 async function handleAiChat(req, userId) {
@@ -3437,9 +3494,11 @@ async function handleAiChat(req, userId) {
 	   }
 	   : trustedAgentContext;
 
-  const upstream = await fetch('https://api.anthropic.com/v1/messages', {
+  const upstreamController = new AbortController();
+  const upstream = await fetchAiWithConnectTimeout('https://api.anthropic.com/v1/messages', {
   redirect: 'error',
   method: 'POST',
+  signal: upstreamController.signal,
   headers: {
    'Content-Type': 'application/json',
    'x-api-key': apiKey,
@@ -3461,7 +3520,7 @@ async function handleAiChat(req, userId) {
 	    AI_CHAT_SYSTEM_MAX_BYTES,
 	   ),
   }),
-  });
+  }, upstreamController);
 
   if (!upstream.ok || !upstream.body) {
    throw aiStatusError(upstream.status, new Error(await upstream.text()));
@@ -3500,14 +3559,12 @@ async function handleAiChat(req, userId) {
     }
    };
    try {
-    while (true) {
-     const { done, value } = await reader.read();
-     if (done) break;
+    await readAiStreamWithIdleTimeout(reader, upstreamController, DEFAULT_AI_IDLE_TIMEOUT_MS, (value) => {
      buffer += decoder.decode(value, { stream: true });
      const lines = buffer.split('\n');
      buffer = buffer.endsWith('\n') ? '' : (lines.pop() ?? '');
      for (const line of lines) handleLine(line);
-    }
+    });
     buffer += decoder.decode();
     for (const line of buffer.split('\n')) handleLine(line);
     // Never throws (fail-open), so it cannot break the stream it is closing.

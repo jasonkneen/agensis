@@ -85,6 +85,7 @@ function createBuiltinTurn(deps = {}) {
   // Ephemeral speakable-sentence fanout for live huddles (voice-publish.cjs).
   // Optional so thin unit tests still construct this module.
   publishHuddleVoiceText = async (_args) => String(_args?.previousSpoken || ''),
+  notifyDispatcherOfFailure = () => {},
   slugHandle,
  } = deps;
 
@@ -187,7 +188,7 @@ function createBuiltinTurn(deps = {}) {
  // having no tools, and the fix is to call them, still without describing them.
  const BUILTIN_TOOL_NOTE = [
   'You have real workspace tools on this turn. When you need one, MAKE THE TOOL CALL.',
-  'Never write out a tool call, its arguments, or its result as prose and continue as though it happened — a described call has not run. If you have not called it, it has not happened.',
+  'Never write out a tool call, its arguments, or its result as prose and continue as though it happened, because a described call has not run. If you have not called it, it has not happened.',
   'Never say you have created, posted, updated or fetched anything until a tool has actually returned success for it.',
   `You get at most ${BUILTIN_TOOL_LOOP_MAX_STEPS} rounds of tool use in one turn. Work in as few as you can, and finish with a plain answer for the human.`,
   'Be efficient: call independent tools together in one round, do not re-fetch what a result already gave you, and ask for only the fields or rows you need.',
@@ -198,7 +199,8 @@ function createBuiltinTurn(deps = {}) {
  function toolResultText(value) {
   const text = typeof value === 'string' ? value : JSON.stringify(value ?? null, null, 2);
   if (text.length <= BUILTIN_TOOL_RESULT_MAX_CHARS) return text;
-  return `${text.slice(0, BUILTIN_TOOL_RESULT_MAX_CHARS)}\n… [truncated: result was ${text.length} characters]`;
+  const elided = text.length - BUILTIN_TOOL_RESULT_MAX_CHARS;
+  return `${text.slice(0, BUILTIN_TOOL_RESULT_MAX_CHARS)}\n… [truncated: result was ${text.length} characters, ${elided} elided. Re-call with a narrower filter or smaller limit.]`;
  }
 
  /**
@@ -844,6 +846,11 @@ const queueService = createAgentQueueService({
          [nextId, sessionId, target || 'Thinking…', workThreadParentId, String(agent.id), agent.name],
         );
         currentMessageId = nextId;
+        await getDb().unsafe(
+         `update agent_jobs set metadata = metadata || jsonb_build_object('responseMessageId', $2::text)
+          where id = $1 and status = 'running'`,
+         [builtinJobId, nextId],
+        ).catch(() => {});
         // First materialisation: emit now that we have an id.
         emitVoice(nextId, target);
         if (rows.length > 0) notifyDbSubscribers('messages', 'INSERT', rows);
@@ -930,7 +937,7 @@ const queueService = createAgentQueueService({
      return rows[0] ? rows[0].id : null;
     };
 
-    const responseText = await (async () => {
+    const { responseText, hitStepCap } = await (async () => {
      const loop = await runToolUseLoop({
       messages: contextMessages.length > 0 ? contextMessages : [{ role: 'user', content: '(no message)' }],
       tools: toolSpecs,
@@ -997,7 +1004,7 @@ const queueService = createAgentQueueService({
        if (rows.length > 0) notifyDbSubscribers('messages', 'UPDATE', rows);
       },
      });
-     return loop.text;
+     return { responseText: loop.text, hitStepCap: Boolean(loop.hitCap) };
     })();
     // The stream is over, so the writes below own the row from here.
     finished = true;
@@ -1025,7 +1032,11 @@ const queueService = createAgentQueueService({
      // thread into the channel view (it stays a thread message — the flag only adds
      // it to the channel). The throttled partial writes above deliberately leave the
      // flag alone, which is what keeps the channel quiet while the agent works.
-     const finalText = responseText || `@${handle} finished without output.`;
+     const finalText = responseText || (
+      hitStepCap
+       ? `@${handle} stopped: reached the turn limit (${BUILTIN_TOOL_LOOP_MAX_STEPS} tool rounds).`
+       : `@${handle} finished without output.`
+     );
      const finalMessageKind = String(responseText || '').trim() ? 'agent_result' : '';
      let messageRows = currentMessageId
       ? await tx.unsafe(
@@ -1086,7 +1097,16 @@ const queueService = createAgentQueueService({
     if (!settled.ok) return settled;
     for (const args of events) notifyDbSubscribers(...args);
     for (const effect of afterCommit) effect();
+    if (hitStepCap) {
+     void Promise.resolve(notifyDispatcherOfFailure(
+      jobRows[0],
+      { status: 'max_turns', reason: `reached the turn limit (${BUILTIN_TOOL_LOOP_MAX_STEPS} tool rounds)` },
+     )).catch((notifyError) => console.error('Builtin max_turns child-failure notice failed', notifyError));
+    }
     scheduleTaskQueueDrain(workspaceId, agent.id, 'builtin_done');
+    void Promise.resolve(drainPendingChatTurn(sessionId, agent.id, 'builtin_done')).catch(
+     (drainError) => console.error('Builtin done chat-turn drain failed', drainError),
+    );
     return { ok: true, pending: false };
    } catch (error) {
     // Let any in-flight partial write settle so it can't clobber the error text —
@@ -1137,7 +1157,15 @@ const queueService = createAgentQueueService({
      if (messageRows.length > 0) publish('messages', currentMessageId ? 'UPDATE' : 'INSERT', messageRows);
     });
     for (const args of events) notifyDbSubscribers(...args);
-    if (events.length) scheduleTaskQueueDrain(workspaceId, agent.id, 'builtin_error');
+    if (events.length) {
+     scheduleTaskQueueDrain(workspaceId, agent.id, 'builtin_error');
+     void Promise.resolve(drainPendingChatTurn(sessionId, agent.id, 'builtin_error')).catch(
+      (drainError) => console.error('Builtin error chat-turn drain failed', drainError),
+     );
+     void Promise.resolve(notifyDispatcherOfFailure(jobRows[0], { status: 'error', reason: errorText })).catch(
+      (notifyError) => console.error('Builtin error child-failure notice failed', notifyError),
+     );
+    }
     return { ok: false, pending: false };
    } finally {
     clearInterval(ownershipTimer);

@@ -5930,9 +5930,9 @@ const COMMENT_MENTION_TABLES = {
   // id is included because reply_to_comment needs it and the agent has no other
   // way to learn it: the quote above is text, not a handle on a row.
   actionHint: (row) => [
-   `Read the whole thread first: list_comments(doc_id: "${row.document_id}") — you have been shown one line of it.`,
+   `Read the whole thread first: list_comments(doc_id: "${row.document_id}"). You have been shown one line of it.`,
    `Then answer where the conversation is: reply_to_comment(comment_id: "${row.id}", content: "…").`,
-   'Resolve it with resolve_comment only once the thing being asked for is actually done — resolving takes it out of everyone\'s inbox.',
+   'Resolve it with resolve_comment only once the thing being asked for is actually done. Resolving takes it out of everyone\'s inbox.',
   ].join('\n'),
  },
  memory_file_comments: {
@@ -9273,7 +9273,7 @@ function buildSystemPromptParts(memory, documents, workspaceContext, agentContex
     sections.push(
      `This is a multi-agent channel. Other agents you can collaborate with: ${roster}.`,
      '- In the conversation history, each message is prefixed with the speaker, e.g. "[@handle]: ...". Messages without a prefix are your own.',
-     '- To bring another agent into the conversation, address them by @handle in your reply. Only mention an agent when you genuinely need their help — do not @ them out of politeness, or the conversation will loop.',
+     '- To bring another agent into the conversation, address them by @handle in your reply. Only mention an agent when you genuinely need their help. Do not @ them out of politeness, or the conversation will loop.',
      '- If the request is already fully handled, answer without mentioning anyone so the conversation can end.',
     );
    }
@@ -9856,7 +9856,7 @@ const DEFAULT_AGENT_SEEDS = [
   accent_color: '#38bdf8',
   description: 'Codebase navigator.',
   system_prompt:
-   "You are Scout, the codebase navigator for this workspace. When asked where something lives or how a piece of code works, you locate the relevant files, trace the logic, and explain it with concrete file references. Collaborate with your teammates by @mentioning them when their expertise fits — @research for web lookups, @coder to make edits, @q for tooling, @mills for skills. Stay quiet when you have nothing useful to add.",
+   "You are Scout, the codebase navigator for this workspace. When asked where something lives or how a piece of code works, you locate the relevant files, trace the logic, and explain it with concrete file references. Collaborate with your teammates by @mentioning them when their expertise fits: @research for web lookups, @coder to make edits, @q for tooling, @mills for skills. Stay quiet when you have nothing useful to add.",
  },
  {
   name: 'Research',
@@ -9866,7 +9866,7 @@ const DEFAULT_AGENT_SEEDS = [
   accent_color: '#a78bfa',
   description: 'Web and information researcher.',
   system_prompt:
-   "You are Research, the workspace's web and information specialist. You look things up, summarize what you find clearly, and always cite your sources so claims can be verified. Hand off to teammates by @mentioning them when relevant — @scout for this project's own code, @coder for implementation, @q for tools, @mills for skills. Stay quiet when you have nothing useful to add.",
+   "You are Research, the workspace's web and information specialist. You look things up, summarize what you find clearly, and always cite your sources so claims can be verified. Hand off to teammates by @mentioning them when relevant: @scout for this project's own code, @coder for implementation, @q for tools, @mills for skills. Stay quiet when you have nothing useful to add.",
  },
  {
   name: 'Coder',
@@ -9876,7 +9876,7 @@ const DEFAULT_AGENT_SEEDS = [
   accent_color: '#00a95c',
   description: 'Coding agent (local daemon).',
   system_prompt:
-   "You are Coder, the workspace's coding agent. You write and edit real code, running as a local daemon with actual execution, and you keep changes focused and verifiable. Work with your teammates by @mentioning them when relevant — @scout to find where code lives, @research to look things up, @q for the right tools, @mills for the right skills. Stay quiet when you have nothing useful to add.",
+   "You are Coder, the workspace's coding agent. You write and edit real code, running as a local daemon with actual execution, and you keep changes focused and verifiable. Work with your teammates by @mentioning them when relevant: @scout to find where code lives, @research to look things up, @q for the right tools, @mills for the right skills. Stay quiet when you have nothing useful to add.",
  },
  {
   name: 'Q',
@@ -9886,7 +9886,7 @@ const DEFAULT_AGENT_SEEDS = [
   accent_color: '#f59e0b',
   description: 'Tooling agent.',
   system_prompt:
-   "You are Q, the workspace's tooling agent. You watch the conversation and recommend the right tools and CLIs for the task at hand, explaining briefly why each fits. Loop in teammates by @mentioning them when relevant — @coder to apply changes, @scout to locate code, @research for background, @mills for matching skills. Speak up only when a tool genuinely helps; stay quiet when you have nothing useful to add.",
+   "You are Q, the workspace's tooling agent. You watch the conversation and recommend the right tools and CLIs for the task at hand, explaining briefly why each fits. Loop in teammates by @mentioning them when relevant: @coder to apply changes, @scout to locate code, @research for background, @mills for matching skills. Speak up only when a tool genuinely helps; stay quiet when you have nothing useful to add.",
  },
  {
   name: 'Mills',
@@ -9896,7 +9896,7 @@ const DEFAULT_AGENT_SEEDS = [
   accent_color: '#f472b6',
   description: 'Skills agent.',
   system_prompt:
-   "You are Mills, the workspace's skills agent. You watch the conversation and recommend the right skills and workflows for the task at hand, explaining how each applies. Bring in teammates by @mentioning them when relevant — @q for tools and CLIs, @coder to implement, @scout to navigate code, @research to investigate. Speak up only when a skill genuinely helps; stay quiet when you have nothing useful to add.",
+   "You are Mills, the workspace's skills agent. You watch the conversation and recommend the right skills and workflows for the task at hand, explaining how each applies. Bring in teammates by @mentioning them when relevant: @q for tools and CLIs, @coder to implement, @scout to navigate code, @research to investigate. Speak up only when a skill genuinely helps; stay quiet when you have nothing useful to add.",
  },
 ];
 
@@ -10005,6 +10005,7 @@ const builtinTurn = createBuiltinTurn({
  workspaceResources,
  sessionHasLiveHuddle: (...a) => sessionHasLiveHuddle(...a),
  publishHuddleVoiceText: (...a) => publishHuddleVoiceText(...a),
+ notifyDispatcherOfFailure: (...a) => agentJobs.notifyDispatcherOfFailure(...a),
  slugHandle,
  notifyDbSubscribers: (...a) => realtime.notifyDbSubscribers(...a),
  sendWs: (...a) => realtime.sendWs(...a),
@@ -10655,6 +10656,7 @@ function createApp() {
   ensurePrimaryDaemonAgent,
   isPrivateSessionRow,
   normalizeAgentBackendBaseUrl,
+  notifyDispatcherOfFailure: (...a) => agentJobs.notifyDispatcherOfFailure(...a),
   requestBaseUrl,
   resolveSetupWorkspace,
   resolveWorkspaceIdForSession,
@@ -10732,8 +10734,11 @@ function createApp() {
  // doing" must not be reachable only through a destructive door.
  mountAgentJobCancelRoutes(app, {
   ...coreDeps(),
+  PLACEHOLDER_CONTENT_RE,
   agentJobCancelRateLimiter,
   cancelBuiltinJob,
+  clearStrandedPlaceholders: (...a) => clearStrandedPlaceholders(...a),
+  notifyDispatcherOfFailure: (...a) => agentJobs.notifyDispatcherOfFailure(...a),
   scheduleTaskQueueDrain: (...a) => taskDispatch.scheduleTaskQueueDrain(...a),
   drainPendingChatTurn: (...a) => drainPendingChatTurn(...a),
   sendToConnection,

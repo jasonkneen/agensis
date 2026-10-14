@@ -66,6 +66,26 @@ function publicJob(row) {
   };
 }
 
+function parseJsonObject(value) {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+const DEFAULT_PLACEHOLDER_CONTENT_RE = '^Thinking( [0-9]|…)';
+const CANCEL_PERMISSION_RETURNING = [
+  'id', 'workspace_id', 'agent_id', 'job_id', 'connection_id', 'session_id', 'message_id',
+  'request_key', 'tool_name', 'tool_detail', 'title', 'description', 'rules', 'scopes',
+  'status', 'scope', 'decided_by', 'decided_by_name', 'decided_at', 'expires_at',
+  'created_at', 'updated_at',
+].join(', ');
+
 function mountAgentJobCancelRoutes(app, deps = {}) {
   const {
     requireAuth, jsonError, badRequest, getDb, notifyDbSubscribers,
@@ -73,6 +93,9 @@ function mountAgentJobCancelRoutes(app, deps = {}) {
     cancelBuiltinJob, sendToConnection, scheduleTaskQueueDrain,
     rateLimitBlocked, agentJobCancelRateLimiter,
     drainPendingChatTurn = () => {},
+    clearStrandedPlaceholders = () => {},
+    notifyDispatcherOfFailure = () => {},
+    PLACEHOLDER_CONTENT_RE = DEFAULT_PLACEHOLDER_CONTENT_RE,
     onWarn = () => {},
   } = deps;
 
@@ -164,6 +187,71 @@ function mountAgentJobCancelRoutes(app, deps = {}) {
         } catch (error) {
           onWarn(`could not signal daemon for job ${row.id}: ${error?.message || error}`);
         }
+      }
+
+      const meta = parseJsonObject(row.metadata);
+      const responseMessageId = meta.responseMessageId ? String(meta.responseMessageId) : null;
+      if (row.session_id && responseMessageId) {
+        try {
+          const handle = meta.handle || 'agent';
+          const content = `@${handle} stopped: the turn was cancelled.`;
+          const messageRows = await getDb().unsafe(
+            `update messages set content = $2, broadcast_to_channel = $4
+               where id = $1 and session_id = $3 and deleted_at is null and content ~ $5
+               returning *`,
+            [responseMessageId, content, row.session_id, meta.broadcastToChannel === true, PLACEHOLDER_CONTENT_RE],
+          );
+          if (Array.isArray(messageRows) && messageRows.length > 0) {
+            notifyDbSubscribers('messages', 'UPDATE', messageRows);
+          }
+        } catch (error) {
+          onWarn(`could not update placeholder for cancelled job ${row.id}: ${error?.message || error}`);
+        }
+      }
+
+      try {
+        await clearStrandedPlaceholders(row, responseMessageId);
+      } catch (error) {
+        onWarn(`could not clear stranded placeholders for cancelled job ${row.id}: ${error?.message || error}`);
+      }
+
+      try {
+        const expiredRequests = await getDb().unsafe(
+          `update agent_permission_requests
+              set status = 'expired',
+                  scope = '',
+                  decided_by = null,
+                  decided_by_name = $2,
+                  decided_at = now(),
+                  updated_at = now()
+            where job_id = $1::uuid
+              and status in ('pending', 'allowing', 'denying')
+          returning ${CANCEL_PERMISSION_RETURNING}`,
+          [String(row.id), reason],
+        );
+        if (Array.isArray(expiredRequests) && expiredRequests.length > 0) {
+          notifyDbSubscribers('agent_permission_requests', 'UPDATE', expiredRequests);
+          for (const request of expiredRequests) {
+            if (!request?.connection_id || !request?.request_key) continue;
+            try {
+              sendToConnection(String(request.connection_id), {
+                type: 'agent_permission_abort',
+                requestId: String(request.request_key),
+                message: 'The turn was cancelled.',
+              });
+            } catch (abortError) {
+              onWarn(`could not abort permission request ${request.id || ''}: ${abortError?.message || abortError}`);
+            }
+          }
+        }
+      } catch (error) {
+        onWarn(`could not expire permission requests for cancelled job ${row.id}: ${error?.message || error}`);
+      }
+
+      try {
+        await notifyDispatcherOfFailure(row, { status: 'cancelled', reason: 'the turn was cancelled' });
+      } catch (error) {
+        onWarn(`could not notify parent dispatcher for cancelled job ${row.id}: ${error?.message || error}`);
       }
 
       // Cancelling frees the agent exactly like finishing does, so whatever is

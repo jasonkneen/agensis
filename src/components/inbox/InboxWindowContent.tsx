@@ -356,7 +356,7 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
           />
         ) : (
         <div className={PANE_HEADER}>
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {INBOX_CATEGORY_TABS.map(([value, label]) => {
               const count = categoryCounts.get(value) ?? 0;
               const active = category === value;
@@ -390,9 +390,6 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
           >
             Unread{unreadCount > 0 ? ` ${unreadCount > 99 ? '99+' : unreadCount}` : ''}
           </button>
-
-          <div className="flex-1" />
-
           <Button
             type="button"
             variant="ghost"

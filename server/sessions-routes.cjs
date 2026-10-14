@@ -18,13 +18,14 @@ const { applySessionClosureRuntimeEffects } = require('./session-close-runtime.c
 // more than once (canvas_id on sessions, metadata on agents).
 
 function mountSessionsRoutes(app, deps = {}) {
- const {
+  const {
   requireAuth, jsonError, forbidden, enforceWorkspaceRole, enforceSessionRead, sessionReadableSql, getDb,
   notifyDbSubscribers, isPrivateSessionRow, redactDeletedMessageRows,
   recordAudit, cancelBuiltinJob, sendToConnection, scheduleTaskQueueDrain, endHuddleRoom,
   buildAgentConnectionCommand, buildWorkspaceBootstrap,
   ensurePrimaryDaemonAgent, normalizeAgentBackendBaseUrl, requestBaseUrl,
   resolveSetupWorkspace, resolveWorkspaceIdForSession,
+  notifyDispatcherOfFailure = () => {},
  } = deps;
  for (const [name, value] of Object.entries({
   cancelBuiltinJob,
@@ -267,6 +268,7 @@ function mountSessionsRoutes(app, deps = {}) {
     sendToConnection,
     scheduleTaskQueueDrain,
     endHuddleRoom,
+    notifyDispatcherOfFailure,
     onWarn: (message) => console.warn('[session-clear]', message),
    });
    if (typeof recordAudit === 'function') {
@@ -358,6 +360,7 @@ function mountSessionsRoutes(app, deps = {}) {
     sendToConnection,
     scheduleTaskQueueDrain,
     endHuddleRoom,
+    notifyDispatcherOfFailure,
     onWarn: (message) => console.warn('[session-close]', message),
    });
    if (typeof recordAudit === 'function') {

@@ -489,7 +489,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
   const [statusFilter, setStatusFilter] = usePersistedPreference(
     viewPreferenceKey('agents.status-filter', workspaceId), AGENT_STATUS_FILTER_PREF, NO_STATUS_FILTER,
   );
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm] = useState('');
   const [ownerFilter, setOwnerFilter] = usePersistedPreference(
     viewPreferenceKey('agents.owner-filter', workspaceId), AGENT_OWNER_FILTER_PREF, 'all' as 'all' | 'mine',
   );
@@ -939,8 +939,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
 
   return (
     <div className={WINDOW_SHELL}>
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-card/65 px-3 py-2 backdrop-blur-md">
-        <SearchField className="min-w-0 max-w-xs flex-1" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Search agents" />
+      <div className="flex shrink-0 items-center justify-end gap-2 border-b border-border bg-card/65 px-3 py-2 backdrop-blur-md">
         <div className="flex shrink-0 items-center gap-2">
           {!createStep && agents.length > 0 && (
             <div className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-card/40 p-0.5">
@@ -2759,7 +2758,7 @@ function AgentDetailPane({
         <div className="mt-3 flex flex-wrap gap-2">
           <Button
             type="button"
-            variant={agentActive ? 'secondary' : 'outline'}
+            variant="outline"
             size="sm"
             onClick={onToggleEnabled}
             disabled={isConnected}
@@ -2796,7 +2795,7 @@ function AgentDetailPane({
               fields of a template — the table has no column for them. */}
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="sm"
             onClick={onSaveAsTemplate}
             disabled={templateSaved}
@@ -2807,7 +2806,7 @@ function AgentDetailPane({
           </Button>
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="sm"
             onClick={onShareToMarketplace}
             title="Share this agent to the marketplace — as a copyable template, or for hire with only its capabilities visible. Its permissions, folder access and connect token are never shared."
@@ -2823,7 +2822,7 @@ function AgentDetailPane({
           ) : null}
           <Button
             type="button"
-            variant={confirmDelete ? 'destructive' : 'ghost'}
+            variant={confirmDelete ? 'destructive' : 'outline'}
             size="sm"
             onClick={onDelete}
             disabled={isConnected || agentActive}
