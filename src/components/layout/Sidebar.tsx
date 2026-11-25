@@ -41,6 +41,9 @@ import {
  PanelLeftClose,
  Plus,
  RotateCcw,
+ ListTodo,
+ Activity as ActivityIcon,
+ MessagesSquare,
  Search,
  Settings,
  Star,
@@ -607,7 +610,6 @@ export const Sidebar = React.memo(function Sidebar({
         "workspace" is what made the two concepts indistinguishable. */}
     <SidebarRailButton icon={<Layers3 />} title="Switch desktop" onClick={onOpenWorkspaceGrid || onCreateWorkspace} />
     <SidebarRailButton icon={<Plus />} title="Create workspace" onClick={onCreateWorkspace} />
-    <SidebarRailButton icon={<Settings />} title="Desktop settings" onClick={onOpenSettings} />
     <Separator />
     <SidebarRailButton icon={<Search />} title="Search" onClick={onOpenCommandPalette} />
     {onOpenInbox && <SidebarRailButton icon={<Inbox />} title="Inbox" count={inboxUnreadCount} onClick={onOpenInbox} />}
@@ -615,19 +617,20 @@ export const Sidebar = React.memo(function Sidebar({
     {/* Same order as the expanded panel, and for the same reason — collapsing
         the sidebar must not reshuffle where things are. The two Separators sit
         where the expanded panel draws its two rules. */}
-    {onOpenTasks && <SidebarRailButton icon={<RotateCcw />} title="Tasks" count={openTaskCount} onClick={onOpenTasks} />}
+    {onOpenTasks && <SidebarRailButton icon={<ListTodo />} title="Tasks" count={openTaskCount} onClick={onOpenTasks} />}
+    {onOpenProjects && <SidebarRailButton icon={<Layers3 />} title="Projects" onClick={onOpenProjects} />}
     <SidebarRailButton icon={<Brain />} title="Memory" onClick={onOpenMemory} />
     <Separator />
     <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadInbox.unreadCount} onClick={() => revealSection('threads')} />
     <SidebarRailButton icon={<Hash />} title="Channels" count={activeChannelSessions.length} onClick={() => revealSection('channels')} />
     <SidebarRailButton icon={<FileText />} title="Documents" count={documentCount} onClick={() => revealSection('documents')} />
     <SidebarRailButton icon={<Upload />} title="Upload files" onClick={openUploadPicker} />
-    <SidebarRailButton icon={<Bot />} title="Direct messages" count={directMessageTargets.length} onClick={() => revealSection('direct-messages')} />
+    <SidebarRailButton icon={<MessagesSquare />} title="Direct messages" count={directMessageTargets.length} onClick={() => revealSection('direct-messages')} />
     <SidebarRailButton icon={<Archive />} title="Archive" count={archivedSessions.length} onClick={() => revealSection('archive')} />
     <Separator />
     {onOpenSkills && <SidebarRailButton icon={<Sparkles />} title="Skills" onClick={onOpenSkills} />}
     {onOpenLibrary && <SidebarRailButton icon={<Library />} title="Library" count={libraryEntries.length} onClick={() => onOpenLibrary()} />}
-    {onOpenActivity && <SidebarRailButton icon={<RotateCcw />} title="Activity" onClick={onOpenActivity} />}
+    {onOpenActivity && <SidebarRailButton icon={<ActivityIcon />} title="Activity" onClick={onOpenActivity} />}
     {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
     {onOpenResources && <SidebarRailButton icon={<Database />} title="Resources" onClick={onOpenResources} />}
     {onOpenUsers && <SidebarRailButton icon={<Users />} title="Users" onClick={onOpenUsers} />}
@@ -790,7 +793,7 @@ export const Sidebar = React.memo(function Sidebar({
           they were separated from Inbox and Desktop by five collapsible
           sections whose height changes every time one is opened, so their
           position on screen was never twice the same. */}
-      {onOpenTasks && <ActionTile icon={<RotateCcw />} label="Tasks" count={openTaskCount} active={focusedWindowType === 'tasks'} onClick={onOpenTasks} />}
+      {onOpenTasks && <ActionTile icon={<ListTodo />} label="Tasks" count={openTaskCount} active={focusedWindowType === 'tasks'} onClick={onOpenTasks} />}
       {onOpenProjects && <ActionTile icon={<Layers3 />} label="Projects" active={focusedWindowType === 'projects'} onClick={onOpenProjects} />}
       <ActionTile icon={<Brain />} label="Memory" active={focusedWindowType === 'memory'} onClick={onOpenMemory} />
       {/* Closes the fixed block. Below it everything is a collapsible section;
@@ -1166,17 +1169,23 @@ export const Sidebar = React.memo(function Sidebar({
           than "after the Archive header". Paired with the rule above THREADS —
           together they bracket the sections so the five read as one band. */}
       <div aria-hidden="true" className="sidebar-group-divider" />
-      {onOpenSkills && <ActionTile icon={<Sparkles />} label="Skills" active={focusedWindowType === 'skills'} onClick={onOpenSkills} />}
-      {onOpenLibrary && <ActionTile icon={<Library />} label="Library" active={focusedWindowType === 'library'} onClick={() => onOpenLibrary()} />}
-      {onOpenActivity && <ActionTile icon={<RotateCcw />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
-      {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
-      {onOpenResources && <ActionTile icon={<Database />} label="Resources" active={focusedWindowType === 'resources'} onClick={onOpenResources} />}
-      {onOpenUsers && <ActionTile icon={<Users />} label="Users" active={focusedWindowType === 'users'} onClick={onOpenUsers} />}
-      {onOpenSchedules && <ActionTile icon={<Clock />} label="Schedules" active={focusedWindowType === 'schedules'} onClick={onOpenSchedules} />}
-      {onOpenAutomations && <ActionTile icon={<Zap />} label="Automations" active={focusedWindowType === 'automations'} onClick={onOpenAutomations} />}
-      {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Applets" onClick={onOpenTemplates} />}
-      {onOpenBrowser && <ActionTile icon={<Globe />} label="Browser" active={focusedWindowType === 'browser'} onClick={onOpenBrowser} />}
-      {onOpenTerminal && <ActionTile icon={<SquareTerminal />} label="Terminal" active={focusedWindowType === 'terminal'} onClick={onOpenTerminal} />}
+      {/* Occasional destinations sit two to a row: eleven full-width rows were
+          the longest stretch of the sidebar and pushed the footer off small
+          screens. Nothing is hidden behind a menu; each tile still shows its
+          label (truncated) and its full name on hover. */}
+      <div data-sidebar-tool-grid className="grid grid-cols-2 gap-0.5">
+       {onOpenSkills && <ActionTile icon={<Sparkles />} label="Skills" active={focusedWindowType === 'skills'} onClick={onOpenSkills} />}
+       {onOpenLibrary && <ActionTile icon={<Library />} label="Library" active={focusedWindowType === 'library'} onClick={() => onOpenLibrary()} />}
+       {onOpenActivity && <ActionTile icon={<ActivityIcon />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
+       {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
+       {onOpenResources && <ActionTile icon={<Database />} label="Resources" active={focusedWindowType === 'resources'} onClick={onOpenResources} />}
+       {onOpenUsers && <ActionTile icon={<Users />} label="Users" active={focusedWindowType === 'users'} onClick={onOpenUsers} />}
+       {onOpenSchedules && <ActionTile icon={<Clock />} label="Schedules" active={focusedWindowType === 'schedules'} onClick={onOpenSchedules} />}
+       {onOpenAutomations && <ActionTile icon={<Zap />} label="Automations" active={focusedWindowType === 'automations'} onClick={onOpenAutomations} />}
+       {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Applets" onClick={onOpenTemplates} />}
+       {onOpenBrowser && <ActionTile icon={<Globe />} label="Browser" active={focusedWindowType === 'browser'} onClick={onOpenBrowser} />}
+       {onOpenTerminal && <ActionTile icon={<SquareTerminal />} label="Terminal" active={focusedWindowType === 'terminal'} onClick={onOpenTerminal} />}
+      </div>
      </div>
     </ScrollArea>
 
@@ -1728,6 +1737,7 @@ function ActionTile({
    className="sidebar-action-row flex min-w-0 w-full items-center overflow-hidden rounded-md text-left text-sm font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
    data-active={active ? 'true' : undefined}
    aria-pressed={pressed}
+   title={label}
    onClick={onClick}
   >
    <span className="sidebar-item-icon flex size-4 shrink-0 items-center justify-center">{icon}</span>
