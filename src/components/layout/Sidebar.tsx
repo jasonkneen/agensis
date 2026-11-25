@@ -1169,23 +1169,17 @@ export const Sidebar = React.memo(function Sidebar({
           than "after the Archive header". Paired with the rule above THREADS —
           together they bracket the sections so the five read as one band. */}
       <div aria-hidden="true" className="sidebar-group-divider" />
-      {/* Occasional destinations sit two to a row: eleven full-width rows were
-          the longest stretch of the sidebar and pushed the footer off small
-          screens. Nothing is hidden behind a menu; each tile still shows its
-          label (truncated) and its full name on hover. */}
-      <div data-sidebar-tool-grid className="grid grid-cols-2 gap-0.5">
-       {onOpenSkills && <ActionTile icon={<Sparkles />} label="Skills" active={focusedWindowType === 'skills'} onClick={onOpenSkills} />}
-       {onOpenLibrary && <ActionTile icon={<Library />} label="Library" active={focusedWindowType === 'library'} onClick={() => onOpenLibrary()} />}
-       {onOpenActivity && <ActionTile icon={<ActivityIcon />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
-       {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
-       {onOpenResources && <ActionTile icon={<Database />} label="Resources" active={focusedWindowType === 'resources'} onClick={onOpenResources} />}
-       {onOpenUsers && <ActionTile icon={<Users />} label="Users" active={focusedWindowType === 'users'} onClick={onOpenUsers} />}
-       {onOpenSchedules && <ActionTile icon={<Clock />} label="Schedules" active={focusedWindowType === 'schedules'} onClick={onOpenSchedules} />}
-       {onOpenAutomations && <ActionTile icon={<Zap />} label="Automations" active={focusedWindowType === 'automations'} onClick={onOpenAutomations} />}
-       {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Applets" onClick={onOpenTemplates} />}
-       {onOpenBrowser && <ActionTile icon={<Globe />} label="Browser" active={focusedWindowType === 'browser'} onClick={onOpenBrowser} />}
-       {onOpenTerminal && <ActionTile icon={<SquareTerminal />} label="Terminal" active={focusedWindowType === 'terminal'} onClick={onOpenTerminal} />}
-      </div>
+      {onOpenSkills && <ActionTile icon={<Sparkles />} label="Skills" active={focusedWindowType === 'skills'} onClick={onOpenSkills} />}
+      {onOpenLibrary && <ActionTile icon={<Library />} label="Library" active={focusedWindowType === 'library'} onClick={() => onOpenLibrary()} />}
+      {onOpenActivity && <ActionTile icon={<ActivityIcon />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
+      {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
+      {onOpenResources && <ActionTile icon={<Database />} label="Resources" active={focusedWindowType === 'resources'} onClick={onOpenResources} />}
+      {onOpenUsers && <ActionTile icon={<Users />} label="Users" active={focusedWindowType === 'users'} onClick={onOpenUsers} />}
+      {onOpenSchedules && <ActionTile icon={<Clock />} label="Schedules" active={focusedWindowType === 'schedules'} onClick={onOpenSchedules} />}
+      {onOpenAutomations && <ActionTile icon={<Zap />} label="Automations" active={focusedWindowType === 'automations'} onClick={onOpenAutomations} />}
+      {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Applets" onClick={onOpenTemplates} />}
+      {onOpenBrowser && <ActionTile icon={<Globe />} label="Browser" active={focusedWindowType === 'browser'} onClick={onOpenBrowser} />}
+      {onOpenTerminal && <ActionTile icon={<SquareTerminal />} label="Terminal" active={focusedWindowType === 'terminal'} onClick={onOpenTerminal} />}
      </div>
     </ScrollArea>
 
