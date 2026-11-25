@@ -11,8 +11,11 @@ const { createEngine } = require('../electron/broadcast/engine.cjs');
 const available = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0
   && spawnSync('ffprobe', ['-version'], { stdio: 'ignore' }).status === 0;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Deadlines are wide on purpose: the encodes are real, and on a loaded machine
+// (load ~150 on 16 cores) a 10s cap on making the 5s input clip killed ffmpeg
+// (exit 255) before the pipeline under test ever ran.
 
-for (const audio of [false, true]) test(`real WebM → FFmpeg → loopback RTMP produces 720p H.264 and AAC (input audio: ${audio})`, { skip: !available, timeout: 25000 }, async () => {
+for (const audio of [false, true]) test(`real WebM → FFmpeg → loopback RTMP produces 720p H.264 and AAC (input audio: ${audio})`, { skip: !available, timeout: 90000 }, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'agensis-broadcast-test-'));
   const input = join(directory, 'input.webm');
   const output = join(directory, 'received.flv');
@@ -25,23 +28,23 @@ for (const audio of [false, true]) test(`real WebM → FFmpeg → loopback RTMP 
   let engine;
   let deadline;
   try {
-    const generated = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30', ...(audio ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-c:a', 'libopus'] : []), '-t', '5', '-c:v', 'libvpx', '-deadline', 'realtime', '-f', 'webm', input], { timeout: 10000 });
+    const generated = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30', ...(audio ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-c:a', 'libopus'] : []), '-t', '5', '-c:v', 'libvpx', '-deadline', 'realtime', '-f', 'webm', input], { timeout: 40000 });
     assert.equal(generated.status, 0, 'synthetic WebM generated');
     receiver = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-listen', '1', '-i', `${url}/synthetic-only`, '-t', '2', '-c', 'copy', '-f', 'flv', output], { stdio: 'ignore' });
     const receiverClosed = new Promise(resolve => receiver.once('close', resolve));
     await wait(400);
     assert.equal(receiver.exitCode, null, 'loopback receiver running');
-    engine = createEngine({ resolveBinary: () => 'ffmpeg', startupMs: 10000 });
+    engine = createEngine({ resolveBinary: () => 'ffmpeg', startupMs: 30000 });
     const s = engine.start('test', { url, key: 'synthetic-only', audio });
     const bytes = readFileSync(input);
     for (let i = 0; i < bytes.length; i += 32768) {
       await engine.write('test', s.id, bytes.subarray(i, i + 32768));
     }
-    const closed = await Promise.race([receiverClosed.then(code => ({ code })), new Promise(resolve => { deadline = setTimeout(() => resolve(null), 12000); })]);
+    const closed = await Promise.race([receiverClosed.then(code => ({ code })), new Promise(resolve => { deadline = setTimeout(() => resolve(null), 30000); })]);
     clearTimeout(deadline);
     assert.ok(closed, 'receiver completed before deadline');
     assert.equal(closed.code, 0);
-    const probe = spawnSync('ffprobe', ['-v', 'error', '-show_streams', '-of', 'json', output], { encoding: 'utf8', timeout: 3000 });
+    const probe = spawnSync('ffprobe', ['-v', 'error', '-show_streams', '-of', 'json', output], { encoding: 'utf8', timeout: 15000 });
     assert.equal(probe.status, 0);
     const streams = JSON.parse(probe.stdout).streams;
     const video = streams.find(s => s.codec_type === 'video');
