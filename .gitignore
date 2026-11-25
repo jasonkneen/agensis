@@ -73,3 +73,24 @@ src/dev-local/*
 
 # Local inspector tool state (holds an access token; never publish)
 /.data/
+
+# Craft Anything's working records for this folder: its build transcript,
+# session log, checks and captures. Local to one machine, never published —
+# the transcript quotes private memory notes verbatim.
+/craft.json
+/feed.json
+/questions.json
+/usage.json
+/assets.json
+/transcript.json
+/extract-transcript.json
+/agent-session.jsonl
+/build-activity.log
+/build-activity.old.log
+/inbox/
+/capture/
+/checks/
+/reference/
+/attachments/
+/pinned/
+/investigation.cany/
