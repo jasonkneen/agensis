@@ -28,6 +28,7 @@ const {
  PUBLIC_EVENT_TYPES,
  AGENT_ACTIVITY_TYPE,
  isUuid,
+ publishedEventTypes,
  normalizePublicPolicyEntry,
  createPublicWorkspaceReader,
 } = require('../shared/public-workspace.cjs');
@@ -77,8 +78,26 @@ function createPublicStreamHub({ reader, pollMs = STREAM_POLL_MS, pingMs = STREA
  const perIp = new Map();
  let total = 0;
 
- function canJoin(ip) {
-  return total < STREAM_MAX_TOTAL && (perIp.get(ip) || 0) < STREAM_MAX_PER_IP;
+ /**
+  * Take a stream slot SYNCHRONOUSLY, before the route awaits anything, so a
+  * burst of connects from one address cannot all pass the cap together.
+  * Returns null when the cap is reached; `release()` is idempotent.
+  */
+ function reserve(ip) {
+  if (total >= STREAM_MAX_TOTAL || (perIp.get(ip) || 0) >= STREAM_MAX_PER_IP) return null;
+  total += 1;
+  perIp.set(ip, (perIp.get(ip) || 0) + 1);
+  let held = true;
+  return {
+   release() {
+    if (!held) return;
+    held = false;
+    total = Math.max(0, total - 1);
+    const left = (perIp.get(ip) || 1) - 1;
+    if (left <= 0) perIp.delete(ip);
+    else perIp.set(ip, left);
+   },
+  };
  }
 
  function closeRoom(room) {
@@ -95,11 +114,7 @@ function createPublicStreamHub({ reader, pollMs = STREAM_POLL_MS, pingMs = STREA
  }
 
  function release(room, client) {
-  if (!room.clients.delete(client)) return;
-  total = Math.max(0, total - 1);
-  const left = (perIp.get(client.ip) || 1) - 1;
-  if (left <= 0) perIp.delete(client.ip);
-  else perIp.set(client.ip, left);
+  if (room.clients.delete(client)) client.reservation.release();
  }
 
  function broadcast(room, event, data) {
@@ -118,9 +133,17 @@ function createPublicStreamHub({ reader, pollMs = STREAM_POLL_MS, pingMs = STREA
     return;
    }
    const policy = await reader.loadPolicy(workspace.id);
-   const page = await reader.eventsFor(workspace, policy, { since: room.cursor, limit: 200 });
-   room.cursor = page.next;
-   for (const event of page.events) broadcast(room, 'event', event);
+   const typesKey = publishedEventTypes(policy).join(',');
+   if (typesKey !== room.typesKey) {
+    // The owner changed what is published. Start the cursor again from NOW,
+    // so a newly published type's backlog is not replayed as live events.
+    room.typesKey = typesKey;
+    room.cursor = await reader.dbNow();
+   } else {
+    const page = await reader.eventsFor(workspace, policy, { since: room.cursor, limit: 200 });
+    room.cursor = page.next;
+    for (const event of page.events) broadcast(room, 'event', event);
+   }
    const summary = await reader.summaryFor(workspace, policy);
    for (const agent of summary.agents) {
     const json = JSON.stringify(agent);
@@ -137,10 +160,16 @@ function createPublicStreamHub({ reader, pollMs = STREAM_POLL_MS, pingMs = STREA
  }
 
  async function openRoom(workspace, policy, summary) {
-  // The cursor starts at the newest published event, read from the database
-  // so the server clock never decides what counts as "after connect".
-  const latest = await reader.eventsFor(workspace, policy, { limit: 1 });
-  const room = { workspaceId: workspace.id, clients: new Set(), agents: new Map(), cursor: latest.next, ticking: false };
+  // The cursor starts at the DATABASE's now, so the server clock never
+  // decides what counts as "after connect".
+  const room = {
+   workspaceId: workspace.id,
+   clients: new Set(),
+   agents: new Map(),
+   cursor: await reader.dbNow(),
+   typesKey: publishedEventTypes(policy).join(','),
+   ticking: false,
+  };
   for (const agent of summary.agents) room.agents.set(agent.id, JSON.stringify(agent));
   room.pollTimer = setTimer(() => { void tick(room); }, pollMs);
   room.pingTimer = setTimer(() => broadcast(room, 'ping', { at: new Date().toISOString() }), pingMs);
@@ -150,7 +179,7 @@ function createPublicStreamHub({ reader, pollMs = STREAM_POLL_MS, pingMs = STREA
   return room;
  }
 
- async function join({ workspace, policy, summary, res, ip }) {
+ async function join({ workspace, policy, summary, res, reservation }) {
   let room = rooms.get(workspace.id);
   if (!room) {
    let pending = opening.get(workspace.id);
@@ -162,13 +191,12 @@ function createPublicStreamHub({ reader, pollMs = STREAM_POLL_MS, pingMs = STREA
   }
   if (room.closed) {
    // The workspace stopped being public while this room was opening.
+   reservation.release();
    try { res.end(); } catch { /* already closed */ }
    return () => {};
   }
-  const client = { res, ip };
+  const client = { res, reservation };
   room.clients.add(client);
-  total += 1;
-  perIp.set(ip, (perIp.get(ip) || 0) + 1);
   return () => {
    release(room, client);
    if (room.clients.size === 0) closeRoom(room);
@@ -181,7 +209,7 @@ function createPublicStreamHub({ reader, pollMs = STREAM_POLL_MS, pingMs = STREA
   total = 0;
  }
 
- return { canJoin, join, tick: (workspaceId) => (rooms.get(workspaceId) ? tick(rooms.get(workspaceId)) : undefined), rooms, reset };
+ return { reserve, join, tick: (workspaceId) => (rooms.get(workspaceId) ? tick(rooms.get(workspaceId)) : undefined), rooms, reset };
 }
 
 function mountPublicWorkspaceRoutes(app, deps = {}) {
@@ -233,15 +261,27 @@ function mountPublicWorkspaceRoutes(app, deps = {}) {
 
  app.get('/backend/public/workspaces/:id/stream', async (req, res) => {
   if (await limited(req, res)) return;
+  let reservation = null;
+  let closed = false;
+  let leave = null;
   try {
    const workspace = await reader.loadPublicWorkspace(String(req.params.id || ''));
    if (!workspace) return sendNotFound(res);
-   const ip = String(clientIpFromReq(req));
-   if (!hub.canJoin(ip)) {
+   reservation = hub.reserve(String(clientIpFromReq(req)));
+   if (!reservation) {
     setPublicHeaders(res);
     res.setHeader('Retry-After', '30');
     return res.status(429).json({ data: null, error: { message: 'Too many open streams. Please retry shortly.', code: 'rate_limited' } });
    }
+   // Listen for the close BEFORE awaiting anything else: a viewer who leaves
+   // early must still give its slot back.
+   // res, not req: an IncomingMessage can report 'close' once its (empty)
+   // body is read, while the response closes only when the viewer goes away.
+   res.on('close', () => {
+    closed = true;
+    if (leave) leave();
+    else reservation.release();
+   });
    const policy = await reader.loadPolicy(workspace.id);
    const summary = await reader.summaryFor(workspace, policy);
    setPublicHeaders(res);
@@ -251,17 +291,10 @@ function mountPublicWorkspaceRoutes(app, deps = {}) {
    res.status(200);
    res.flushHeaders?.();
    sseWrite(res, 'snapshot', summary);
-   // Listen for the close BEFORE joining: a viewer who leaves while the room
-   // is opening must still be released.
-   let closed = false;
-   let leave = null;
-   req.on('close', () => {
-    closed = true;
-    if (leave) leave();
-   });
-   leave = await hub.join({ workspace, policy, summary, res, ip });
+   leave = await hub.join({ workspace, policy, summary, res, reservation });
    if (closed) leave();
   } catch (error) {
+   reservation?.release();
    if (!res.headersSent) sendPublicError(res, error);
    else res.end();
   }

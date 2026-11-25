@@ -542,6 +542,12 @@ function createPublicWorkspaceReader({ db } = {}) {
   };
  }
 
+ /** The database clock, in the same format as an event's `at`. */
+ async function dbNow() {
+  const rows = await db(`select ${ISO_AT_SQL('now()')} as now`, []);
+  return String(rows[0]?.now || new Date().toISOString());
+ }
+
  /** GET /backend/public/workspaces/:id -> summary, or null (404). */
  async function getSummary(workspaceId) {
   const workspace = await loadPublicWorkspace(workspaceId);
@@ -567,8 +573,10 @@ function createPublicWorkspaceReader({ db } = {}) {
           e.event_type, e.entity_type, e.entity_id, e.title, e.user_id::text as user_id, e.metadata,
           u.display_name as user_display_name,
           case
+           -- Only a PLAIN message leaves. A tool step is logged as message_sent
+           -- too, and its title is "<sender>: <tool> · <arguments>".
            when e.event_type = 'message_sent' then (
-            m.id is not null and m.deleted_at is null
+            m.id is not null and m.deleted_at is null and coalesce(m.message_kind, '') = ''
             and ms.id is not null and ms.workspace_id = e.workspace_id and ms.deleted_at is null
             and ${sessionOpenSql('ms')}
            )
@@ -677,6 +685,7 @@ function createPublicWorkspaceReader({ db } = {}) {
  return {
   loadPublicWorkspace,
   loadPolicy,
+  dbNow,
   summaryFor,
   eventsFor,
   getSummary,

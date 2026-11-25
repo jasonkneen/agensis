@@ -76,6 +76,7 @@ function makeDb({ role = 'owner', visibility = { [PUBLIC_WS]: 'public', [PRIVATE
    }
    if (q.startsWith('select agent_id, status, capabilities')) return [{ agent_id: AGENT, status: 'online', share_policy: null }];
    if (q.startsWith('select e.id::text as id')) return [];
+   if (q.startsWith('select to_char(now()')) return [{ now: '2026-11-25T12:00:00.000000Z' }];
    if (q.startsWith('select * from marketplace_listings')) {
     return [{ id: 'l1', slug: 'scout', listing_type: 'template', name: 'Scout', status: 'published', system_prompt: 'PROMPT-SENTINEL', publisher_workspace_id: PRIVATE_WS }];
    }
@@ -248,9 +249,41 @@ test('policy writes need manage, refuse unknown values, and write workspace.publ
  ]);
 });
 
-test('a generic /backend/db write cannot set workspaces.visibility', () => {
+test('a generic /backend/db write cannot set workspaces.visibility', async () => {
  const out = stripPrivilegedDbValues('workspaces', { name: 'Renamed', visibility: 'public' });
  assert.deepEqual(out, { name: 'Renamed' });
+
+ // And at the door: the generic update and insert routes, through the app.
+ const db = makeDb();
+ const writes = [];
+ const unsafe = db.unsafe.bind(db);
+ db.unsafe = async (sql, params = []) => {
+  const q = String(sql).replace(/\s+/g, ' ').trim().toLowerCase();
+  if (/^(update|insert into) "?workspaces"?/.test(q)) {
+   writes.push({ q, params });
+   return [{ id: PRIVATE_WS, name: 'Renamed' }];
+  }
+  return unsafe(sql, params);
+ };
+ __test.setTestDb(db);
+ const token = await __test.issueToken(USER, '1');
+ await withServer(async (base) => {
+  const update = await call(base, 'POST', '/backend/db/update', token, {
+   table: 'workspaces', filters: [{ column: 'id', operator: 'eq', value: PRIVATE_WS }],
+   values: { name: 'Renamed', visibility: 'public' },
+  });
+  assert.equal(update.status, 200, await update.text());
+  const insert = await call(base, 'POST', '/backend/db/insert', token, {
+   table: 'workspaces', values: { name: 'New', visibility: 'public' },
+  });
+  assert.equal(insert.status, 200, await insert.text());
+ });
+ assert.ok(writes.length >= 2, `expected both writes to reach SQL, saw ${writes.length}`);
+ for (const write of writes) {
+  assert.equal(write.q.includes('visibility'), false, write.q);
+  assert.equal(write.params.includes('public'), false);
+ }
+ assert.equal(db.state.visibility[PRIVATE_WS], 'private');
 });
 
 test('the stream opens with a snapshot and closes when the workspace stops being public', async () => {
@@ -296,7 +329,7 @@ test('two first viewers share one room, and the last one out stops its timers', 
  let release;
  const gate = new Promise((resolve) => { release = resolve; });
  const reader = {
-  async eventsFor() { await gate; return { events: [], next: '2026-11-25T00:00:00.000000Z' }; },
+  async dbNow() { await gate; return '2026-11-25T00:00:00.000000Z'; },
  };
  const hub = createPublicStreamHub({
   reader,
@@ -306,8 +339,8 @@ test('two first viewers share one room, and the last one out stops its timers', 
  const workspace = { id: PUBLIC_WS };
  const summary = { agents: [] };
  const res = () => ({ write() {}, end() {} });
- const first = hub.join({ workspace, policy: new Map(), summary, res: res(), ip: '1' });
- const second = hub.join({ workspace, policy: new Map(), summary, res: res(), ip: '2' });
+ const first = hub.join({ workspace, policy: new Map(), summary, res: res(), reservation: hub.reserve('1') });
+ const second = hub.join({ workspace, policy: new Map(), summary, res: res(), reservation: hub.reserve('2') });
  release();
  const [leaveFirst, leaveSecond] = await Promise.all([first, second]);
  assert.equal(hub.rooms.size, 1);
@@ -319,4 +352,44 @@ test('two first viewers share one room, and the last one out stops its timers', 
  leaveSecond();
  assert.equal(hub.rooms.size, 0);
  assert.equal(timers.size, 0);
+});
+
+test('stream slots are taken synchronously and given back exactly once', () => {
+ const { createPublicStreamHub } = require('../server/public-workspace-routes.cjs');
+ const hub = createPublicStreamHub({ reader: {} });
+ const held = [];
+ for (let i = 0; i < 4; i += 1) held.push(hub.reserve('9.9.9.9'));
+ assert.ok(held.every(Boolean));
+ assert.equal(hub.reserve('9.9.9.9'), null, 'a fifth stream from one address is refused');
+ held[0].release();
+ held[0].release();
+ assert.ok(hub.reserve('9.9.9.9'), 'one released slot is one slot');
+ assert.equal(hub.reserve('9.9.9.9'), null);
+});
+
+test('publishing a new type re-seeds the stream cursor instead of replaying its backlog', async () => {
+ const { createPublicStreamHub } = require('../server/public-workspace-routes.cjs');
+ const sent = [];
+ let policy = new Map();
+ let eventsCalls = 0;
+ const reader = {
+  async dbNow() { return 'NOW'; },
+  async loadPublicWorkspace() { return { id: PUBLIC_WS }; },
+  async loadPolicy() { return policy; },
+  async eventsFor() { eventsCalls += 1; return { events: [{ id: 'old', at: 'x', type: 'task_created', category: 'tasks' }], next: 'NEXT' }; },
+  async summaryFor() { return { agents: [] }; },
+ };
+ const hub = createPublicStreamHub({ reader, setTimer: () => ({}), clearTimer: () => {} });
+ await hub.join({
+  workspace: { id: PUBLIC_WS }, policy, summary: { agents: [] },
+  res: { write: (chunk) => sent.push(chunk), end() {} }, reservation: hub.reserve('1'),
+ });
+ policy = new Map([['task_created', { level: 'public', detail: 'title' }]]);
+ await hub.tick(PUBLIC_WS);
+ assert.equal(eventsCalls, 0, 'the tick that sees the new type only re-seeds');
+ assert.equal(hub.rooms.get(PUBLIC_WS).cursor, 'NOW');
+ assert.equal(sent.some((chunk) => chunk.includes('"old"')), false);
+ await hub.tick(PUBLIC_WS);
+ assert.equal(eventsCalls, 1, 'the next tick reads from the new cursor');
+ hub.reset();
 });

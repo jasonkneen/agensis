@@ -382,3 +382,34 @@ test('reader: a bad since is a 400, a big limit is capped at 200', async () => {
  const eventsCall = db.calls.find((call) => call.q.startsWith('select e.id::text as id'));
  assert.equal(eventsCall.params[3], 200);
 });
+
+test('reader: never selects prompts, tool arguments, hosts, folders, persona prose, documents or memory', async () => {
+ const state = baseState();
+ state.policy[WS] = POLICY_EVENT_TYPES.map((event_type) => ({ event_type, level: 'public', detail: 'full' }));
+ const db = fakeDb(state);
+ const reader = createPublicWorkspaceReader({ db });
+ await reader.getSummary(WS);
+ await reader.getEvents(WS, {});
+ await reader.getEvents(WS, { since: '2026-11-25T00:00:00Z' });
+ assert.ok(db.calls.some((call) => call.q.startsWith('select j.agent_id::text')), 'the activity query ran');
+ const forbidden = [
+  /\bprompt\b/, /\btool_detail\b/, /\bhost\b/, /\bcwd\b/, /\bsystem_prompt\b/, /\bsoul\b/, /\binstructions\b/,
+  /\bconnect_token/, /\bhost_folders\b/, /\bemail\b/, /\bresponse\b/, /\bdocuments\b/, /\bagent_memory/,
+  /\bagent_documents\b/, /\bworkspace_secrets\b/, /\bsandbox_config\b/, /\bwa\.metadata\b/, /\bcapabilities\b(?! -> 'sharepolicy')/,
+ ];
+ for (const call of db.calls) {
+  for (const pattern of forbidden) assert.equal(pattern.test(call.q), false, `${pattern} in: ${call.q.slice(0, 160)}`);
+ }
+});
+
+test('reader: a message_sent leaves only for a PLAIN message in an open session', async () => {
+ // Tool steps are logged as message_sent too; their title is "<sender>: <tool> · <arguments>".
+ const db = fakeDb({ ...baseState(), policy: { [WS]: [{ event_type: 'message_sent', level: 'public', detail: 'title' }] } });
+ const reader = createPublicWorkspaceReader({ db });
+ await reader.getEvents(WS, {});
+ const sql = db.calls.find((call) => call.q.startsWith('select e.id::text as id')).q;
+ const branch = sql.slice(sql.indexOf("when e.event_type = 'message_sent' then ("), sql.indexOf("when e.event_type = 'chat_created' then ("));
+ assert.match(branch, /coalesce\(m\.message_kind, ''\) = ''/);
+ assert.match(branch, /coalesce\(ms\.visibility, 'workspace'\) <> 'private'/);
+ assert.match(branch, /coalesce\(ms\.folder, ''\) <> 'direct messages'/);
+});
