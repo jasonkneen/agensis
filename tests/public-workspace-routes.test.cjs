@@ -289,3 +289,34 @@ test('the stream opens with a snapshot and closes when the workspace stops being
   controller.abort();
  });
 });
+
+test('two first viewers share one room, and the last one out stops its timers', async () => {
+ const { createPublicStreamHub } = require('../server/public-workspace-routes.cjs');
+ const timers = new Set();
+ let release;
+ const gate = new Promise((resolve) => { release = resolve; });
+ const reader = {
+  async eventsFor() { await gate; return { events: [], next: '2026-11-25T00:00:00.000000Z' }; },
+ };
+ const hub = createPublicStreamHub({
+  reader,
+  setTimer: (fn) => { const id = { fn }; timers.add(id); return id; },
+  clearTimer: (id) => timers.delete(id),
+ });
+ const workspace = { id: PUBLIC_WS };
+ const summary = { agents: [] };
+ const res = () => ({ write() {}, end() {} });
+ const first = hub.join({ workspace, policy: new Map(), summary, res: res(), ip: '1' });
+ const second = hub.join({ workspace, policy: new Map(), summary, res: res(), ip: '2' });
+ release();
+ const [leaveFirst, leaveSecond] = await Promise.all([first, second]);
+ assert.equal(hub.rooms.size, 1);
+ assert.equal(hub.rooms.get(PUBLIC_WS).clients.size, 2);
+ assert.equal(timers.size, 2, 'one poll timer and one ping timer');
+ leaveFirst();
+ assert.equal(hub.rooms.size, 1);
+ leaveSecond();
+ leaveSecond();
+ assert.equal(hub.rooms.size, 0);
+ assert.equal(timers.size, 0);
+});

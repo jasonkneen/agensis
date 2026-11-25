@@ -4,6 +4,7 @@ import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import App from './App.tsx';
 import { FarmIntegrationApproval } from './components/integrations/FarmIntegrationApproval.tsx';
 import { installDiagnosticsCapture } from './lib/feedbackDiagnostics.ts';
+import { publicWorkspaceIdFromPath } from './lib/publicWorkspace.ts';
 import './index.css';
 
 // BEFORE React mounts, so the feedback report can carry the errors thrown while
@@ -21,11 +22,19 @@ const Showcase = import.meta.env.DEV
   : () => null;
 const isShowcase = import.meta.env.DEV && typeof window !== 'undefined' && window.location.hash.replace('#', '') === 'showcase';
 const isFarmIntegrationApproval = typeof window !== 'undefined' && window.location.pathname.replace(/\/+$/, '') === '/integrations/farm';
+// /p/<workspace id>: the public network map of a public workspace. No sign-in,
+// and none of the app shell; lazy so the signed-in app never loads it.
+const publicWorkspaceId = typeof window !== 'undefined' ? publicWorkspaceIdFromPath(window.location.pathname) : null;
+const PublicWorkspacePage = lazy(() => import('./components/public/PublicWorkspacePage.tsx').then(m => ({ default: m.PublicWorkspacePage })));
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
-      {isShowcase ? <Suspense fallback={null}><Showcase /></Suspense> : isFarmIntegrationApproval ? <FarmIntegrationApproval /> : <App />}
+      {isShowcase
+        ? <Suspense fallback={null}><Showcase /></Suspense>
+        : publicWorkspaceId
+          ? <Suspense fallback={null}><PublicWorkspacePage workspaceId={publicWorkspaceId} /></Suspense>
+          : isFarmIntegrationApproval ? <FarmIntegrationApproval /> : <App />}
     </ErrorBoundary>
   </StrictMode>
 );

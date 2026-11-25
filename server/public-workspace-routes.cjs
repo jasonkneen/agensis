@@ -73,6 +73,7 @@ function sseWrite(res, event, data) {
  */
 function createPublicStreamHub({ reader, pollMs = STREAM_POLL_MS, pingMs = STREAM_PING_MS, setTimer = setInterval, clearTimer = clearInterval } = {}) {
  const rooms = new Map(); // workspaceId -> room
+ const opening = new Map(); // workspaceId -> Promise<room>, so two first joins share one room
  const perIp = new Map();
  let total = 0;
 
@@ -81,7 +82,10 @@ function createPublicStreamHub({ reader, pollMs = STREAM_POLL_MS, pingMs = STREA
  }
 
  function closeRoom(room) {
-  rooms.delete(room.workspaceId);
+  if (room.closed) return;
+  room.closed = true;
+  // Only ever remove THIS room: a later viewer may already have opened a new one.
+  if (rooms.get(room.workspaceId) === room) rooms.delete(room.workspaceId);
   if (room.pollTimer) clearTimer(room.pollTimer);
   if (room.pingTimer) clearTimer(room.pingTimer);
   for (const client of [...room.clients]) {
@@ -132,19 +136,34 @@ function createPublicStreamHub({ reader, pollMs = STREAM_POLL_MS, pingMs = STREA
   }
  }
 
+ async function openRoom(workspace, policy, summary) {
+  // The cursor starts at the newest published event, read from the database
+  // so the server clock never decides what counts as "after connect".
+  const latest = await reader.eventsFor(workspace, policy, { limit: 1 });
+  const room = { workspaceId: workspace.id, clients: new Set(), agents: new Map(), cursor: latest.next, ticking: false };
+  for (const agent of summary.agents) room.agents.set(agent.id, JSON.stringify(agent));
+  room.pollTimer = setTimer(() => { void tick(room); }, pollMs);
+  room.pingTimer = setTimer(() => broadcast(room, 'ping', { at: new Date().toISOString() }), pingMs);
+  room.pollTimer?.unref?.();
+  room.pingTimer?.unref?.();
+  rooms.set(workspace.id, room);
+  return room;
+ }
+
  async function join({ workspace, policy, summary, res, ip }) {
   let room = rooms.get(workspace.id);
   if (!room) {
-   // The cursor starts at the newest published event, read from the database
-   // so the server clock never decides what counts as "after connect".
-   const latest = await reader.eventsFor(workspace, policy, { limit: 1 });
-   room = { workspaceId: workspace.id, clients: new Set(), agents: new Map(), cursor: latest.next, ticking: false };
-   for (const agent of summary.agents) room.agents.set(agent.id, JSON.stringify(agent));
-   room.pollTimer = setTimer(() => { void tick(room); }, pollMs);
-   room.pingTimer = setTimer(() => broadcast(room, 'ping', { at: new Date().toISOString() }), pingMs);
-   room.pollTimer?.unref?.();
-   room.pingTimer?.unref?.();
-   rooms.set(workspace.id, room);
+   let pending = opening.get(workspace.id);
+   if (!pending) {
+    pending = openRoom(workspace, policy, summary).finally(() => opening.delete(workspace.id));
+    opening.set(workspace.id, pending);
+   }
+   room = await pending;
+  }
+  if (room.closed) {
+   // The workspace stopped being public while this room was opening.
+   try { res.end(); } catch { /* already closed */ }
+   return () => {};
   }
   const client = { res, ip };
   room.clients.add(client);
@@ -232,8 +251,16 @@ function mountPublicWorkspaceRoutes(app, deps = {}) {
    res.status(200);
    res.flushHeaders?.();
    sseWrite(res, 'snapshot', summary);
-   const leave = await hub.join({ workspace, policy, summary, res, ip });
-   req.on('close', leave);
+   // Listen for the close BEFORE joining: a viewer who leaves while the room
+   // is opening must still be released.
+   let closed = false;
+   let leave = null;
+   req.on('close', () => {
+    closed = true;
+    if (leave) leave();
+   });
+   leave = await hub.join({ workspace, policy, summary, res, ip });
+   if (closed) leave();
   } catch (error) {
    if (!res.headersSent) sendPublicError(res, error);
    else res.end();

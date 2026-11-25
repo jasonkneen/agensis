@@ -31,7 +31,7 @@ test('the production build runs the routing finalizer after Nitro finishes', asy
  const pkg = require('../package.json');
  assert.match(pkg.scripts.build, /vite build && node scripts\/finalize-static-routing\.mjs$/);
  const config = await fs.readFile(path.join(__dirname, '../netlify.toml'), 'utf8');
- for (const route of ['/app', '/integrations/*', '/join/*']) {
+ for (const route of ['/app', '/integrations/*', '/p/*', '/join/*']) {
   const routeAt = config.indexOf(`from = "${route}"`);
   assert.ok(routeAt >= 0 && routeAt < config.indexOf('from = "/*"'), `${route} precedes the fallback`);
  }
