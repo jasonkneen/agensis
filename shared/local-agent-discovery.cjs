@@ -152,8 +152,15 @@ function primaryCommand(definition) {
 
 let loginShellPathCache = { state: 'uninit' }; // uninit | probed({ value })
 
+let loginShellPathInflight = null;
+// Per-command results of the last-resort `command -v` lookup, so a tool that is
+// not installed costs one shell spawn per session, not one per scan.
+const loginShellLookupCache = new Map();
+
 function refreshLoginShellPath() {
   loginShellPathCache = { state: 'uninit' };
+  loginShellPathInflight = null;
+  loginShellLookupCache.clear();
 }
 
 function fetchLoginShellPath() {
@@ -188,6 +195,40 @@ function loginShellPath() {
   const value = fetchLoginShellPath();
   loginShellPathCache = { state: 'probed', value };
   return value;
+}
+
+/**
+ * The same login-shell PATH, fetched WITHOUT blocking. In Electron the sync
+ * version runs on the main process, and every second it waits is a second of
+ * spinning beach ball for the whole app; this one lets the window keep
+ * painting. Shares the sync version's cache, so whichever runs first fills it.
+ */
+async function loginShellPathAsync() {
+  if (loginShellPathCache.state === 'probed') return loginShellPathCache.value;
+  if (loginShellPathInflight) return loginShellPathInflight;
+  loginShellPathInflight = (async () => {
+    let value = null;
+    if (process.platform !== 'win32') {
+      for (const shell of ['/bin/zsh', '/bin/bash']) {
+        if (!fs.existsSync(shell)) continue;
+        try {
+          const { stdout } = await execFileAsync(shell, ['-l', '-c', 'echo $PATH'], {
+            encoding: 'utf8',
+            timeout: 3000,
+            env: process.env,
+          });
+          const lines = String(stdout || '').split('\n').map(line => line.trim()).filter(Boolean);
+          if (lines.length) { value = lines[lines.length - 1]; break; }
+        } catch {
+          // try next shell
+        }
+      }
+    }
+    if (loginShellPathCache.state !== 'probed') loginShellPathCache = { state: 'probed', value };
+    loginShellPathInflight = null;
+    return loginShellPathCache.value;
+  })();
+  return loginShellPathInflight;
 }
 
 // ── Path resolution ─────────────────────────────────────────────────────────
@@ -408,12 +449,21 @@ function resolveCommandPath(command, options = {}) {
   if (shellPath) {
     const fromShell = findInDirs(trimmed, pathDirsFromEnv(shellPath));
     if (fromShell) return fromShell;
+    // The login shell's PATH was searched and the command is not on it, so
+    // `command -v` in that same shell will not find it either. Asking anyway
+    // cost two blocking shell spawns per missing tool — about ten seconds of
+    // frozen app for one scan of the agent list.
+    return null;
   }
 
-  // Last resort only: one more login-shell spawn per command. Avoid when the
-  // caller already supplied pathEnv (desktop list path never reaches here).
-  if (options.pathEnv !== undefined) return null;
-  return findViaLoginShell(trimmed);
+  // Last resort only: one more login-shell spawn per command, when the login
+  // PATH itself could not be read. Avoid when the caller already supplied
+  // pathEnv or an explicit login PATH (it has done its own resolution).
+  if (options.pathEnv !== undefined || options.loginShellPath !== undefined) return null;
+  if (loginShellLookupCache.has(trimmed)) return loginShellLookupCache.get(trimmed);
+  const found = findViaLoginShell(trimmed);
+  loginShellLookupCache.set(trimmed, found);
+  return found;
 }
 
 /**
@@ -588,10 +638,17 @@ async function detectLocalAgentCapabilities(options = {}) {
 
   const workspacePath = options.workspacePath || '';
   const home = options.home || os.homedir();
+  // Read the login-shell PATH once, without blocking, before probing. Passed
+  // down explicitly ('' when unreadable) so no per-command probe falls back to
+  // a synchronous shell spawn on Electron's main process.
+  let resolvedLoginShellPath = options.loginShellPath;
+  if (resolvedLoginShellPath === undefined && !options.skipLoginShell && options.pathEnv === undefined) {
+    resolvedLoginShellPath = (await loginShellPathAsync()) || '';
+  }
   const resolveOpts = {
     home,
     pathEnv: options.pathEnv,
-    loginShellPath: options.loginShellPath,
+    loginShellPath: resolvedLoginShellPath,
     skipLoginShell: options.skipLoginShell,
     timeoutMs: 5000,
   };
@@ -647,6 +704,7 @@ module.exports = {
   detectLocalAgentCapabilities,
   refreshLoginShellPath,
   loginShellPath,
+  loginShellPathAsync,
   mergedPathEnv,
   findNvmDefaultBin,
   isSafeNvmTag,

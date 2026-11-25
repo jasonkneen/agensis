@@ -208,3 +208,30 @@ test('isSafeNvmTag rejects traversal', () => {
   assert.equal(isSafeNvmTag('/abs'), false);
   assert.equal(isSafeNvmTag(''), false);
 });
+
+// Beach-ball guard. In Electron these run on the main process, where every
+// synchronous shell spawn freezes every window. A tool that is NOT installed
+// used to cost two blocking `zsh -l` / `bash -l` spawns each — ~10s of frozen
+// app for one scan — even though the login PATH had already been searched.
+test('a missing command never spawns a blocking login shell once the login PATH is known', () => {
+  const cp = require('node:child_process');
+  const modulePath = require.resolve('../shared/local-agent-discovery.cjs');
+  const original = cp.spawnSync;
+  let spawns = 0;
+  cp.spawnSync = (...args) => { spawns += 1; return original(...args); };
+  delete require.cache[modulePath];
+  try {
+    const fresh = require(modulePath);
+    const home = makeTempHome();
+    for (const loginShellPath of ['/nonexistent-bin', '']) {
+      assert.equal(
+        fresh.resolveCommandPath('definitely-not-installed-cli', { home, pathEnv: undefined, loginShellPath }),
+        null,
+      );
+    }
+    assert.equal(spawns, 0, 'resolveCommandPath spawned a synchronous shell');
+  } finally {
+    cp.spawnSync = original;
+    delete require.cache[modulePath];
+  }
+});

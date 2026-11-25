@@ -838,10 +838,12 @@ app.whenReady().then(async () => {
 
   // Warm login-shell PATH off the critical path so the first Agents/Connect
   // list does not pay a sync zsh -l on the main thread mid-interaction.
+  // Async: the sync version ran on this (main) process and froze every
+  // window for as long as the user's login shell took to start.
   setImmediate(() => {
     try {
-      const { loginShellPath } = require('../shared/local-agent-discovery.cjs');
-      loginShellPath();
+      const { loginShellPathAsync } = require('../shared/local-agent-discovery.cjs');
+      loginShellPathAsync().catch(() => {});
     } catch {
       // ignore warm failures
     }

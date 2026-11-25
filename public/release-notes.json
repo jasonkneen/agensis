@@ -7,7 +7,8 @@
     "highlights": [
       "In a direct message, the box shows which agent will answer and on which model; click it to open the agent's profile",
       "Tasks and Activity, and Agents and Direct messages, no longer share an icon in the sidebar",
-      "The collapsed sidebar no longer shows Settings twice, and now includes Projects"
+      "The collapsed sidebar no longer shows Settings twice, and now includes Projects",
+      "Desktop app: opening Agents or Connect no longer freezes the window while it looks for installed agent tools"
     ]
   },
   {
