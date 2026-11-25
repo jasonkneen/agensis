@@ -32,7 +32,6 @@ import {
   Pin,
   Plus,
   RotateCcw,
-  Send,
   ShieldCheck,
   Sparkles,
   SquareDashedMousePointer,
@@ -193,6 +192,7 @@ import {
   MessageHeader as UiMessageHeader,
 } from '@agensis/ui/components/message';
 import { Spinner } from '@agensis/ui/components/spinner';
+import { ComposerAgentChip, ComposerSendButton } from '../chat/ComposerParts';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -2926,18 +2926,21 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                       >
                         <SquareDashedMousePointer />
                       </InputGroupButton>
+                      {isDirectMessage && (profileAgent || directAgent) && (
+                        <ComposerAgentChip
+                          name={profileAgent?.name || directAgent?.name || channelTitle}
+                          model={profileAgent?.model}
+                          onClick={() => openAgentProfilePanel()}
+                        />
+                      )}
                     </div>
 
                     <div className="flex min-w-0 items-center gap-1">
-                      <Button
-                        type="button"
-                        size="icon-sm"
+                      <ComposerSendButton
                         onClick={handleSend}
                         disabled={!input.trim() || streaming}
-                        aria-label="Send message"
-                      >
-                        {streaming ? <Spinner /> : <Send />}
-                      </Button>
+                        busy={streaming}
+                      />
                     </div>
                   </InputGroupAddon>
                 </InputGroup>

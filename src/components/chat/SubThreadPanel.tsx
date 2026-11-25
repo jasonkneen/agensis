@@ -1,5 +1,5 @@
 import { useHistoryScrollAnchor } from '../../hooks/useHistoryScrollAnchor';
-import { Bot, Check, MessageSquare, Pencil, Plus, Send, Trash2, User, X } from 'lucide-react';
+import { Bot, Check, MessageSquare, Pencil, Plus, Trash2, User, X } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { SessionStopButton } from './StopAgentButton';
@@ -72,6 +72,7 @@ import {
   PopoverTrigger,
 } from '@agensis/ui/components/popover';
 import { Spinner } from '@agensis/ui/components/spinner';
+import { ComposerSendButton } from './ComposerParts';
 import { useComposerMentions } from '../../hooks/useComposerMentions';
 import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI';
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
@@ -584,15 +585,11 @@ export function SubThreadPanel({
                 </Popover>
               </div>
               <div className="flex items-center gap-1">
-                <Button
-                  type="button"
-                  size="icon-sm"
+                <ComposerSendButton
                   onClick={handleSend}
                   disabled={(!mentions.input.trim() && mentions.mentionedAgents.length === 0) || streaming}
-                  aria-label="Send message"
-                >
-                  {streaming ? <Spinner /> : <Send />}
-                </Button>
+                  busy={streaming}
+                />
               </div>
             </InputGroupAddon>
           </InputGroup>

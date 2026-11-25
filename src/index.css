@@ -2278,6 +2278,17 @@
  background: color-mix(in srgb, var(--muted) 85%, transparent);
 }
 
+/* The message box is one rounded card (the shape every reference composer
+   uses), softer than a form field. Neo keeps its square ink edge. The agent
+   chip is a label, not a filled button, so it opts out of the ghost fill. */
+:root:not([data-ui-theme="neo"]) .channel-composer [data-slot="input-group"] {
+ border-radius: 0.875rem;
+}
+
+.channel-composer [data-slot="input-group"] [data-composer-agent-chip][data-variant="ghost"] {
+ background: transparent;
+}
+
 .channel-composer [data-slot="input-group"] [data-slot="button"][data-variant="ghost"]:hover {
  background: var(--muted);
 }

@@ -1,6 +1,6 @@
 import { useHistoryScrollAnchor } from '../../hooks/useHistoryScrollAnchor';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Bot, Check, CornerDownRight, Paperclip, Pencil, Send, Trash2, User, X } from 'lucide-react';
+import { Bot, Check, CornerDownRight, Paperclip, Pencil, Trash2, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { ThreadWorkBadge } from './AgentWorkBadge';
 import { AgentAvatar } from '../agents/AgentAvatar';
@@ -59,6 +59,7 @@ import {
   MessageHeader as UiMessageHeader,
 } from '@agensis/ui/components/message';
 import { Spinner } from '@agensis/ui/components/spinner';
+import { ComposerSendButton } from './ComposerParts';
 import { useComposerMentions } from '../../hooks/useComposerMentions';
 import { ComposerMentionPicker, ComposerMentionChips } from './ComposerMentionUI';
 import { COMPOSER_ADDON_CLASS, COMPOSER_SHELL_CLASS, COMPOSER_TEXTAREA_CLASS, autosizeComposer } from '@/lib/composerStyles';
@@ -460,15 +461,12 @@ export function ChatThreadPanel({
                   <span className="truncate text-2xs text-muted-foreground" role="status">{uploadStatus}</span>
                 )}
               </div>
-              <Button
-                type="button"
-                size="icon-sm"
+              <ComposerSendButton
                 onClick={handleSend}
                 disabled={(!m.input.trim() && m.mentionedAgents.length === 0 && linkedFiles.length === 0) || streaming}
-                aria-label="Send reply"
-              >
-                {streaming ? <Spinner /> : <Send />}
-              </Button>
+                busy={streaming}
+                label="Send reply"
+              />
             </InputGroupAddon>
           </InputGroup>
           {onUploadFiles && (

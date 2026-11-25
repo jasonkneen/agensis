@@ -35,8 +35,11 @@
  */
 export const COMPOSER_TEXTAREA_CLASS = 'field-sizing-fixed flex-none max-h-28 min-h-12 px-3 py-2 text-sm leading-relaxed';
 
-/** The control row beneath the textarea (model selector, send, attachments). */
-export const COMPOSER_ADDON_CLASS = 'min-h-10 justify-between gap-2 border-t px-2 py-1.5';
+/**
+ * The control row beneath the textarea (add, agent chip, send). No rule above
+ * it: the text and its controls are one surface, not two stacked boxes.
+ */
+export const COMPOSER_ADDON_CLASS = 'min-h-10 justify-between gap-2 px-2 pt-0.5 pb-1.5';
 
 /**
  * The bar the composer sits in, at the bottom of a channel / thread / sub-thread
