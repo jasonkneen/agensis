@@ -45,6 +45,10 @@ const MUST_BE_LINTED = [
   // the privilege-strip path is a cross-tenant leak, not a style problem.
   'shared/marketplace.cjs',
   'server/marketplace-routes.cjs',
+  // The ONLY path from a workspace to the open internet, and the routes that
+  // serve it without sign-in. A shadowed variable in the projection is a leak.
+  'shared/public-workspace.cjs',
+  'server/public-workspace-routes.cjs',
   'shared/channelIntent.cjs',
   'shared/backend-core.cjs',
   // Owns the workspace-hierarchy rules the authorization path depends on:

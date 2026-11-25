@@ -173,6 +173,8 @@ const { runDmScopeBackfill } = require('./dm-scope-backfill.cjs');
 const { mountLinkPreviewsRoutes } = require('./link-previews-routes.cjs');
 const { mountAgentsRoutes } = require('./agents-routes.cjs');
 const { mountJoinPagesRoutes } = require('./join-pages-routes.cjs');
+const { mountPublicWorkspaceRoutes, createPublicStreamHub } = require('./public-workspace-routes.cjs');
+const { createPublicWorkspaceReader } = require('../shared/public-workspace.cjs');
 const { mountTtsRoutes } = require('./tts-routes.cjs');
 const { mountMcpDoorsRoutes } = require('./mcp-doors-routes.cjs');
 const { mountMcpOauthRoutes } = require('./mcp-oauth-routes.cjs');
@@ -3454,6 +3456,39 @@ ALTER TABLE resource_operations ADD CONSTRAINT resource_operations_requested_by_
  } catch (error) {
   console.warn('[backend] usage metering schema migration failed:', error.message || error);
  }
+
+ // --------------------------------------------------------------------------
+ // Public workspaces (docs/agensis-public-contract in the expo repo; AGENTS.md
+ // "Public workspaces"). `visibility` defaults to 'private', so every existing
+ // workspace stays private. `workspace_public_policy` holds one row per event
+ // type the owner has chosen to publish; a type with no row never leaves.
+ //
+ // NOT in ALLOWED_TABLES: the manage-gated routes in
+ // server/public-workspace-routes.cjs are the only writers, because a generic
+ // insert could not write the audit row. `workspaces.visibility` is a
+ // PRIVILEGED column for the same reason.
+ try {
+  await getDb().unsafe(`
+    ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS visibility text NOT NULL DEFAULT 'private';
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspaces_visibility_check' AND conrelid = 'workspaces'::regclass) THEN
+        ALTER TABLE workspaces ADD CONSTRAINT workspaces_visibility_check CHECK (visibility IN ('private', 'public'));
+      END IF;
+    END $$;
+    CREATE TABLE IF NOT EXISTS workspace_public_policy (
+      workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      event_type text NOT NULL,
+      level text NOT NULL DEFAULT 'private' CHECK (level IN ('public', 'members', 'private')),
+      detail text NOT NULL DEFAULT 'category' CHECK (detail IN ('category', 'title', 'full')),
+      updated_by uuid,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (workspace_id, event_type)
+    );
+  `);
+ } catch (error) {
+  console.warn('[backend] public workspace schema migration failed:', error.message || error);
+ }
 }
 
 function getDb() {
@@ -3824,6 +3859,10 @@ const skillRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 //     unlimited attempts would not find one, but the limiter is what keeps a
 //     brute-force attempt from being free load on the database.
 const joinLinkRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// Public workspace reads (/backend/public/*). Unauthenticated, so keyed per IP.
+// A viewer polling every few seconds uses a fraction of this; it exists to stop
+// a scrape, the same budget as the public join page.
+const publicWorkspaceRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 const joinRedeemRateLimiter = createRateLimiter({ windowMs: 60_000, max: 10 });
 // The audit log read. Manage-gated already, so this is not an authorization
 // control — it bounds how fast an admin (or a stolen admin session) can page the
@@ -3887,6 +3926,10 @@ const linkPreviewImageRateLimiter = createRateLimiter({ windowMs: 60_000, max: 1
 // burst protection), then the DB check (cross-instance quota). DB errors fail
 // open (see createDbRateLimiter), so the in-memory layer is always a floor.
 const dbQuery = (sql, params) => getDb().unsafe(sql, params);
+const publicWorkspaceDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 120, db: dbQuery, namespace: 'public-workspace' });
+// One poller per public workspace with live viewers (see the routes file).
+// Module scope so resetTestState can stop its timers between tests.
+const publicStreamHub = createPublicStreamHub({ reader: createPublicWorkspaceReader({ db: dbQuery }) });
 const aiChatDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: dbQuery, namespace: 'ai-chat' });
 const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: dbQuery, namespace: 'dispatch' });
 // Feedback: any signed-in user may submit, so this is the only thing standing
@@ -10915,6 +10958,13 @@ mountAgentQueueRoutes(app, {
   setJoinJsonHeaders, setJoinPageHeaders, uniqueAgentHandle, verifyToken,
  });
 
+ // Public workspaces: the no-sign-in reads, the SSE stream, and the owner's
+ // manage-gated, audited visibility/policy controls.
+ mountPublicWorkspaceRoutes(app, {
+  ...coreDeps(),
+  publicWorkspaceRateLimiter, publicWorkspaceDbRateLimiter, publicStreamHub,
+ });
+
  mountJoinLinksRoutes(app, { ...coreDeps(), createJoinLinkToken, hashAgentToken, joinLinkTtlMs, joinPublicBaseUrl, joinUrlFor, logJoinLinkActivity });
  mountControllerRoutes(app, { ...coreDeps() });
  mountWorkspaceResourceRoutes(app, {
@@ -11985,6 +12035,8 @@ function resetTestState() {
  pendingChatTurns.clear();
  ambientElectionBudget.reset();
  workspaceIdBySessionCache.clear();
+ publicWorkspaceRateLimiter.reset();
+ publicStreamHub.reset();
 }
 
 
@@ -12011,6 +12063,8 @@ module.exports = {
   // of the thing under test.
   joinLinkRateLimiter,
   joinRedeemRateLimiter,
+  publicWorkspaceRateLimiter,
+  publicStreamHub,
   isJoinLinkToken,
   createJoinLinkToken,
   joinLinkTtlMs,

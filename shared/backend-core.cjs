@@ -618,6 +618,11 @@ const PRIVILEGED_DB_COLUMNS_BY_TABLE = {
   // The System workspace is a server-resolved destination for feedback. A
   // generic workspace edit must never be able to create or retag that anchor.
   'is_system',
+  // Publishing a workspace to the internet is an owner decision with an audit
+  // row (workspace.visibility_changed). The dedicated route in
+  // server/public-workspace-routes.cjs is the only door; a generic update
+  // that names this column still succeeds, it just cannot set it.
+  'visibility',
  ]),
  // The three columns the dedicated gateway routes exist to VALIDATE or PROTECT.
  // Allowlisting gateway_configs opens /backend/db/insert|update on it, and those
@@ -3398,6 +3403,11 @@ const AUDIT_ACTIONS = Object.freeze(new Set([
  // (no row) so "I had to nudge this" is auditable; detail.kind carries which
  // queue was forced ('tasks' | 'chat' | 'all').
  'agent.queue_force_drained',
+ // Public workspaces. Making a workspace public, and choosing which event types
+ // leave it and at what detail, are the decisions that put workspace activity
+ // on the open internet. Both are manage-gated and recorded.
+ 'workspace.visibility_changed',
+ 'workspace.public_policy_changed',
 ]));
 
 /** What an unrecognised action records as, rather than throwing in production. */

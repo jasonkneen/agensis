@@ -2568,3 +2568,25 @@ ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS attempts integer NOT 
 ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS failed_at timestamptz;
 ALTER TABLE pending_cadence_wakes ADD COLUMN IF NOT EXISTS last_error text;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_jobs_dispatch_wake ON agent_jobs ((metadata->>'dispatchWakeId')) WHERE metadata->>'dispatchWakeId' IS NOT NULL;
+
+-- Public workspaces. `visibility` defaults to 'private', so every existing
+-- workspace stays private. A policy row per event type decides what the public
+-- read routes may project; a type with no row never leaves the workspace.
+-- Written only by the manage-gated routes in server/public-workspace-routes.cjs
+-- (audited); deliberately absent from the generic /backend/db allowlists.
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS visibility text NOT NULL DEFAULT 'private';
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'workspaces_visibility_check' AND conrelid = 'workspaces'::regclass) THEN
+    ALTER TABLE workspaces ADD CONSTRAINT workspaces_visibility_check CHECK (visibility IN ('private', 'public'));
+  END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS workspace_public_policy (
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  event_type text NOT NULL,
+  level text NOT NULL DEFAULT 'private' CHECK (level IN ('public', 'members', 'private')),
+  detail text NOT NULL DEFAULT 'category' CHECK (detail IN ('category', 'title', 'full')),
+  updated_by uuid,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (workspace_id, event_type)
+);
