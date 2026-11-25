@@ -299,6 +299,14 @@ test('findAdoptable keeps a live, fresh, matching daemon', () => {
   assert.equal(supervisor.findAdoptable(dir, wanted, now, () => true)?.pid, process.pid);
 });
 
+// The daemon beats every few hundred ms and `now` is taken before the `ps`
+// check, so a fresh beat can be slightly NEWER than `now`. Rejecting it retired
+// healthy daemons (and failed the end-to-end adoption test ~3 runs in 10).
+test('findAdoptable keeps a daemon whose heartbeat landed just after `now`', () => {
+  const { dir, wanted, now } = adoptFixture({ beatAgeMs: -400 });
+  assert.equal(supervisor.findAdoptable(dir, wanted, now, () => true)?.pid, process.pid);
+});
+
 test('findAdoptable refuses anything doubtful', () => {
   const cases = {
     'a stale heartbeat': adoptFixture({ beatAgeMs: 5 * 60_000 }),

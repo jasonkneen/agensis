@@ -109,6 +109,7 @@ const SIDECAR_FILE = 'desktop-session.json';
 const LOG_FILE = 'desktop-daemon.log';
 const HEARTBEAT_FILE = 'heartbeat.json';
 const ADOPT_MAX_HEARTBEAT_AGE_MS = 90_000;
+const ADOPT_CLOCK_SLACK_MS = 10_000;
 const LOG_POLL_MS = 1000;
 const EXIT_POLL_MS = 2000;
 
@@ -216,7 +217,11 @@ function findAdoptable(dir, wanted, now = Date.now(), isDaemon = isAgensisDaemon
   const beat = readHeartbeat(path.join(dir, HEARTBEAT_FILE));
   if (!beat || Number(beat.pid) !== Number(sidecar.pid)) return null;
   const age = now - Number(beat.ts || 0);
-  if (!(age >= 0 && age <= ADOPT_MAX_HEARTBEAT_AGE_MS)) return null;
+  // `now` is taken before the `ps` check above, which can take a while on a busy
+  // Mac; a live daemon beats every few hundred ms, so its heartbeat is often
+  // NEWER than `now`. That read as a heartbeat "from the future" and a healthy
+  // daemon was retired and respawned. Same clock, so allow a little slack.
+  if (!(age >= -ADOPT_CLOCK_SLACK_MS && age <= ADOPT_MAX_HEARTBEAT_AGE_MS)) return null;
   if (String(beat.status || '') === 'stopped') return null;
   return sidecar;
 }
