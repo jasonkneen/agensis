@@ -172,6 +172,23 @@ function readJson(file) {
   }
 }
 
+/**
+ * The daemon rewrites its heartbeat in place every few hundred ms, and a plain
+ * writeFile truncates before it writes. A read that lands in that gap sees an
+ * empty file, which used to make a live, healthy daemon look unadoptable — so
+ * the next start spawned a second one. Re-read a few times, a few ms apart,
+ * before deciding there is no heartbeat. Bounded at ~60ms of blocking.
+ */
+function readHeartbeat(file, attempts = 4) {
+  for (let i = 0; i < attempts; i += 1) {
+    const beat = readJson(file);
+    if (beat) return beat;
+    if (!fs.existsSync(file)) return null;
+    if (i < attempts - 1) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+  return null;
+}
+
 function writeSidecar(dir, data) {
   try {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -196,7 +213,7 @@ function findAdoptable(dir, wanted, now = Date.now(), isDaemon = isAgensisDaemon
   for (const key of ['baseUrl', 'runtime', 'model', 'permissionMode', 'cwd', 'tokenHash', 'workspaceId']) {
     if (String(sidecar[key] ?? '') !== String(wanted[key] ?? '')) return null;
   }
-  const beat = readJson(path.join(dir, HEARTBEAT_FILE));
+  const beat = readHeartbeat(path.join(dir, HEARTBEAT_FILE));
   if (!beat || Number(beat.pid) !== Number(sidecar.pid)) return null;
   const age = now - Number(beat.ts || 0);
   if (!(age >= 0 && age <= ADOPT_MAX_HEARTBEAT_AGE_MS)) return null;
