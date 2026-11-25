@@ -150,6 +150,11 @@ test('detectLocalAgentCapabilities reports available clis by path probe', async 
       pathEnv: '',
       skipLoginShell: true,
       workspacePath: home,
+      // This test is about finding binaries on disk, not about the probe
+      // deadline. Five stub `--version` spawns took past the 15s default on a
+      // machine at load ~200 and every CLI came back unavailable, so give the
+      // spawns room; the deadline itself is not under test here.
+      probeBudgetMs: 120_000,
       cliDefinitions: [
         { id: 'claude', label: 'Claude Code', commands: ['claude'], adapter_commands: ['claude-agent-acp'] },
         { id: 'codex', label: 'Codex', commands: ['codex'], adapter_commands: ['codex-acp'] },
