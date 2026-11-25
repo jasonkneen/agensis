@@ -1,7 +1,8 @@
 import { NewChannelDialog } from './components/chat/NewChannelDialog';
 import { DEFAULT_BACKGROUND_OPACITY } from './lib/wallpaperDefaults';
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
-import { Globe, SquareTerminal, MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Database, Library, Trash2, Settings, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2, Zap } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Globe, SquareTerminal, MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Database, Library, Trash2, Settings, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2, Zap, X } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
 import { WorkspaceRail } from './components/layout/WorkspaceRail';
@@ -4508,6 +4509,25 @@ function WorkspaceDesktopOverlay({
   baseLayerId: string;
 }) {
   const [renamingDesktopId, setRenamingDesktopId] = useState<string | null>(null);
+  // Two ways out besides the Close button. Escape — unless a desktop name is
+  // being edited, where Escape belongs to the rename. And using the sidebar or
+  // the workspace rail: those open windows and switch places, and with this
+  // screen left on top everything they did happened invisibly behind it.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || renamingDesktopId) return;
+      onClose();
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest('[data-sidebar-panel], [data-workspace-rail]')) onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('pointerdown', onPointerDown, true);
+    };
+  }, [onClose, renamingDesktopId]);
   const model = useMemo(
     () => buildDesktopOverlay({
       workspaces,
@@ -4553,10 +4573,18 @@ function WorkspaceDesktopOverlay({
     </button>
   );
 
-  return (
+  // Portalled and fixed to the whole area right of the sidebar, not the canvas
+  // viewport: the viewport sits inside an 8px chrome gap, so the blur stopped
+  // short and left strips of sharp wallpaper on three sides.
+  return createPortal(
     <div
       onClick={onClose}
-      className="absolute inset-0 z-[120] flex items-center justify-center overflow-hidden p-8"
+      role="dialog"
+      aria-modal="false"
+      aria-label="Workspaces and desktops"
+      data-desktop-overlay
+      className="fixed top-0 right-0 bottom-0 z-[120] flex items-center justify-center overflow-hidden p-8"
+      style={{ left: `calc(var(--workspace-viewport-left, ${WORKSPACE_CHROME_GAP}px) - ${WORKSPACE_CHROME_GAP}px)` }}
     >
       <img src={backgroundImage} alt="" className="pointer-events-none absolute inset-0 size-full object-cover opacity-20" />
       <div className="pointer-events-none absolute inset-0 bg-[var(--home-bg-overlay)]" />
@@ -4578,6 +4606,9 @@ function WorkspaceDesktopOverlay({
             <Button type="button" onClick={onCreateLayer} disabled={model.desktopTier === 'pending'}>
               <Layers3 data-icon="inline-start" className="size-4" />
               New desktop
+            </Button>
+            <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close" title="Close (Esc)">
+              <X className="size-5" />
             </Button>
           </div>
         </header>
@@ -4725,6 +4756,7 @@ function WorkspaceDesktopOverlay({
           )}
         </section>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
