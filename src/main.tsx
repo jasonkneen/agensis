@@ -20,12 +20,18 @@ const Showcase = import.meta.env.DEV
   ? lazy(() => import('./showcase/Showcase.tsx').then(m => ({ default: m.Showcase })))
   : () => null;
 const isShowcase = import.meta.env.DEV && typeof window !== 'undefined' && window.location.hash.replace('#', '') === 'showcase';
+// /#screens renders real window contents from the smoke fixtures — see
+// sr./showcase/screens/ScreenGallery.tsx. Same DEV gate as the showcase.
+const ScreenGallery = import.meta.env.DEV
+  ? lazy(() => import('./showcase/screens/ScreenGallery.tsx').then(m => ({ default: m.ScreenGallery })))
+  : () => null;
+const isScreens = import.meta.env.DEV && typeof window !== 'undefined' && window.location.hash.replace('#', '').split('/')[0] === 'screens';
 const isFarmIntegrationApproval = typeof window !== 'undefined' && window.location.pathname.replace(/\/+$/, '') === '/integrations/farm';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
-      {isShowcase ? <Suspense fallback={null}><Showcase /></Suspense> : isFarmIntegrationApproval ? <FarmIntegrationApproval /> : <App />}
+      {isShowcase ? <Suspense fallback={null}><Showcase /></Suspense> : isScreens ? <Suspense fallback={null}><ScreenGallery /></Suspense> : isFarmIntegrationApproval ? <FarmIntegrationApproval /> : <App />}
     </ErrorBoundary>
   </StrictMode>
 );
