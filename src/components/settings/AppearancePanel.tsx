@@ -17,6 +17,7 @@ import type { ThemeMode } from '../../hooks/useTheme';
 import type { Workspace } from '../../types';
 import { applyUiAppearanceSettings, getSettings, setSetting, type AppSettings, type UiFontFamily } from '../../lib/settings';
 import { THEME_PRESETS, applyThemePreset } from '../../showcase/themePresets';
+import { EXPO_ACCENTS, EXPO_BASES, getExpoAccent, getExpoBase, setExpoAccent, setExpoBase, type ExpoAccent, type ExpoBase } from '@/lib/theme/expoColors';
 import { THEME_CONTRASTS, THEME_DEPTHS, THEME_PALETTES, buildThemeTokens, type ThemeContrast, type ThemeDepth } from '@/lib/theme/engine';
 import {
   currentSeed,
@@ -71,6 +72,8 @@ export function AppearancePanel({
   const [themePreset, setThemePreset] = useState(initialSettings.ui_theme_preset);
   const [radiusScale, setRadiusScale] = useState(() => radiusScaleFrom(initialSettings.ui_default_radius));
   const [palette, setPalette] = useState(() => getStoredPalette());
+  const [expoAccent, setExpoAccentState] = useState<ExpoAccent>(() => getExpoAccent());
+  const [expoBase, setExpoBaseState] = useState<ExpoBase>(() => getExpoBase());
   const [contrast, setContrast] = useState<ThemeContrast>(() => getStoredContrast());
   const [depth, setDepth] = useState<ThemeDepth>(() => getStoredDepth());
   const [normalTheme, setNormalTheme] = useState(() => getStoredNormalTheme());
@@ -350,7 +353,38 @@ export function AppearancePanel({
               <ToggleGroupItem value="light">Light</ToggleGroupItem>
               <ToggleGroupItem value="dark">Dark</ToggleGroupItem>
             </ToggleGroup>
-            <FieldDescription>Navy, cream and coral, with tactile controls.</FieldDescription>
+            <FieldDescription>Cream and paper, a base colour and an accent, with tactile controls.</FieldDescription>
+
+            {/* Two choices re-tint the whole family: expo.css mixes every
+                other shade from them (src/lib/theme/expoColors.ts). */}
+            {([
+              ['Base', 'The dark stage, and the text colour in light.', EXPO_BASES, expoBase, (id: string) => { setExpoBaseState(id as ExpoBase); setExpoBase(id as ExpoBase); }],
+              ['Accent', 'Primary buttons and every selected state.', EXPO_ACCENTS, expoAccent, (id: string) => { setExpoAccentState(id as ExpoAccent); setExpoAccent(id as ExpoAccent); }],
+            ] as const).map(([title, hint, options, current, choose]) => (
+              <div key={title} className="space-y-2">
+                <div className="ui-section-label">{title}</div>
+                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={`Expo ${title.toLowerCase()} colour`}>
+                  {options.map(option => {
+                    const active = current === option.id;
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        aria-label={option.label}
+                        title={option.label}
+                        data-selection-control="true"
+                        onClick={() => choose(option.id)}
+                        className={`size-8 rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? 'ring-2 ring-foreground ring-offset-2 ring-offset-background' : 'hover:scale-110'}`}
+                        style={{ background: option.swatch, boxShadow: 'inset 0 1.5px 0 rgba(255,255,255,0.35), inset 0 0 0 1px rgba(0,0,0,0.15)' }}
+                      />
+                    );
+                  })}
+                </div>
+                <FieldDescription>{hint}</FieldDescription>
+              </div>
+            ))}
           </div>
         )}
 

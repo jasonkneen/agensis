@@ -13,9 +13,9 @@
 
 :root[data-ui-theme="expo"] {
  --expo-navy: #2b2d48;
- --expo-navy-2: #4a4c6e;
+ --expo-navy-2: color-mix(in oklab, var(--expo-navy), white 18%);
  --expo-coral: #e8735f;
- --expo-coral-deep: #b8412b;
+ --expo-coral-deep: color-mix(in oklab, var(--expo-coral), black 30%);
  --expo-mustard: #f2c94c;
  --expo-mint: #7fc8a9;
  --expo-sky: #8fb7f0;
@@ -51,7 +51,7 @@
  --ink-muted: #7d7e95;
  --ink-inverse: var(--expo-paper);
  --accent: var(--expo-coral);
- --accent-hover: #d95f4b;
+ --accent-hover: color-mix(in oklab, var(--expo-coral), black 10%);
  --accent-subtle: color-mix(in srgb, var(--expo-coral) 14%, transparent);
  --accent-border: color-mix(in srgb, var(--expo-coral) 40%, transparent);
  --success: #2f8a63;
@@ -97,23 +97,23 @@
 /* ---- Dark: raglan's navy stage, cream ink -------------------------------- */
 :root[data-ui-theme="expo"][data-theme="dark"] {
  --expo-edge: rgba(255, 255, 255, 0.09);
- --expo-lip: #1d1e33;
+ --expo-lip: color-mix(in oklab, var(--expo-navy), black 30%);
  --expo-drop: 0 14px 22px -10px rgba(8, 8, 20, 0.6);
- --expo-pill: linear-gradient(180deg, #4a4c6e, #3a3c5a);
+ --expo-pill: linear-gradient(180deg, color-mix(in oklab, var(--expo-navy), white 18%), color-mix(in oklab, var(--expo-navy), white 9%));
 
  --canvas-base: var(--expo-navy);
- --canvas-elevated: #33355a;
- --canvas-raised: #3b3d62;
- --canvas-overlay: #3a3c61;
- --border: #45476b;
- --border-subtle: #3a3c5f;
- --border-strong: #55577c;
+ --canvas-elevated: color-mix(in oklab, var(--expo-navy), white 7%);
+ --canvas-raised: color-mix(in oklab, var(--expo-navy), white 10%);
+ --canvas-overlay: color-mix(in oklab, var(--expo-navy), white 10%);
+ --border: color-mix(in oklab, var(--expo-navy), white 15%);
+ --border-subtle: color-mix(in oklab, var(--expo-navy), white 9%);
+ --border-strong: color-mix(in oklab, var(--expo-navy), white 22%);
  --ink: var(--expo-cream);
  --ink-secondary: #c9c8dc;
  --ink-muted: #9796b3;
  --ink-inverse: var(--expo-navy);
  --accent: var(--expo-coral);
- --accent-hover: #ff8f79;
+ --accent-hover: color-mix(in oklab, var(--expo-coral), white 20%);
  --accent-subtle: color-mix(in srgb, var(--expo-coral) 18%, transparent);
  --accent-border: color-mix(in srgb, var(--expo-coral) 45%, transparent);
  --success: var(--expo-mint);
@@ -122,29 +122,29 @@
 
  --background: var(--expo-navy);
  --foreground: var(--expo-cream);
- --card: #33355a;
+ --card: color-mix(in oklab, var(--expo-navy), white 7%);
  --card-foreground: var(--expo-cream);
- --popover: #3a3c61;
+ --popover: color-mix(in oklab, var(--expo-navy), white 10%);
  --popover-foreground: var(--expo-cream);
  --primary: var(--expo-coral);
  --primary-foreground: #fffaf0;
- --secondary: #3b3d62;
+ --secondary: color-mix(in oklab, var(--expo-navy), white 10%);
  --secondary-foreground: var(--expo-cream);
- --muted: #3b3d62;
+ --muted: color-mix(in oklab, var(--expo-navy), white 10%);
  --muted-foreground: #c9c8dc;
- --sh-accent: #404268;
+ --sh-accent: color-mix(in oklab, var(--expo-navy), white 13%);
  --sh-accent-foreground: var(--expo-cream);
- --sh-border: #45476b;
- --input: #4a4c6e;
+ --sh-border: color-mix(in oklab, var(--expo-navy), white 15%);
+ --input: color-mix(in oklab, var(--expo-navy), white 18%);
  --ring: var(--expo-coral);
  --destructive: #ff8f79;
- --sidebar: #25273f;
+ --sidebar: color-mix(in oklab, var(--expo-navy), black 14%);
  --sidebar-foreground: var(--expo-cream);
  --sidebar-primary: var(--expo-coral);
  --sidebar-primary-foreground: #fffaf0;
- --sidebar-accent: #33355a;
+ --sidebar-accent: color-mix(in oklab, var(--expo-navy), white 7%);
  --sidebar-accent-foreground: var(--expo-cream);
- --sidebar-border: #3a3c5f;
+ --sidebar-border: color-mix(in oklab, var(--expo-navy), white 9%);
  --sidebar-ring: var(--expo-coral);
 
  --shadow-sm: 0 2px 0 var(--expo-lip);
@@ -152,7 +152,7 @@
  --shadow-lg: 0 4px 0 var(--expo-lip), 0 18px 30px -12px rgba(8, 8, 20, 0.6);
  --shadow-xl: 0 5px 0 var(--expo-lip), 0 24px 38px -14px rgba(8, 8, 20, 0.66);
  --shadow-window: 0 5px 0 var(--expo-lip), 0 22px 34px -14px rgba(8, 8, 20, 0.6);
- --chrome-cast: 1px 0 0 #1d1e33;
+ --chrome-cast: 1px 0 0 color-mix(in oklab, var(--expo-navy), black 30%);
  color-scheme: dark;
 }
 
@@ -201,10 +201,10 @@
 
 /* Primary: coral, deep-coral lip. */
 :root[data-ui-theme="expo"] [data-slot="button"][data-variant="default"] {
- background: linear-gradient(180deg, #ff8f79, var(--expo-coral)) !important;
+ background: linear-gradient(180deg, color-mix(in oklab, var(--expo-coral), white 20%), var(--expo-coral)) !important;
  color: #fffaf0 !important;
  border-color: transparent !important;
- box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px #f5a493, 0 3px 0 var(--expo-coral-deep), 0 8px 12px -8px rgba(20, 20, 40, 0.45) !important;
+ box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-coral), white 35%), 0 3px 0 var(--expo-coral-deep), 0 8px 12px -8px rgba(20, 20, 40, 0.45) !important;
 }
 
 /* Secondary / outline controls and choice triggers: the cream (or navy) pill. */
@@ -226,9 +226,9 @@
 
 /* The selected choice in a group is the coral pill. */
 :root[data-ui-theme="expo"] [data-slot="toggle-group-item"][data-state="on"] {
- background: linear-gradient(180deg, #ff8f79, var(--expo-coral)) !important;
+ background: linear-gradient(180deg, color-mix(in oklab, var(--expo-coral), white 20%), var(--expo-coral)) !important;
  color: #fffaf0 !important;
- box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px #f5a493, 0 3px 0 var(--expo-coral-deep) !important;
+ box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-coral), white 35%), 0 3px 0 var(--expo-coral-deep) !important;
 }
 
 /* Pressed: the pill sinks onto its lip. */
@@ -238,7 +238,7 @@
  transform: translateY(2px);
 }
 :root[data-ui-theme="expo"] [data-slot="button"][data-variant="default"]:not(:disabled):active {
- box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px #f5a493, 0 1px 0 var(--expo-coral-deep) !important;
+ box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-coral), white 35%), 0 1px 0 var(--expo-coral-deep) !important;
 }
 :root[data-ui-theme="expo"] [data-slot="button"][data-variant="outline"]:not(:disabled):active,
 :root[data-ui-theme="expo"] [data-slot="button"][data-variant="secondary"]:not(:disabled):active {
@@ -264,7 +264,7 @@
 :root[data-ui-theme="expo"][data-theme="dark"] [data-slot="textarea"],
 :root[data-ui-theme="expo"][data-theme="dark"] [data-slot="input-group"],
 :root[data-ui-theme="expo"][data-theme="dark"] [data-slot="native-select"] {
- background: #26283f !important;
+ background: color-mix(in oklab, var(--expo-navy), black 12%) !important;
  box-shadow: inset 0 2px 3px rgba(0, 0, 0, 0.35), inset 0 0 0 1.5px var(--expo-edge) !important;
 }
 
@@ -291,7 +291,7 @@
 /* The rail and the sidebar are ONE darker surface: same colour, no border
    between them or along the sidebar's edge. */
 :root[data-ui-theme="expo"][data-theme="light"] { --expo-chrome: #e6d8ba; }
-:root[data-ui-theme="expo"][data-theme="dark"] { --expo-chrome: #212338; }
+:root[data-ui-theme="expo"][data-theme="dark"] { --expo-chrome: color-mix(in oklab, var(--expo-navy), black 22%); }
 :root[data-ui-theme="expo"] [data-workspace-rail],
 :root[data-ui-theme="expo"] [data-sidebar-panel] {
  background: var(--expo-chrome) !important;
@@ -356,7 +356,7 @@
  box-shadow: inset 0 2px 3px rgba(43, 45, 72, 0.14), inset 0 0 0 1.5px var(--expo-edge) !important;
 }
 :root[data-ui-theme="expo"][data-theme="dark"] .sidebar-search {
- background: #2a2c46 !important;
+ background: color-mix(in oklab, var(--expo-navy), white 2%) !important;
  box-shadow: inset 0 2px 3px rgba(0, 0, 0, 0.35), inset 0 0 0 1.5px var(--expo-edge) !important;
 }
 
@@ -376,11 +376,11 @@
 :root[data-ui-theme="expo"] button[aria-pressed="true"][class*="rounded-full"]:not([data-slot="button"]),
 :root[data-ui-theme="expo"] [data-slot="tabs-trigger"][data-state="active"],
 :root[data-ui-theme="expo"] [role="tab"][aria-selected="true"] {
- background: linear-gradient(180deg, #ff8f79, var(--expo-coral)) !important;
+ background: linear-gradient(180deg, color-mix(in oklab, var(--expo-coral), white 20%), var(--expo-coral)) !important;
  color: #fffaf0 !important;
  border-color: transparent !important;
  border-radius: 999px !important;
- box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px #f5a493, 0 2px 0 var(--expo-coral-deep) !important;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-coral), white 35%), 0 2px 0 var(--expo-coral-deep) !important;
 }
 :root[data-ui-theme="expo"] [role="group"] > button[aria-pressed="true"]:not([data-slot="button"]) *,
 :root[data-ui-theme="expo"] button[aria-pressed="true"][class*="rounded-full"]:not([data-slot="button"]) * {
@@ -419,7 +419,7 @@
 }
 :root[data-ui-theme="expo"][data-theme="dark"] .sidebar-action-row[data-active="true"],
 :root[data-ui-theme="expo"][data-theme="dark"] .sidebar-item-row[data-active="true"] {
- background: #34365a !important;
+ background: color-mix(in oklab, var(--expo-navy), white 8%) !important;
  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 4px 10px -4px rgba(0, 0, 0, 0.6) !important;
 }
 :root[data-ui-theme="expo"] .sidebar-action-row[data-active="true"] svg,
@@ -440,9 +440,54 @@
  font-weight: 700;
 }
 :root[data-ui-theme="expo"][data-theme="dark"] [data-slot="avatar-fallback"] {
- background: #4b4e80 !important;
+ background: color-mix(in oklab, var(--expo-navy), white 18%) !important;
  color: #fbf4e4 !important;
 }
 :root[data-ui-theme="expo"] [data-slot="avatar"] {
  box-shadow: 0 0 0 2px var(--card), 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+/* ==========================================================================
+   Colour choices. Expo is two colours: the BASE (raglan's navy — the dark
+   stage, and the ink in light) and the ACCENT (coral — primary buttons and
+   every selected state). Every shade above is mixed from these two, so a
+   choice here re-tints the whole family. Set by src/lib/theme/expoColors.ts.
+   ========================================================================== */
+:root[data-ui-theme="expo"][data-expo-accent="tangerine"] { --expo-coral: #e9853a; }
+:root[data-ui-theme="expo"][data-expo-accent="rose"] { --expo-coral: #dd5f7f; }
+:root[data-ui-theme="expo"][data-expo-accent="violet"] { --expo-coral: #8a6fe0; }
+:root[data-ui-theme="expo"][data-expo-accent="sky"] { --expo-coral: #4c8ce0; }
+:root[data-ui-theme="expo"][data-expo-accent="teal"] { --expo-coral: #2c9f96; }
+:root[data-ui-theme="expo"][data-expo-accent="green"] { --expo-coral: #4ea468; }
+
+:root[data-ui-theme="expo"][data-expo-base="plum"] { --expo-navy: #3a2a47; }
+:root[data-ui-theme="expo"][data-expo-base="forest"] { --expo-navy: #20382f; }
+:root[data-ui-theme="expo"][data-expo-base="slate"] { --expo-navy: #29333f; }
+:root[data-ui-theme="expo"][data-expo-base="espresso"] { --expo-navy: #382c26; }
+:root[data-ui-theme="expo"][data-expo-base="charcoal"] { --expo-navy: #222327; }
+
+/* The window dock: an opaque tray on a lip like every other Expo surface,
+   with a defined edge, instead of a smoky glass strip over the wallpaper. */
+:root[data-ui-theme="expo"] .workspace-window-dock {
+ background: var(--card) !important;
+ backdrop-filter: none !important;
+ -webkit-backdrop-filter: none !important;
+ border-color: transparent !important;
+ border-radius: 20px !important;
+ box-shadow:
+  inset 0 1.5px 0 rgba(255, 255, 255, 0.5),
+  inset 0 0 0 1.5px var(--expo-edge),
+  0 4px 0 var(--expo-lip),
+  0 16px 28px -12px rgba(20, 20, 40, 0.5) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] .workspace-window-dock {
+ box-shadow:
+  inset 0 1.5px 0 rgba(255, 255, 255, 0.1),
+  inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 22%),
+  0 4px 0 var(--expo-lip),
+  0 18px 30px -12px rgba(0, 0, 0, 0.7) !important;
+}
+:root[data-ui-theme="expo"] .workspace-window-dock .dock-window-group {
+ border-color: transparent !important;
+ background: color-mix(in srgb, var(--foreground) 7%, transparent) !important;
 }
