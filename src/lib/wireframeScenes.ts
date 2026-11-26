@@ -465,7 +465,7 @@ const streamingChannel: WireframeScene = {
   ],
 };
 
-/** One window re-tinting as palette swatches are picked — the theme engine. */
+/** One window re-tinting as Expo colour swatches are picked. */
 const themeEngine: WireframeScene = {
   id: 'theme-engine',
   alt: 'A row of palette swatches appears; picking one re-tints the whole window, its lines and its text together.',
@@ -506,9 +506,9 @@ export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
  */
 export const GALLERY_SLIDES: GallerySlide[] = [
   {
-    note: 'one-theme-engine',
-    title: 'One theme, your palette',
-    body: 'Pick a palette, a colour, contrast and depth; every surface, line and text shade follows, in light and dark, and stays readable.',
+    note: 'one-style-expo',
+    title: 'One look, your colours',
+    body: 'agensis is Expo everywhere. Pick a preset or your own base, accent and surface, plus a font; every surface follows, in light and dark, and text stays readable.',
     scene: themeEngine,
   },
   {

@@ -11,6 +11,9 @@
    glass, and a blurred backdrop under a lipped control reads as smudge.
    ========================================================================== */
 
+/* The page behind the app takes the active palette, not a hard-coded colour. */
+html[data-ui-theme="expo"] { background-color: var(--background); }
+
 :root[data-ui-theme="expo"] {
  --expo-navy: #2b2d48;
  --expo-navy-2: color-mix(in oklab, var(--expo-navy), white 18%);
@@ -21,6 +24,13 @@
  --expo-sky: #8fb7f0;
  --expo-cream: #fbf4e4;
  --expo-paper: #fffaf0;
+ /* Defaults until lib/theme/expoColors.ts writes the chosen palette. */
+ --expo-tone: #c9a676;
+ --expo-on-accent: #fffaf0;
+ --expo-ink-2-light: #545670;
+ --expo-ink-3-light: #7d7e95;
+ --expo-ink-2-dark: #c9c8dc;
+ --expo-ink-3-dark: #9796b3;
  --expo-ease: cubic-bezier(0.32, 0.72, 0, 1);
  --expo-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
@@ -34,21 +44,21 @@
 
 /* ---- Light: cream page, paper cards, navy ink --------------------------- */
 :root[data-ui-theme="expo"][data-theme="light"] {
- --expo-edge: #e2c99e;
- --expo-lip: #c9a676;
+ --expo-edge: color-mix(in oklab, var(--expo-tone) 45%, var(--expo-cream));
+ --expo-lip: var(--expo-tone);
  --expo-drop: 0 10px 14px -8px rgba(20, 20, 40, 0.28);
- --expo-pill: linear-gradient(180deg, #fff9ee, #f3e2c4);
+ --expo-pill: linear-gradient(180deg, var(--expo-paper), color-mix(in oklab, var(--expo-tone) 24%, var(--expo-cream)));
 
- --canvas-base: #f4ecdb;
+ --canvas-base: color-mix(in oklab, var(--expo-tone) 9%, var(--expo-cream));
  --canvas-elevated: var(--expo-paper);
- --canvas-raised: #efe3c9;
+ --canvas-raised: color-mix(in oklab, var(--expo-tone) 20%, var(--expo-cream));
  --canvas-overlay: var(--expo-paper);
- --border: #e4d5b6;
- --border-subtle: #ece0c6;
+ --border: color-mix(in oklab, var(--expo-tone) 30%, var(--expo-cream));
+ --border-subtle: color-mix(in oklab, var(--expo-tone) 22%, var(--expo-cream));
  --border-strong: var(--expo-edge);
  --ink: var(--expo-navy);
- --ink-secondary: #545670;
- --ink-muted: #7d7e95;
+ --ink-secondary: var(--expo-ink-2-light);
+ --ink-muted: var(--expo-ink-3-light);
  --ink-inverse: var(--expo-paper);
  --accent: var(--expo-coral);
  --accent-hover: color-mix(in oklab, var(--expo-coral), black 10%);
@@ -58,31 +68,31 @@
  --warning: #a8770b;
  --error: #c8452f;
 
- --background: #f4ecdb;
+ --background: color-mix(in oklab, var(--expo-tone) 9%, var(--expo-cream));
  --foreground: var(--expo-navy);
  --card: var(--expo-paper);
  --card-foreground: var(--expo-navy);
  --popover: var(--expo-paper);
  --popover-foreground: var(--expo-navy);
  --primary: var(--expo-coral);
- --primary-foreground: #fffaf0;
- --secondary: #efe3c9;
+ --primary-foreground: var(--expo-on-accent);
+ --secondary: color-mix(in oklab, var(--expo-tone) 20%, var(--expo-cream));
  --secondary-foreground: var(--expo-navy);
- --muted: #efe3c9;
- --muted-foreground: #545670;
- --sh-accent: #f3e6cb;
+ --muted: color-mix(in oklab, var(--expo-tone) 20%, var(--expo-cream));
+ --muted-foreground: var(--expo-ink-2-light);
+ --sh-accent: color-mix(in oklab, var(--expo-tone) 18%, var(--expo-cream));
  --sh-accent-foreground: var(--expo-navy);
- --sh-border: #e4d5b6;
+ --sh-border: color-mix(in oklab, var(--expo-tone) 30%, var(--expo-cream));
  --input: var(--expo-edge);
  --ring: var(--expo-coral);
  --destructive: #c8452f;
- --sidebar: #efe5cf;
+ --sidebar: color-mix(in oklab, var(--expo-tone) 16%, var(--expo-cream));
  --sidebar-foreground: var(--expo-navy);
  --sidebar-primary: var(--expo-coral);
- --sidebar-primary-foreground: #fffaf0;
- --sidebar-accent: #f6ead2;
+ --sidebar-primary-foreground: var(--expo-on-accent);
+ --sidebar-accent: color-mix(in oklab, var(--expo-tone) 12%, var(--expo-cream));
  --sidebar-accent-foreground: var(--expo-navy);
- --sidebar-border: #e4d5b6;
+ --sidebar-border: color-mix(in oklab, var(--expo-tone) 30%, var(--expo-cream));
  --sidebar-ring: var(--expo-coral);
 
  --shadow-sm: 0 2px 0 var(--expo-lip);
@@ -109,8 +119,8 @@
  --border-subtle: color-mix(in oklab, var(--expo-navy), white 9%);
  --border-strong: color-mix(in oklab, var(--expo-navy), white 22%);
  --ink: var(--expo-cream);
- --ink-secondary: #c9c8dc;
- --ink-muted: #9796b3;
+ --ink-secondary: var(--expo-ink-2-dark);
+ --ink-muted: var(--expo-ink-3-dark);
  --ink-inverse: var(--expo-navy);
  --accent: var(--expo-coral);
  --accent-hover: color-mix(in oklab, var(--expo-coral), white 20%);
@@ -127,11 +137,11 @@
  --popover: color-mix(in oklab, var(--expo-navy), white 10%);
  --popover-foreground: var(--expo-cream);
  --primary: var(--expo-coral);
- --primary-foreground: #fffaf0;
+ --primary-foreground: var(--expo-on-accent);
  --secondary: color-mix(in oklab, var(--expo-navy), white 10%);
  --secondary-foreground: var(--expo-cream);
  --muted: color-mix(in oklab, var(--expo-navy), white 10%);
- --muted-foreground: #c9c8dc;
+ --muted-foreground: var(--expo-ink-2-dark);
  --sh-accent: color-mix(in oklab, var(--expo-navy), white 13%);
  --sh-accent-foreground: var(--expo-cream);
  --sh-border: color-mix(in oklab, var(--expo-navy), white 15%);
@@ -141,7 +151,7 @@
  --sidebar: color-mix(in oklab, var(--expo-navy), black 14%);
  --sidebar-foreground: var(--expo-cream);
  --sidebar-primary: var(--expo-coral);
- --sidebar-primary-foreground: #fffaf0;
+ --sidebar-primary-foreground: var(--expo-on-accent);
  --sidebar-accent: color-mix(in oklab, var(--expo-navy), white 7%);
  --sidebar-accent-foreground: var(--expo-cream);
  --sidebar-border: color-mix(in oklab, var(--expo-navy), white 9%);
@@ -202,7 +212,7 @@
 /* Primary: coral, deep-coral lip. */
 :root[data-ui-theme="expo"] [data-slot="button"][data-variant="default"] {
  background: linear-gradient(180deg, color-mix(in oklab, var(--expo-coral), white 20%), var(--expo-coral)) !important;
- color: #fffaf0 !important;
+ color: var(--expo-on-accent) !important;
  border-color: transparent !important;
  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-coral), white 35%), 0 3px 0 var(--expo-coral-deep), 0 8px 12px -8px rgba(20, 20, 40, 0.45) !important;
 }
@@ -227,7 +237,7 @@
 /* The selected choice in a group is the coral pill. */
 :root[data-ui-theme="expo"] [data-slot="toggle-group-item"][data-state="on"] {
  background: linear-gradient(180deg, color-mix(in oklab, var(--expo-coral), white 20%), var(--expo-coral)) !important;
- color: #fffaf0 !important;
+ color: var(--expo-on-accent) !important;
  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-coral), white 35%), 0 3px 0 var(--expo-coral-deep) !important;
 }
 
@@ -290,7 +300,7 @@
 
 /* The rail and the sidebar are ONE darker surface: same colour, no border
    between them or along the sidebar's edge. */
-:root[data-ui-theme="expo"][data-theme="light"] { --expo-chrome: #e6d8ba; }
+:root[data-ui-theme="expo"][data-theme="light"] { --expo-chrome: color-mix(in oklab, var(--expo-tone) 34%, var(--expo-cream)); }
 :root[data-ui-theme="expo"][data-theme="dark"] { --expo-chrome: color-mix(in oklab, var(--expo-navy), black 22%); }
 :root[data-ui-theme="expo"] [data-workspace-rail],
 :root[data-ui-theme="expo"] [data-sidebar-panel] {
@@ -377,7 +387,7 @@
 :root[data-ui-theme="expo"] [data-slot="tabs-trigger"][data-state="active"],
 :root[data-ui-theme="expo"] [role="tab"][aria-selected="true"] {
  background: linear-gradient(180deg, color-mix(in oklab, var(--expo-coral), white 20%), var(--expo-coral)) !important;
- color: #fffaf0 !important;
+ color: var(--expo-on-accent) !important;
  border-color: transparent !important;
  border-radius: 999px !important;
  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-coral), white 35%), 0 2px 0 var(--expo-coral-deep) !important;
@@ -435,36 +445,18 @@
 /* Avatars carry more weight: a solid tinted disc, bold initials, and a ring
    in the surface colour so a stack of them reads as separate faces. */
 :root[data-ui-theme="expo"] [data-slot="avatar-fallback"] {
- background: #e8d9b9 !important;
+ background: color-mix(in oklab, var(--expo-tone) 30%, var(--expo-cream)) !important;
  color: var(--expo-navy, #2b2d48) !important;
  font-weight: 700;
 }
 :root[data-ui-theme="expo"][data-theme="dark"] [data-slot="avatar-fallback"] {
  background: color-mix(in oklab, var(--expo-navy), white 18%) !important;
- color: #fbf4e4 !important;
+ color: var(--expo-on-accent) !important;
 }
 :root[data-ui-theme="expo"] [data-slot="avatar"] {
  box-shadow: 0 0 0 2px var(--card), 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
-/* ==========================================================================
-   Colour choices. Expo is two colours: the BASE (raglan's navy — the dark
-   stage, and the ink in light) and the ACCENT (coral — primary buttons and
-   every selected state). Every shade above is mixed from these two, so a
-   choice here re-tints the whole family. Set by src/lib/theme/expoColors.ts.
-   ========================================================================== */
-:root[data-ui-theme="expo"][data-expo-accent="tangerine"] { --expo-coral: #e9853a; }
-:root[data-ui-theme="expo"][data-expo-accent="rose"] { --expo-coral: #dd5f7f; }
-:root[data-ui-theme="expo"][data-expo-accent="violet"] { --expo-coral: #8a6fe0; }
-:root[data-ui-theme="expo"][data-expo-accent="sky"] { --expo-coral: #4c8ce0; }
-:root[data-ui-theme="expo"][data-expo-accent="teal"] { --expo-coral: #2c9f96; }
-:root[data-ui-theme="expo"][data-expo-accent="green"] { --expo-coral: #4ea468; }
-
-:root[data-ui-theme="expo"][data-expo-base="plum"] { --expo-navy: #3a2a47; }
-:root[data-ui-theme="expo"][data-expo-base="forest"] { --expo-navy: #20382f; }
-:root[data-ui-theme="expo"][data-expo-base="slate"] { --expo-navy: #29333f; }
-:root[data-ui-theme="expo"][data-expo-base="espresso"] { --expo-navy: #382c26; }
-:root[data-ui-theme="expo"][data-expo-base="charcoal"] { --expo-navy: #222327; }
 
 /* The window dock: an opaque tray on a lip like every other Expo surface,
    with a defined edge, instead of a smoky glass strip over the wallpaper. */
@@ -505,7 +497,7 @@
    the trigger is a paper card on a lip. */
 :root[data-ui-theme="expo"] [data-switcher-option][data-selected="true"] {
  background: linear-gradient(180deg, color-mix(in oklab, var(--expo-coral), white 20%), var(--expo-coral)) !important;
- color: #fffaf0 !important;
+ color: var(--expo-on-accent) !important;
  border-radius: 12px;
  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-coral), white 35%), 0 2px 0 var(--expo-coral-deep) !important;
 }
