@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { docBodyToHtml } from '@/lib/docBody';
 import { Bold, Italic, List, ListOrdered, Code, Heading1, Heading2, Quote, Star, Trash2, Image as ImageIcon, Pencil, MessageCircle, History, Sparkles, ListChecks, PanelsTopLeft } from 'lucide-react';
 import type { Document, DocumentVersion, Task } from '../../types';
 import { stripHtml } from '../../lib/utils';
@@ -396,7 +397,8 @@ export const DocWindowContent = React.memo(function DocWindowContent({
     const applyBody = (body: string) => {
       if (cancelled) return;
       setBodyStatus('ready');
-      const cleanBody = sanitizeHtml(body || '');
+      // Agents write markdown; the editor is HTML (see lib/docBody.ts).
+      const cleanBody = sanitizeHtml(docBodyToHtml(body || ''));
       const currentBody = contentRef.current?.innerHTML || '';
 
       // A revision can be our own debounced save or another user's edit. Keep
@@ -468,7 +470,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
 
   const handleRestoreVersion = useCallback((version: DocumentVersion) => {
     if (contentRef.current) {
-      contentRef.current.innerHTML = sanitizeHtml(version.content);
+      contentRef.current.innerHTML = sanitizeHtml(docBodyToHtml(version.content || ''));
       hydrateSketchCanvases(contentRef.current);
     }
     setTitle(version.title);
