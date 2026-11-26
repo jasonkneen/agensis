@@ -104,7 +104,14 @@ describe('useTheme family application order', () => {
     switchTheme('default-light');
     expect(styleValue('--background')).toBe('');
     expect(styleValue('--card')).toBe('');
-    expect(styleValue('--primary')).toBe('oklch(0.62 0.19 256)');
+    // The Default family generates its palette (src/lib/theme/engine.ts) as a
+    // scheme-scoped stylesheet, so the accent must NOT be inline on :root —
+    // an inline value would beat the dark scope — and the engine's light
+    // scope must carry it instead.
+    expect(styleValue('--primary')).toBe('');
+    const engineCss = document.getElementById('agensis-theme-engine')?.textContent ?? '';
+    const lightScope = engineCss.split('[data-theme="dark"]')[0];
+    expect(lightScope).toContain('--primary: oklch(0.62 0.19 256);');
   });
 
   it('preserves the numeric radius slider value and resolves legacy preset ids', () => {
