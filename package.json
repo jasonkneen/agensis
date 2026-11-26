@@ -27,6 +27,7 @@
   "scripts": {
     "ops": "node cli/agensis-ops.mjs",
     "dev": "vite",
+    "postinstall": "node scripts/fix-node-pty-perms.mjs",
     "build": "tsc --noEmit -p tsconfig.app.json && vite build && node scripts/finalize-static-routing.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
