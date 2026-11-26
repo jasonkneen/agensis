@@ -173,12 +173,17 @@ describe('unified workspace join links', () => {
     expect(container.textContent).toContain('Individual links last 15 minutes');
     expect(container.textContent).toContain('used once');
 
+    // The default form is one role and one button; who it is for and a label
+    // sit behind More options.
+    expect(container.querySelector('#join-audience')).toBeNull();
+    expect(container.querySelector('#join-label')).toBeNull();
+    await click(buttonByText('More options')!);
     act(() => {
       setSelectValue(container.querySelector('#join-audience') as HTMLSelectElement, 'agent');
       setSelectValue(container.querySelector('#join-role') as HTMLSelectElement, 'viewer');
       setInputValue(container.querySelector('#join-label') as HTMLInputElement, ' Remote code handler ');
     });
-    await click(buttonByText('Create & copy link')!);
+    await click(buttonByText('Copy invite link')!);
 
     expect(create).toHaveBeenCalledWith({
       audience: 'agent',
@@ -190,6 +195,23 @@ describe('unified workspace join links', () => {
     });
     expect(writeText).toHaveBeenCalledWith('https://agensis.io/join/agj_once');
     expect(container.textContent).toContain('Link copied');
+  });
+
+  it('one click makes a person-or-agent link at the chosen role', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn(async () => undefined) },
+    });
+    const create = vi.fn(async () => makeCreatedJoinLink());
+    renderContent({ onCreateJoinLink: create });
+
+    await click(buttonByText('Copy invite link')!);
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      audience: 'both',
+      role: 'editor',
+      grantKind: 'individual',
+    }));
   });
 
   it('creates an owner-only workspace controller enrollment with visible fixed scopes', async () => {
@@ -208,6 +230,7 @@ describe('unified workspace join links', () => {
     }));
     renderContent({ onCreateJoinLink: create, canIssueWorkspaceControl: true });
 
+    await click(buttonByText('More options')!);
     act(() => {
       setSelectValue(container.querySelector('#join-audience') as HTMLSelectElement, 'controller');
       setInputValue(container.querySelector('#controller-name') as HTMLInputElement, ' Local build farm ');
@@ -216,7 +239,7 @@ describe('unified workspace join links', () => {
     expect(container.textContent).toContain('agents:register');
     expect(container.querySelector('#join-role')).toBeNull();
 
-    await click(buttonByText('Create & copy link')!);
+    await click(buttonByText('Copy invite link')!);
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       audience: 'controller',
       grantKind: 'workspace_control',
@@ -268,7 +291,7 @@ describe('unified workspace join links', () => {
     });
 
     expect(container.textContent).toContain('Join links are private to workspace owners and admins');
-    expect(buttonByText('Create & copy link')).toBeUndefined();
+    expect(buttonByText('Copy invite link')).toBeUndefined();
     expect(buttonByLabel('Remove member@example.test')).toBeUndefined();
     expect(container.querySelector('[aria-label="Change role for member@example.test"]')).toBeNull();
   });

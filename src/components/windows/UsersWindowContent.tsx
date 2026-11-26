@@ -99,6 +99,9 @@ export const UsersWindowContent = memo(function UsersWindowContent({
   const [newRole, setNewRole] = useState<WorkspaceConnectionRole>('editor');
   const [newAudience, setNewAudience] = useState<JoinLinkAudience>('both');
   const [newLabel, setNewLabel] = useState('');
+  // Who the link is for, a label and controller enrolment are rarely needed;
+  // the default link already works for a person OR an agent.
+  const [showInviteOptions, setShowInviteOptions] = useState(false);
   const [controllerName, setControllerName] = useState('');
   const [controllerScopes, setControllerScopes] = useState<WorkspaceControllerScope[]>([
     'agents:register',
@@ -342,13 +345,12 @@ export const UsersWindowContent = memo(function UsersWindowContent({
         <section className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <Link2 className="size-4 text-primary" />
-            <h2 className="text-sm font-semibold">Join links</h2>
-            {canManage && <Badge variant="secondary">{joinLinks.length}</Badge>}
+            <h2 className="text-sm font-semibold">Invite</h2>
           </div>
 
           <p className="text-xs leading-relaxed text-muted-foreground">
-            One URL works for people and agents. Individual links last 15 minutes; owner-only controller
-            enrollments last five. Every link can be used once.
+            One URL works for people and agents: send it to a person, or paste it into an agent. Individual
+            links last 15 minutes and can be used once.
           </p>
 
           {!canManage && loading && members.length === 0 ? null : !canManage ? (
@@ -363,30 +365,6 @@ export const UsersWindowContent = memo(function UsersWindowContent({
             <>
               <div className="rounded-lg border bg-card/55 p-3 backdrop-blur-md">
                 <div className="flex flex-wrap items-end gap-2">
-                  <Field className="w-auto">
-                    <FieldLabel htmlFor="join-audience">For</FieldLabel>
-                    <NativeSelect
-                      id="join-audience"
-                      size="sm"
-                      value={newAudience}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setNewAudience(
-                          value === 'human' || value === 'agent' || (value === 'controller' && canIssueWorkspaceControl)
-                            ? value
-                            : 'both',
-                        );
-                        setCopiedCreate(false);
-                      }}
-                    >
-                      <NativeSelectOption value="both">Person or agent</NativeSelectOption>
-                      <NativeSelectOption value="human">Person only</NativeSelectOption>
-                      <NativeSelectOption value="agent">Agent only</NativeSelectOption>
-                      {canIssueWorkspaceControl && (
-                        <NativeSelectOption value="controller">Workspace controller</NativeSelectOption>
-                      )}
-                    </NativeSelect>
-                  </Field>
                   {newAudience !== 'controller' && (
                     <Field className="w-auto">
                       <FieldLabel htmlFor="join-role">Role</FieldLabel>
@@ -411,34 +389,62 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                       </NativeSelect>
                     </Field>
                   )}
-                  {newAudience === 'controller' && (
-                    <Field className="min-w-52 flex-1">
-                      <FieldLabel htmlFor="controller-name">Controller name</FieldLabel>
-                      <Input
-                        id="controller-name"
-                        placeholder="Required, e.g. Local build farm"
-                        maxLength={120}
-                        value={controllerName}
-                        onChange={(event) => {
-                          setControllerName(event.target.value);
-                          setCopiedCreate(false);
-                        }}
-                      />
-                    </Field>
+                  {showInviteOptions && (
+                    <>
+                      <Field className="w-auto">
+                        <FieldLabel htmlFor="join-audience">For</FieldLabel>
+                        <NativeSelect
+                          id="join-audience"
+                          size="sm"
+                          value={newAudience}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setNewAudience(
+                              value === 'human' || value === 'agent' || (value === 'controller' && canIssueWorkspaceControl)
+                                ? value
+                                : 'both',
+                            );
+                            setCopiedCreate(false);
+                          }}
+                        >
+                          <NativeSelectOption value="both">Person or agent</NativeSelectOption>
+                          <NativeSelectOption value="human">Person only</NativeSelectOption>
+                          <NativeSelectOption value="agent">Agent only</NativeSelectOption>
+                          {canIssueWorkspaceControl && (
+                            <NativeSelectOption value="controller">Workspace controller</NativeSelectOption>
+                          )}
+                        </NativeSelect>
+                      </Field>
+                      {newAudience === 'controller' && (
+                        <Field className="min-w-52 flex-1">
+                          <FieldLabel htmlFor="controller-name">Controller name</FieldLabel>
+                          <Input
+                            id="controller-name"
+                            placeholder="Required, e.g. Local build farm"
+                            maxLength={120}
+                            value={controllerName}
+                            onChange={(event) => {
+                              setControllerName(event.target.value);
+                              setCopiedCreate(false);
+                            }}
+                          />
+                        </Field>
+                      )}
+                      <Field className="min-w-48 flex-1">
+                        <FieldLabel htmlFor="join-label">Label</FieldLabel>
+                        <Input
+                          id="join-label"
+                          placeholder="Optional, e.g. build agent"
+                          maxLength={120}
+                          value={newLabel}
+                          onChange={(event) => {
+                            setNewLabel(event.target.value);
+                            setCopiedCreate(false);
+                          }}
+                        />
+                      </Field>
+                    </>
                   )}
-                  <Field className="min-w-48 flex-1">
-                    <FieldLabel htmlFor="join-label">Label</FieldLabel>
-                    <Input
-                      id="join-label"
-                      placeholder="Optional, e.g. build agent"
-                      maxLength={120}
-                      value={newLabel}
-                      onChange={(event) => {
-                        setNewLabel(event.target.value);
-                        setCopiedCreate(false);
-                      }}
-                    />
-                  </Field>
                   <Button
                     type="button"
                     size="sm"
@@ -455,7 +461,25 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                     ) : (
                       <Plus data-icon="inline-start" />
                     )}
-                    {copiedCreate ? 'Link copied' : 'Create & copy link'}
+                    {copiedCreate ? 'Link copied' : 'Copy invite link'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-expanded={showInviteOptions}
+                    onClick={() => {
+                      // Folding the options away also undoes them, so a hidden
+                      // choice can never shape the next link.
+                      if (showInviteOptions) {
+                        setNewAudience('both');
+                        setNewLabel('');
+                      }
+                      setShowInviteOptions(open => !open);
+                      setCopiedCreate(false);
+                    }}
+                  >
+                    {showInviteOptions ? 'Fewer options' : 'More options'}
                   </Button>
                 </div>
                 {newAudience === 'controller' && (
@@ -491,17 +515,7 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                 )}
               </div>
 
-              {joinLinks.length === 0 && !loading ? (
-                <Empty className="border-0 py-5">
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon" className="size-9">
-                      <Link2 className="size-4" />
-                    </EmptyMedia>
-                    <EmptyTitle className="text-sm">No join links yet</EmptyTitle>
-                    <EmptyDescription>Links you create will appear here without their secret URL.</EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              ) : (
+              {joinLinks.length === 0 ? null : (
                 <ItemGroup className="gap-1">
                   {joinLinks.map((link) => {
                     const state = joinLinkLifecycleState(link);
@@ -556,7 +570,7 @@ export const UsersWindowContent = memo(function UsersWindowContent({
           )}
         </section>
 
-        {canIssueWorkspaceControl && (
+        {canIssueWorkspaceControl && (controllers.length > 0 || newAudience === 'controller') && (
           <section className="flex flex-col gap-2">
             <div className="flex flex-wrap items-center gap-2">
               <ServerCog className="size-4 text-primary" />
