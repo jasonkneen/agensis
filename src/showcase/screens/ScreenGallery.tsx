@@ -21,6 +21,10 @@ import { ChatWindowContent } from '@/components/windows/ChatWindowContent';
 import { AppearancePanel } from '@/components/settings/AppearancePanel';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { MemorySection } from '@/components/memory/MemorySection';
+import { InboxWindowContent } from '@/components/inbox/InboxWindowContent';
+import { HomeCanvas } from '@/components/home/HomeCanvas';
+import { DocWindowContent } from '@/components/windows/DocWindowContent';
+import { ChatThreadPanel } from '@/components/chat/ChatThreadPanel';
 import { SchedulesWindow } from '@/components/windows/SchedulesWindow';
 import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import {
@@ -38,6 +42,8 @@ import {
   seedMessages,
   seedTaskMembers,
   seedTasks,
+  seedInboxItems,
+  SAMPLE_DOC_MARKDOWN,
 } from './galleryFixtures';
 
 interface Screen {
@@ -153,7 +159,39 @@ function SettingsScreen({ tab }: { tab: 'tools' | 'ai' }) {
   );
 }
 
+// The gallery must never reach a real backend: apiUrl() points at production.
+// Inbox gets fixtures; every other backend read gets an empty list. Asset and
+// vite requests pass through.
+if (typeof window !== 'undefined' && !(window as { __galleryFetch?: boolean }).__galleryFetch) {
+  (window as { __galleryFetch?: boolean }).__galleryFetch = true;
+  const realFetch = window.fetch.bind(window);
+  const json = (data: unknown) => new Response(JSON.stringify({ data, error: null }), { status: 200, headers: { 'content-type': 'application/json' } });
+  window.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (/\/inbox(\?|$)/.test(url)) return json({ items: seedInboxItems(), unreadCount: 3 });
+    if (url.includes('/backend/')) return json([]);
+    return realFetch(input, init);
+  };
+}
+
+const sampleDoc = {
+  id: 'doc-1', workspace_id: WORKSPACE_ID, title: 'Theme engine', content: SAMPLE_DOC_MARKDOWN, is_favorite: false,
+  created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+} as never;
+
+const threadMessages = seedMessages().map((m, i) => ({ ...m, thread_parent_id: i === 0 ? null : 'msg-1' }));
+
 const SCREENS: Screen[] = [
+  { id: 'inbox', title: 'Inbox', icon: <Users className="size-3.5" />, render: () => <InboxWindowContent workspaceId={WORKSPACE_ID} agents={agents} onReplyInThread={async () => ({ delivered: true })} /> },
+  { id: 'home', title: 'Home', icon: <Sun className="size-3.5" />, render: () => (
+    <div className="relative h-full"><HomeCanvas documents={[]} agents={agents} workspaceId={WORKSPACE_ID} memoryFacts={[]} onSendMessage={noop} onOpenNewDocument={noop} workspaceName="Main" /></div>
+  ) },
+  { id: 'doc', title: 'Theme engine', icon: <Sparkles className="size-3.5" />, render: () => (
+    <DocWindowContent document={sampleDoc} onAutoSave={noop} onToggleFavorite={noop} onDelete={noop} onTitleChange={noop} fetchDocumentContent={async () => SAMPLE_DOC_MARKDOWN} />
+  ) },
+  { id: 'thread', title: 'Thread', icon: <Hash className="size-3.5" />, render: () => (
+    <ChatThreadPanel parentMessage={threadMessages[0]} threadMessages={threadMessages} streaming={false} onSendReply={noop} onClose={noop} workspaceId={WORKSPACE_ID} currentUserId={CURRENT_USER_ID} />
+  ) },
   { id: 'memory', title: 'Memory', icon: <Sparkles className="size-3.5" />, render: () => (
     <MemorySection facts={memoryFacts} categories={['process', 'design', 'environment']} onAdd={noop} onUpdate={noop} onDelete={noop}
       workspaceId={WORKSPACE_ID} agents={agents} userId={CURRENT_USER_ID} userEmail="you@example.test" documents={[]} />

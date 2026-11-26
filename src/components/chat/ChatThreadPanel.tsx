@@ -1,5 +1,6 @@
 import { useHistoryScrollAnchor } from '../../hooks/useHistoryScrollAnchor';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { ROW_REVEAL } from '@/components/common/Section';
 import { Bot, Check, CornerDownRight, Paperclip, Pencil, Trash2, User, X } from 'lucide-react';
 import { ChatArtifact, extractHtmlArtifact } from './ChatArtifact';
 import { ThreadWorkBadge } from './AgentWorkBadge';
@@ -580,7 +581,7 @@ export function ThreadBubble({
   return (
     <UiMessage
       align="start"
-      className={`chat-thread-message flex min-w-0 gap-2 rounded-md px-2 py-1.5 ${isParent ? 'opacity-80' : ''}`}
+      className={`chat-thread-message group/row flex min-w-0 gap-2 rounded-md px-2 py-1.5 ${isParent ? 'opacity-80' : ''}`}
       data-agent-message={isAgentMessage ? 'true' : undefined}
       data-streaming={isStreaming ? 'true' : undefined}
       style={accentStyle}
@@ -612,7 +613,9 @@ export function ThreadBubble({
           )}
           {timeLabel && <span className="shrink-0 text-2xs text-muted-foreground">{timeLabel}</span>}
           {ownMutation.mutable && (
-            <span className="ml-auto flex shrink-0 items-center gap-0.5">
+            // Shown on hover / keyboard focus (always on touch): a pencil and
+            // a bin on every post you wrote read as clutter down the thread.
+            <span className={cn('ml-auto flex shrink-0 items-center gap-0.5', !ownMutation.busy && ROW_REVEAL)}>
               <Button
                 type="button"
                 variant="ghost"

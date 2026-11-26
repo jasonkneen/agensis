@@ -839,7 +839,7 @@ export const DocWindowContent = React.memo(function DocWindowContent({
               disabled={bodyStatus !== 'ready'}
               onChange={handleTitleChange}
               placeholder="Untitled"
-              className="doc-title-input mb-3 h-auto w-full border-0 bg-transparent px-0 py-0 text-xl font-semibold tracking-tight shadow-none focus-visible:ring-0"
+              className="doc-title-input mb-3 h-auto w-full border-0 bg-transparent px-0 py-0 text-2xl md:text-2xl font-semibold tracking-tight shadow-none focus-visible:ring-0"
             />
             <div
               ref={contentRef}

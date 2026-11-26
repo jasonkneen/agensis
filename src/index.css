@@ -3105,6 +3105,44 @@ body {
  line-height: 1.6;
 }
 
+/* Tailwind's preflight strips list markers and table rules; a document needs
+   both back. Without them a bulleted list read as two indented paragraphs and
+   a table as columns of words run together ("ContrastHow far text…").
+   Checklists are label rows in a div (doc-task-list), so they are untouched. */
+.doc-editor ul { list-style: disc; }
+.doc-editor ol { list-style: decimal; }
+.doc-editor ul ul { list-style: circle; }
+.doc-editor li::marker { color: var(--muted-foreground); }
+.doc-editor table {
+ display: block;
+ max-width: 100%;
+ overflow-x: auto;
+ margin: 0.75rem 0;
+ border-collapse: collapse;
+ font-size: 0.9em;
+}
+.doc-editor th,
+.doc-editor td {
+ border: 1px solid var(--border);
+ padding: 0.35rem 0.7rem;
+ text-align: left;
+ vertical-align: top;
+}
+.doc-editor th {
+ font-weight: 600;
+ background: color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+
+/* The document's title is a heading you can type into, not a form field: the
+   theme's bordered input style made it a small boxed line with a stray rule. */
+.doc-title-input,
+.doc-title-input:focus-visible {
+ border: 0 !important;
+ box-shadow: none !important;
+ background: transparent !important;
+ outline: none;
+}
+
 .doc-editor strong,
 .doc-editor b {
  font-weight: 600;
