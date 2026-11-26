@@ -177,8 +177,8 @@ export const PAGE_TIPS: readonly PageTip[] = [
   {
     id: 'document-applet',
     surface: 'document',
-    title: 'An applet is a document whose body is code',
-    body: 'Applets live in their own folder and hold HTML instead of prose, which is why they open in a code editor. Add one to the canvas and it runs there as a live panel.',
+    title: 'An artifact is a document whose body is code',
+    body: 'Artifacts live in their own folder and hold HTML instead of prose, which is why they open in a code editor. Add one to the canvas and it runs there as a live panel.',
   },
 
   // Agents. Run modes + host folders + webhook tab + voice: AgentsWindowContent.tsx.

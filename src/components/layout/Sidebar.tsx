@@ -92,7 +92,7 @@ import { cn } from '../../lib/utils';
 import { useThreadInbox } from '../../hooks/useThreadInbox';
 import { threadReplyLabel, threadRowSource, threadRowTitle } from '../../lib/threadInbox';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
-import { APPLETS_FOLDER } from '../../lib/canvasApps';
+import { APPLETS_FOLDER, folderDisplayName } from '../../lib/canvasApps';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
 
 // Which agents the DM section lists, remembered per workspace alongside the
@@ -913,7 +913,7 @@ export const Sidebar = React.memo(function Sidebar({
          <SidebarFolderGroup
           key={group.folder}
           id={`channels-folder:${group.folder}`}
-          label={group.folder}
+          label={folderDisplayName(group.folder)}
           count={group.sessions.length}
           open={openSections.has(`channels-folder:${group.folder}`)}
           onOpenChange={open => toggleSection(`channels-folder:${group.folder}`, open)}
@@ -1180,7 +1180,7 @@ export const Sidebar = React.memo(function Sidebar({
       {onOpenUsers && <ActionTile icon={<Users />} label="Users" active={focusedWindowType === 'users'} onClick={onOpenUsers} />}
       {/* Schedules live inside Automations now (two tabs, one window). */}
       {(onOpenAutomations || onOpenSchedules) && <ActionTile icon={<Zap />} label="Automations" active={focusedWindowType === 'automations' || focusedWindowType === 'schedules'} onClick={(onOpenAutomations || onOpenSchedules)!} />}
-      {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Applets" onClick={onOpenTemplates} />}
+      {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Artifacts" onClick={onOpenTemplates} />}
       {onOpenBrowser && <ActionTile icon={<Globe />} label="Browser" active={focusedWindowType === 'browser'} onClick={onOpenBrowser} />}
       {onOpenTerminal && <ActionTile icon={<SquareTerminal />} label="Terminal" active={focusedWindowType === 'terminal'} onClick={onOpenTerminal} />}
      </div>
