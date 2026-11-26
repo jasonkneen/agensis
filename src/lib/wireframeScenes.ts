@@ -465,13 +465,29 @@ const streamingChannel: WireframeScene = {
   ],
 };
 
+/** One window re-tinting as palette swatches are picked — the theme engine. */
+const themeEngine: WireframeScene = {
+  id: 'theme-engine',
+  alt: 'A row of palette swatches appears; picking one re-tints the whole window, its lines and its text together.',
+  shapes: [
+    { kind: 'chip', x: 18, y: 12, w: 14, h: 14, tone: 'muted', motion: 'pop', delay: 0.1 },
+    { kind: 'chip', x: 36, y: 12, w: 14, h: 14, tone: 'base', motion: 'pop', delay: 0.2 },
+    { kind: 'chip', x: 54, y: 12, w: 14, h: 14, tone: 'accent', motion: 'pop', delay: 0.3 },
+    { kind: 'panel', x: 18, y: 34, w: 128, h: 56, tone: 'muted', motion: 'fade', delay: 0.5 },
+    { kind: 'panel', x: 18, y: 34, w: 128, h: 56, tone: 'accent', motion: 'fade', delay: 1.3 },
+    { kind: 'row', x: 28, y: 44, w: 90, h: 8, tone: 'base', motion: 'fade', delay: 0.8 },
+    { kind: 'row', x: 28, y: 58, w: 66, h: 6, tone: 'muted', motion: 'fade', delay: 0.95 },
+    { kind: 'bar', x: 28, y: 74, w: 40, h: 6, tone: 'accent', motion: 'pulse', delay: 1.5 },
+  ],
+};
+
 export const WIREFRAME_SCENES = {
   // In the gallery today.
-  projectsDashboard, streamingChannel, agentMarketplace, socialSignInGuard, automationRule, codexRuntime, connectionResources, stewardedResourceWork, auditLog, typingDots, stopReason, toolLoop,
+  themeEngine, projectsDashboard, streamingChannel, agentMarketplace, socialSignInGuard, automationRule, codexRuntime, stewardedResourceWork, auditLog, typingDots, stopReason, toolLoop,
   // Retired from the gallery when their feature stopped being news. Kept as
   // authored vocabulary — a scene costs nothing and is the reference for how
   // this format is meant to read.
-  dmPrivacy, splitView, chips, cadence, savedTemplate, preview, showDesktop
+  dmPrivacy, splitView, chips, cadence, savedTemplate, preview, showDesktop, connectionResources,
 } as const;
 
 export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
@@ -489,6 +505,12 @@ export type WireframeSceneName = keyof typeof WIREFRAME_SCENES;
  * its scene stays in WIREFRAME_SCENES.
  */
 export const GALLERY_SLIDES: GallerySlide[] = [
+  {
+    note: 'one-theme-engine',
+    title: 'One theme, your palette',
+    body: 'Pick a palette, a colour, contrast and depth; every surface, line and text shade follows, in light and dark, and stays readable.',
+    scene: themeEngine,
+  },
   {
     note: 'projects-and-reports',
     title: 'Projects, with reports',
@@ -518,12 +540,6 @@ export const GALLERY_SLIDES: GallerySlide[] = [
     title: 'Protected work, visible progress',
     body: 'Send ordered instructions to a steward; its lease and the resource version keep concurrent changes from overwriting each other.',
     scene: stewardedResourceWork,
-  },
-  {
-    note: 'workspace-connections-and-agent-resources',
-    title: 'One link, clear roles',
-    body: 'Invite a person, an agent, or a resource steward with one short-lived link; the workspace keeps authority and capability separate.',
-    scene: connectionResources,
   },
 ];
 
