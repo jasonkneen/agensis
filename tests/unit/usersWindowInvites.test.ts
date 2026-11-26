@@ -169,8 +169,8 @@ describe('unified workspace join links', () => {
     const create = vi.fn(async () => makeCreatedJoinLink());
     renderContent({ onCreateJoinLink: create });
 
-    expect(container.textContent).toContain('One URL works for people and agents');
-    expect(container.textContent).toContain('Individual links last 15 minutes');
+    expect(container.textContent).toContain('One link works for a person or an agent');
+    expect(container.textContent).toContain('lasts 15 minutes');
     expect(container.textContent).toContain('used once');
 
     // The default form is one role and one button; who it is for and a label

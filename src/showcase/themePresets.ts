@@ -4,6 +4,8 @@
 // the app's existing useTheme ([data-theme]); these only change the brand hue,
 // so they compose with both light and dark.
 
+import { syncEngineTheme } from '@/lib/theme/applyEngineTheme';
+
 export interface ThemePreset {
   id: string;
   label: string;
@@ -118,6 +120,13 @@ export function applyThemePreset(id: string) {
   if (root.getAttribute('data-ui-theme') === 'neo') return;
   // Clear any prior preset overrides first so switching presets is clean.
   for (const key of MANAGED_KEYS) root.style.removeProperty(key);
+  // The Default family GENERATES its palette (src/lib/theme/engine.ts), accent
+  // included, as scheme-scoped rules. Writing the preset inline here would beat
+  // those rules, so hand the choice to the engine instead.
+  if (root.getAttribute('data-ui-theme') === 'default') {
+    syncEngineTheme();
+    return;
+  }
   if (!preset.reset) {
     for (const [key, value] of Object.entries(preset.vars)) {
       root.style.setProperty(key, value);

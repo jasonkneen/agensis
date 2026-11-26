@@ -184,7 +184,7 @@ import {
   type AgentLayoutView,
 } from '../../lib/agentsView';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
-import { FILTER_CHIP_OFF, FILTER_CHIP_ON, WINDOW_SHELL, WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { FILTER_CHIP_OFF, FILTER_CHIP_ON, SEGMENTED, SEGMENT_ITEM, WINDOW_SHELL, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { SearchField } from '@/components/common/SearchField';
 import { Label } from '@agensis/ui/components/label';
 import { RadioGroup, RadioGroupItem } from '@agensis/ui/components/radio-group';
@@ -1341,7 +1341,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 // on. This filter has no "neither" state, so an empty value is
                 // the user pressing the current tab: keep what they had.
                 onValueChange={value => { if (value) setOwnerFilter(value as typeof ownerFilter); }}
-                className="mb-2 inline-flex w-auto shrink-0 items-center gap-0.5 self-start rounded-lg border border-border bg-card/40 p-0.5 text-xs font-medium"
+                className={cn(SEGMENTED, 'mb-2 w-auto self-start')}
               >
                 <ToggleGroupItem value="mine" className={OWNER_FILTER_ITEM}>
                   Yours <span className="tabular-nums opacity-70">{mineCount}</span>
@@ -1370,6 +1370,9 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 {(() => {
                   const activeCount = presenceCounts.busy + presenceCounts.idle;
                   const isActiveFilter = statusFilter.size === 2 && statusFilter.has('busy') && statusFilter.has('idle');
+                  // A chip that would filter to nothing is noise — unless it is
+                  // the filter in force, which must stay reachable to undo.
+                  if (activeCount === 0 && !isActiveFilter) return null;
                   return (
                     <button
                       type="button"
@@ -1390,6 +1393,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 })()}
                 {AGENT_PRESENCE_FILTERS.map(filter => {
                   const active = statusFilter.has(filter.key);
+                  if (presenceCounts[filter.key] === 0 && !active) return null;
                   return (
                     <button
                       key={filter.key}
@@ -4165,7 +4169,7 @@ function HostFoldersSection({
  * trap-state smoke gate recovers through, so its appearance is deliberately
  * unchanged by the move onto the primitive.
  */
-const OWNER_FILTER_ITEM = 'rounded-md px-3 py-1 text-muted-foreground transition hover:text-foreground data-[state=on]:bg-primary data-[state=on]:text-primary-foreground';
+const OWNER_FILTER_ITEM = SEGMENT_ITEM;
 
 /** The status/presence filter row's chip. Three chips, three different
  *  selection rules (clear all, set both active states, toggle one) but one

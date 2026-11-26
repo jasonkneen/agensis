@@ -9,7 +9,8 @@ import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@agensis/ui/components/empty';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-import { WINDOW_SHELL } from '@/components/common/presentation';
+import { LIST_COLUMN_CLASS, WINDOW_SHELL, WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { ListGroup, ListRow, ROW_REVEAL } from '@/components/common/Section';
 
 interface SchedulesWindowProps {
   workspaceId: string;
@@ -105,32 +106,23 @@ export function SchedulesWindow({ workspaceId, agents, sessions }: SchedulesWind
 
   return (
     <div className={WINDOW_SHELL}>
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-card/65 px-4 py-3 backdrop-blur-md">
-        <div>
-          <h2 className="text-base font-semibold">Schedules</h2>
-          <p className="text-xs text-muted-foreground">Automate repetitive tasks — an agent runs your prompt on a cadence.</p>
-        </div>
+      {/* One band. This sat under the Automations title bar AND its
+          Schedules/Rules tabs, then repeated "Schedules" as a heading with a
+          subtitle, then a grid of three stat cards — four bands before the
+          first schedule. The stats are one line of meta text now. */}
+      <div className={WINDOW_TOOLBAR}>
+        <span className="min-w-0 truncate text-xs text-muted-foreground tabular-nums">
+          {stats.total} schedule{stats.total === 1 ? '' : 's'}
+          {stats.successful > 0 && <> · <span className="text-success">{stats.successful} ok</span></>}
+          {stats.failed > 0 && <> · <span className="text-destructive">{stats.failed} failed</span></>}
+        </span>
+        <div className="flex-1" />
         {!creating && (
           <Button type="button" size="sm" onClick={() => setCreating(true)} disabled={enabledAgents.length === 0 || sessions.length === 0}>
             <Plus data-icon="inline-start" />
-            New Schedule
+            New schedule
           </Button>
         )}
-      </div>
-
-      <div className="grid shrink-0 grid-cols-3 gap-2 border-b border-border px-4 py-3">
-        <div className="rounded-lg border bg-card/40 px-3 py-2">
-          <div className="text-xs text-muted-foreground">Total schedules</div>
-          <div className="text-lg font-semibold tabular-nums">{stats.total}</div>
-        </div>
-        <div className="rounded-lg border bg-card/40 px-3 py-2">
-          <div className="text-xs text-muted-foreground">Successful runs</div>
-          <div className="text-lg font-semibold tabular-nums text-emerald-500">{stats.successful}</div>
-        </div>
-        <div className="rounded-lg border bg-card/40 px-3 py-2">
-          <div className="text-xs text-muted-foreground">Failed runs</div>
-          <div className={cn('text-lg font-semibold tabular-nums', stats.failed > 0 ? 'text-destructive' : '')}>{stats.failed}</div>
-        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -186,16 +178,14 @@ export function SchedulesWindow({ workspaceId, agents, sessions }: SchedulesWind
             </EmptyHeader>
           </Empty>
         ) : (
-          <div className="flex flex-col gap-2">
+          <ListGroup className={LIST_COLUMN_CLASS}>
             {schedules.map(schedule => (
-              <div key={schedule.id} className={cn('flex items-center gap-3 rounded-lg border bg-card/50 px-3 py-2.5', !schedule.enabled && 'opacity-60')}>
-                <span className={cn('grid size-9 shrink-0 place-items-center rounded-lg', schedule.enabled ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground')}>
-                  <Clock className="size-4" />
-                </span>
+              <ListRow key={schedule.id} className={cn(!schedule.enabled && 'opacity-60')}>
+                <Clock className="size-4 shrink-0 text-muted-foreground" aria-hidden />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate text-sm font-medium">{schedule.name || 'Untitled schedule'}</span>
-                    {schedule.running && <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-3xs font-medium text-amber-500">running</span>}
+                    {schedule.running && <span className="rounded-full bg-warning/15 px-1.5 py-0.5 text-3xs font-medium text-warning">running</span>}
                     {!schedule.enabled && <span className="rounded-full bg-muted px-1.5 py-0.5 text-3xs text-muted-foreground">paused</span>}
                   </div>
                   <div className="truncate text-xs text-muted-foreground">
@@ -203,12 +193,12 @@ export function SchedulesWindow({ workspaceId, agents, sessions }: SchedulesWind
                   </div>
                   <div className="mt-0.5 flex items-center gap-2 text-2xs text-muted-foreground">
                     <span>next {relativeTime(schedule.next_run_at)}</span>
-                    {schedule.last_status === 'ok' && <span className="inline-flex items-center gap-0.5 text-emerald-500"><CircleCheck className="size-3" />ok</span>}
+                    {schedule.last_status === 'ok' && <span className="inline-flex items-center gap-0.5 text-success"><CircleCheck className="size-3" />ok</span>}
                     {schedule.last_status === 'error' && <span className="inline-flex items-center gap-0.5 text-destructive"><CircleX className="size-3" />failed</span>}
                     <span>· {schedule.run_count} run{schedule.run_count === 1 ? '' : 's'}</span>
                   </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-1">
+                <div className={cn('flex shrink-0 items-center gap-1', confirmDeleteId !== schedule.id && ROW_REVEAL)}>
                   <Button type="button" variant="ghost" size="icon-xs" title="Run now" disabled={busyId === schedule.id} onClick={() => void runNow(schedule)}>
                     <Play className="size-4" />
                   </Button>
@@ -233,9 +223,9 @@ export function SchedulesWindow({ workspaceId, agents, sessions }: SchedulesWind
                     <Trash2 className="size-4" />
                   </Button>
                 </div>
-              </div>
+              </ListRow>
             ))}
-          </div>
+          </ListGroup>
         )}
       </div>
     </div>

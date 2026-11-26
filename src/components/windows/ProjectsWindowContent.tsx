@@ -4,6 +4,7 @@ import { Button } from '@agensis/ui/components/button';
 import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
 import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
+import { SEGMENTED, SEGMENT_ITEM, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { useActivity } from '../../hooks/useActivity';
 import { useProjectFiles } from '../../hooks/useProjectFiles';
 import { projectActivity } from '../../lib/pm/projectActivity';
@@ -298,23 +299,27 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3">
-        <h1 className="text-base font-semibold">Projects</h1>
-        <span className="text-sm text-muted-foreground">{projects.filter(project => !project.archived).length}</span>
-        <div className="flex-1" />
-        <div className="flex gap-1 text-xs" role="group" aria-label="Projects page">
-          {([['dashboard', 'Dashboard'], ['projects', 'All projects'], ['teams', 'Teams'], ['members', 'Members']] as const).map(([value, label]) => (
+      {/* One band. The title bar already says "Projects", so the band leads
+          with the page switch instead of repeating the name; the live count
+          rides on the Projects segment. */}
+      <div className={WINDOW_TOOLBAR}>
+        <div className={SEGMENTED} role="group" aria-label="Projects page">
+          {([['dashboard', 'Dashboard'], ['projects', 'Projects'], ['teams', 'Teams'], ['members', 'Members']] as const).map(([value, label]) => (
             <button
               key={value}
               type="button"
               aria-pressed={page === value}
               onClick={() => setPage(value)}
-              className={cn('rounded-full border border-border px-2.5 py-1', page === value ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground')}
+              className={SEGMENT_ITEM}
             >
               {label}
+              {value === 'projects' && (
+                <span className="tabular-nums opacity-60">{projects.filter(project => !project.archived).length}</span>
+              )}
             </button>
           ))}
         </div>
+        <div className="flex-1" />
         <Button size="sm" onClick={() => setDialogOpen(true)}>
           New project
         </Button>
@@ -327,7 +332,11 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
         <MembersPage teams={teams} members={members} agents={agents} tasks={tasks} />
       ) : (
       <>
-      <div className="flex shrink-0 gap-1 border-b border-border px-4 py-2 text-xs">
+      {/* Status filters only once there is something to filter — or when one
+          is already engaged, so a persisted filter can never hide the control
+          that clears it. */}
+      {(projects.length > 0 || filter !== 'all') && (
+      <div className="flex shrink-0 gap-1 border-b border-border px-3 py-1.5 text-xs">
         {STATUS_FILTERS.map(([value, label]) => (
           <button
             key={value}
@@ -340,6 +349,7 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
           </button>
         ))}
       </div>
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {visible.length === 0 && projectsLoading && <p className="px-6 py-16 text-center text-sm text-muted-foreground">Loading projects…</p>}

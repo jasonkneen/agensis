@@ -353,7 +353,7 @@ export function DocumentLibraryWindowContent({
                         className="block w-full px-3 pt-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
                       >
                         <div className="flex items-center gap-2">
-                          <FileText className="size-3.5 shrink-0 text-primary" />
+                          <FileText className="size-3.5 shrink-0 text-muted-foreground" />
                           <span className="truncate text-[0.8125rem] font-medium text-foreground">{entry.title}</span>
                           {/* The count is the library's whole reason for existing:
                               it says "several places have this" at list level,
@@ -415,7 +415,7 @@ export function DocumentLibraryWindowContent({
               <ChevronLeft className="size-4" />
             </Button>
           )}
-          <FileText className="size-4 shrink-0 text-primary" />
+          <FileText className="size-4 shrink-0 text-muted-foreground" />
           <p className="min-w-0 flex-1 truncate text-sm font-medium">{selected.title}</p>
           {selected.primary.agent && (
             <Button
