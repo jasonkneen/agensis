@@ -162,7 +162,7 @@ import { PresenceRoster } from './components/presence/PresenceRoster';
 import type { ChannelParticipant, Document, ChatSession, MemoryFact, Message, MessageAttachment, CanvasGroup, CanvasObject, FloatingWindow, Task, ActivityEvent, WorkspaceAgent, AgentWebhook, PresenceVisibilityMode, Workspace, AgentConnection, UploadedFile } from './types';
 import { windowsClosedWithSessions } from './lib/sessionRealtime';
 import type { InboxOpenTarget } from './components/inbox/inboxSources';
-import type { InboxOpenSession } from './components/inbox/inboxNavigation';
+import type { InboxOpenSession, InboxReplyInThread } from './components/inbox/inboxNavigation';
 import type { WorkspaceMember } from './hooks/useSharing';
 import type { CreateTaskInput } from './hooks/useTasks';
 
@@ -2364,6 +2364,14 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     return sendMessage(content, model, memFacts, docs, snapshot, selectedAgent, threadParentId, targetSession, broadcastToChannel, attachments);
   }, [sendMessage, useWorkspaceCtx, buildWorkspaceContext, selectedAgent]);
 
+  // The inbox reading pane's comment box: a thread reply through the same call
+  // the thread panel makes (WindowBodies handleSendThreadReply).
+  const handleReplyToInboxItem = useCallback<InboxReplyInThread>(async (thread, content) => {
+    const session = sessions.find(item => item.id === thread.sessionId);
+    if (!session) return { delivered: false, failure: { reason: 'That conversation is no longer in this workspace.' } };
+    return wrappedSendMessage(content, 'auto', undefined, undefined, thread.threadParentId, session);
+  }, [sessions, wrappedSendMessage]);
+
   // Posting path for the WebMCP bridge. Routed through wrappedSendMessage so a
   // tool-posted message is indistinguishable from a composer-posted one — same
   // workspace-context snapshot, same agent routing. 'auto' is the composer's own
@@ -2894,6 +2902,7 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
                   onSetActiveSession={setActiveSession}
                   onOpenSessionById={handleSessionOpenById}
                   onOpenInboxItem={handleOpenInboxItem}
+                  onReplyToInboxItem={handleReplyToInboxItem}
                   onDeleteDocument={handleDeleteDocumentFromScene}
                   onAutoSaveDocument={autoSave}
                   onAddToCanvasApplet={handleCreateDocApp}
@@ -3283,6 +3292,7 @@ function CanvasLayerScene({
   onSetActiveSession,
   onOpenSessionById,
   onOpenInboxItem,
+  onReplyToInboxItem,
   onDeleteDocument,
   onAutoSaveDocument,
   onAddToCanvasApplet,
@@ -3398,6 +3408,7 @@ function CanvasLayerScene({
   onOpenSessionById: (sessionId: string) => void;
   /** Inbox rows carry more than a session id — see components/inbox/inboxNavigation. */
   onOpenInboxItem: InboxOpenSession;
+  onReplyToInboxItem: InboxReplyInThread;
   onDeleteDocument: (id: string) => Promise<boolean>;
   onAutoSaveDocument: (id: string, updates: { title?: string; content?: string }) => void;
   onAddToCanvasApplet: (doc: Document) => void;
@@ -4211,6 +4222,7 @@ function CanvasLayerScene({
                   workspaceId={workspaceId}
                   agents={agents}
                   onOpenSession={onOpenInboxItem}
+                  onReplyInThread={onReplyToInboxItem}
                 />
               </Suspense>
             </FloatingWindowShell>

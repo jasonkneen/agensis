@@ -15,19 +15,21 @@ import {
   senderLabel,
   type InboxGroup,
 } from './inboxModel';
-import { inboxOpenTarget } from './inboxSources';
+import { inboxOpenTarget, inboxReplyTarget } from './inboxSources';
+import { InboxReplyBox } from './InboxReplyBox';
 import { PermissionRequestCard } from '../chat/PermissionRequestCard';
 import { MarkdownContent } from '../chat/MarkdownContent';
-import type { InboxOpenSession } from './inboxNavigation';
-import type { PermissionRequest, PermissionScope } from '../../types';
+import type { InboxOpenSession, InboxReplyInThread } from './inboxNavigation';
+import type { PermissionRequest, PermissionScope, WorkspaceAgent } from '../../types';
 
 // ---------------------------------------------------------------------------
 // The reading pane.
 //
 // Its header is the SAME 36px band as the list header, so the two line up
 // pixel-for-pixel across the divider. Everything expensive lives here and
-// nothing leaks back into the row: the blocker answer box, the raw entity ids,
-// the thread tail.
+// nothing leaks back into the row: the blocker answer box, the thread tail, and
+// the comment box at the foot (see InboxReplyBox), which posts into the item's
+// thread and then opens it.
 //
 // `now` is the same timestamp the list rows were formatted against — the pane
 // never reads the clock itself, so nothing here can start a re-render loop.
@@ -47,6 +49,11 @@ interface InboxDetailProps {
   onResolveBlocker?: (entityId: string, status: 'answered' | 'dismissed', response?: string) => Promise<boolean>;
   /** Resolves '' on success, or the reason the decision did not land. */
   onDecideApproval?: (requestId: string, behavior: 'allow' | 'deny', scope: PermissionScope) => Promise<string>;
+  /** Posts the comment box's text as a thread reply. Omit to hide the box. */
+  onReplyInThread?: InboxReplyInThread;
+  workspaceId?: string | null;
+  /** For the comment box's @ picker. */
+  agents?: WorkspaceAgent[];
 }
 
 export function InboxDetail({
@@ -59,6 +66,9 @@ export function InboxDetail({
   onOpenSession,
   onResolveBlocker,
   onDecideApproval,
+  onReplyInThread,
+  workspaceId = null,
+  agents,
 }: InboxDetailProps) {
   const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
@@ -86,6 +96,7 @@ export function InboxDetail({
   const earlier = group.items.slice(1);
   const openTarget = inboxOpenTarget(group);
   const canOpen = !!openTarget && !!onOpenSession;
+  const replyTarget = inboxReplyTarget(group);
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
@@ -258,24 +269,21 @@ export function InboxDetail({
             </div>
           )}
 
-          {(group.entityType || group.entityId) && (
-            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-t border-border/60 pt-3 text-xs">
-              {group.entityType && (
-                <>
-                  <dt className="text-muted-foreground">Entity</dt>
-                  <dd className="min-w-0 truncate font-mono">{group.entityType}</dd>
-                </>
-              )}
-              {group.entityId && (
-                <>
-                  <dt className="text-muted-foreground">Id</dt>
-                  <dd className="min-w-0 truncate font-mono">{group.entityId}</dd>
-                </>
-              )}
-            </dl>
-          )}
         </div>
       </ScrollArea>
+
+      {/* Keyed by the item, so a half-written comment can never be carried into
+          the next item's thread and posted there. */}
+      {replyTarget && onReplyInThread && (
+        <InboxReplyBox
+          key={group.key}
+          target={replyTarget}
+          workspaceId={workspaceId}
+          agents={agents}
+          onReply={onReplyInThread}
+          onOpenSession={onOpenSession}
+        />
+      )}
     </section>
   );
 }

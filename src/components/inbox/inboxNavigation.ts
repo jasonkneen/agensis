@@ -15,3 +15,16 @@ import type { InboxOpenTarget } from './inboxSources';
  * halves, the caller opens it normally instead (see openSessionBeside).
  */
 export type InboxOpenSession = (target: InboxOpenTarget & { beside?: boolean }) => void;
+
+/**
+ * Post a reading-pane comment as a reply in a thread.
+ *
+ * App binds this to the same sendMessage call the thread panel makes (content,
+ * 'auto', threadParentId, the session), so the inbox never owns a second send
+ * path. Resolves `delivered: false` when the message never reached the
+ * database — the box puts the draft back — with the reason when there is one.
+ */
+export type InboxReplyInThread = (
+  thread: { sessionId: string; threadParentId: string },
+  content: string,
+) => Promise<{ delivered: boolean; failure?: { reason: string } | null }>;

@@ -15,8 +15,7 @@ import { booleanPreference, viewPreferenceKey } from '../../lib/viewPreferences'
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useSplitResize } from '../../hooks/useSplitResize';
 import { buildInboxRows, inboxEmptyState, pinRank, type InboxRowModel } from './inboxModel';
-import type { InboxCategory } from '../../types';
-import type { InboxOpenSession } from './inboxNavigation';
+import type { InboxOpenSession, InboxReplyInThread } from './inboxNavigation';
 import type { WorkspaceAgent } from '../../types';
 import {
   NO_SELECTION,
@@ -56,9 +55,12 @@ import { ResizeHandle } from '@/components/common/ResizeHandle';
 // section headers, no date dividers, no per-row rules, no cards, no counts, no
 // badges. Restraint is the whole design — see InboxRow.tsx.
 //
-// The category filter bar that used to sit under this header now lives in
-// Activity, which is a feed and is where slicing by category actually helps.
-// What is left here is the one filter an inbox genuinely needs: unread.
+// The header is a mail client's: All / Unread and a refresh, nothing else. The
+// category tabs (Approvals, Blockers, Mentions...) are gone — slicing by
+// category belongs to Activity, which is a feed. Nothing actionable was lost
+// with them: approvals and blockers are pinned under "Needs you now" in both
+// views and keep their answer controls in the reading pane, whose foot carries
+// a comment box that replies into the item's thread (InboxReplyBox).
 //
 // Two interaction rules hold the whole thing up:
 //   1. selection is keyed off the group's contextKey (a stable conversation id),
@@ -133,22 +135,18 @@ interface InboxWindowContentProps {
   agents?: WorkspaceAgent[];
   /** Offered on any item that carries a session — "go read it where it happened". */
   onOpenSession?: InboxOpenSession;
+  /**
+   * Posts the reading pane's comment as a reply in the item's thread (App binds
+   * it to the thread panel's send path). Omit and the comment box is not shown.
+   */
+  onReplyInThread?: InboxReplyInThread;
 }
-
-const INBOX_CATEGORY_TABS: Array<[InboxCategory | 'all', string]> = [
-  ['all', 'All'],
-  ['approval', 'Approvals'],
-  ['blocker', 'Blockers'],
-  ['mention', 'Mentions'],
-  ['thread', 'Threads'],
-  ['comment', 'Comments'],
-  ['error', 'Errors'],
-];
 
 export const InboxWindowContent = React.memo(function InboxWindowContent({
   workspaceId,
   agents,
   onOpenSession,
+  onReplyInThread,
 }: InboxWindowContentProps) {
   const {
     groups, unreadCount, loading, approvalsByKey, decidingApproval,
@@ -166,8 +164,6 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
     viewPreferenceKey('inbox.unread-only', workspaceId), booleanPreference, false,
   );
   const [listWidth, setListWidth] = useState(readStoredWidth);
-  // Category tabs from the approved inbox mock. Session-only: which tab you are on is a view state.
-  const [category, setCategory] = useState<InboxCategory | 'all'>('all');
 
   // `now` is sampled here and nowhere else — one timestamp per data load, no
   // interval, no per-second re-render.
@@ -177,21 +173,9 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
   }, [groups]);
 
   const visibleRows = useMemo(
-    () =>
-      rows.filter(
-        row =>
-          (!unreadOnly || row.group.unreadCount > 0) &&
-          (category === 'all' || row.group.category === category),
-      ),
-    [rows, unreadOnly, category],
+    () => (unreadOnly ? rows.filter(row => row.group.unreadCount > 0) : rows),
+    [rows, unreadOnly],
   );
-
-  // Items per category, for the tab counts. Not filtered by the Unread toggle, so the numbers are stable.
-  const categoryCounts = useMemo(() => {
-    const counts = new Map<InboxCategory | 'all', number>([['all', rows.length]]);
-    for (const row of rows) counts.set(row.group.category, (counts.get(row.group.category) ?? 0) + 1);
-    return counts;
-  }, [rows]);
 
   const selected = useMemo(
     () => (selectedKey ? groups.find(group => group.key === selectedKey) ?? null : null),
@@ -356,16 +340,18 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
           />
         ) : (
         <div className={PANE_HEADER}>
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {INBOX_CATEGORY_TABS.map(([value, label]) => {
-              const count = categoryCounts.get(value) ?? 0;
-              const active = category === value;
+          {/* Two views, like any mail client: everything, or what you have not
+              read. Approvals and blockers need no tab of their own — they are
+              pinned to the top of both, under "Needs you now". */}
+          <div className="flex min-w-0 flex-1 items-center gap-1" role="group" aria-label="Show">
+            {([[false, 'All'], [true, 'Unread']] as const).map(([value, label]) => {
+              const active = unreadOnly === value;
               return (
                 <button
-                  key={value}
+                  key={label}
                   type="button"
                   aria-pressed={active}
-                  onClick={() => setCategory(value)}
+                  onClick={() => setUnreadOnly(value)}
                   className={cn(
                     'flex h-6 shrink-0 items-center gap-1 rounded-md px-2 text-sm transition-colors',
                     active ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
@@ -373,23 +359,13 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
                   )}
                 >
                   {label}
-                  {count > 0 && <span className="text-xs text-muted-foreground">{count}</span>}
+                  {value && unreadCount > 0 && (
+                    <span className="text-xs text-muted-foreground">{unreadCount > 99 ? '99+' : unreadCount}</span>
+                  )}
                 </button>
               );
             })}
           </div>
-          <button
-            type="button"
-            onClick={() => setUnreadOnly(!unreadOnly)}
-            aria-pressed={unreadOnly}
-            className={cn(
-              'h-6 shrink-0 rounded-md px-2 text-xs transition-colors',
-              unreadOnly ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground',
-              FOCUS_RING,
-            )}
-          >
-            Unread{unreadCount > 0 ? ` ${unreadCount > 99 ? '99+' : unreadCount}` : ''}
-          </button>
           <Button
             type="button"
             variant="ghost"
@@ -441,6 +417,9 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
           onOpenSession={onOpenSession}
           onResolveBlocker={resolveBlocker}
           onDecideApproval={decideApproval}
+          onReplyInThread={onReplyInThread}
+          workspaceId={workspaceId}
+          agents={agents}
         />
       )}
     </div>

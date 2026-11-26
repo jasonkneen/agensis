@@ -21,11 +21,13 @@ import type { ThreadInboxItem } from '../../src/lib/threadInbox';
 import {
   approvalInboxItems,
   inboxOpenTarget,
+  inboxReplyTarget,
   isApprovalContextKey,
   isThreadContextKey,
   mergeInboxItems,
   threadInboxItems,
   threadParentIdFromKey,
+  threadRootOf,
   unreadItemCount,
 } from '../../src/components/inbox/inboxSources';
 import {
@@ -250,6 +252,44 @@ describe('inboxOpenTarget', () => {
     expect(inboxOpenTarget({
       category: 'comment', sessionId: null, entityType: 'document', entityId: 'doc-1',
     })).toBeNull();
+  });
+});
+
+describe('inboxReplyTarget — where a reading-pane comment is posted', () => {
+  it('replies into a thread row under its known root', () => {
+    expect(inboxReplyTarget({
+      category: 'thread', sessionId: 'sess-9', entityType: 'message', entityId: 'p1',
+    })).toEqual({ sessionId: 'sess-9', messageId: 'p1', threadRootId: 'p1' });
+  });
+
+  it('leaves a mention\'s root to be looked up, never assuming the message is one', () => {
+    // The mentioning message may itself be a reply; posting under it would
+    // start a thread the panel never lists.
+    expect(inboxReplyTarget({
+      category: 'mention', sessionId: 'sess-2', entityType: 'message', entityId: 'msg-77',
+    })).toEqual({ sessionId: 'sess-2', messageId: 'msg-77', threadRootId: null });
+  });
+
+  it('offers no box where there is no chat thread to reply into', () => {
+    for (const group of [
+      { category: 'approval', sessionId: 'sess-1', entityType: 'permission_request', entityId: 'r1' },
+      { category: 'blocker', sessionId: 'sess-1', entityType: 'thread_item', entityId: 'b1' },
+      { category: 'error', sessionId: 'sess-1', entityType: 'agent_job', entityId: 'j1' },
+      { category: 'comment', sessionId: null, entityType: 'task', entityId: 't1' },
+      { category: 'thread', sessionId: null, entityType: 'message', entityId: 'p1' },
+      { category: 'thread', sessionId: 'sess-9', entityType: 'message', entityId: '' },
+    ] as const) {
+      expect(inboxReplyTarget(group)).toBeNull();
+    }
+  });
+});
+
+describe('threadRootOf', () => {
+  it('is the parent for a reply and the message itself otherwise', () => {
+    expect(threadRootOf({ id: 'm2', thread_parent_id: 'm1' })).toBe('m1');
+    expect(threadRootOf({ id: 'm1', thread_parent_id: null })).toBe('m1');
+    expect(threadRootOf({ id: 'm1' })).toBe('m1');
+    expect(threadRootOf({})).toBe('');
   });
 });
 

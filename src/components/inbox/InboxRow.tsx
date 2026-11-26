@@ -9,11 +9,11 @@ import type { InboxRowModel } from './inboxModel';
 import type { InboxOpenSession } from './inboxNavigation';
 
 // ---------------------------------------------------------------------------
-// Three lines of text and a face.
+// Three lines of text and a face — a mail client's row.
 //
 //   ( AB )  Scout                                      • 2:34 PM
-//           Needs your decision
-//           Ship the migration now or wait for the …
+//           Replied in Deploy thread                    (subject)
+//           Fixed — it was the edge function. …         (one-line preview)
 //
 // Everything structural is absent on purpose: no border between rows, no gap,
 // no card, no radius, no shadow, no left accent bar, no reply count, no
@@ -182,38 +182,31 @@ export const InboxRow = React.memo(function InboxRow({
             </span>
           </div>
 
-          {/* Line 2 — what kind of thing this is. The only coloured text in the
-              list, and only for the two categories that block a human. */}
+          {/* Line 2 — the subject: what this is and where it came from, as one
+              plain line ("Replied in Deploy thread", "Comment on Roadmap"). The
+              only coloured text in the list, and only for the categories that
+              block a human. Bold while unread, as a mail client does. */}
           <div
             className={cn(
-              'flex min-w-0 items-center gap-1.5 leading-4 transition-[padding]',
-              TEXT_META,
+              'min-w-0 truncate leading-5 transition-[padding]',
+              TEXT_BODY,
               label.tone === 'blocker'
                 ? 'font-medium text-amber-600 dark:text-amber-400/90'
                 : label.tone === 'error'
                   ? 'font-medium text-destructive/90'
-                  : 'font-medium text-muted-foreground/80',
+                  : unread ? 'font-medium text-foreground' : 'font-normal text-foreground/80',
               hasActions && 'group-hover/row:pr-16 group-focus-within/row:pr-16',
             )}
           >
-            <span className="shrink-0">{label.text}</span>
-            {label.chip && (
-              <span className="min-w-0 truncate rounded-[4px] bg-muted px-1 py-px font-medium text-muted-foreground/90">
-                {label.chip}
-              </span>
-            )}
+            {label.chip ? `${label.text} ${label.chip}` : label.text}
           </div>
 
-          {/* Line 3 — the preview IS the subject. Read rows desaturate rather
-              than dim, so the list never looks half switched-off. */}
+          {/* Line 3 — one line of preview, muted. */}
           {preview && (
             <p
               className={cn(
-                // break-words so a path, a uuid or a stack frame WRAPS instead
-                // of running past the pane edge and being cut off mid-token.
-                'mt-1.5 line-clamp-2 break-words leading-snug',
+                'mt-0.5 truncate leading-snug text-muted-foreground',
                 TEXT_BODY,
-                unread ? 'font-normal text-foreground' : 'font-normal text-muted-foreground',
               )}
             >
               {preview}

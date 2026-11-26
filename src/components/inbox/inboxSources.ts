@@ -204,3 +204,51 @@ export function inboxOpenTarget(
 
 /** The fields inboxOpenTarget reads — satisfied by both InboxItem and InboxGroup. */
 type InboxItemLocation = Pick<InboxItem, 'category' | 'sessionId' | 'entityType' | 'entityId'>;
+
+// --- Where a comment written in the reading pane goes ----------------------
+
+/**
+ * The thread a reading-pane comment is posted into.
+ *
+ * A comment from the inbox is a THREAD REPLY, posted through the same send path
+ * the thread panel uses, so an @agent in it wakes that agent inside the thread
+ * and the conversation carries on there — the inbox then opens the thread.
+ *
+ * Only two categories have a message to hang the reply off:
+ *
+ *   thread   entityId IS the thread root (the server selected it as one).
+ *   mention  entityId is the message that mentioned you, which may itself be a
+ *            reply. Posting under a reply would start a thread nobody can see
+ *            (the panel lists rows whose thread_parent_id is the ROOT), so the
+ *            root is looked up from that message at send time — its parent when
+ *            it has one, else itself. `threadRootId` is null to say so.
+ *
+ * Everything else — approvals, blockers (which have their own answer box),
+ * failed runs, document/task/file comments — has no chat thread to reply into,
+ * and gets no box rather than one that posts somewhere invented.
+ */
+export interface InboxReplyTarget {
+  sessionId: string;
+  /** The message the item is about. */
+  messageId: string;
+  /** The thread root when already known; null means "resolve it from messageId". */
+  threadRootId: string | null;
+}
+
+export function inboxReplyTarget(
+  group: Pick<InboxItemLocation, 'category' | 'sessionId' | 'entityType' | 'entityId'>,
+): InboxReplyTarget | null {
+  const sessionId = String(group.sessionId || '').trim();
+  const messageId = String(group.entityId || '').trim();
+  if (!sessionId || !messageId || group.entityType !== 'message') return null;
+  if (group.category === 'thread') return { sessionId, messageId, threadRootId: messageId };
+  if (group.category === 'mention') return { sessionId, messageId, threadRootId: null };
+  return null;
+}
+
+/** A message's thread root: its parent when it is a reply, otherwise itself. */
+export function threadRootOf(message: { id?: unknown; thread_parent_id?: unknown }): string {
+  const parent = String(message.thread_parent_id ?? '').trim();
+  if (parent) return parent;
+  return String(message.id ?? '').trim();
+}
