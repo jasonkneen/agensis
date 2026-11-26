@@ -36,6 +36,8 @@ const MOBILE_BOTTOM_RESERVE = WORKSPACE_BOTTOM_RESERVE;
 const MAXIMIZED_EDGE_INSET = WORKSPACE_PANEL_EDGE_INSET;
 const MIN_WINDOW_WIDTH = 320;
 const MIN_WINDOW_HEIGHT = 260;
+/** Gap a full-bleed window leaves on its top, right and bottom edges (px). */
+const FULL_BLEED_EDGE_INSET = 6;
 // Visible channel between two tiled panes, in px. Split between the two
 // neighbours (half each), so this is the width of the finished seam — not the
 // amount each pane loses. Paint-time only; stored bounds stay flush.
@@ -446,10 +448,13 @@ export function FloatingWindowShell({
     adjacentEdges,
     flushEdges,
   });
+  // The left edge still bleeds flush against the sidebar; top/right/bottom stop
+  // FULL_BLEED_EDGE_INSET short of the panel edge so the central surface reads
+  // as inset on those three sides (Jason, 6px).
   const bleedLeft = bleedEdges.has('left') ? WORKSPACE_CHROME_GAP : 0;
-  const bleedRight = bleedEdges.has('right') ? WORKSPACE_CHROME_GAP : 0;
-  const bleedTop = bleedEdges.has('top') ? WORKSPACE_CHROME_GAP : 0;
-  const bleedBottom = bleedEdges.has('bottom') ? WORKSPACE_CHROME_GAP : 0;
+  const bleedRight = bleedEdges.has('right') ? WORKSPACE_CHROME_GAP - FULL_BLEED_EDGE_INSET : 0;
+  const bleedTop = bleedEdges.has('top') ? WORKSPACE_CHROME_GAP - FULL_BLEED_EDGE_INSET : 0;
+  const bleedBottom = bleedEdges.has('bottom') ? WORKSPACE_CHROME_GAP - FULL_BLEED_EDGE_INSET : 0;
 
   const isFullSurface = isFullView || isFullBleed;
 
