@@ -13,7 +13,6 @@ import {
  Users,
  Brain,
  ChevronRight,
- Clock,
  Code2,
  Copy,
  CreditCard,
@@ -634,8 +633,7 @@ export const Sidebar = React.memo(function Sidebar({
     {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
     {onOpenResources && <SidebarRailButton icon={<Database />} title="Resources" onClick={onOpenResources} />}
     {onOpenUsers && <SidebarRailButton icon={<Users />} title="Users" onClick={onOpenUsers} />}
-    {onOpenSchedules && <SidebarRailButton icon={<Clock />} title="Schedules" onClick={onOpenSchedules} />}
-    {onOpenAutomations && <SidebarRailButton icon={<Zap />} title="Automations" onClick={onOpenAutomations} />}
+    {(onOpenAutomations || onOpenSchedules) && <SidebarRailButton icon={<Zap />} title="Automations" onClick={(onOpenAutomations || onOpenSchedules)!} />}
     {onOpenTemplates && <SidebarRailButton icon={<LayoutTemplate />} title="Applets" onClick={onOpenTemplates} />}
     {onOpenBrowser && <SidebarRailButton icon={<Globe />} title="Browser" onClick={onOpenBrowser} />}
     {onOpenTerminal && <SidebarRailButton icon={<SquareTerminal />} title="Terminal" onClick={onOpenTerminal} />}
@@ -1175,8 +1173,8 @@ export const Sidebar = React.memo(function Sidebar({
       {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
       {onOpenResources && <ActionTile icon={<Database />} label="Resources" active={focusedWindowType === 'resources'} onClick={onOpenResources} />}
       {onOpenUsers && <ActionTile icon={<Users />} label="Users" active={focusedWindowType === 'users'} onClick={onOpenUsers} />}
-      {onOpenSchedules && <ActionTile icon={<Clock />} label="Schedules" active={focusedWindowType === 'schedules'} onClick={onOpenSchedules} />}
-      {onOpenAutomations && <ActionTile icon={<Zap />} label="Automations" active={focusedWindowType === 'automations'} onClick={onOpenAutomations} />}
+      {/* Schedules live inside Automations now (two tabs, one window). */}
+      {(onOpenAutomations || onOpenSchedules) && <ActionTile icon={<Zap />} label="Automations" active={focusedWindowType === 'automations' || focusedWindowType === 'schedules'} onClick={(onOpenAutomations || onOpenSchedules)!} />}
       {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Applets" onClick={onOpenTemplates} />}
       {onOpenBrowser && <ActionTile icon={<Globe />} label="Browser" active={focusedWindowType === 'browser'} onClick={onOpenBrowser} />}
       {onOpenTerminal && <ActionTile icon={<SquareTerminal />} label="Terminal" active={focusedWindowType === 'terminal'} onClick={onOpenTerminal} />}

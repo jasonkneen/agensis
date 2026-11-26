@@ -174,8 +174,8 @@ const ActivityWindowContent = lazy(() => import('./components/windows/ActivityWi
 const AgentsWindowContent = lazy(() => import('./components/windows/AgentsWindowContent').then(m => ({ default: m.AgentsWindowContent })));
 const ResourcesWindowContent = lazy(() => import('./components/windows/ResourcesWindowContent').then(m => ({ default: m.ResourcesWindowContent })));
 const UsersWindow = lazy(() => import('./components/windows/UsersWindow').then(m => ({ default: m.UsersWindow })));
-const SchedulesWindow = lazy(() => import('./components/windows/SchedulesWindow').then(m => ({ default: m.SchedulesWindow })));
-const AutomationsWindowContent = lazy(() => import('./components/windows/AutomationsWindowContent').then(m => ({ default: m.AutomationsWindowContent })));
+// Schedules and automations are one window with two tabs (see AutomationsHub).
+const AutomationsHub = lazy(() => import('./components/windows/AutomationsHub').then(m => ({ default: m.AutomationsHub })));
 const TerminalPanel = lazy(() => import('./components/windows/TerminalPanel').then(m => ({ default: m.TerminalPanel })));
 const BrowserPanel = lazy(() => import('./components/windows/BrowserPanel').then(m => ({ default: m.BrowserPanel })));
 const SkillsWindowContent = lazy(() => import('./components/windows/SkillsWindowContent').then(m => ({ default: m.SkillsWindowContent })));
@@ -1585,18 +1585,22 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     openWindow('resources', { title: 'Shared Resources', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
+  // One window for both: "Schedules" anywhere in the app (sidebar, the daily
+  // brief card, the command palette) opens the Automations window, which starts
+  // on its schedule tab. A schedules window restored from an older layout is
+  // reused rather than opened twice.
   const handleOpenSchedules = useCallback(() => {
-    const existing = windows.find(w => w.type === 'schedules');
+    const existing = windows.find(w => w.type === 'automations' || w.type === 'schedules');
     if (existing) {
       focusWindow(existing.id);
       if (existing.minimized) minimizeWindow(existing.id);
       return;
     }
-    openWindow('schedules', { title: 'Schedules', canvasId: activeLayerId, ownerUserId: user?.id });
+    openWindow('automations', { title: 'Automations', canvasId: activeLayerId, ownerUserId: user?.id });
   }, [windows, openWindow, focusWindow, minimizeWindow, activeLayerId, user?.id]);
 
   const handleOpenAutomations = useCallback(() => {
-    const existing = windows.find(w => w.type === 'automations');
+    const existing = windows.find(w => w.type === 'automations' || w.type === 'schedules');
     if (existing) {
       focusWindow(existing.id);
       if (existing.minimized) minimizeWindow(existing.id);
@@ -4270,10 +4274,11 @@ function CanvasLayerScene({
               breadcrumb={workspaceName}
             >
               <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
-                <SchedulesWindow
+                <AutomationsHub
                   workspaceId={workspaceId}
                   agents={agents}
                   sessions={sessions}
+                  initialTab="schedule"
                 />
               </Suspense>
             </FloatingWindowShell>
@@ -4303,9 +4308,11 @@ function CanvasLayerScene({
               breadcrumb={workspaceName}
             >
               <Suspense fallback={<div className="flex h-full items-center justify-center"><Spinner /></div>}>
-                <AutomationsWindowContent
+                <AutomationsHub
                   workspaceId={workspaceId}
+                  agents={agents}
                   sessions={sessions}
+                  initialTab="schedule"
                 />
               </Suspense>
             </FloatingWindowShell>
