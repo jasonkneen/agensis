@@ -342,7 +342,7 @@ export function ChatThreadPanel({
                     type="button"
                     variant="ghost"
                     size="sm"
-                    className="text-xs text-muted-foreground"
+                    className="chat-history-pill text-xs text-muted-foreground"
                     disabled={loadingEarlier}
                     onClick={historyScroll.loadEarlier}
                   >

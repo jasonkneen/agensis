@@ -2360,7 +2360,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                   <button
                     type="button"
                     onClick={restoreView}
-                    className="mx-auto my-2 rounded-lg border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition hover:text-foreground"
+                    className="chat-history-pill mx-auto my-2 rounded-lg border border-border bg-card px-3 py-1 text-xs text-muted-foreground transition hover:text-foreground"
                   >
                     Show {hiddenCount} earlier message{hiddenCount === 1 ? '' : 's'}
                   </button>
@@ -2391,7 +2391,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="text-xs text-muted-foreground"
+                          className="chat-history-pill text-xs text-muted-foreground"
                           disabled={loadingEarlier}
                           onClick={historyScroll.loadEarlier}
                         >

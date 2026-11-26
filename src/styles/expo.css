@@ -586,3 +586,78 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
 :root[data-ui-theme="expo"] .canvas-column:has([data-floating-window][data-window-view-mode="full"]:not([data-window-hidden="true"])) > .canvas-column-edge {
  display: none;
 }
+
+/* Agents: the status-filter chips and the avatar tiles sit on the same hard
+   dark lip as the buttons, and the chips and agent cards take a slightly
+   lighter surface than the window so they read as objects on it (Jason). */
+:root[data-ui-theme="expo"] .agents-status-filter > button,
+:root[data-ui-theme="expo"][data-theme="dark"] .agents-status-filter > button {
+ border-color: transparent !important;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px var(--expo-edge), 0 2px 0 var(--expo-lip) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] .agents-status-filter > button {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.35), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 2px 0 var(--expo-lip) !important;
+}
+:root[data-ui-theme="expo"] .agents-status-filter > button:not([aria-pressed="true"]),
+:root[data-ui-theme="expo"] .agents-list-card {
+ background-color: color-mix(in oklab, var(--card), white 45%) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] .agents-status-filter > button:not([aria-pressed="true"]),
+:root[data-ui-theme="expo"][data-theme="dark"] .agents-list-card {
+ background-color: color-mix(in oklab, var(--card), white 6%) !important;
+}
+:root[data-ui-theme="expo"] .agents-status-filter > button:active { transform: translateY(1px); }
+:root[data-ui-theme="expo"] .agents-list-card-avatar {
+ box-shadow: inset 0 0 0 1.5px var(--expo-edge), 0 2px 0 var(--expo-lip) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] .agents-list-card-avatar {
+ box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 2px 0 var(--expo-lip) !important;
+}
+
+/* Home composer: the one big prompt on the desktop is a raised Expo card over
+   the wallpaper — a lighter surface, the top shine, an edge and a lip with a
+   soft drop — not a sunken black well. The textarea inside stays clear. */
+:root[data-ui-theme="expo"] .home-workspace-composer[data-slot="input-group"] {
+ background: linear-gradient(180deg, var(--expo-paper), color-mix(in oklab, var(--expo-tone) 10%, var(--expo-cream))) !important;
+ border-color: transparent !important;
+ border-radius: 20px !important;
+ box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.7), inset 0 0 0 1.5px var(--expo-edge), 0 4px 0 var(--expo-lip), 0 18px 34px -14px rgba(20, 20, 40, 0.45) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] .home-workspace-composer[data-slot="input-group"] {
+ background: linear-gradient(180deg, color-mix(in oklab, var(--card), white 9%), color-mix(in oklab, var(--card), white 3%)) !important;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.35), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 4px 0 var(--expo-lip), 0 22px 40px -14px rgba(0, 0, 0, 0.7) !important;
+}
+:root[data-ui-theme="expo"] .home-workspace-composer :is(textarea, [data-slot="input-group-control"]) {
+ background: transparent !important;
+ box-shadow: none !important;
+}
+:root[data-ui-theme="expo"] .home-workspace-composer:focus-within {
+ box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.7), inset 0 0 0 2px color-mix(in oklab, var(--expo-coral), transparent 30%), 0 4px 0 var(--expo-lip), 0 18px 34px -14px rgba(20, 20, 40, 0.45) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] .home-workspace-composer:focus-within {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.35), inset 0 0 0 2px color-mix(in oklab, var(--expo-coral), transparent 30%), 0 4px 0 var(--expo-lip), 0 22px 40px -14px rgba(0, 0, 0, 0.7) !important;
+}
+
+/* Subtle depth for the small things: history pills ("Show 3 earlier
+   messages", "Load earlier messages") sit on a 2px lip with the top shine,
+   and avatars get a lip under their surface ring plus a faint shine. */
+:root[data-ui-theme="expo"] .chat-history-pill {
+ border-color: transparent !important;
+ border-radius: 999px !important;
+ background-color: color-mix(in oklab, var(--card), white 45%) !important;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.55), inset 0 0 0 1.5px var(--expo-edge), 0 2px 0 var(--expo-lip) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] .chat-history-pill {
+ background-color: color-mix(in oklab, var(--card), white 6%) !important;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.3), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 24%), 0 2px 0 var(--expo-lip) !important;
+}
+:root[data-ui-theme="expo"] .chat-history-pill:active { transform: translateY(1px); }
+:root[data-ui-theme="expo"] [data-slot="avatar"] {
+ box-shadow: 0 0 0 2px var(--card), 0 2px 0 2px var(--expo-lip) !important;
+}
+:root[data-ui-theme="expo"] [data-slot="avatar-fallback"] {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.35);
+}
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="avatar-fallback"] {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.16);
+}
