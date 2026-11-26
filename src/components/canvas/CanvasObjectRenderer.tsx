@@ -524,10 +524,7 @@ function readAppletTheme() {
   const style = getComputedStyle(root);
   const token = (name: string) => style.getPropertyValue(name).trim();
   const family = root.getAttribute('data-ui-theme') || 'classic';
-  // No single --border-width token exists; the neo family renders 2px "brutal"
-  // borders app-wide while every other family is 1px. Derive it so applets can
-  // match the control weight of the active theme.
-  const borderWidth = family === 'neo' ? '2px' : '1px';
+  const borderWidth = '1px';
   return {
     family,
     scheme: root.getAttribute('data-theme') || 'light',
@@ -562,10 +559,7 @@ function readAppletTheme() {
       success: token('--success'),
       warning: token('--warning'),
       error: token('--error'),
-      shadowX: token('--neo-shadow-x'),
-      shadowY: token('--neo-shadow-y'),
       borderWidth,
-      neoStyle: root.getAttribute('data-neo-style') || '',
     },
   };
 }

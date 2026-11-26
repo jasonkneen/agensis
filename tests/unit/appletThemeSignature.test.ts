@@ -12,7 +12,7 @@ describe('themeSignature', () => {
   beforeEach(() => {
     root = document.createElement('html');
     root.setAttribute('data-theme', 'dark');
-    root.setAttribute('data-ui-theme', 'neo');
+    root.setAttribute('data-ui-theme', 'default');
     root.style.setProperty('--background', '#101014');
   });
 
