@@ -111,7 +111,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
         <button
           type="button"
           onClick={() => setTab('facts')}
-          className={`inline-flex items-center gap-1.5 border-b-2 px-2.5 text-xs font-medium ${tab === 'facts' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+          className={`inline-flex items-center gap-1.5 border-b-2 px-2.5 text-sm font-medium ${tab === 'facts' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
         >
           <Brain className="size-4" />
           Team facts
@@ -119,7 +119,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
         <button
           type="button"
           onClick={() => setTab('files')}
-          className={`inline-flex items-center gap-1.5 border-b-2 px-2.5 text-xs font-medium ${tab === 'files' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+          className={`inline-flex items-center gap-1.5 border-b-2 px-2.5 text-sm font-medium ${tab === 'files' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
         >
           <FileText className="size-4" />
           Agent files
@@ -127,7 +127,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
         <button
           type="button"
           onClick={() => setTab('suggestions')}
-          className={`inline-flex items-center gap-1.5 border-b-2 px-2.5 text-xs font-medium ${tab === 'suggestions' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+          className={`inline-flex items-center gap-1.5 border-b-2 px-2.5 text-sm font-medium ${tab === 'suggestions' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
         >
           <Lightbulb className="size-4" />
           Suggestions
