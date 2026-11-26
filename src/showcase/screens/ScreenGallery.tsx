@@ -23,7 +23,6 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { MemorySection } from '@/components/memory/MemorySection';
 import { InboxWindowContent } from '@/components/inbox/InboxWindowContent';
 import { ResourcesWindowContent } from '@/components/windows/ResourcesWindowContent';
-import { FileUpload } from '@/components/files/FileUpload';
 import { NostrCommunitySetup } from '@/components/chat/NostrCommunitySetup';
 import { Dialog, DialogContent } from '@agensis/ui/components/dialog';
 import { HomeCanvas } from '@/components/home/HomeCanvas';
@@ -51,7 +50,6 @@ import {
   SYSTEM_CAPABILITIES,
   GATEWAYS,
   RESOURCES,
-  UPLOADED_FILES,
   NOSTR_CONNECTION,
   NOSTR_CHANNELS,
 } from './galleryFixtures';
@@ -199,9 +197,6 @@ const threadMessages = seedMessages().map((m, i) => ({ ...m, thread_parent_id: i
 
 const SCREENS: Screen[] = [
   { id: 'resources', title: 'Resources', icon: <Sparkles className="size-3.5" />, render: () => <ResourcesWindowContent workspaceId={WORKSPACE_ID} agents={agents} /> },
-  { id: 'files', title: 'Files', icon: <Sparkles className="size-3.5" />, render: () => (
-    <div className="h-full overflow-auto p-4"><FileUpload files={UPLOADED_FILES as never} onUpload={noop} onDelete={noop} /></div>
-  ) },
   { id: 'nostr', title: 'Nostr community', icon: <Hash className="size-3.5" />, render: () => (
     // It is a dialog body in the app (needs Dialog for its DialogTitle).
     <Dialog open>
