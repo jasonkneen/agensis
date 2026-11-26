@@ -8,7 +8,10 @@
       "In a direct message, the box shows which agent will answer and on which model; click it to open the agent's profile",
       "Tasks and Activity, and Agents and Direct messages, no longer share an icon in the sidebar",
       "The collapsed sidebar no longer shows Settings twice, and now includes Projects",
-      "Desktop app: opening Agents or Connect no longer freezes the window while it looks for installed agent tools"
+      "Desktop app: opening Agents or Connect no longer freezes the window while it looks for installed agent tools",
+      "Inviting is one step: pick a role and copy the link; it works for a person or an agent",
+      "Schedules and automations are one Automations window with two tabs",
+      "The workspaces and desktops screen has a Close button, closes with Escape, and gets out of the way when you use the sidebar"
     ]
   },
   {
