@@ -4441,6 +4441,12 @@ body {
  --color-input: var(--input);
  --color-border: var(--sh-border);
  --color-destructive: var(--destructive);
+ /* State colours as utilities (text-success, bg-warning/15 …). Every scheme
+    and family defines --success / --warning, and the Default family's engine
+    generates them; without these mappings state was painted with raw
+    emerald-500 / amber-500 classes that ignore the theme entirely. */
+ --color-success: var(--success);
+ --color-warning: var(--warning);
  --color-accent-foreground: var(--sh-accent-foreground);
  --color-accent: var(--sh-accent);
  --color-muted-foreground: var(--muted-foreground);
