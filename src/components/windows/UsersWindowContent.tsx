@@ -49,7 +49,8 @@ import {
 } from '@agensis/ui/components/item';
 import { NativeSelect, NativeSelectOption } from '@agensis/ui/components/native-select';
 import { Spinner } from '@agensis/ui/components/spinner';
-import { WINDOW_SHELL, WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { LIST_COLUMN_CLASS, WINDOW_SHELL } from '@/components/common/presentation';
+import { ListGroup, ListRow, ROW_REVEAL, Section } from '@/components/common/Section';
 import { cn } from '@/lib/utils';
 import { Checkbox } from '@agensis/ui/components/checkbox';
 
@@ -226,38 +227,21 @@ export const UsersWindowContent = memo(function UsersWindowContent({
   };
 
   return (
+    // No content toolbar: the window title bar already reads "<workspace> >
+    // Users". This window used to stack three headers over one member.
     <div className={WINDOW_SHELL}>
-      <div className={cn(WINDOW_TOOLBAR, 'bg-card/65 backdrop-blur-md')}>
-        <Users className="size-4 text-primary" />
-        <span className="text-sm font-semibold">People & connections</span>
-        <Badge variant="secondary">{members.length}</Badge>
-        {loading && <Spinner className="size-3.5 text-muted-foreground" />}
-        <div className="flex-1" />
-        <span className="max-w-[40%] truncate text-xs text-muted-foreground" title={workspaceName}>
-          {workspaceName}
-        </span>
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-auto p-4">
+      <div className={cn('flex min-h-0 flex-1 flex-col gap-6 overflow-auto px-4 py-5', LIST_COLUMN_CLASS)}>
         {(error || actionError) && (
           <div role="alert" className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-xs text-destructive">
             {actionError || error}
           </div>
         )}
 
-        {loading && members.length === 0 && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Spinner className="size-3.5" />
-            Loading…
-          </div>
-        )}
-
-        <section className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <Users className="size-4 text-primary" />
-            <h2 className="text-sm font-semibold">Members</h2>
-            <Badge variant="secondary">{members.length}</Badge>
-          </div>
+        <Section
+          title="Members"
+          count={members.length || null}
+          action={loading ? <Spinner className="size-3.5 text-muted-foreground" aria-label="Loading members" /> : null}
+        >
 
           {members.length === 0 && !loading ? (
             <Empty className="border-0 py-6">
@@ -274,7 +258,7 @@ export const UsersWindowContent = memo(function UsersWindowContent({
               </EmptyHeader>
             </Empty>
           ) : (
-            <ItemGroup className="gap-1">
+            <ListGroup>
               {members.map((member) => {
                 const memberId = member.id;
                 const isYou = member.user_id === currentUserId;
@@ -285,24 +269,16 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                   && !isYou;
                 const memberLabel = displayEmail || (member.role === 'owner' ? 'Workspace owner' : 'Unknown user');
                 return (
-                  <Item key={memberId ?? member.user_id} variant="outline">
-                    <ItemMedia className="size-9 items-center justify-center rounded-full bg-muted text-sm font-semibold uppercase text-muted-foreground">
-                      {displayEmail ? displayEmail.charAt(0).toUpperCase() : <UserRound className="size-4" />}
-                    </ItemMedia>
-                    <ItemContent className="min-w-0">
-                      <ItemTitle className="truncate font-semibold">
-                        {memberLabel}
-                        {isYou ? ' (you)' : ''}
-                      </ItemTitle>
-                      <div className="flex flex-wrap items-center gap-1">
-                        <Badge variant={roleBadgeVariant(member.role)}>
-                          {member.role === 'owner' && <Crown data-icon="inline-start" />}
-                          {member.role}
-                        </Badge>
-                      </div>
-                    </ItemContent>
-                    {canEditMember && memberId !== null && (
-                      <ItemActions>
+                  <ListRow key={memberId ?? member.user_id}>
+                    <span className="grid size-7 shrink-0 place-items-center rounded-full bg-muted text-xs font-medium uppercase text-muted-foreground">
+                      {displayEmail ? displayEmail.charAt(0).toUpperCase() : <UserRound className="size-3.5" />}
+                    </span>
+                    <div className="flex min-w-0 flex-1 items-baseline gap-2">
+                      <span className="truncate text-sm">{memberLabel}</span>
+                      {isYou && <span className="shrink-0 text-xs text-muted-foreground">You</span>}
+                    </div>
+                    {canEditMember && memberId !== null ? (
+                      <div className="flex shrink-0 items-center gap-1">
                         <NativeSelect
                           size="sm"
                           aria-label={`Change role for ${memberLabel}`}
@@ -325,6 +301,7 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                           type="button"
                           variant={confirmRemoveId === memberId ? 'destructive' : 'ghost'}
                           size="icon-xs"
+                          className={confirmRemoveId === memberId ? undefined : ROW_REVEAL}
                           aria-label={confirmRemoveId === memberId
                             ? `Confirm remove ${memberLabel}`
                             : `Remove ${memberLabel}`}
@@ -333,25 +310,24 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                         >
                           <Trash2 />
                         </Button>
-                      </ItemActions>
+                      </div>
+                    ) : (
+                      <span className="flex shrink-0 items-center gap-1 text-xs capitalize text-muted-foreground">
+                        {member.role === 'owner' && <Crown className="size-3" aria-hidden />}
+                        {member.role}
+                      </span>
                     )}
-                  </Item>
+                  </ListRow>
                 );
               })}
-            </ItemGroup>
+            </ListGroup>
           )}
-        </section>
+        </Section>
 
-        <section className="flex flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Link2 className="size-4 text-primary" />
-            <h2 className="text-sm font-semibold">Invite</h2>
-          </div>
-
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            One URL works for people and agents: send it to a person, or paste it into an agent. Individual
-            links last 15 minutes and can be used once.
-          </p>
+        <Section
+          title="Invite"
+          description="One link works for a person or an agent. It lasts 15 minutes and can be used once."
+        >
 
           {!canManage && loading && members.length === 0 ? null : !canManage ? (
             <div className="flex items-start gap-2 rounded-lg border bg-card/55 p-3 text-xs text-muted-foreground">
@@ -363,11 +339,13 @@ export const UsersWindowContent = memo(function UsersWindowContent({
             </div>
           ) : (
             <>
-              <div className="rounded-lg border bg-card/55 p-3 backdrop-blur-md">
+              <div>
                 <div className="flex flex-wrap items-end gap-2">
                   {newAudience !== 'controller' && (
                     <Field className="w-auto">
-                      <FieldLabel htmlFor="join-role">Role</FieldLabel>
+                      {/* The label only earns its line once there are other
+                          fields to tell apart; the select says what it is. */}
+                      <FieldLabel htmlFor="join-role" className={showInviteOptions ? undefined : 'sr-only'}>Role</FieldLabel>
                       <NativeSelect
                         id="join-role"
                         size="sm"
@@ -516,11 +494,11 @@ export const UsersWindowContent = memo(function UsersWindowContent({
               </div>
 
               {joinLinks.length === 0 ? null : (
-                <ItemGroup className="gap-1">
+                <ItemGroup className="gap-0 divide-y divide-border/70 overflow-hidden rounded-lg border border-border bg-card/50">
                   {joinLinks.map((link) => {
                     const state = joinLinkLifecycleState(link);
                     return (
-                      <Item key={link.id} variant="outline">
+                      <Item key={link.id} className="rounded-none">
                         <ItemMedia className="size-9 items-center justify-center rounded-full bg-muted text-muted-foreground">
                           <JoinAudienceIcon audience={link.audience} />
                         </ItemMedia>
@@ -568,19 +546,14 @@ export const UsersWindowContent = memo(function UsersWindowContent({
               )}
             </>
           )}
-        </section>
+        </Section>
 
         {canIssueWorkspaceControl && (controllers.length > 0 || newAudience === 'controller') && (
-          <section className="flex flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <ServerCog className="size-4 text-primary" />
-              <h2 className="text-sm font-semibold">Workspace controllers</h2>
-              <Badge variant="secondary">{controllers.length}</Badge>
-            </div>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Named control credentials can register their own agents and stewarded resources. Revocation is
-              independent; child records stay attributed for audit.
-            </p>
+          <Section
+            title="Workspace controllers"
+            count={controllers.length}
+            description="Named credentials that can register their own agents and resources. Revoking one keeps its records attributed for audit."
+          >
             {controllersLoading ? (
               <div className="flex items-center gap-2 rounded-xl border border-dashed border-border p-4 text-xs text-muted-foreground">
                 <Spinner className="size-3.5" />
@@ -599,14 +572,14 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                 </EmptyHeader>
               </Empty>
             ) : (
-              <ItemGroup className="gap-1">
+              <ItemGroup className="gap-0 divide-y divide-border/70 overflow-hidden rounded-lg border border-border bg-card/50">
                 {controllers.map(controller => {
                   const expired = controller.expires_at
                     ? new Date(controller.expires_at).getTime() <= Date.now()
                     : false;
                   const active = controller.status === 'active' && !expired;
                   return (
-                    <Item key={controller.id} variant="outline">
+                    <Item key={controller.id} className="rounded-none">
                       <ItemMedia className="size-9 items-center justify-center rounded-full bg-muted text-muted-foreground">
                         <ServerCog className="size-4" />
                       </ItemMedia>
@@ -650,7 +623,7 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                 })}
               </ItemGroup>
             )}
-          </section>
+          </Section>
         )}
       </div>
     </div>
