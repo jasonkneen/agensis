@@ -1174,17 +1174,17 @@ export const Sidebar = React.memo(function Sidebar({
      {(onOpenFeedback || onOpenTenants || workspaceSwitcherSlot) && (
       <div className="sidebar-footer-actions flex gap-1.5">
        {workspaceSwitcherSlot && (
-        <Button type="button" variant="outline" size="sm" className="min-w-0 flex-1" onClick={onCreateWorkspace}>
-         <Plus data-icon="inline-start" /> <span className="truncate">Workspace</span>
+        <Button type="button" variant="outline" size="sm" className="h-7 min-w-0 flex-1 gap-1 px-1.5 text-xs" onClick={onCreateWorkspace} aria-label="New workspace" title="New workspace">
+         <Plus data-icon="inline-start" /> <span className="truncate">New</span>
         </Button>
        )}
        {onOpenFeedback && (
-        <Button type="button" variant="outline" size="sm" className="min-w-0 flex-1" onClick={onOpenFeedback}>
+        <Button type="button" variant="outline" size="sm" className="h-7 min-w-0 flex-1 gap-1 px-1.5 text-xs" onClick={onOpenFeedback}>
          <MessageSquareWarning data-icon="inline-start" /> <span className="truncate">Feedback</span>
         </Button>
        )}
        {onOpenTenants && (
-        <Button type="button" variant="outline" size="sm" className="min-w-0 flex-1" onClick={onOpenTenants}>
+        <Button type="button" variant="outline" size="sm" className="h-7 min-w-0 flex-1 gap-1 px-1.5 text-xs" onClick={onOpenTenants}>
          <Building2 data-icon="inline-start" /> <span className="truncate">Tenants</span>
         </Button>
        )}
