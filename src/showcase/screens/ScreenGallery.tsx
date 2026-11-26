@@ -303,7 +303,7 @@ function readRoute(): string | null {
   return id || null;
 }
 
-const MODES: ThemeMode[] = ['default-light', 'default-dark'];
+const MODES: ThemeMode[] = ['light', 'dark'];
 
 export function ScreenGallery() {
   const { mode, setTheme } = useTheme();

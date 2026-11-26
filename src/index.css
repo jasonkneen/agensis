@@ -477,16 +477,6 @@
  bottom: 0;
  mask-image: radial-gradient(circle at 100% 0, transparent calc(var(--radius-xl) - 0.5px), #000 var(--radius-xl));
 }
-:root[data-ui-theme="neo"] .canvas-column::before,
-:root[data-ui-theme="neo"] .canvas-column::after {
- background: var(--card);
- backdrop-filter: none;
-}
-:root[data-normal-theme="carbon"] .canvas-column::before,
-:root[data-normal-theme="carbon"] .canvas-column::after {
- background: var(--sidebar);
- backdrop-filter: none;
-}
 /* The sidebar's straight hairline would cut across the curve. */
 div:has(> .canvas-column) [data-sidebar-panel] {
  border-right-color: transparent !important;
@@ -3308,26 +3298,11 @@ body {
    tokens so nothing reads as a big pill. The base --radius is left untouched
    (capping it would round LESS than intended); only xl+ are pulled down to lg.
    Colour-only normal themes otherwise inherit the classic radii. */
-:root[data-normal-theme-group="Minimal"],
-:root[data-normal-theme-group="Developer"],
-:root[data-normal-theme-group="Tinted"] {
- --radius-xl: var(--radius-lg);
- --radius-2xl: var(--radius-lg);
- --radius-3xl: var(--radius-lg);
- --radius-4xl: var(--radius-lg);
-}
 
 /* Flatten fully-rounded control + container surfaces to `lg`: cards, inputs,
    dialogs, popovers, dropdowns, pills, product badges, and NON-icon buttons.
    Icon-shaped buttons (data-size="icon*") keep their radius so the round
    notification bell / avatar triggers stay circular; avatars excluded too. */
-:where(:root[data-normal-theme-group="Minimal"], :root[data-normal-theme-group="Developer"], :root[data-normal-theme-group="Tinted"]) :is([data-slot="card"], [data-slot="input"], [data-slot="select-trigger"], [data-slot="dialog-content"], [data-slot="popover-content"], [data-slot="dropdown-menu-content"], [data-slot="badge"], .home-suggestion-pill, .sidebar-search):not([class*="avatar"]) {
- border-radius: var(--radius-lg) !important;
-}
-
-:where(:root[data-normal-theme-group="Minimal"], :root[data-normal-theme-group="Developer"], :root[data-normal-theme-group="Tinted"]) [data-slot="button"]:not([data-size^="icon"]) {
- border-radius: var(--radius-lg) !important;
-}
 
 :root[data-theme="dark"] {
  --background: oklch(0.145 0 0);
@@ -3370,180 +3345,10 @@ body {
    the surfaces quiet, while the controls retain a restrained version of the
    offset edge used by the Brutal family.
    ============================================================ */
-:root[data-ui-theme="default"][data-theme="light"] {
- --canvas-base: #f8f8f8;
- --canvas-elevated: #ffffff;
- --canvas-raised: #f0f0f0;
- --canvas-overlay: #ffffff;
- --border: #e0e0e0;
- --border-subtle: #eaeaea;
- --border-strong: #cccccc;
- --ink: #1a1a1a;
- --ink-secondary: #5a5a5a;
- --ink-muted: #9a9a9a;
- --ink-inverse: #ffffff;
- --accent: var(--primary);
- --accent-hover: color-mix(in srgb, var(--primary) 82%, var(--foreground) 18%);
- --accent-subtle: color-mix(in srgb, var(--primary) 12%, transparent);
- --accent-border: color-mix(in srgb, var(--primary) 32%, transparent);
- --success: #3d7a5a;
- --warning: #d4900a;
- --error: #b8200c;
- --background: #f8f8f8;
- --foreground: #1a1a1a;
- --card: #ffffff;
- --card-foreground: #1a1a1a;
- --popover: #ffffff;
- --popover-foreground: #1a1a1a;
- --primary: var(--foreground);
- --primary-foreground: var(--background);
- --secondary: #f0f0f0;
- --secondary-foreground: #1a1a1a;
- --muted: #f0f0f0;
- --muted-foreground: #5a5a5a;
- --sh-accent: color-mix(in srgb, var(--primary) 14%, var(--background));
- --sh-accent-foreground: var(--foreground);
- --sh-border: #e0e0e0;
- --input: #e0e0e0;
- --ring: var(--primary);
- --sidebar: #ffffff;
- --sidebar-foreground: #1a1a1a;
- --sidebar-primary: var(--primary);
- --sidebar-primary-foreground: var(--primary-foreground);
- --sidebar-accent: #f0f0f0;
- --sidebar-accent-foreground: #1a1a1a;
- --sidebar-border: #e0e0e0;
- --sidebar-ring: var(--primary);
- --shadow-sm: 2px 2px 0 color-mix(in srgb, var(--foreground) 18%, transparent);
- --shadow-md: 3px 3px 0 color-mix(in srgb, var(--foreground) 22%, transparent);
- --shadow-lg: 4px 4px 0 color-mix(in srgb, var(--foreground) 26%, transparent);
- --shadow-xl: 5px 5px 0 color-mix(in srgb, var(--foreground) 30%, transparent);
- --shadow-2xl: 6px 6px 0 color-mix(in srgb, var(--foreground) 32%, transparent);
- --shadow-window: 4px 4px 0 color-mix(in srgb, var(--foreground) 24%, transparent);
- --chrome-cast: 1px 0 0 color-mix(in srgb, var(--foreground) 10%, transparent), 6px 0 0 color-mix(in srgb, var(--foreground) 18%, transparent);
- --home-bg-image-opacity: 0.28;
- --home-bg-overlay: linear-gradient(to bottom, rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0.08) 72%, var(--canvas-base));
- --home-bg-vignette: radial-gradient(135% 105% at 50% 42%, transparent 44%, rgba(0, 0, 0, 0.1) 76%, rgba(0, 0, 0, 0.2) 100%);
- --default-hard-shadow: 2px 2px 0 color-mix(in srgb, var(--foreground) 20%, transparent);
- --default-hard-shadow-hover: 3px 3px 0 color-mix(in srgb, var(--foreground) 22%, transparent);
-}
-
-:root[data-ui-theme="default"][data-theme="dark"] {
- --canvas-base: #0c0c0c;
- --canvas-elevated: #141414;
- --canvas-raised: #1c1c1c;
- --canvas-overlay: #222222;
- --border: #2a2a2a;
- --border-subtle: #1f1f1f;
- --border-strong: #3a3a3a;
- --ink: #f2f2f2;
- --ink-secondary: #9a9a9a;
- --ink-muted: #565656;
- --ink-inverse: #0c0c0c;
- --accent: var(--primary);
- --accent-hover: color-mix(in srgb, var(--primary) 82%, white 18%);
- --accent-subtle: color-mix(in srgb, var(--primary) 16%, transparent);
- --accent-border: color-mix(in srgb, var(--primary) 38%, transparent);
- --success: #65d7a0;
- --warning: #f0b85d;
- --error: #f27d5f;
- --background: #0c0c0c;
- --foreground: #f2f2f2;
- --card: #141414;
- --card-foreground: #f2f2f2;
- --popover: #222222;
- --popover-foreground: #f2f2f2;
- --primary: var(--foreground);
- --primary-foreground: var(--background);
- --secondary: #1c1c1c;
- --secondary-foreground: #f2f2f2;
- --muted: #1c1c1c;
- --muted-foreground: #9a9a9a;
- --sh-accent: color-mix(in srgb, var(--primary) 18%, var(--background));
- --sh-accent-foreground: var(--foreground);
- --sh-border: #2a2a2a;
- --input: #2a2a2a;
- --ring: var(--primary);
- --sidebar: #141414;
- --sidebar-foreground: #f2f2f2;
- --sidebar-primary: var(--primary);
- --sidebar-primary-foreground: var(--primary-foreground);
- --sidebar-accent: #1c1c1c;
- --sidebar-accent-foreground: #f2f2f2;
- --sidebar-border: #2a2a2a;
- --sidebar-ring: var(--primary);
- /* Shadows mix toward BLACK here, not toward --foreground.
-    The light theme mixes toward --foreground and that is correct there, because
-    in light mode --foreground IS near-black. Reusing the same expression in dark
-    mode inverted it: --foreground is #f2f2f2, so every "shadow" was a pale
-    offset smudge sitting LIGHTER than the surface it fell on — a highlight
-    wearing a shadow's name. Offsets and the 0 blur radius are unchanged: these
-    stay hard-edged, which is the Default theme's whole look. Only the colour and
-    the strength move, and they go up, because a dark surface needs more contrast
-    to read the same as a light one. */
- --shadow-sm: 2px 2px 0 rgba(0, 0, 0, 0.55);
- --shadow-md: 3px 3px 0 rgba(0, 0, 0, 0.6);
- --shadow-lg: 4px 4px 0 rgba(0, 0, 0, 0.65);
- --shadow-xl: 5px 5px 0 rgba(0, 0, 0, 0.7);
- --shadow-2xl: 6px 6px 0 rgba(0, 0, 0, 0.75);
- --shadow-window: 4px 4px 0 rgba(0, 0, 0, 0.62);
- --chrome-cast: 1px 0 0 rgba(0, 0, 0, 0.5), 6px 0 0 rgba(0, 0, 0, 0.6);
- --home-bg-image-opacity: 0.16;
- --home-bg-overlay: linear-gradient(to bottom, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0.52) 72%, var(--canvas-base));
- --home-bg-vignette: radial-gradient(135% 105% at 50% 42%, transparent 40%, rgba(0, 0, 0, 0.2) 74%, rgba(0, 0, 0, 0.42) 100%);
- --default-hard-shadow: 2px 2px 0 rgba(0, 0, 0, 0.6);
- --default-hard-shadow-hover: 3px 3px 0 rgba(0, 0, 0, 0.7);
-}
-
-:root[data-ui-theme="default"] {
- /* The radius tokens are NOT here any more: they are derived from
-    --default-radius-scale in the block just below, so a slider can drive all
-    thirteen at once. Left here they would be dead declarations shadowed a few
-    lines later — the kind of duplicate that survives because both copies look
-    authoritative. */
- background-image: radial-gradient(circle at 18% 8%, color-mix(in srgb, var(--primary) 7%, transparent), transparent 30rem);
-}
-
-:root[data-ui-theme="default"] {
- /* GRANULAR CORNERS.
-    These used to be three fixed scopes — sharp / rounded / pill — hung off
-    [data-default-radius]. Four presets could not express "a bit rounder", and
-    their names did not even order by radius: "Rounded" (14px) sat between
-    "Soft" (10px) and "Pill", so the picker read as four unrelated styles rather
-    than one axis. It is one axis, so it is one number now.
-
-    --default-radius-scale is a multiplier the Settings slider writes onto the
-    root element (0 = square, 1 = a 10px maximum, up to 2.4). Smaller tokens
-    retain their proportions, while xl and above stop at the number displayed
-    in Settings. Previously the badge could say 11px while rounded-2xl resolved
-    to 17.6px, which made a precise-looking value actively misleading.
-
-    The two "999px" pill values are handled separately: a fully-round toolbar or
-    button is a shape, not a size, so they switch at the top of the range rather
-    than growing continuously into it. */
- --default-radius-scale: 1;
- --radius: calc(10px * var(--default-radius-scale));
- --radius-sm: calc(4px * var(--default-radius-scale));
- --radius-md: calc(6px * var(--default-radius-scale));
- --radius-lg: calc(8px * var(--default-radius-scale));
- --radius-xl: var(--radius);
- --radius-2xl: var(--radius);
- --radius-3xl: var(--radius);
- --radius-4xl: var(--radius);
- --default-radius-card: calc(8px * var(--default-radius-scale));
- --default-radius-modal: calc(10px * var(--default-radius-scale));
- --default-radius-toolbar: var(--radius);
- --default-radius-control: calc(6px * var(--default-radius-scale));
- --default-radius-button: calc(9px * var(--default-radius-scale));
-}
 
 /* At the top of the range the toolbar and button go fully round: past roughly
    2x the base, a "rounder" rectangle stops reading as rounder and starts
    reading as a lozenge that has not committed. */
-:root[data-ui-theme="default"][data-radius-pill="true"] {
- --default-radius-toolbar: 999px;
- --default-radius-button: 999px;
-}
 
 @layer base {
  * {
@@ -3894,108 +3699,17 @@ select {
 /* Default controls and elevation: the same tactile offset idea as
    ideation-canvas / Doop. Selection states keep their existing background
    treatment instead of gaining a new frame. */
-:root[data-ui-theme="default"] body {
- background-color: var(--canvas-base);
- background-image: radial-gradient(circle at 18% 8%, color-mix(in srgb, var(--primary) 7%, transparent), transparent 30rem);
-}
-
-:root[data-ui-theme="default"] [data-slot="button"],
-:root[data-ui-theme="default"] [data-slot="toggle-group-item"],
-:root[data-ui-theme="default"] [data-slot="select-trigger"] {
- border-radius: var(--default-radius-button) !important;
- transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
-}
-
-:root[data-ui-theme="default"] [data-slot="button"][data-variant="outline"],
-:root[data-ui-theme="default"] [data-slot="toggle-group-item"],
-:root[data-ui-theme="default"] [data-slot="select-trigger"] {
- border-color: color-mix(in srgb, var(--border-strong) 72%, var(--foreground) 28%);
- background: var(--card);
-}
 
 /* Solid primary surfaces use the same restrained glass accent as the selected
    "All" filter. Keep the primary colour, but let the surface underneath show
    through instead of painting a block of solid orange. */
-:root[data-ui-theme="default"] :is(
- [data-slot="button"][data-variant="default"],
- [data-slot="badge"][data-variant="default"],
- button[class~="bg-primary"],
- .sidebar-action-count,
- .sidebar-section-count
-) {
- background: color-mix(in srgb, var(--primary) 15%, var(--card)) !important;
- color: var(--foreground) !important;
- border-color: color-mix(in srgb, var(--primary) 52%, var(--border-strong) 48%) !important;
-}
-
-:root[data-ui-theme="default"] :is(
- [data-slot="button"][data-variant="default"],
- [data-slot="badge"][data-variant="default"],
- button[class~="bg-primary"]
-):hover {
- background: color-mix(in srgb, var(--primary) 23%, var(--card)) !important;
-}
-
-:root[data-ui-theme="default"] [data-slot="button"][data-bordered="true"],
-:root[data-ui-theme="default"] [data-slot="toggle-group-item"],
-:root[data-ui-theme="default"] [data-slot="select-trigger"] {
- box-shadow: var(--default-hard-shadow) !important;
-}
 
 /* Filled primary actions are intentional calls to action, not selection
    markers. Keep icon-only view toggles out of this treatment. */
-:root[data-ui-theme="default"] [data-slot="button"][data-variant="default"]:not([data-size^="icon"]) {
- box-shadow: var(--default-hard-shadow) !important;
-}
-
-:root[data-ui-theme="default"] [data-slot="button"][data-variant="ghost"]:not([data-bordered="true"]) {
- border-color: transparent;
- background: transparent;
- box-shadow: none;
-}
-
-:root[data-ui-theme="default"] [data-slot="button"][data-variant="outline"]:hover,
-:root[data-ui-theme="default"] [data-slot="button"][data-bordered="true"]:hover,
-:root[data-ui-theme="default"] [data-slot="toggle-group-item"]:hover,
-:root[data-ui-theme="default"] [data-slot="select-trigger"]:hover {
- transform: translate(-1px, -1px);
- box-shadow: var(--default-hard-shadow-hover) !important;
-}
-
-:root[data-ui-theme="default"] [data-slot="button"][data-variant="default"]:not([data-size^="icon"]):hover {
- transform: translate(-1px, -1px);
- box-shadow: var(--default-hard-shadow-hover) !important;
-}
-
-:root[data-ui-theme="default"] [data-slot="button"][data-variant="outline"]:active,
-:root[data-ui-theme="default"] [data-slot="button"][data-bordered="true"]:active,
-:root[data-ui-theme="default"] [data-slot="toggle-group-item"]:active {
- transform: translate(2px, 2px);
- box-shadow: none !important;
-}
-
-:root[data-ui-theme="default"] [data-slot="button"][data-variant="default"]:not([data-size^="icon"]):active {
- transform: translate(2px, 2px);
- box-shadow: none !important;
-}
 
 /* Plain buttons (the settings cards and other small pickers) do not carry a
    data-slot, but their existing `border` utility is still a useful semantic
    boundary for the same tactile treatment. */
-:root[data-ui-theme="default"] button:not([data-slot="button"]):not([data-flat-control])[class~="border"]:not([data-variant="ghost"]) {
- box-shadow: var(--default-hard-shadow) !important;
- transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
-}
-
-:root[data-ui-theme="default"] button:not([data-slot="button"]):not([data-flat-control])[class~="border"]:not([data-variant="ghost"]):hover {
- transform: translate(-1px, -1px);
- box-shadow: var(--default-hard-shadow-hover) !important;
-}
-
-:root[data-ui-theme="default"] button:not([data-slot="button"]):not([data-flat-control])[class~="border"]:not([data-variant="ghost"]):active {
- transform: translate(2px, 2px);
- box-shadow: none !important;
-}
 
 /* Default LIGHT — crisp control edges.
    The default theme leans on --default-hard-shadow (a low-contrast offset)
@@ -4006,19 +3720,6 @@ select {
    shadow stays. Scoped to [data-theme="light"] so default-dark (which already
    has crisp borders on near-black) is untouched, and to the named controls so
    hairline list dividers keep the quiet --border. */
-:root[data-ui-theme="default"][data-theme="light"] {
- --control-edge: #1a1a1a;
-}
-
-:root[data-ui-theme="default"][data-theme="light"] :is(
- [data-slot="button"][data-bordered="true"],
- [data-slot="select-trigger"],
- [data-slot="toggle-group-item"],
- [data-slot="input"],
- .sidebar-search
-) {
- border-color: var(--control-edge) !important;
-}
 
 /* Window titlebar controls (overflow / minimize / close in FloatingWindowShell):
    bare glyphs at rest — no border, fill or shadow — that only take the outline +
@@ -4027,7 +3728,6 @@ select {
    there's no layout shift. Scoped-under-`:root[data-ui-theme]` to match the
    light-mode !important rule's specificity, then appended after it to win the
    tie; the bare selector covers the other themes. */
-:root[data-ui-theme="default"] [data-slot="button"].window-titlebar-control:not(:hover),
 [data-slot="button"].window-titlebar-control:not(:hover) {
  border-color: transparent !important;
  background: transparent !important;
@@ -4048,13 +3748,6 @@ select {
    them show a crisp line. Repoint them to the SAME mode-aware edge as
    .workspace-tile-swatch so the rail reads as one system. Create keeps its
    dashed "add" affordance — only its colour darkens. */
-:root[data-ui-theme="default"][data-theme="light"] :is(
- [data-workspace-rail-create],
- [data-workspace-rail-hidden],
- [data-workspace-rail-tenants]
-) {
- border-color: color-mix(in srgb, var(--foreground) 55%, transparent) !important;
-}
 
 /* Avatars in the sidebar chrome (DM rows + the workspace/channel indicator in
    the titlebar) draw their edge from the shared avatar ::after, which reads off
@@ -4063,117 +3756,26 @@ select {
    around — matching the agents pill. Scoped to [data-sidebar-panel] so message
    and presence avatars elsewhere are untouched; mix-blend-darken keeps the line
    from punching through a light identity fill. */
-:root[data-ui-theme="default"][data-theme="light"] [data-sidebar-panel] [data-slot="avatar"]::after {
- border-color: var(--control-edge);
-}
 
 /* Count pills carry no border width of their own — add a hairline so the
    dark edge has something to paint, matching the other controls. */
-:root[data-ui-theme="default"][data-theme="light"] :is(
- .sidebar-action-count,
- .sidebar-section-count
-) {
- border: 1px solid var(--control-edge) !important;
-}
 
 /* Tailwind's shadow utilities bake blurred values into --tw-shadow instead of
    reading the app's --shadow-* tokens. Re-point the outer utility shadows at
    the Default scale while preserving any separate focus/ring layers. State
    controls and icon-only buttons are excluded so elevation never becomes a
    selection indicator. */
-:root[data-ui-theme="default"] :is(.shadow-sm, [class~="hover:shadow-sm"]:hover):not([data-selection-control]):not([data-state="active"]):not([data-state="on"]):not([aria-selected="true"]):not([aria-pressed="true"]):not([data-slot="button"][data-size^="icon"]) {
- --tw-shadow: var(--shadow-sm) !important;
-}
-
-:root[data-ui-theme="default"] :is(.shadow-md, [class~="hover:shadow-md"]:hover):not([data-selection-control]):not([data-state="active"]):not([data-state="on"]):not([aria-selected="true"]):not([aria-pressed="true"]):not([data-slot="button"][data-size^="icon"]) {
- --tw-shadow: var(--shadow-md) !important;
-}
-
-:root[data-ui-theme="default"] :is(.shadow-lg, [class~="hover:shadow-lg"]:hover):not([data-selection-control]):not([data-state="active"]):not([data-state="on"]):not([aria-selected="true"]):not([aria-pressed="true"]):not([data-slot="button"][data-size^="icon"]) {
- --tw-shadow: var(--shadow-lg) !important;
-}
-
-:root[data-ui-theme="default"] :is(.shadow-xl, [class~="hover:shadow-xl"]:hover):not([data-selection-control]):not([data-state="active"]):not([data-state="on"]):not([aria-selected="true"]):not([aria-pressed="true"]):not([data-slot="button"][data-size^="icon"]) {
- --tw-shadow: var(--shadow-xl) !important;
-}
-
-:root[data-ui-theme="default"] :is(.shadow-2xl, [class~="hover:shadow-2xl"]:hover):not([data-selection-control]):not([data-state="active"]):not([data-state="on"]):not([aria-selected="true"]):not([aria-pressed="true"]):not([data-slot="button"][data-size^="icon"]) {
- --tw-shadow: var(--shadow-2xl) !important;
-}
 
 /* The same controls do not retain Tailwind's blurred selection shadow either;
    selection is carried by the existing background/border state. */
-:root[data-ui-theme="default"] :is([data-selection-control], [data-state="active"], [data-state="on"], [aria-selected="true"], [aria-pressed="true"], [data-slot="button"][data-size^="icon"]) {
- --tw-shadow: none !important;
-}
-
-:root[data-ui-theme="default"] [data-slot="toggle-group-item"][data-state="on"] {
- background: var(--sh-accent);
- border-color: color-mix(in srgb, var(--primary) 54%, var(--border-strong) 46%);
-}
-
-:root[data-ui-theme="default"] [data-slot="card"],
-:root[data-ui-theme="default"] [data-slot="dialog-content"],
-:root[data-ui-theme="default"] [data-slot="alert-dialog-content"],
-:root[data-ui-theme="default"] [data-slot="popover-content"],
-:root[data-ui-theme="default"] [data-slot="dropdown-menu-content"],
-:root[data-ui-theme="default"] [data-slot="select-content"],
-:root[data-ui-theme="default"] .settings-choice-card {
- border-radius: var(--default-radius-card) !important;
- border-color: color-mix(in srgb, var(--border) 78%, var(--foreground) 22%);
- background: var(--card);
- box-shadow: var(--shadow-md);
-}
-
-:root[data-ui-theme="default"] [data-slot="input-group"],
-:root[data-ui-theme="default"] [data-slot="input"],
-:root[data-ui-theme="default"] [data-slot="textarea"],
-:root[data-ui-theme="default"] input:not([type="range"]):not([type="checkbox"]):not([type="radio"]),
-:root[data-ui-theme="default"] textarea,
-:root[data-ui-theme="default"] select {
- border-radius: var(--default-radius-control);
- border-color: var(--border);
- background: var(--card);
- box-shadow: 1px 1px 0 color-mix(in srgb, var(--foreground) 12%, transparent);
-}
 
 /* A few legacy surfaces carry their own literal shadow instead of a Tailwind
    utility. Settings stays on the Default elevation ladder. The home composer
    is the calm focal surface used by Legion, so it gets a soft ambient shadow
    below rather than looking like another stamped control. */
-:root[data-ui-theme="default"] .settings-dialog {
- box-shadow: var(--shadow-xl) !important;
-}
-
-:root[data-ui-theme="default"][data-theme="light"] .home-workspace-composer {
- box-shadow: 0 8px 28px rgba(17, 17, 17, 0.12) !important;
-}
-
-:root[data-ui-theme="default"][data-theme="dark"] .home-workspace-composer {
- box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45) !important;
-}
 
 /* Starter prompts are suggestions, not raised actions. Neo and Paper keep
    their own explicit treatments; Default follows Legion's flat outline chips. */
-:root[data-ui-theme="default"] .home-suggestion-pill,
-:root[data-ui-theme="default"] .home-suggestion-pill:hover,
-:root[data-ui-theme="default"] .home-suggestion-pill:active {
- transform: none !important;
- box-shadow: none !important;
-}
-
-:root[data-ui-theme="default"] .task-card-expanded,
-:root[data-ui-theme="default"] .thread-widget-card {
- box-shadow: var(--shadow-md) !important;
-}
-
-:root[data-ui-theme="default"] .task-card {
- border-radius: var(--radius);
-}
-
-:root[data-ui-theme="default"] [data-window-surface] {
- border-radius: var(--radius-xl);
-}
 
 /* Full/max-expanded windows are edge-to-edge, so their surface stays square in every theme. */
 [data-window-view-mode="full"] [data-window-surface] {
@@ -4243,137 +3845,10 @@ select {
    as equal, full-width channel rows rather than introducing sender-side chat
    bubbles.
    ============================================================================ */
-:root[data-normal-theme="carbon"] {
- --radius-sm: 5px;
- --radius-md: 8px;
- --radius-lg: 10px;
- --radius-xl: 12px;
- --radius-2xl: 12px;
- --radius-3xl: 12px;
- --radius-4xl: 12px;
- --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.18);
- --shadow-md: 0 6px 18px -12px rgb(0 0 0 / 0.42);
- --shadow-lg: 0 10px 28px -18px rgb(0 0 0 / 0.5);
- --shadow-xl: 0 14px 36px -22px rgb(0 0 0 / 0.58);
- --shadow-window: 0 0 0 1px var(--border), 0 18px 42px -30px rgb(0 0 0 / 0.72);
- --chrome-cast: none;
-}
 
 /* This visual language is solid rather than glass. Bypass the user glass
    alpha for Carbon surfaces without mutating their stored preference, so
    switching to another theme restores exactly the translucency they chose. */
-:root[data-normal-theme="carbon"] [data-sidebar-panel],
-:root[data-normal-theme="carbon"] [data-window-surface],
-:root[data-normal-theme="carbon"] .settings-dialog,
-:root[data-normal-theme="carbon"] .settings-dialog-header,
-:root[data-normal-theme="carbon"] .settings-dialog-nav,
-:root[data-normal-theme="carbon"] .settings-dialog-content,
-:root[data-normal-theme="carbon"] .settings-dialog-scroll,
-:root[data-normal-theme="carbon"] [data-slot="dialog-content"],
-:root[data-normal-theme="carbon"] [data-slot="popover-content"],
-:root[data-normal-theme="carbon"] [data-slot="dropdown-menu-content"],
-:root[data-normal-theme="carbon"] .agensis-glass-panel,
-:root[data-normal-theme="carbon"] .home-workspace-composer {
- backdrop-filter: none !important;
- -webkit-backdrop-filter: none !important;
-}
-
-:root[data-normal-theme="carbon"] [data-sidebar-panel],
-:root[data-normal-theme="carbon"] [data-workspace-rail] {
- border-color: var(--border) !important;
- background: var(--sidebar) !important;
-}
-
-:root[data-normal-theme="carbon"] .sidebar-accent-wash {
- display: none;
-}
-
-:root[data-normal-theme="carbon"] [data-window-surface],
-:root[data-normal-theme="carbon"] .settings-dialog,
-:root[data-normal-theme="carbon"] .settings-dialog-header,
-:root[data-normal-theme="carbon"] .settings-dialog-nav,
-:root[data-normal-theme="carbon"] .settings-dialog-content,
-:root[data-normal-theme="carbon"] .settings-dialog-scroll,
-:root[data-normal-theme="carbon"] [data-slot="card"] {
- background: var(--card) !important;
-}
-
-:root[data-normal-theme="carbon"] [data-slot="dialog-content"],
-:root[data-normal-theme="carbon"] [data-slot="popover-content"],
-:root[data-normal-theme="carbon"] [data-slot="dropdown-menu-content"],
-:root[data-normal-theme="carbon"] .agensis-glass-panel {
- background: var(--popover) !important;
-}
-
-:root[data-normal-theme="carbon"] .home-workspace-composer {
- background: var(--card) !important;
-}
-
-:root[data-normal-theme="carbon"] .channel-shell {
- --channel-surface: var(--background) !important;
- --channel-header: var(--card) !important;
- --channel-composer: var(--card) !important;
- --channel-side: var(--card) !important;
-}
-
-:root[data-normal-theme="carbon"] .channel-message-surface,
-:root[data-normal-theme="carbon"] .channel-message-surface [data-slot="message-scroller-viewport"],
-:root[data-normal-theme="carbon"] .channel-message-surface [data-slot="message-scroller-content"] {
- background: var(--channel-surface) !important;
-}
-
-:root[data-normal-theme="carbon"] .channel-header,
-:root[data-normal-theme="carbon"] .channel-composer,
-:root[data-normal-theme="carbon"] .channel-side-panel {
- border-color: var(--border) !important;
-}
-
-:root[data-normal-theme="carbon"] .channel-composer [data-slot="input-group"] {
- border-color: var(--border) !important;
- background: var(--secondary) !important;
- box-shadow: none;
-}
-
-:root[data-normal-theme="carbon"] :is(
- .sidebar-action-row[data-active="true"],
- .sidebar-item-row[data-active="true"],
- .sidebar-session-row[data-active="true"],
- .sidebar-agent-row[data-active="true"]
-) {
- border-color: transparent !important;
- background: var(--secondary) !important;
- color: var(--foreground) !important;
-}
-
-:root[data-normal-theme="carbon"] .chat-message-row,
-:root[data-normal-theme="carbon"] .chat-thread-message {
- border-bottom: 1px solid var(--border-subtle);
- border-radius: 0;
- background: transparent;
- transition: background-color 120ms ease;
-}
-
-:root[data-normal-theme="carbon"] .chat-message-row:hover,
-:root[data-normal-theme="carbon"] .chat-message-row:focus-within,
-:root[data-normal-theme="carbon"] .chat-thread-message:hover,
-:root[data-normal-theme="carbon"] .chat-thread-message:focus-within {
- background: color-mix(in srgb, var(--foreground) 3%, transparent);
-}
-
-:root[data-normal-theme="carbon"] :is(.chat-message-row, .chat-thread-message)[data-streaming="true"] {
- border-bottom-color: var(--accent-border);
-}
-
-:root[data-normal-theme="carbon"] .chat-stream-status [data-slot="spinner"] {
- color: var(--primary);
-}
-
-@media (prefers-reduced-motion: reduce) {
- :root[data-normal-theme="carbon"] .chat-message-row,
- :root[data-normal-theme="carbon"] .chat-thread-message {
-  transition: none;
- }
-}
 
 /* Touch: canvas objects and their resize handles are dragged directly, so the
    browser must not claim the gesture for panning/zooming. (The drawing surface

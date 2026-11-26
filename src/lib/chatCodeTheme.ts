@@ -1,6 +1,5 @@
 import { useSyncExternalStore } from 'react';
 import type { ThemeInput } from '@streamdown/code';
-import { getStoredNormalTheme } from '../showcase/normalThemes';
 
 export type ChatShikiThemePair = [light: ThemeInput, dark: ThemeInput];
 
@@ -15,6 +14,7 @@ const DEFAULT_CODE_THEMES: ChatShikiThemePair = ['github-light', 'github-dark'];
 const CODE_THEMES_BY_PALETTE: Readonly<Record<string, ChatShikiThemePair>> = {
   dracula: ['github-light', 'dracula'],
   'tokyo-night': ['github-light', 'tokyo-night'],
+  tokyo: ['github-light', 'tokyo-night'],
   'one-dark': ['github-light', 'one-dark-pro'],
   nord: ['github-light', 'nord'],
   catppuccin: ['catppuccin-latte', 'catppuccin-mocha'],
@@ -39,8 +39,9 @@ function readChatPalette(): string {
   if (typeof document === 'undefined') return '';
   const root = document.documentElement;
 
-  if (root.hasAttribute('data-normal-theme-group')) return getStoredNormalTheme();
-  return '';
+  // The Expo base names the syntax palette when one has a close Shiki peer
+  // (nord, dracula, tokyo, gruvbox, solarized, forest); others use GitHub's.
+  return root.getAttribute('data-expo-base') || '';
 }
 
 function subscribeToTheme(onChange: () => void): () => void {

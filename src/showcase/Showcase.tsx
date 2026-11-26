@@ -4,7 +4,7 @@ import { TooltipProvider } from '@agensis/ui/components/tooltip';
 import { Toaster } from '@/components/ui/sonner';
 import { Button } from '@agensis/ui/components/button';
 import { useTheme, type ThemeMode } from '@/hooks/useTheme';
-import { THEME_PRESETS, applyThemePreset, getStoredPreset } from './themePresets';
+import { EXPO_PRESETS, applyExpoPreset, currentExpoPreset, EXPO_ACCENTS } from '@/lib/theme/expoColors';
 
 import ActionsSection from './sections/Actions';
 import InputsSection from './sections/Inputs';
@@ -42,10 +42,10 @@ const MODES: Array<{ id: ThemeMode; icon: typeof Sun; label: string }> = [
 
 export function Showcase() {
   const { mode, setTheme } = useTheme();
-  const [preset, setPreset] = useState(getStoredPreset);
+  const [preset, setPreset] = useState(() => currentExpoPreset() ?? 'expo');
 
   useEffect(() => {
-    applyThemePreset(preset);
+    applyExpoPreset(preset);
   }, [preset]);
 
   return (
@@ -80,9 +80,9 @@ export function Showcase() {
                   );
                 })}
               </div>
-              {/* Accent presets */}
+              {/* Expo colour presets */}
               <div className="flex items-center gap-1.5">
-                {THEME_PRESETS.map((p) => (
+                {EXPO_PRESETS.map((p) => (
                   <button
                     key={p.id}
                     title={p.label}
@@ -91,7 +91,7 @@ export function Showcase() {
                     className={`size-6 rounded-full border-2 transition ${
                       preset === p.id ? 'border-foreground' : 'border-transparent'
                     }`}
-                    style={{ background: p.swatch }}
+                    style={{ background: EXPO_ACCENTS.find(a => a.id === p.accent)?.hex }}
                   />
                 ))}
               </div>

@@ -8,7 +8,7 @@
     <link rel="icon" type="image/svg+xml" href="/icon-192.svg" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
-    <meta name="theme-color" content="#0c0c0c" />
+    <meta name="theme-color" content="#2b2d48" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="agensis" />
@@ -30,18 +30,19 @@
   <body>
     <script>
       (function(){
-        var mode=localStorage.getItem('agensis_theme')||'default-light';
-        if(mode==='paper-dark'){
-          mode='dark';
-          localStorage.setItem('agensis_theme',mode);
-        }
-        var t=mode==='system'||mode==='default-system'
-          ?(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light')
-          :(mode==='dark'||mode==='neo-dark'||mode==='normal-dark'||mode==='default-dark'?'dark':'light');
-        var family=mode.indexOf('neo-')===0?'neo':mode.indexOf('paper-')===0?'paper':mode.indexOf('normal-')===0||mode==='light'||mode==='dark'||mode==='system'?'classic':mode.indexOf('default-')===0?'default':'default';
-        document.documentElement.setAttribute('data-theme',t);
-        document.documentElement.setAttribute('data-ui-theme',family);
-        document.documentElement.style.background=family==='default'?(t==='dark'?'#0c0c0c':'#f8f8f8'):(t==='dark'?'#0c0c0c':'#f8f8f8');
+        // One style (Expo); the stored choice is only the scheme plus colours.
+        // Mirrors normalizeThemeMode (src/hooks/useTheme.ts) so first paint is
+        // right before React loads.
+        var mode=String(localStorage.getItem('agensis_theme')||'light');
+        var scheme=mode==='system'||/-system$/.test(mode)?'system':(mode==='dark'||/-dark$/.test(mode)?'dark':'light');
+        var t=scheme==='system'?(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'):scheme;
+        var r=document.documentElement;
+        r.setAttribute('data-theme',t);
+        r.setAttribute('data-ui-theme','expo');
+        ['base','accent','paper'].forEach(function(k){
+          var v=localStorage.getItem('agensis_expo_'+k);
+          if(v)r.setAttribute('data-expo-'+k,v);
+        });
       })();
     </script>
     <div id="root"></div>
