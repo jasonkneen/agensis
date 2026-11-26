@@ -6,6 +6,7 @@ import {
  type LibrarySource,
 } from '../../lib/documentLibrary';
 import React from 'react';
+import { createPortal } from 'react-dom';
 import {
  Archive,
  AtSign,
@@ -42,7 +43,6 @@ import {
  RotateCcw,
  ListTodo,
  Activity as ActivityIcon,
- MessagesSquare,
  Search,
  Settings,
  Star,
@@ -75,7 +75,6 @@ import {
  DropdownMenuTrigger,
 } from '@agensis/ui/components/dropdown-menu';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
-import { Separator } from '@agensis/ui/components/separator';
 import { AccountDialog } from '../account/AccountDialog';
 import { AgentAvatar } from '../agents/AgentAvatar';
 import { SessionWorkBadge } from '../chat/AgentWorkBadge';
@@ -101,7 +100,6 @@ const DM_FILTER_PREF = oneOf<DmFilter>(['active', 'idle', 'busy', 'all']);
 
 const SIDEBAR_WIDTH_KEY = 'agensis_sidebar_width';
 const AGENT_FAVORITES_KEY = 'agensis_sidebar_agent_favorites';
-const COLLAPSED_SIDEBAR_WIDTH = 52;
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 380;
 /** How far one arrow-key press moves the resize seam, px. Matches usePaneSplit. */
@@ -245,6 +243,8 @@ interface SidebarProps {
  getStartedSlot?: React.ReactNode;
  notificationsSlot?: React.ReactNode;
  presenceSlot?: React.ReactNode;
+ /** Workspace-rail slot the collapsed sidebar portals its toggle + notification icons into. */
+ collapsedSlot?: HTMLElement | null;
 }
 
 export const Sidebar = React.memo(function Sidebar({
@@ -318,6 +318,7 @@ export const Sidebar = React.memo(function Sidebar({
  getStartedSlot,
  notificationsSlot,
  presenceSlot,
+ collapsedSlot,
 }: SidebarProps) {
  // Feeds the agent-work store for every live-elapsed badge in the app (sidebar
  // rows AND the thread indicator). Mounted here because the sidebar is the one
@@ -521,7 +522,7 @@ export const Sidebar = React.memo(function Sidebar({
  const setWorkspaceViewportLeft = React.useCallback((width: number, isCollapsed = collapsed) => {
   // Overlay (phone drawer): the sidebar floats above the canvas, so the
   // viewport's left inset is just the chrome gap — never the sidebar width.
-  const sidebarFrameWidth = overlay ? 0 : (isCollapsed ? COLLAPSED_SIDEBAR_WIDTH : width);
+  const sidebarFrameWidth = overlay ? 0 : (isCollapsed ? 0 : width);
   // Sidebar is flush to the left edge now, so the canvas starts one chrome gap
   // to the right of it (previously two gaps straddled a floating panel).
   // `leadingInset` is anything pinned further left still — the workspace rail.
@@ -568,82 +569,24 @@ export const Sidebar = React.memo(function Sidebar({
   });
  };
 
+ // Collapsed, the sidebar has no column of its own: it folds into the
+ // workspace rail to its left. Only the expand toggle and the entries that are
+ // asking for attention (a bell, an unread count) cross over, portalled into
+ // the rail's slot — everything else is one click away behind "Expand".
  if (collapsed) {
-  return (
-   <aside
-    data-sidebar-panel
-    // No shadow utility here: `[data-sidebar-panel]` in index.css sets
-    // box-shadow unlayered, so it wins over any Tailwind shadow-* on the
-    // element. Depth and elevation for all three shell columns live in that one
-    // rule — see src/lib/chromeDepth.ts.
-    className="sidebar-collapsed-panel flex h-full shrink-0 flex-col items-center gap-1 overflow-visible rounded-none border-r border-border bg-card/45 py-2 text-card-foreground"
-   style={{ ...SIDEBAR_FRAME_STYLE, width: COLLAPSED_SIDEBAR_WIDTH, paddingTop: titlebarInset ? titlebarInset + 8 : undefined }}
-   >
-    <input
-     ref={uploadInputRef}
-     type="file"
-     multiple
-     className="sr-only"
-     tabIndex={-1}
-     onChange={handleUploadInputChange}
-     aria-label="Upload files"
-    />
-    {/* The rail's drag band, continued across this column. Collapsed, the
-        sidebar also reserves titlebarInset at the top, and under `hiddenInset`
-        reserved space that is not a drag region is space the window cannot be
-        moved by. See WorkspaceRail for the full reasoning. */}
-    {titlebarInset ? (
-     <div
-      aria-hidden="true"
-      data-titlebar-drag=""
-      className="titlebar-drag-region absolute inset-x-0 top-0"
-      style={{ height: titlebarInset }}
-     />
-    ) : null}
-    {/* Theme-accent wash on the chrome — see .sidebar-accent-wash in index.css.
-        Decorative, non-interactive, and out of flow, so it is not a flex item. */}
-    <div aria-hidden="true" className="sidebar-accent-wash" />
-    <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Expand sidebar">
+  if (!collapsedSlot) return null;
+  return createPortal(
+   <>
+    <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Expand sidebar" title="Expand sidebar">
      <PanelLeft />
     </Button>
-    <Separator />
-    {/* Desktops, not workspaces: this opens the desktop grid, and the workspace
-        rail immediately to the left is what switches workspaces. Labelling both
-        "workspace" is what made the two concepts indistinguishable. */}
-    <SidebarRailButton icon={<Layers3 />} title="Switch desktop" onClick={onOpenWorkspaceGrid || onCreateWorkspace} />
-    <SidebarRailButton icon={<Plus />} title="Create workspace" onClick={onCreateWorkspace} />
-    <Separator />
-    <SidebarRailButton icon={<Search />} title="Search" onClick={onOpenCommandPalette} />
-    {onOpenInbox && <SidebarRailButton icon={<Inbox />} title="Inbox" count={inboxUnreadCount} onClick={onOpenInbox} />}
-    {onShowDesktop && <SidebarRailButton icon={<Minimize2 />} title="Desktop" pressed={showingDesktop} onClick={onShowDesktop} />}
-    {/* Same order as the expanded panel, and for the same reason — collapsing
-        the sidebar must not reshuffle where things are. The two Separators sit
-        where the expanded panel draws its two rules. */}
-    {onOpenTasks && <SidebarRailButton icon={<ListTodo />} title="Tasks" count={openTaskCount} onClick={onOpenTasks} />}
-    {onOpenProjects && <SidebarRailButton icon={<Layers3 />} title="Projects" onClick={onOpenProjects} />}
-    <SidebarRailButton icon={<Brain />} title="Memory" onClick={onOpenMemory} />
-    <Separator />
-    <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadInbox.unreadCount} onClick={() => revealSection('threads')} />
-    <SidebarRailButton icon={<Hash />} title="Channels" count={activeChannelSessions.length} onClick={() => revealSection('channels')} />
-    <SidebarRailButton icon={<FileText />} title="Documents" count={documentCount} onClick={() => revealSection('documents')} />
-    <SidebarRailButton icon={<Upload />} title="Upload files" onClick={openUploadPicker} />
-    <SidebarRailButton icon={<MessagesSquare />} title="Direct messages" count={directMessageTargets.length} onClick={() => revealSection('direct-messages')} />
-    <SidebarRailButton icon={<Archive />} title="Archive" count={archivedSessions.length} onClick={() => revealSection('archive')} />
-    <Separator />
-    {onOpenSkills && <SidebarRailButton icon={<Sparkles />} title="Skills" onClick={onOpenSkills} />}
-    {onOpenLibrary && <SidebarRailButton icon={<Library />} title="Library" count={libraryEntries.length} onClick={() => onOpenLibrary()} />}
-    {onOpenActivity && <SidebarRailButton icon={<ActivityIcon />} title="Activity" onClick={onOpenActivity} />}
-    {onOpenAgents && <SidebarRailButton icon={<Bot />} title="Agents" count={agents.length} onClick={onOpenAgents} />}
-    {onOpenResources && <SidebarRailButton icon={<Database />} title="Resources" onClick={onOpenResources} />}
-    {onOpenUsers && <SidebarRailButton icon={<Users />} title="Users" onClick={onOpenUsers} />}
-    {(onOpenAutomations || onOpenSchedules) && <SidebarRailButton icon={<Zap />} title="Automations" onClick={(onOpenAutomations || onOpenSchedules)!} />}
-    {onOpenTemplates && <SidebarRailButton icon={<LayoutTemplate />} title="Applets" onClick={onOpenTemplates} />}
-    {onOpenBrowser && <SidebarRailButton icon={<Globe />} title="Browser" onClick={onOpenBrowser} />}
-    {onOpenTerminal && <SidebarRailButton icon={<SquareTerminal />} title="Terminal" onClick={onOpenTerminal} />}
-    <div className="flex-1" />
-    <SidebarRailButton icon={<Settings />} title="App settings" onClick={onOpenSettings} />
-    <SidebarRailButton icon={<LogOut />} title="Sign out" onClick={onSignOut} />
-   </aside>
+    {notificationsSlot}
+    {onOpenInbox && inboxUnreadCount > 0 && <SidebarRailButton icon={<Inbox />} title="Inbox" count={inboxUnreadCount} onClick={onOpenInbox} />}
+    {onOpenTasks && openTaskCount > 0 && <SidebarRailButton icon={<ListTodo />} title="Tasks" count={openTaskCount} onClick={onOpenTasks} />}
+    {threadInbox.unreadCount > 0 && <SidebarRailButton icon={<MessageSquare />} title="Threads" count={threadInbox.unreadCount} onClick={() => revealSection('threads')} />}
+    <div aria-hidden="true" className="mx-auto my-0.5 h-px w-6 bg-border" />
+   </>,
+   collapsedSlot,
   );
  }
 
@@ -721,7 +664,7 @@ export const Sidebar = React.memo(function Sidebar({
     <div aria-hidden="true" className="sidebar-accent-wash" />
     <div
      data-sidebar-titlebar
-     className="px-2 pt-2 pb-3"
+     className="p-2"
      style={{
       paddingLeft: titlebarLeftInset || undefined,
       // Desktop traffic-light clearance, also exposed as a CSS var so themes
@@ -753,16 +696,14 @@ export const Sidebar = React.memo(function Sidebar({
      </div>
     </div>
 
-    <div className="px-2 pt-2 pb-2">
-     <button
+    <button
       type="button"
-      className="sidebar-search flex min-h-8 min-w-0 w-full items-center gap-2 rounded-md border px-2.5 text-left text-sm font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+      className="sidebar-search mx-2 mb-2 flex min-h-8 min-w-0 items-center gap-2 rounded-md border px-2.5 text-left text-sm font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
       onClick={onOpenCommandPalette}
      >
       <Search className="size-4 shrink-0" />
       <span className="min-w-0 flex-1 truncate text-left">Search...</span>
      </button>
-    </div>
 
     <ScrollArea className="min-h-0 flex-1 px-2 [&_[data-radix-scroll-area-viewport]>div]:!block">
      {/* gap-0.5, not gap-1: with ~14 entries the inter-row gap is counted

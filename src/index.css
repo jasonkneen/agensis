@@ -437,6 +437,61 @@
  backdrop-filter: var(--agensis-glass-filter);
 }
 
+/* One surface across both left columns. The rail and the sidebar each paint the
+   same gradient and accent wash, but sized to their own box, so the wash
+   restarted at the sidebar's left edge and the two read as separate panels.
+   Anchoring both to the viewport makes the sidebar's surface run straight on
+   under the rail as a single panel. */
+[data-workspace-rail],
+[data-sidebar-panel],
+[data-workspace-rail] .sidebar-accent-wash,
+[data-sidebar-panel] .sidebar-accent-wash {
+ background-attachment: fixed !important;
+}
+
+/* Rounded top-left / bottom-left corners on the canvas column. The column paints
+   nothing (it IS the wallpaper), so the curve is made by filling the two corner
+   notches with the sidebar's surface. Keep in step with [data-sidebar-panel]. */
+.canvas-column::before,
+.canvas-column::after {
+ content: '';
+ position: absolute;
+ left: 0;
+ width: var(--radius-xl);
+ height: var(--radius-xl);
+ /* Above every floating window, so a maximized one is rounded too. */
+ z-index: 2147483000;
+ pointer-events: none;
+ background:
+  linear-gradient(180deg, color-mix(in srgb, var(--foreground) 5%, transparent), transparent 32%),
+  color-mix(in srgb, var(--card) var(--agensis-sidebar-alpha, 88%), transparent);
+ background-attachment: fixed;
+ backdrop-filter: var(--agensis-glass-filter);
+ -webkit-backdrop-filter: var(--agensis-glass-filter);
+}
+.canvas-column::before {
+ top: 0;
+ mask-image: radial-gradient(circle at 100% 100%, transparent calc(var(--radius-xl) - 0.5px), #000 var(--radius-xl));
+}
+.canvas-column::after {
+ bottom: 0;
+ mask-image: radial-gradient(circle at 100% 0, transparent calc(var(--radius-xl) - 0.5px), #000 var(--radius-xl));
+}
+:root[data-ui-theme="neo"] .canvas-column::before,
+:root[data-ui-theme="neo"] .canvas-column::after {
+ background: var(--card);
+ backdrop-filter: none;
+}
+:root[data-normal-theme="carbon"] .canvas-column::before,
+:root[data-normal-theme="carbon"] .canvas-column::after {
+ background: var(--sidebar);
+ backdrop-filter: none;
+}
+/* The sidebar's straight hairline would cut across the curve. */
+div:has(> .canvas-column) [data-sidebar-panel] {
+ border-right-color: transparent !important;
+}
+
 /* The canvas column is above the sidebar as well, so it casts back onto it.
    Both raised columns now throw onto the recessed one between them, which is
    the whole point of putting the sidebar at the bottom of the ladder — without

@@ -130,6 +130,8 @@ interface WorkspaceRailProps {
   hiddenWorkspaces?: readonly WorkspaceRailSource[];
   /** Add a hidden workspace back to the rail. Required for the Hidden menu to act. */
   onRestoreWorkspace?: (workspaceId: string) => void;
+  /** Mount point the collapsed Sidebar portals its expand toggle and notification icons into. */
+  sidebarSlotRef?: (node: HTMLDivElement | null) => void;
 }
 
 export const WorkspaceRail = React.memo(function WorkspaceRail({
@@ -152,6 +154,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
   onHideWorkspace,
   hiddenWorkspaces,
   onRestoreWorkspace,
+  sidebarSlotRef,
 }: WorkspaceRailProps) {
   const model = React.useMemo(
     () => buildWorkspaceRail(workspaces, activeWorkspaceId),
@@ -375,6 +378,15 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
       {/* Theme-accent wash, matching the sidebar it sits beside. Decorative,
           non-interactive, out of flow — not a flex item. */}
       <div aria-hidden="true" className="sidebar-accent-wash" />
+
+      {/* Collapsed sidebar lands here (see Sidebar). Empty → hidden. Hover
+          labels are hidden: the rail clips overflow, so they would show as a
+          sliver; the buttons carry a native title instead. */}
+      <div
+        ref={sidebarSlotRef}
+        data-workspace-rail-sidebar-slot
+        className="flex w-full shrink-0 flex-col items-center gap-1 empty:hidden [&_.sidebar-rail-label]:hidden"
+      />
 
       {/* Only the workspace tiles scroll. "+" and Tenants are pinned to the
           bottom of the rail (below this container) so both are always reachable
