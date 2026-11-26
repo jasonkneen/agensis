@@ -732,9 +732,14 @@ export const Sidebar = React.memo(function Sidebar({
       </Button>
       <button
        type="button"
-       className="sidebar-workspace-switch flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-base font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
+       // text-sm, not text-base: beside the collapse toggle, the bell and +,
+       // a 16px label left ~85px at the 220px minimum width and clipped even
+       // "Workspace 1" to "Workspa…". The full name is in the tooltip for
+       // anything longer still.
+       className="sidebar-workspace-switch flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
        onClick={onOpenWorkspaceGrid || onCreateWorkspace}
        aria-label="Switch desktop"
+       title={workspaceLabel}
       >
        <span className="min-w-0 truncate text-left">{workspaceLabel}</span>
       </button>
