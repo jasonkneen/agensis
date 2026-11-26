@@ -104,12 +104,12 @@ function AppearanceScreen() {
 
 function SidebarScreen() {
   const { mode, setTheme } = useTheme();
-  const workspace = { id: WORKSPACE_ID, name: 'Main', created_at: new Date().toISOString() } as never;
+  const workspace = { id: WORKSPACE_ID, name: 'Workspace 1', created_at: new Date().toISOString() } as never;
   const sessions = ['general', 'design', 'release-notes'].map((title, i) => ({
     id: `s-${i}`, workspace_id: WORKSPACE_ID, title, model: 'auto', created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
   })) as never;
   return (
-    <div className="relative h-full w-[248px] overflow-hidden border-r border-border">
+    <div className="relative h-full w-[220px] overflow-hidden border-r border-border">
       <Sidebar
         workspace={workspace}
         collapsed={false}
@@ -130,6 +130,7 @@ function SidebarScreen() {
         userEmail="you@example.test"
         onSignOut={noop}
         onOpenSettings={noop}
+        notificationsSlot={<button type="button" aria-label="Notifications" className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground"><Activity className="size-4" /></button>}
       />
     </div>
   );
