@@ -42,6 +42,12 @@ export interface ThemePalette {
   hue: number;
   /** OKLCH chroma of the neutrals. Keep tiny: 0.004–0.02 reads as a tint, not a colour. */
   chroma: number;
+  /**
+   * Dark scheme only: raise every surface and line this much in lightness.
+   * Nord, Dracula and friends live on a lifted slate (#282a36 is L 0.29), not
+   * near-black. Capped at 0.1 so primary text still clears 12:1.
+   */
+  darkLift?: number;
 }
 
 /** An OKLCH accent, or null for "ink": primary = text colour. */
@@ -65,6 +71,14 @@ export const THEME_PALETTES: ThemePalette[] = [
   { id: 'slate', label: 'Slate', hue: 255, chroma: 0.013 },
   { id: 'sage', label: 'Sage', hue: 150, chroma: 0.011 },
   { id: 'plum', label: 'Plum', hue: 315, chroma: 0.012 },
+  // Editor-classic palettes, in the spirit of ideation-canvas's catalogue:
+  // stronger tint, and in dark a lifted slate instead of near-black. Only the
+  // neutrals come from here — the accent is still the separate Colour choice.
+  { id: 'nord', label: 'Nord', hue: 262, chroma: 0.03, darkLift: 0.1 },
+  { id: 'dracula', label: 'Dracula', hue: 285, chroma: 0.032, darkLift: 0.1 },
+  { id: 'tokyo', label: 'Tokyo Night', hue: 275, chroma: 0.04, darkLift: 0.05 },
+  { id: 'gruvbox', label: 'Gruvbox', hue: 80, chroma: 0.025, darkLift: 0.09 },
+  { id: 'solarized', label: 'Solarized', hue: 220, chroma: 0.045, darkLift: 0.08 },
 ];
 
 export const THEME_CONTRASTS: Array<{ id: ThemeContrast; label: string }> = [
@@ -201,12 +215,24 @@ function shadows(depth: ThemeDepth, scheme: ThemeScheme): Record<string, string>
 /** Every token the engine owns, for one scheme. */
 export function buildThemeTokens(seed: ThemeSeed, scheme: ThemeScheme): Record<string, string> {
   const dark = scheme === 'dark';
-  const ramp = RAMP[scheme];
+  const baseRamp = RAMP[scheme];
   const k = CONTRAST[seed.contrast];
   const { hue: h, chroma } = seed.palette;
-  // Tint fades as surfaces approach white/black, where chroma reads as dirt.
-  const c = dark ? chroma * 0.85 : chroma;
+  // Tint fades as surfaces approach white/black, where chroma reads as dirt;
+  // light surfaces cap it, or a strong dark palette washes the page pink/blue.
+  const c = dark ? chroma * 0.85 : Math.min(chroma, 0.02);
   const n = (l: number, cm = 1) => fmt(l, c * cm, h);
+  const lift = dark ? Math.min(0.1, seed.palette.darkLift ?? 0) : 0;
+  const ramp: Ramp = lift === 0 ? baseRamp : {
+    ...baseRamp,
+    base: baseRamp.base + lift,
+    card: baseRamp.card + lift,
+    raised: baseRamp.raised + lift,
+    overlay: baseRamp.overlay + lift,
+    border: baseRamp.border + lift,
+    borderSubtle: baseRamp.borderSubtle + lift,
+    borderStrong: baseRamp.borderStrong + lift,
+  };
 
   // Lines move away from the card surface by `line` times their default distance.
   const line = (l: number) => r3(ramp.card + (l - ramp.card) * k.line);
