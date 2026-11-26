@@ -1557,19 +1557,52 @@
    the theme's buttons and cards already use, so this is the existing vocabulary
    rather than a new effect; scoped to [data-ui-theme="default"] because paper
    and neo have their own shadow languages and classic deliberately has none. */
-:root[data-ui-theme="default"] .sidebar-section-count,
-:root[data-ui-theme="default"] .sidebar-action-count {
- box-shadow: var(--default-hard-shadow);
+/* Counts are QUIET. They used to be solid accent pills with the Default
+   theme's hard offset shadow — which is what "unread" looks like everywhere
+   else, on numbers that are only totals ("6 agents", "6 DMs"). A total is a
+   muted chip; a solid fill is reserved for something that needs you. */
+.sidebar-action-count {
+ background: color-mix(in oklab, var(--foreground) 8%, transparent) !important;
+ color: var(--muted-foreground) !important;
+ font-weight: 600 !important;
+ box-shadow: none;
+}
+
+/* A section heading is a label, so its count is a plain number beside the
+   word — not a chip parked in a reserved right-hand column. */
+.sidebar-section-trigger .sidebar-section-count {
+ position: static !important;
+ transform: none !important;
+ width: auto !important;
+ height: auto !important;
+ margin-left: 0.25rem !important;
+ background: none !important;
+ color: var(--muted-foreground) !important;
+ font-weight: 500 !important;
+ opacity: 0.8;
+ box-shadow: none;
 }
 
 /* Two reserved right-hand columns per row: a count column, then a far-right
    gutter for a future per-row menu icon. Labels clear both. A shared min-height
    keeps section, folder, and action rows on one tight vertical rhythm. */
-.sidebar-section-trigger,
 .sidebar-action-row,
 .sidebar-folder-trigger {
  position: relative;
  padding-right: 4.25rem !important;
+}
+
+/* Section headings do NOT reserve that column. They share the header row with
+   their own action icons (Documents has three), so a 4.25rem reserve on top
+   left a ~220px sidebar about 70px for the word: "DO…", "DIRECT MESSA…".
+   The label takes what the icons leave, and only then truncates. */
+.sidebar-section-trigger {
+ position: relative;
+ padding-right: 0.5rem !important;
+}
+.sidebar-section-trigger .sidebar-section-label {
+ flex: 0 1 auto !important;
+ margin-right: 0;
 }
 
 .sidebar-folder-trigger {
