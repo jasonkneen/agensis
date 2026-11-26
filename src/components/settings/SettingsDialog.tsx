@@ -11,6 +11,7 @@ import {
   Eye,
   EyeOff,
   FolderOpen,
+  Globe,
   Image as Info,
   Gauge,
   KeyRound,
@@ -45,6 +46,7 @@ import { useAgentConnections } from '../../hooks/useAgentConnections';
 import { useAgentRegistrations } from '../../hooks/useAgentRegistrations';
 import type { AgentConnection } from '../../types';
 import { AuditLogPanel } from './AuditLogPanel';
+import { PublicPagePanel } from './PublicPagePanel';
 import { useGateways } from '../../hooks/useGateways';
 import { ConnectFlowsDialog } from '../integrations/ConnectFlowsDialog';
 import { Badge } from '@agensis/ui/components/badge';
@@ -92,7 +94,7 @@ interface SettingsDialogProps {
   initialTab?: SettingsTabId;
 }
 
-export type SettingsTabId = 'general' | 'notifications' | 'appearance' | 'ai' | 'tools' | 'connections' | 'secrets' | 'audit' | 'usage' | 'about';
+export type SettingsTabId = 'general' | 'notifications' | 'appearance' | 'ai' | 'tools' | 'connections' | 'secrets' | 'audit' | 'public' | 'usage' | 'about';
 type TabId = SettingsTabId;
 
 const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
@@ -112,6 +114,8 @@ const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   // that message rather than an empty table they would read as "nothing has
   // happened".
   { id: 'audit', label: 'Audit log', icon: <ScrollText /> },
+  // Same manage gate as the two above: what this workspace shows the internet.
+  { id: 'public', label: 'Public page', icon: <Globe /> },
   { id: 'usage', label: 'Usage', icon: <Gauge /> },
   { id: 'about', label: 'About', icon: <Info /> },
 ];
@@ -188,6 +192,7 @@ export function SettingsDialog({
               )}
               {tab === 'secrets' && <SecretsPanel workspaceId={secretsWorkspaceId} />}
               {tab === 'audit' && <AuditLogPanel workspaceId={secretsWorkspaceId} />}
+              {tab === 'public' && <PublicPagePanel workspaceId={secretsWorkspaceId} />}
               {tab === 'usage' && <UsagePanel workspaceId={secretsWorkspaceId} workspaceName={workspaceName} />}
               {tab === 'about' && <AboutPanel />}
             </div>

@@ -5,6 +5,7 @@ import App from './App.tsx';
 import { FarmIntegrationApproval } from './components/integrations/FarmIntegrationApproval.tsx';
 import { installDiagnosticsCapture } from './lib/feedbackDiagnostics.ts';
 import { applyExpoColors } from './lib/theme/expoColors.ts';
+import { publicWorkspaceIdFromPath } from './lib/publicWorkspace.ts';
 import './index.css';
 
 // Expo's base/accent choices are attributes on <html>; stamp them before the
@@ -32,11 +33,21 @@ const ScreenGallery = import.meta.env.DEV
   : () => null;
 const isScreens = import.meta.env.DEV && typeof window !== 'undefined' && window.location.hash.replace('#', '').split('/')[0] === 'screens';
 const isFarmIntegrationApproval = typeof window !== 'undefined' && window.location.pathname.replace(/\/+$/, '') === '/integrations/farm';
+// /p/<workspace id>: the public network map of a public workspace. No sign-in,
+// and none of the app shell; lazy so the signed-in app never loads it.
+const publicWorkspaceId = typeof window !== 'undefined' ? publicWorkspaceIdFromPath(window.location.pathname) : null;
+const PublicWorkspacePage = lazy(() => import('./components/public/PublicWorkspacePage.tsx').then(m => ({ default: m.PublicWorkspacePage })));
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
-      {isShowcase ? <Suspense fallback={null}><Showcase /></Suspense> : isScreens ? <Suspense fallback={null}><ScreenGallery /></Suspense> : isFarmIntegrationApproval ? <FarmIntegrationApproval /> : <App />}
+      {isShowcase
+        ? <Suspense fallback={null}><Showcase /></Suspense>
+        : isScreens
+          ? <Suspense fallback={null}><ScreenGallery /></Suspense>
+          : publicWorkspaceId
+            ? <Suspense fallback={null}><PublicWorkspacePage workspaceId={publicWorkspaceId} /></Suspense>
+            : isFarmIntegrationApproval ? <FarmIntegrationApproval /> : <App />}
     </ErrorBoundary>
   </StrictMode>
 );

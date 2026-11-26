@@ -134,9 +134,16 @@ export const backend = {
   tables: new Map<string, unknown[]>(),
   /** URL substring -> the `data` payload of a GET route. */
   routes: new Map<string, unknown>(),
+  /**
+   * URL substring -> a body answered AS IS, with no { data, error } envelope.
+   * The public workspace routes (/backend/public/*) answer the contract shape
+   * directly, so they cannot be registered on `routes`.
+   */
+  rawRoutes: new Map<string, unknown>(),
   reset() {
     this.tables.clear();
     this.routes.clear();
+    this.rawRoutes.clear();
   },
 };
 
@@ -160,6 +167,16 @@ async function smokeFetch(input: RequestInfo | URL, init?: RequestInit): Promise
     } catch { /* an unparseable body is an empty read */ }
     const rows = backend.tables.get(table) ?? [];
     return json(single ? (rows[0] ?? null) : rows);
+  }
+
+  const rawHit = [...backend.rawRoutes.keys()]
+    .filter(key => url.includes(key))
+    .sort((a, b) => b.length - a.length)[0];
+  if (rawHit !== undefined) {
+    return new Response(JSON.stringify(backend.rawRoutes.get(rawHit)), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
   }
 
   // Longest match wins, so '/backend/tenants/<id>' can be registered alongside

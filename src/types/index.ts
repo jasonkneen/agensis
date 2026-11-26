@@ -515,7 +515,10 @@ export type AuditAction =
  // A persona pack from outside this workspace. Authoring one is NOT audited —
  // a template cannot carry authority, so writing one is a non-event; arriving
  // from elsewhere is not.
- | 'agent_template.imported';
+ | 'agent_template.imported'
+ // Publishing a workspace to the internet, and choosing what leaves it.
+ | 'workspace.visibility_changed'
+ | 'workspace.public_policy_changed';
 
 /**
  * One audit row as the read route returns it.

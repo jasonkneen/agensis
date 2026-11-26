@@ -93,6 +93,9 @@ import {
  submitOwnedGuide,
  updateOwnedGuide,
 } from '../../shared/cursorbuddy-guides.cjs';
+// Public workspaces: the ONE projection both backends serve. The live stream is
+// Fly-only (this mirror answers 501 for it, as it does for websockets).
+import { createPublicWorkspaceReader } from '../../shared/public-workspace.cjs';
 // Cost metering, shared with the Fly lane so both backends write identically
 // shaped rows into one table. FAIL-OPEN by contract — never wrap in try/catch.
 import { recordAnthropicUsage, createAnthropicUsageAccumulator } from '../../shared/usage-metering.cjs';
@@ -207,6 +210,8 @@ const feedbackRateLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 // query loop.
 const tenantsRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 const cursorBuddyGuidesRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
+// Public workspace reads. Budget mirrors server/index.cjs (per IP, 120/min).
+const publicWorkspaceRateLimiter = createRateLimiter({ windowMs: 60_000, max: 120 });
 // Delivery side of owner broadcasts: read by every signed-in session, not by
 // the operator, so it gets its own budget rather than sharing the admin one.
 const campaignMessageRateLimiter = createRateLimiter({ windowMs: 60_000, max: 60 });
@@ -260,6 +265,8 @@ const dispatchDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, d
 const feedbackDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 5, db: query, namespace: 'feedback' });
 const tenantsDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 30, db: query, namespace: 'tenants' });
 const cursorBuddyGuidesDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 120, db: query, namespace: 'cursorbuddy-guides' });
+const publicWorkspaceDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 120, db: query, namespace: 'public-workspace' });
+const publicWorkspaceReader = createPublicWorkspaceReader({ db: query });
 const campaignMessageDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 60, db: query, namespace: 'campaign-messages' });
 const resourceOperationDbRateLimiter = createDbRateLimiter({ windowMs: 60_000, max: 120, db: query, namespace: 'resource-operations' });
 
@@ -537,6 +544,71 @@ async function forwardLongRunningControl(req, pathname, body, {
  }
 }
 
+// Public workspace answers: read-only, uncached, readable from any origin by
+// GET. The same headers on every answer, 404 and 429 included, so a private
+// workspace and a missing one cannot be told apart by a header either.
+const PUBLIC_WORKSPACE_HEADERS = {
+ 'Access-Control-Allow-Origin': '*',
+ 'Access-Control-Allow-Methods': 'GET, OPTIONS',
+ 'Access-Control-Allow-Headers': 'content-type',
+ 'Cache-Control': 'no-store, max-age=0',
+ 'Referrer-Policy': 'no-referrer',
+ 'X-Content-Type-Options': 'nosniff',
+};
+
+function publicWorkspaceJson(body, status = 200, extraHeaders = {}) {
+ return Response.json(body, { status, headers: { ...PUBLIC_WORKSPACE_HEADERS, ...extraHeaders } });
+}
+
+const PUBLIC_WORKSPACE_NOT_FOUND = { data: null, error: { message: 'Not found', code: 'not_found' } };
+
+async function handlePublicWorkspaceRead(req, pathname, searchParams) {
+ const blocked = await dbRateLimitBlock(publicWorkspaceRateLimiter, publicWorkspaceDbRateLimiter, `public:${clientIpFromRequest(req)}`);
+ if (blocked) {
+  return publicWorkspaceJson(
+   { data: null, error: { message: 'Rate limit exceeded. Please retry shortly.', code: 'rate_limited' } },
+   429,
+   { 'Retry-After': blocked.headers.get('Retry-After') || '60' },
+  );
+ }
+ try {
+  if (pathname === '/backend/public/marketplace/listings') {
+   return publicWorkspaceJson(await publicWorkspaceReader.getListings({
+    category: searchParams.get('category') || '',
+    q: searchParams.get('q') || '',
+   }));
+  }
+  const match = pathname.match(/^\/backend\/public\/workspaces\/([^/]+)(?:\/(events|stream))?$/);
+  if (!match) return publicWorkspaceJson(PUBLIC_WORKSPACE_NOT_FOUND, 404);
+  const workspaceId = decodeURIComponent(match[1]);
+  if (match[2] === 'stream') {
+   // Checked BEFORE the 501, so the stream route cannot be used to ask
+   // whether a private workspace exists.
+   const workspace = await publicWorkspaceReader.loadPublicWorkspace(workspaceId);
+   if (!workspace) return publicWorkspaceJson(PUBLIC_WORKSPACE_NOT_FOUND, 404);
+   return publicWorkspaceJson(
+    { data: null, error: { message: 'The live stream needs the long-running backend; poll /events instead.', code: 'stream_unavailable' } },
+    501,
+   );
+  }
+  if (match[2] === 'events') {
+   const page = await publicWorkspaceReader.getEvents(workspaceId, {
+    since: searchParams.get('since') || '',
+    limit: searchParams.get('limit') || '',
+   });
+   return page ? publicWorkspaceJson(page) : publicWorkspaceJson(PUBLIC_WORKSPACE_NOT_FOUND, 404);
+  }
+  const summary = await publicWorkspaceReader.getSummary(workspaceId);
+  return summary ? publicWorkspaceJson(summary) : publicWorkspaceJson(PUBLIC_WORKSPACE_NOT_FOUND, 404);
+ } catch (error) {
+  if (error?.status === 400) {
+   return publicWorkspaceJson({ data: null, error: { message: String(error.message || 'Bad request'), code: 'bad_request' } }, 400);
+  }
+  console.error('[public-workspace] read failed:', error?.message || error);
+  return publicWorkspaceJson({ data: null, error: { message: 'Public read failed', code: 'public_read_failed' } }, 500);
+ }
+}
+
 function isJoinBackendPath(pathname) {
  return /^\/backend\/join(?:\/|$)/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/(?:join-links|controllers)(?:\/|$)/.test(pathname);
@@ -566,6 +638,8 @@ function isFlyOwnedControlPath(pathname) {
   || /^\/backend\/agents\/[^/]+\/connection-command$/.test(pathname)
   || /^\/backend\/agents\/[^/]+\/(?:disconnect|memory-refresh|documents-refresh|capabilities-refresh)$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/audit$/.test(pathname)
+  // Public workspace controls: manage-gated and audited, one implementation.
+  || /^\/backend\/workspaces\/[^/]+\/(?:visibility|public-policy)(?:\/|$)/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/(?:automations|automation-runs)(?:\/[^/]+)?$/.test(pathname)
   || /^\/backend\/workspaces\/[^/]+\/agent-templates(?:\/|$)/.test(pathname)
   // The agent marketplace: server-owned validation, cross-workspace audit
@@ -3647,6 +3721,10 @@ async function route(req) {
   || isFlyOwnedControlPath(pathname)) {
   const forwarded = await forwardCanonicalRoute(req, requestUrl);
   if (forwarded) return forwarded;
+ }
+ if (pathname.startsWith('/backend/public/')) {
+  if (req.method === 'GET') return handlePublicWorkspaceRead(req, pathname, requestUrl.searchParams);
+  return publicWorkspaceJson(PUBLIC_WORKSPACE_NOT_FOUND, 404);
  }
  if (pathname === '/backend/health') {
   await query('select 1');

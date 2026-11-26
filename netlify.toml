@@ -96,6 +96,13 @@
   to = "/index.html"
   status = 200
 
+# A public workspace's network map (/p/<workspace id>): a client-side route,
+# no sign-in. The page reads only the public /backend/public/* routes.
+[[redirects]]
+  from = "/p/*"
+  to = "/index.html"
+  status = 200
+
 # The ONE join URL. https://agensis.io/join/<token> is what both a human and an
 # agent are given, and it is SERVER-RENDERED by the Fly backend — not the SPA.
 #

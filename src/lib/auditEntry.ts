@@ -28,6 +28,8 @@ const ACTION_LABELS: Record<string, string> = {
   'chat_session.access_granted': 'Private conversation opened to someone',
   'chat_session.access_revoked': 'Private conversation access removed',
   'agent_template.imported': 'Agent template imported',
+  'workspace.visibility_changed': 'Workspace visibility changed',
+  'workspace.public_policy_changed': 'Public page policy changed',
   unknown: 'Unrecognised action',
 };
 

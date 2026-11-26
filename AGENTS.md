@@ -391,6 +391,44 @@ Netlify forwards). Full design incl. the hire execution lane and the
   hiring writes BOTH workspaces' logs). Neither table is in `ALLOWED_TABLES` —
   the dedicated routes are the only doors.
 
+### Public workspaces (`workspaces.visibility`, `workspace_public_policy`)
+
+A workspace whose `visibility` is `'public'` answers four no-sign-in GETs:
+`/backend/public/workspaces/:id` (summary), `.../events` (polling),
+`.../stream` (SSE, Fly only; the Netlify mirror answers 501) and
+`/backend/public/marketplace/listings`. The page is `/p/<workspace id>`
+(`src/components/public/PublicWorkspacePage.tsx`), drawn with the existing
+`AgentNetworkDiagram`. Owner controls are Settings -> Public page.
+
+- **One path out.** Every value is built by `shared/public-workspace.cjs`
+  (`publicProjection`, `publicAgent`, `publicListing`) from named fields, and
+  both backends call its reader. Do not add a second projection, and do not
+  feed the stream from `notifyDbSubscribers` (it carries raw rows).
+- **No policy row = nothing leaves.** One row per event type; only level
+  `public` leaves. Each type has a ceiling the policy cannot raise
+  (`memory_added` stops at `category`: its title is the memory). The
+  publishable set is closed; `provider_call` and join-link events are not in it.
+- **AND with the agent's share policy.** An event in a channel the agent
+  withholds (`documents`, `memory`; `tools` for `activity`) does not leave.
+- **Privacy is resolved from the real rows, fail closed**: message and chat
+  events need an open session (`sessionOpenSql`), task events need a task
+  outside a private project. `activity_events` is client-authored, so nothing
+  the event row claims is trusted for this. Text that survives is
+  pattern-scrubbed (emails, URLs, paths, token shapes); a hit drops the field.
+- **No oracle.** Private, missing and malformed ids answer one identical 404,
+  stream route included.
+- **Writes are manage-gated and audited** (`workspace.visibility_changed`,
+  `workspace.public_policy_changed`) through `server/public-workspace-routes.cjs`
+  only. `visibility` is a privileged column; the policy table is deliberately
+  not in `ALLOWED_TABLES`.
+- **Status** uses the network map rule (`agentStatus` in
+  `agentNetworkModel.ts`), which differs from `agentPresenceStatus` for a
+  builtin agent with no connection. `tests/unit/publicWorkspaceStatus.test.ts`
+  pins the server copy to it.
+
+Pinned by `tests/public-workspace.test.cjs`, `tests/public-workspace-routes.test.cjs`,
+`tests/public-workspace-netlify.test.cjs` and the unit test above.
+
 ### Workspace automations (`automations`, `automation_runs`)
 
 "When X happens inside agensis, do Y inside agensis", without a code change.

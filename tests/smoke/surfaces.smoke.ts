@@ -56,6 +56,7 @@ import { InboxWindowContent } from '../../src/components/inbox/InboxWindowConten
 import { TenantsWindowContent } from '../../src/components/tenants/TenantsWindowContent';
 import { AgentMemoryBrowser } from '../../src/components/memory/AgentMemoryBrowser';
 import { ResourcesWindowContent } from '../../src/components/windows/ResourcesWindowContent';
+import { PublicWorkspacePage } from '../../src/components/public/PublicWorkspacePage';
 import type { ChatSession } from '../../src/types';
 
 let mounted: Mounted | null = null;
@@ -308,6 +309,30 @@ describe('smoke: every surface shows its data', () => {
       surface: 'Tenants',
       seeded: TENANT_MARKERS,
       emptyStates: ['No accounts yet', 'No matching accounts'],
+    });
+  });
+
+  it('Public page shows the public activity of a public workspace', async () => {
+    const workspaceId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const titles = ACTIVITY_MARKERS.map(marker => `Task created: ${marker}`);
+    backend.rawRoutes.set(`/backend/public/workspaces/${workspaceId}/events`, {
+      events: titles.map((title, i) => ({
+        id: `public-event-${i}`, at: `2026-11-25T10:00:0${i}.000000Z`, type: 'task_created', category: 'tasks', title,
+      })),
+      next: '2026-11-25T10:00:09.000000Z',
+    });
+    backend.rawRoutes.set(`/backend/public/workspaces/${workspaceId}`, {
+      id: workspaceId, name: 'SmokePublicHall', description: '', icon: '',
+      agents: seedAgents().map(agent => ({
+        id: agent.id, name: agent.name, avatar: 'SA', accentColor: '#6366f1', runMode: 'daemon', status: 'idle',
+      })),
+      counts: { agents: 8, busy: 0, idle: 8, disconnected: 0 },
+    });
+    mounted = await mount(createElement(PublicWorkspacePage, { workspaceId }));
+    assertPopulated(mounted, {
+      surface: 'Public page',
+      seeded: [...ACTIVITY_MARKERS, 'SmokePublicHall'],
+      emptyStates: ['Nothing public yet', 'Nothing to see here', 'This page could not be loaded'],
     });
   });
 
