@@ -21,8 +21,14 @@ type Detail = 'category' | 'title' | 'full';
 interface PolicyState {
   visibility: 'private' | 'public';
   policies: Array<{ eventType: string; level: Level; detail: Detail }>;
-  eventTypes: Array<{ eventType: string; category: string; ceiling: Detail }>;
+  eventTypes: Array<{ eventType: string; kind?: 'roster' | 'activity' | 'event'; category: string; ceiling: Detail }>;
 }
+
+// The two rows that are not events get a plain label; events show their type.
+const ROW_LABEL: Record<string, { label: string; hint: string }> = {
+  agent_roster: { label: 'Agent roster', hint: 'Names, avatars, colours, run modes and status of every agent' },
+  agent_activity: { label: 'Agent activity', hint: 'What a busy agent is doing (search, edit, run…); needs the roster' },
+};
 
 const DETAIL_RANK: Record<Detail, number> = { category: 0, title: 1, full: 2 };
 const DETAIL_LABEL: Record<Detail, string> = { category: 'Category only', title: 'Title', full: 'Title and detail' };
@@ -81,8 +87,9 @@ export function PublicPagePanel({ workspaceId }: { workspaceId: string | null })
         <div className="min-w-0">
           <div className="flex items-center gap-2 font-medium"><Globe className="size-4" />Public page</div>
           <FieldDescription>
-            When on, anyone with the link sees this workspace&apos;s agents and their status, with no sign-in.
-            Activity appears only for the event types you publish below.
+            When on, anyone with the link sees this workspace&apos;s name, description and icon, with no sign-in.
+            Its agents appear only if you publish the agent roster below, and activity only for the event types
+            you publish.
           </FieldDescription>
           {isPublic && <a className="mt-1 block truncate text-sm underline" href={pageUrl} target="_blank" rel="noreferrer">{pageUrl}</a>}
         </div>
@@ -97,7 +104,7 @@ export function PublicPagePanel({ workspaceId }: { workspaceId: string | null })
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-2xs uppercase tracking-wide text-muted-foreground">
-            <th className="py-1 font-medium">Event</th>
+            <th className="py-1 font-medium">What</th>
             <th className="py-1 font-medium">Who sees it</th>
             <th className="py-1 font-medium">How much</th>
           </tr>
@@ -105,6 +112,7 @@ export function PublicPagePanel({ workspaceId }: { workspaceId: string | null })
         <tbody>
           {state.eventTypes.map(({ eventType, ceiling }) => {
             const row = byType.get(eventType);
+            const named = ROW_LABEL[eventType];
             const level: Level = row?.level ?? 'private';
             const detail: Detail = row?.detail ?? 'category';
             const save = (next: { level: Level; detail: Detail }) => void run(() => (
@@ -114,7 +122,11 @@ export function PublicPagePanel({ workspaceId }: { workspaceId: string | null })
             ));
             return (
               <tr key={eventType} className="border-t border-border">
-                <td className="py-1.5 font-mono text-2xs">{eventType}</td>
+                <td className="py-1.5">
+                  {named
+                    ? <div><div className="font-medium">{named.label}</div><div className="text-2xs text-muted-foreground">{named.hint}</div></div>
+                    : <span className="font-mono text-2xs">{eventType}</span>}
+                </td>
                 <td className="py-1.5">
                   <NativeSelect
                     aria-label={`Who sees ${eventType}`}
@@ -144,6 +156,10 @@ export function PublicPagePanel({ workspaceId }: { workspaceId: string | null })
           })}
         </tbody>
       </table>
+      <FieldDescription>
+        Without the agent roster, agents are never named: they show as &ldquo;an agent&rdquo;, and agent_connected /
+        agent_disconnected stay in.
+      </FieldDescription>
       <FieldDescription>
         Private conversations, direct messages, private projects, prompts, tool arguments, file paths, links, tokens,
         email addresses and memory content never appear on the public page, whatever is chosen here.

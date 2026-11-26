@@ -146,15 +146,19 @@ export function PublicWorkspacePage({ workspaceId }: { workspaceId: string }) {
           <h1 className="truncate text-base font-semibold">{summary.name}</h1>
           {summary.description && <p className="truncate text-sm text-muted-foreground">{summary.description}</p>}
         </div>
-        <div className="flex gap-1.5">
-          <Badge variant="outline">{summary.counts.agents} agents</Badge>
-          <Badge variant="outline">{summary.counts.busy} busy</Badge>
-          <Badge variant="outline">{summary.counts.idle} idle</Badge>
-        </div>
+        {summary.roster && (
+          <div className="flex gap-1.5">
+            <Badge variant="outline">{summary.counts.agents} agents</Badge>
+            <Badge variant="outline">{summary.counts.busy} busy</Badge>
+            <Badge variant="outline">{summary.counts.idle} idle</Badge>
+          </div>
+        )}
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[1fr_20rem]">
         <section className="min-h-[28rem] overflow-hidden" aria-label="Agent network">
-          <AgentNetworkDiagram agents={agents} connections={connections} workspaceName={summary.name} />
+          {summary.roster
+            ? <AgentNetworkDiagram agents={agents} connections={connections} workspaceName={summary.name} />
+            : <p className="grid h-full place-items-center p-6 text-sm text-muted-foreground">This workspace does not show its agents publicly.</p>}
         </section>
         <aside className="min-h-0 overflow-y-auto border-t border-border p-3 lg:border-l lg:border-t-0" aria-label="Recent activity">
           <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recent activity</h2>

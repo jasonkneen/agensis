@@ -25,6 +25,8 @@ export interface PublicWorkspaceSummary {
   name: string;
   description: string;
   icon: string;
+  /** False when the owner has not published the agent roster: agents is [] and counts are 0. */
+  roster: boolean;
   agents: PublicAgent[];
   counts: { agents: number; busy: number; idle: number; disconnected: number };
 }

@@ -322,7 +322,7 @@ describe('smoke: every surface shows its data', () => {
       next: '2026-11-25T10:00:09.000000Z',
     });
     backend.rawRoutes.set(`/backend/public/workspaces/${workspaceId}`, {
-      id: workspaceId, name: 'SmokePublicHall', description: '', icon: '',
+      id: workspaceId, name: 'SmokePublicHall', description: '', icon: '', roster: true,
       agents: seedAgents().map(agent => ({
         id: agent.id, name: agent.name, avatar: 'SA', accentColor: '#6366f1', runMode: 'daemon', status: 'idle',
       })),

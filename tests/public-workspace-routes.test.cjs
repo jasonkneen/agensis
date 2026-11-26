@@ -138,11 +138,49 @@ test('a public workspace answers its summary with no-store and GET-only CORS', a
   assert.equal(response.headers.get('cache-control'), 'no-store, max-age=0');
   assert.equal(response.headers.get('access-control-allow-origin'), '*');
   assert.equal(response.headers.get('access-control-allow-methods'), 'GET, OPTIONS');
-  const body = await response.json();
-  assert.deepEqual(body.counts, { agents: 1, busy: 0, idle: 1, disconnected: 0 });
-  assert.deepEqual(Object.keys(body).sort(), ['agents', 'counts', 'description', 'icon', 'id', 'name']);
+  const text = await response.text();
+  const body = JSON.parse(text);
+  assert.deepEqual(Object.keys(body).sort(), ['agents', 'counts', 'description', 'icon', 'id', 'name', 'roster']);
+  assert.equal(body.name, 'Agent Expo', 'the name and description are the page identity and stay public');
+  assert.equal(body.roster, false);
+  assert.deepEqual(body.agents, [], 'no policy row: no roster');
+  assert.deepEqual(body.counts, { agents: 0, busy: 0, idle: 0, disconnected: 0 }, 'no policy row: not even a count');
+  assert.equal(text.includes('Scout'), false);
+  assert.equal(text.includes(AGENT), false);
   const events = await (await fetch(`${base}/backend/public/workspaces/${PUBLIC_WS}/events`)).json();
   assert.deepEqual(events.events, [], 'no policy row: nothing leaves');
+ });
+});
+
+test('the roster leaves only when the owner publishes agent_roster', async () => {
+ const db = makeDb();
+ db.state.policy = [{ event_type: 'agent_roster', level: 'public', detail: 'category' }];
+ __test.setTestDb(db);
+ await withServer(async (base) => {
+  const body = await (await fetch(`${base}/backend/public/workspaces/${PUBLIC_WS}`)).json();
+  assert.equal(body.roster, true);
+  assert.deepEqual(body.agents.map((agent) => agent.name), ['Scout']);
+  assert.deepEqual(body.counts, { agents: 1, busy: 0, idle: 1, disconnected: 0 });
+  for (const level of ['members', 'private']) {
+   db.state.policy = [{ event_type: 'agent_roster', level, detail: 'category' }];
+   const hidden = await (await fetch(`${base}/backend/public/workspaces/${PUBLIC_WS}`)).json();
+   assert.deepEqual(hidden.agents, [], `level ${level} does not publish the roster`);
+  }
+ });
+});
+
+test('publishing the roster does not open a private workspace: the same 404 as a missing one', async () => {
+ const db = makeDb();
+ db.state.policy = ['agent_roster', 'agent_activity', 'task_created'].map((event_type) => ({ event_type, level: 'public', detail: 'title' }));
+ __test.setTestDb(db);
+ await withServer(async (base) => {
+  for (const suffix of ['', '/events', '/stream']) {
+   const privateAnswer = await snapshot(await fetch(`${base}/backend/public/workspaces/${PRIVATE_WS}${suffix}`));
+   const missingAnswer = await snapshot(await fetch(`${base}/backend/public/workspaces/${MISSING_WS}${suffix}`));
+   assert.equal(privateAnswer.status, 404);
+   assert.deepEqual(missingAnswer, privateAnswer, `private vs missing on ${suffix || 'summary'}`);
+   assert.equal(privateAnswer.body.includes('Scout'), false);
+  }
  });
 });
 
@@ -392,4 +430,73 @@ test('publishing a new type re-seeds the stream cursor instead of replaying its 
  await hub.tick(PUBLIC_WS);
  assert.equal(eventsCalls, 1, 'the next tick reads from the new cursor');
  hub.reset();
+});
+
+function streamHubOver(db, workspaceId = PUBLIC_WS) {
+ const { createPublicStreamHub } = require('../server/public-workspace-routes.cjs');
+ const { createPublicWorkspaceReader } = require('../shared/public-workspace.cjs');
+ const reader = createPublicWorkspaceReader({ db: (sql, params) => db.unsafe(sql, params) });
+ const hub = createPublicStreamHub({ reader, setTimer: () => ({}), clearTimer: () => {} });
+ const frames = [];
+ async function open() {
+  const workspace = await reader.loadPublicWorkspace(workspaceId);
+  const policy = await reader.loadPolicy(workspace.id);
+  const summary = await reader.summaryFor(workspace, policy);
+  frames.push(`event: snapshot\ndata: ${JSON.stringify(summary)}\n\n`);
+  await hub.join({ workspace, policy, summary, res: { write: (chunk) => frames.push(chunk), end() {} }, reservation: hub.reserve('1') });
+ }
+ const parsed = () => frames.map((chunk) => {
+  const [eventLine, dataLine] = chunk.trim().split('\n');
+  return { event: eventLine.slice('event: '.length), data: JSON.parse(dataLine.slice('data: '.length)) };
+ });
+ return { hub, frames, open, parsed, tick: () => hub.tick(workspaceId) };
+}
+
+test('stream: with no roster row the snapshot has no agents and no agent frame is ever sent', async () => {
+ const db = makeDb();
+ db.state.connectionStatus = 'online';
+ const unsafe = db.unsafe.bind(db);
+ db.unsafe = async (sql, params) => {
+  if (String(sql).replace(/\s+/g, ' ').trim().toLowerCase().startsWith('select agent_id, status, capabilities')) {
+   return [{ agent_id: AGENT, status: db.state.connectionStatus, share_policy: null }];
+  }
+  return unsafe(sql, params);
+ };
+ // Every EVENT type published, but no agent_roster row.
+ db.state.policy = ['agent_activity', 'task_created', 'agent_connected'].map((event_type) => ({ event_type, level: 'public', detail: 'title' }));
+ const stream = streamHubOver(db);
+ await stream.open();
+ db.state.connectionStatus = 'busy';
+ await stream.tick();
+ await stream.tick();
+ const frames = stream.parsed();
+ assert.equal(frames[0].event, 'snapshot');
+ assert.deepEqual(frames[0].data.agents, []);
+ assert.equal(frames[0].data.roster, false);
+ assert.equal(frames.some((frame) => frame.event === 'agent'), false, 'no agent frame without the roster');
+ assert.equal(stream.frames.join('').includes('Scout'), false);
+
+ // The owner publishes the roster: viewers get a snapshot WITH agents, then frames.
+ db.state.policy.push({ event_type: 'agent_roster', level: 'public', detail: 'category' });
+ await stream.tick();
+ let after = stream.parsed().slice(frames.length);
+ assert.equal(after[0].event, 'snapshot');
+ assert.equal(after[0].data.roster, true);
+ assert.deepEqual(after[0].data.agents.map((agent) => agent.name), ['Scout']);
+ db.state.connectionStatus = 'online';
+ await stream.tick();
+ after = stream.parsed().slice(frames.length);
+ assert.ok(after.some((frame) => frame.event === 'agent' && frame.data.status === 'idle'), 'roster on: agent frames flow');
+
+ // And withdraws it: a snapshot without agents, and no more agent frames.
+ const before = stream.frames.length;
+ db.state.policy = db.state.policy.filter((row) => row.event_type !== 'agent_roster');
+ await stream.tick();
+ db.state.connectionStatus = 'busy';
+ await stream.tick();
+ const withdrawn = stream.parsed().slice(before);
+ assert.equal(withdrawn[0].event, 'snapshot');
+ assert.deepEqual(withdrawn[0].data.agents, []);
+ assert.equal(withdrawn.some((frame) => frame.event === 'agent'), false);
+ stream.hub.reset();
 });

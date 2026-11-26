@@ -20,6 +20,7 @@ const {
  publicListing,
  normalizePublicPolicyEntry,
  publicPolicyMap,
+ publishedEventTypes,
  effectiveShareFlags,
  scrubPublicText,
  opaqueActorId,
@@ -177,8 +178,34 @@ test('every never-leaves pattern drops the whole field, never a substring', () =
  }
 });
 
+test('with the roster withheld no agent is ever named: actors are "an agent", connect events do not leave', () => {
+ const events = { task_created: ['public', 'title'], message_sent: ['public', 'full'], agent_connected: ['public', 'title'], agent_disconnected: ['public', 'title'] };
+ const off = policy(events);
+ const on = policy({ ...events, agent_roster: ['public', 'category'] });
+ const byAgent = { actor_kind: 'agent', actor_agent_id: AGENT, actor_agent_name: 'NAME-SENTINEL', user_id: null };
+ const task = publicProjection(row({ ...byAgent, title: 'Task created: Ship the hall' }), off, null);
+ assert.deepEqual(task.actor, { kind: 'agent', id: '', name: 'an agent' });
+ assert.equal(JSON.stringify(task).includes(AGENT), false, 'no agent id, so agents cannot be counted');
+ const message = row({ ...byAgent, event_type: 'message_sent', entity_type: 'message', session_open: true, message_content: 'hello all', title: 'NAME-SENTINEL: hello all' });
+ const anon = publicProjection(message, off, null);
+ assert.equal(anon.title, 'an agent: hello all', 'the stored "<name>: …" title is rebuilt');
+ assert.equal(JSON.stringify(anon).includes('NAME-SENTINEL'), false);
+ for (const type of ['agent_connected', 'agent_disconnected']) {
+  const r = row({ ...byAgent, event_type: type, entity_type: 'agent', entity_id: AGENT });
+  assert.equal(publicProjection(r, off, null), null, `${type} left without the roster`);
+  assert.ok(publicProjection(r, on, null), `${type} leaves with the roster`);
+ }
+ assert.equal(publishedEventTypes(off).includes('agent_connected'), false);
+ // Roster on: the agent is named, as actor and in the rebuilt message title.
+ assert.deepEqual(publicProjection(row({ ...byAgent, actor_agent_name: 'Scout' }), on, null).actor, { kind: 'agent', id: AGENT, name: 'Scout' });
+ assert.equal(publicProjection({ ...message, actor_agent_name: 'Scout' }, on, null).title, 'Scout: hello all');
+ // A non-person sender the workspace does not hold is "an agent", never its stored name.
+ const bridge = row({ event_type: 'message_sent', entity_type: 'message', session_open: true, message_content: 'hi', user_id: null, actor_kind: '', message_sender_kind: 'bridge', title: 'BRIDGE-SENTINEL: hi' });
+ assert.equal(publicProjection(bridge, on, null).title, 'an agent: hi');
+});
+
 test('agent connect events never carry the stored "@handle" title, only the public name', () => {
- const p = policy({ agent_connected: ['public', 'title'], agent_disconnected: ['public', 'title'] });
+ const p = policy({ agent_connected: ['public', 'title'], agent_disconnected: ['public', 'title'], agent_roster: ['public', 'category'] });
  for (const [type, verb] of [['agent_connected', 'connected'], ['agent_disconnected', 'disconnected']]) {
   const r = row({
    event_type: type, entity_type: 'agent', entity_id: AGENT, title: `@scout-secret-handle ${verb}`,
@@ -369,12 +396,36 @@ test('reader: a private workspace and a missing one both answer null, without re
  assert.equal(db.calls.some((call) => call.params.includes('not-a-uuid')), false, 'a malformed id never reaches SQL');
 });
 
+test('reader: no roster row = no agents, no counts, and the agent tables are never read', async () => {
+ const state = baseState();
+ state.policy[WS] = Object.keys(PUBLIC_EVENT_TYPES).concat('agent_activity').map((event_type) => ({ event_type, level: 'public', detail: 'full' }));
+ const db = fakeDb(state);
+ const reader = createPublicWorkspaceReader({ db });
+ const summary = await reader.getSummary(WS);
+ assert.equal(summary.roster, false);
+ assert.deepEqual(summary.agents, []);
+ assert.deepEqual(summary.counts, { agents: 0, busy: 0, idle: 0, disconnected: 0 });
+ assert.equal(summary.name, 'Agent Expo');
+ assert.equal(db.calls.some((call) => /from workspace_agents|from agent_connections|from agent_jobs/.test(call.q)), false);
+ for (const level of ['members', 'private']) {
+  state.policy[WS] = [{ event_type: 'agent_roster', level, detail: 'category' }];
+  assert.deepEqual((await reader.getSummary(WS)).agents, [], `roster at ${level} stays in`);
+ }
+ state.policy[WS] = [{ event_type: 'agent_roster', level: 'public', detail: 'category' }];
+ const on = await reader.getSummary(WS);
+ assert.equal(on.roster, true);
+ assert.deepEqual(on.agents.map((agent) => agent.name), ['Scout', 'Quiet']);
+});
+
 test('reader: activity needs the agent_activity policy row AND the agent sharing tools', async () => {
  const state = baseState();
  const reader = createPublicWorkspaceReader({ db: fakeDb(state) });
  let summary = await reader.getSummary(WS);
  assert.equal(summary.agents.some((agent) => 'activity' in agent), false, 'no policy row: no activity');
  state.policy[WS] = [{ event_type: 'agent_activity', level: 'public', detail: 'category' }];
+ summary = await reader.getSummary(WS);
+ assert.deepEqual(summary.agents, [], 'activity alone does not publish the roster');
+ state.policy[WS].push({ event_type: 'agent_roster', level: 'public', detail: 'category' });
  summary = await reader.getSummary(WS);
  const byId = new Map(summary.agents.map((agent) => [agent.id, agent]));
  assert.equal(byId.get(AGENT).activity, 'edit');
@@ -517,4 +568,25 @@ test('stream: no never-leaves field reaches an SSE event or agent frame', async 
  ]) {
   assert.equal(wire.includes(sentinel), false, `${sentinel} reached the stream`);
  }
+});
+
+test('reader: an agent-sent message is attributed from the message row, and named only with the roster', async () => {
+ const state = baseState();
+ state.agents[0].name = 'AGENTNAME-SENTINEL';
+ state.events = [{
+  id: 'e1', at: '2026-11-25T10:00:00.000001Z', workspace_id: WS, event_type: 'message_sent', entity_type: 'message', entity_id: 'm1',
+  title: 'AGENTNAME-SENTINEL: hello all', user_id: null, metadata: { sender_kind: 'agent', sender_name: 'AGENTNAME-SENTINEL' },
+  user_display_name: null, session_open: true, task_visible: null, message_content: 'hello all',
+  message_sender_kind: 'agent', message_sender_id: AGENT,
+ }];
+ const reader = createPublicWorkspaceReader({ db: fakeDb(state) });
+ state.policy[WS] = [{ event_type: 'message_sent', level: 'public', detail: 'title' }];
+ let page = await reader.getEvents(WS, {});
+ assert.deepEqual(page.events[0].actor, { kind: 'agent', id: '', name: 'an agent' });
+ assert.equal(page.events[0].title, 'an agent: hello all');
+ assert.equal(JSON.stringify(page).includes('AGENTNAME-SENTINEL'), false);
+ assert.equal(JSON.stringify(page).includes(AGENT), false);
+ state.policy[WS].push({ event_type: 'agent_roster', level: 'public', detail: 'category' });
+ page = await reader.getEvents(WS, {});
+ assert.deepEqual(page.events[0].actor, { kind: 'agent', id: AGENT, name: 'AGENTNAME-SENTINEL' });
 });

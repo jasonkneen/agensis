@@ -24,6 +24,7 @@ const AGENT = '11111111-1111-4111-8111-111111111111';
 const visibility = { [PUBLIC_WS]: 'public', [PRIVATE_WS]: 'private' };
 
 let handler;
+let policyRows = [];
 
 test.before(async () => {
  process.env.AUTH_SECRET = 'public-ws-netlify-secret';
@@ -38,7 +39,7 @@ test.before(async () => {
        const v = visibility[params[0]];
        return { rows: v ? [{ id: params[0], name: 'Agent Expo', description: 'The hall', icon: 'H', visibility: v }] : [] };
       }
-      if (q.startsWith('select event_type, level, detail from workspace_public_policy')) return { rows: [] };
+      if (q.startsWith('select event_type, level, detail from workspace_public_policy')) return { rows: policyRows };
       if (q.startsWith('select id, name, avatar, accent_color, run_mode, enabled, sharing from workspace_agents')) {
        return { rows: [{ id: AGENT, name: 'Scout', avatar: 'SC', accent_color: '#ff7a59', run_mode: 'builtin', enabled: true, sharing: {} }] };
       }
@@ -79,7 +80,23 @@ test('netlify: a public workspace serves the summary and events, and answers 501
  assert.equal(summary.status, 200);
  assert.equal(summary.headers['access-control-allow-methods'], 'GET, OPTIONS');
  const body = JSON.parse(summary.body);
- assert.deepEqual(body.counts, { agents: 1, busy: 0, idle: 1, disconnected: 0 });
+ assert.equal(body.roster, false);
+ assert.deepEqual(body.agents, [], 'no policy row: no roster');
+ assert.deepEqual(body.counts, { agents: 0, busy: 0, idle: 0, disconnected: 0 });
+ assert.equal(summary.body.includes('Scout'), false);
+ policyRows = [{ event_type: 'agent_roster', level: 'public', detail: 'category' }];
+ try {
+  const on = JSON.parse((await get(`/backend/public/workspaces/${PUBLIC_WS}`)).body);
+  assert.equal(on.roster, true);
+  assert.deepEqual(on.counts, { agents: 1, busy: 0, idle: 1, disconnected: 0 });
+  // The roster never opens a private workspace.
+  const privateAnswer = await get(`/backend/public/workspaces/${PRIVATE_WS}`);
+  const missingAnswer = await get(`/backend/public/workspaces/${MISSING_WS}`);
+  assert.equal(privateAnswer.status, 404);
+  assert.deepEqual(missingAnswer, privateAnswer);
+ } finally {
+  policyRows = [];
+ }
  const events = await get(`/backend/public/workspaces/${PUBLIC_WS}/events`);
  assert.equal(events.status, 200);
  assert.deepEqual(JSON.parse(events.body).events, []);

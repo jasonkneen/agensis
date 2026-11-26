@@ -102,7 +102,7 @@ describe('public page helpers', () => {
 
   it('an agent frame replaces the agent and recounts', () => {
     const summary = {
-      id: WS, name: 'Hall', description: '', icon: '',
+      id: WS, name: 'Hall', description: '', icon: '', roster: true,
       agents: [{ id: AGENT, name: 'Scout', avatar: 'SC', accentColor: '', runMode: 'daemon' as const, status: 'idle' as const }],
       counts: { agents: 1, busy: 0, idle: 1, disconnected: 0 },
     };

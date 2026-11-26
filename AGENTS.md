@@ -408,6 +408,15 @@ A workspace whose `visibility` is `'public'` answers four no-sign-in GETs:
   `public` leaves. Each type has a ceiling the policy cannot raise
   (`memory_added` stops at `category`: its title is the memory). The
   publishable set is closed; `provider_call` and join-link events are not in it.
+- **The roster is a policy row too** (`agent_roster`, private by default).
+  Without it the summary, the stream snapshot and the agent frames carry no
+  agents and zero counts (`roster: false`), and the agent tables are not even
+  read; `agent_activity`, `agent_connected` and `agent_disconnected` need the
+  roster as well. Without it an agent is never named: an agent actor is
+  `{ kind: 'agent', id: '', name: 'an agent' }` and the `message_sent` title is
+  rebuilt as `<sender>: <body>` from the rows. Turning it on or off sends
+  viewers a fresh `snapshot`. The workspace name, description and icon are the
+  page's identity and are public whenever the workspace is.
 - **AND with the agent's share policy.** An event in a channel the agent
   withholds (`documents`, `memory`; `tools` for `activity`) does not leave.
 - **Privacy is resolved from the real rows, fail closed**: message and chat

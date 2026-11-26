@@ -27,8 +27,10 @@ const {
  POLICY_EVENT_TYPES,
  PUBLIC_EVENT_TYPES,
  AGENT_ACTIVITY_TYPE,
+ AGENT_ROSTER_TYPE,
  isUuid,
  publishedEventTypes,
+ rosterPublished,
  normalizePublicPolicyEntry,
  createPublicWorkspaceReader,
 } = require('../shared/public-workspace.cjs');
@@ -145,6 +147,16 @@ function createPublicStreamHub({ reader, pollMs = STREAM_POLL_MS, pingMs = STREA
     for (const event of page.events) broadcast(room, 'event', event);
    }
    const summary = await reader.summaryFor(workspace, policy);
+   const roster = rosterPublished(policy);
+   if (roster !== room.roster) {
+    // The owner turned the roster on or off. Viewers get a fresh snapshot
+    // (with or without agents) instead of keeping a roster that was withdrawn.
+    room.roster = roster;
+    room.agents = new Map();
+    for (const agent of summary.agents) room.agents.set(agent.id, JSON.stringify(agent));
+    broadcast(room, 'snapshot', summary);
+    return;
+   }
    for (const agent of summary.agents) {
     const json = JSON.stringify(agent);
     if (room.agents.get(agent.id) !== json) {
@@ -168,6 +180,7 @@ function createPublicStreamHub({ reader, pollMs = STREAM_POLL_MS, pingMs = STREA
    agents: new Map(),
    cursor: await reader.dbNow(),
    typesKey: publishedEventTypes(policy).join(','),
+   roster: rosterPublished(policy),
    ticking: false,
   };
   for (const agent of summary.agents) room.agents.set(agent.id, JSON.stringify(agent));
@@ -337,11 +350,18 @@ function mountPublicWorkspaceRoutes(app, deps = {}) {
     detail: String(row.detail),
     updatedAt: row.updated_at,
    })),
-   eventTypes: POLICY_EVENT_TYPES.map((eventType) => ({
-    eventType,
-    category: eventType === AGENT_ACTIVITY_TYPE ? 'agents' : PUBLIC_EVENT_TYPES[eventType].category,
-    ceiling: eventType === AGENT_ACTIVITY_TYPE ? 'category' : PUBLIC_EVENT_TYPES[eventType].ceiling,
-   })),
+   // The two agent rows first (roster, then activity, which needs the roster),
+   // then the event types. `kind` lets the panel label them.
+   eventTypes: [AGENT_ROSTER_TYPE, AGENT_ACTIVITY_TYPE, ...POLICY_EVENT_TYPES.filter((type) => PUBLIC_EVENT_TYPES[type])]
+    .map((eventType) => {
+     const spec = PUBLIC_EVENT_TYPES[eventType];
+     return {
+      eventType,
+      kind: eventType === AGENT_ROSTER_TYPE ? 'roster' : eventType === AGENT_ACTIVITY_TYPE ? 'activity' : 'event',
+      category: spec ? spec.category : 'agents',
+      ceiling: spec ? spec.ceiling : 'category',
+     };
+    }),
   };
  }
 

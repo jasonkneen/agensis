@@ -31,6 +31,11 @@
 //      those by construction (provider_call, join links) are not in the
 //      publishable set at all. Text that survives the gates is pattern-scrubbed
 //      as a second layer: a field that matches is DROPPED, never redacted.
+//   6. The agent roster is a policy row of its own (`agent_roster`), private
+//      by default: without it the summary, the stream snapshot and the agent
+//      frames carry no agents, no counts and no activity. The workspace name,
+//      description and icon are the page's identity and leave whenever the
+//      workspace is public (scrubbed like everything else).
 //   5. A private workspace and a workspace that does not exist answer the same
 //      way (the reader returns null for both; the routes turn null into one
 //      fixed 404).
@@ -52,8 +57,15 @@ const POLICY_LEVELS = Object.freeze(['public', 'members', 'private']);
 const DETAIL_LEVELS = Object.freeze(['category', 'title', 'full']);
 const DETAIL_RANK = Object.freeze({ category: 0, title: 1, full: 2 });
 
-/** Not an event: the policy row that lets `Agent.activity` leave. */
+/** Not an event: the policy row that lets `Agent.activity` leave (needs the roster too). */
 const AGENT_ACTIVITY_TYPE = 'agent_activity';
+/**
+ * Not an event: the policy row that lets the agent ROSTER leave (names,
+ * avatars, colours, run modes, statuses, and the counts derived from them).
+ * Private by default like every other row: with no row the summary, the
+ * stream snapshot and the agent frames carry no agents at all.
+ */
+const AGENT_ROSTER_TYPE = 'agent_roster';
 
 const MAX_TITLE = 160;
 const MAX_DETAIL = 280;
@@ -74,7 +86,9 @@ const MAX_LISTINGS = 200;
  *   detail    the ONE named source of `detail` at 'full', or absent
  *   entity    the entity kind that may be named at 'title', or absent
  *   title     'agent' -> the stored title is NOT used; the public title is
- *             "<public agent name> <verb>", or absent for an unknown agent
+ *             "<public agent name> <verb>", or absent for an unknown agent;
+ *             'message' -> rebuilt as "<sender>: <first 80 chars of the body>"
+ *   needsRoster the type leaves only while `agent_roster` is published
  */
 const PUBLIC_EVENT_TYPES = Object.freeze({
  task_created: { category: 'tasks', ceiling: 'title', gate: 'task', entity: 'task' },
@@ -85,7 +99,9 @@ const PUBLIC_EVENT_TYPES = Object.freeze({
  document_deleted: { category: 'docs', ceiling: 'title', channel: 'documents' },
  comment_created: { category: 'comments', ceiling: 'title' },
  chat_created: { category: 'messages', ceiling: 'title', gate: 'session', entity: 'chat' },
- message_sent: { category: 'messages', ceiling: 'full', gate: 'session', detail: 'message' },
+ // The stored title is "<sender name>: <first 80 chars>"; it is rebuilt here so
+ // an agent sender is named only when the roster is published.
+ message_sent: { category: 'messages', ceiling: 'full', gate: 'session', detail: 'message', title: 'message' },
  // The stored title is "Memory added: <the memory itself>".
  memory_added: { category: 'memory', ceiling: 'category', channel: 'memory' },
  // Titles written by older clients can carry an invitee's address.
@@ -93,12 +109,13 @@ const PUBLIC_EVENT_TYPES = Object.freeze({
  canvas_updated: { category: 'canvas', ceiling: 'title' },
  // The stored title is "@<handle> connected"; the handle never leaves (see
  // publicAgent), so the public title is rebuilt from the public display name.
- agent_connected: { category: 'agents', ceiling: 'title', entity: 'agent', title: 'agent', verb: 'connected' },
- agent_disconnected: { category: 'agents', ceiling: 'title', entity: 'agent', title: 'agent', verb: 'disconnected' },
+ // They name an agent by construction, so they need the roster published too.
+ agent_connected: { category: 'agents', ceiling: 'title', entity: 'agent', title: 'agent', verb: 'connected', needsRoster: true },
+ agent_disconnected: { category: 'agents', ceiling: 'title', entity: 'agent', title: 'agent', verb: 'disconnected', needsRoster: true },
 });
 
-/** Every type a policy row may name: the events above plus agent activity. */
-const POLICY_EVENT_TYPES = Object.freeze([...Object.keys(PUBLIC_EVENT_TYPES), AGENT_ACTIVITY_TYPE]);
+/** Every type a policy row may name: the events above plus the roster and agent activity. */
+const POLICY_EVENT_TYPES = Object.freeze([...Object.keys(PUBLIC_EVENT_TYPES), AGENT_ROSTER_TYPE, AGENT_ACTIVITY_TYPE]);
 
 /**
  * Tool name -> activity category. An EXACT match over a closed map, on the
@@ -246,6 +263,7 @@ function effectiveDetail(policy, eventType) {
  const spec = PUBLIC_EVENT_TYPES[eventType];
  const entry = policyEntryFor(policy, eventType);
  if (!spec || !entry || entry.level !== 'public') return null;
+ if (spec.needsRoster && !rosterPublished(policy)) return null;
  return DETAIL_RANK[entry.detail] <= DETAIL_RANK[spec.ceiling] ? entry.detail : spec.ceiling;
 }
 
@@ -254,9 +272,15 @@ function publishedEventTypes(policy) {
  return Object.keys(PUBLIC_EVENT_TYPES).filter((type) => effectiveDetail(policy, type) !== null);
 }
 
+function rosterPublished(policy) {
+ const entry = policyEntryFor(policy, AGENT_ROSTER_TYPE);
+ return Boolean(entry && entry.level === 'public');
+}
+
+/** Activity rides on an agent, so it needs the roster as well as its own row. */
 function activityPublished(policy) {
  const entry = policyEntryFor(policy, AGENT_ACTIVITY_TYPE);
- return Boolean(entry && entry.level === 'public');
+ return Boolean(entry && entry.level === 'public') && rosterPublished(policy);
 }
 
 // ----------------------------------------------------------------------------
@@ -294,6 +318,7 @@ function effectiveShareFlags(agentRow, liveConnections = []) {
  *   session_open (true only when the session resolved and is not private),
  *   task_visible (true only when the task resolved, outside a private project),
  *   message_content (the message body; read only for message_sent at 'full').
+ *   message_sender_kind (the message row's sender_kind, for message_sent).
  *
  * `policy` is the workspace policy (Map, object, or the single row for this
  * type). `shareFlags` is the effective share flags of the agent the event is
@@ -321,23 +346,35 @@ function publicProjection(row, policy, shareFlags) {
  const event = { id, at, type, category: spec.category };
  if (DETAIL_RANK[level] < DETAIL_RANK.title) return event;
 
+ // With the roster withheld an agent is never named: not as an actor, not in
+ // a title. It shows as "an agent" with no id, so agents cannot be counted.
+ const roster = rosterPublished(policy);
  const knownAgent = isAgentEvent && isUuid(String(row.actor_agent_id || ''));
- const title = spec.title === 'agent'
-  ? (knownAgent ? scrubPublicText(`${scrubPublicText(row.actor_agent_name, 80) || 'Agent'} ${spec.verb}`, MAX_TITLE) : '')
-  : scrubPublicText(row.title, MAX_TITLE);
+ const agentName = knownAgent && roster ? scrubPublicText(row.actor_agent_name, 80) || 'Agent' : '';
+ const humanActor = !isAgentEvent && row.actor_kind === 'human' && row.user_id && row.workspace_id;
+ const humanName = humanActor ? scrubPublicText(row.user_display_name, 80) || 'Someone' : '';
+ let title = '';
+ if (spec.title === 'agent') {
+  title = agentName ? scrubPublicText(`${agentName} ${spec.verb}`, MAX_TITLE) : '';
+ } else if (spec.title === 'message') {
+  const notAPerson = row.message_sender_kind && row.message_sender_kind !== 'user';
+  const sender = isAgentEvent ? agentName || 'an agent' : humanName || (notAPerson ? 'an agent' : 'Someone');
+  const body = typeof row.message_content === 'string' && row.session_open === true ? row.message_content.slice(0, 80) : '';
+  title = body ? scrubPublicText(`${sender}: ${body}`, MAX_TITLE) : '';
+ } else {
+  title = scrubPublicText(row.title, MAX_TITLE);
+ }
  if (title) event.title = title;
 
- if (knownAgent) {
-  event.actor = {
-   kind: 'agent',
-   id: String(row.actor_agent_id),
-   name: scrubPublicText(row.actor_agent_name, 80) || 'Agent',
-  };
- } else if (row.actor_kind === 'human' && row.user_id && row.workspace_id) {
+ if (isAgentEvent) {
+  event.actor = agentName
+   ? { kind: 'agent', id: String(row.actor_agent_id), name: agentName }
+   : { kind: 'agent', id: '', name: 'an agent' };
+ } else if (humanActor) {
   event.actor = {
    kind: 'human',
    id: opaqueActorId(String(row.workspace_id), String(row.user_id)),
-   name: scrubPublicText(row.user_display_name, 80) || 'Someone',
+   name: humanName,
   };
  }
 
@@ -547,14 +584,21 @@ function createPublicWorkspaceReader({ db } = {}) {
  }
 
  async function summaryFor(workspace, policy) {
-  const { agentRows, connectionRows } = await loadAgents(workspace.id);
-  const activityByAgent = activityPublished(policy) ? await loadActivity(workspace.id) : null;
-  const agents = buildAgents(agentRows, connectionRows, activityByAgent).map((entry) => entry.agent);
+  // No roster row: the agents are not read at all, so nothing about them
+  // (not even how many there are) can reach the summary, snapshot or frames.
+  const roster = rosterPublished(policy);
+  let agents = [];
+  if (roster) {
+   const { agentRows, connectionRows } = await loadAgents(workspace.id);
+   const activityByAgent = activityPublished(policy) ? await loadActivity(workspace.id) : null;
+   agents = buildAgents(agentRows, connectionRows, activityByAgent).map((entry) => entry.agent);
+  }
   return {
    id: String(workspace.id),
    name: scrubPublicText(workspace.name, 120) || 'Workspace',
    description: scrubPublicText(workspace.description, 600),
    icon: typeof workspace.icon === 'string' && workspace.icon.length <= 16 && !/[/:\\@]/.test(workspace.icon) ? workspace.icon : '',
+   roster,
    agents,
    counts: countAgents(agents),
   };
@@ -619,7 +663,9 @@ function createPublicWorkspaceReader({ db } = {}) {
             and ${sessionOpenSql('ms')}
            then m.content
            else null
-          end as message_content
+          end as message_content,
+          case when e.event_type = 'message_sent' then m.sender_kind end as message_sender_kind,
+          case when e.event_type = 'message_sent' then m.sender_id end as message_sender_id
      from activity_events e
      left join app_users u on u.id = e.user_id
      left join messages m on e.event_type = 'message_sent' and e.entity_type = 'message' and m.id = ${ENTITY_UUID_SQL}
@@ -644,6 +690,9 @@ function createPublicWorkspaceReader({ db } = {}) {
     actorAgentId = String(raw.entity_id || '');
    } else if (metadata.actor_kind === 'agent' && metadata.actor_id) {
     actorAgentId = String(metadata.actor_id);
+   } else if (raw.event_type === 'message_sent' && raw.message_sender_kind === 'agent' && raw.message_sender_id) {
+    // From the message row itself (server-written), not from the event.
+    actorAgentId = String(raw.message_sender_id);
    }
    const known = actorAgentId ? agentsById.get(actorAgentId) : null;
    const row = {
@@ -665,6 +714,7 @@ function createPublicWorkspaceReader({ db } = {}) {
     session_open: raw.session_open === true,
     task_visible: raw.task_visible === true,
     message_content: raw.message_content,
+    message_sender_kind: raw.message_sender_kind || '',
    };
    const event = publicProjection(row, policy, known ? known.flags : null);
    if (event) events.push(event);
@@ -717,6 +767,7 @@ module.exports = {
  POLICY_LEVELS,
  DETAIL_LEVELS,
  AGENT_ACTIVITY_TYPE,
+ AGENT_ROSTER_TYPE,
  PUBLIC_EVENT_TYPES,
  POLICY_EVENT_TYPES,
  TOOL_ACTIVITY,
@@ -731,6 +782,7 @@ module.exports = {
  effectiveDetail,
  publishedEventTypes,
  activityPublished,
+ rosterPublished,
  effectiveShareFlags,
  publicProjection,
  publicAgentStatus,
