@@ -350,6 +350,9 @@ export const Sidebar = React.memo(function Sidebar({
  const resizeFrameRef = React.useRef<number | null>(null);
  const uploadInputRef = React.useRef<HTMLInputElement | null>(null);
  const [openSections, setOpenSections] = React.useState<Set<string>>(() => new Set());
+ // Followed threads: the first THREADS_SHOWN, then a Show more / Show less toggle.
+ const THREADS_SHOWN = 8;
+ const [showAllThreads, setShowAllThreads] = React.useState(false);
  const [favoriteAgentKeys, setFavoriteAgentKeys] = React.useState<Set<string>>(() => {
   if (typeof localStorage === 'undefined') return new Set();
   try {
@@ -819,7 +822,7 @@ export const Sidebar = React.memo(function Sidebar({
          {threadInbox.loading ? 'Loading threads' : 'No threads yet'}
         </p>
        ) : (
-        threadInbox.items.map(thread => (
+        (showAllThreads ? threadInbox.items : threadInbox.items.slice(0, THREADS_SHOWN)).map(thread => (
          <button
           key={thread.parentId}
           type="button"
@@ -862,6 +865,21 @@ export const Sidebar = React.memo(function Sidebar({
           </span>
          </button>
         ))
+       )}
+       {/* A long followed-threads list pushed every section below it off
+           screen. The first THREADS_SHOWN (unread sort first, so nothing
+           new is ever hidden behind the fold unless there are that many
+           unread) and a toggle for the rest. */}
+       {threadInbox.items.length > THREADS_SHOWN && (
+        <button
+         type="button"
+         onClick={() => setShowAllThreads(value => !value)}
+         aria-expanded={showAllThreads}
+         className="sidebar-thread-more flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs font-medium text-muted-foreground outline-none hover:bg-muted/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        >
+         <ChevronRight className={cn('size-3.5 transition-transform', showAllThreads ? '-rotate-90' : 'rotate-90')} aria-hidden />
+         {showAllThreads ? 'Show less' : `Show ${threadInbox.items.length - THREADS_SHOWN} more`}
+        </button>
        )}
        </>)}
       </SidebarSection>
