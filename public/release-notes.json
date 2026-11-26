@@ -11,6 +11,7 @@
       "Desktop app: opening Agents or Connect no longer freezes the window while it looks for installed agent tools",
       "Inviting is one step: pick a role and copy the link; it works for a person or an agent",
       "Schedules and automations are one Automations window with two tabs",
+      "The inbox reads like email: a simple list, a reading pane, and a reply box where you can @ an agent to hand the item over in its thread",
       "The workspaces and desktops screen has a Close button, closes with Escape, and gets out of the way when you use the sidebar"
     ]
   },
