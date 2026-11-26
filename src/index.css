@@ -4399,14 +4399,13 @@ rather than one more per-panel hook {
  filter: none;
 }
 
-/* The workspace you are in: a ring with a gap of the rail's own colour, not a
-   dark outline. */
+/* The workspace you are in: a white ring INSIDE the tile. An outer ring was
+   clipped by the rail's scroll box (it is exactly the tile column wide). */
 [data-workspace-rail-tile][data-active="true"] .workspace-tile-swatch {
  box-shadow:
-  inset 0 1px 0 rgba(255, 255, 255, 0.35),
-  inset 0 0 0 1px rgba(0, 0, 0, 0.12),
-  0 0 0 2px var(--rail-gap, var(--card)),
-  0 0 0 3.5px color-mix(in srgb, var(--foreground) 70%, transparent) !important;
+  inset 0 0 0 2px rgba(255, 255, 255, 0.92),
+  inset 0 0 0 3px rgba(0, 0, 0, 0.12),
+  0 2px 6px -1px rgba(0, 0, 0, 0.3) !important;
 }
 
 /* Expo: the tactile version — the tile sits on a lip in its own darker tone,
@@ -4424,8 +4423,8 @@ rather than one more per-panel hook {
   inset 0 1.5px 0 rgba(255, 255, 255, 0.4),
   inset 0 0 0 1.5px rgba(0, 0, 0, 0.1),
   0 2px 0 rgba(0, 0, 0, 0.22),
-  0 0 0 2.5px var(--rail-gap),
-  0 0 0 4.5px var(--expo-coral) !important;
+  inset 0 0 0 2px rgba(255, 250, 240, 0.95),
+  inset 0 0 0 3px rgba(0, 0, 0, 0.14) !important;
 }
 :root[data-ui-theme="expo"] [data-workspace-rail-tile][data-active="true"] > span.absolute {
  background: var(--expo-coral) !important;

@@ -308,9 +308,9 @@
 
 /* The central content lifts off that surface: its own curve, and a soft
    shadow falling onto the chrome. */
-:root[data-ui-theme="expo"] .canvas-column {
- border-radius: var(--radius-xl) 0 0 var(--radius-xl);
-}
+/* NOT rounded itself: the column clips (overflow hidden), so a radius here cut
+   off the corner fills that paint the sidebar colour round the curve, and the
+   wallpaper showed in the notch. The curve comes from those fills. */
 :root[data-ui-theme="expo"][data-theme="light"] .canvas-column {
  box-shadow: -1px 0 0 rgba(43, 45, 72, 0.06), -14px 0 30px -18px rgba(43, 45, 72, 0.45);
 }
@@ -358,4 +358,91 @@
 :root[data-ui-theme="expo"][data-theme="dark"] .sidebar-search {
  background: #2a2c46 !important;
  box-shadow: inset 0 2px 3px rgba(0, 0, 0, 0.35), inset 0 0 0 1.5px var(--expo-edge) !important;
+}
+
+/* ==========================================================================
+   Corners, selectors and emphasis (Jason, live app, round 2)
+   ========================================================================== */
+
+/* A full-size window curves with the column's corner fills, so its inner
+   (offset) border follows the curve instead of being cut square. */
+:root[data-ui-theme="expo"] .canvas-column [data-window-view-mode="full"] [data-window-surface] {
+ border-radius: var(--radius-xl) 0 0 var(--radius-xl) !important;
+}
+
+/* One "selected" style: the raised coral pill, for every segment, filter
+   chip and tab that says it is the current choice. */
+:root[data-ui-theme="expo"] [role="group"] > button[aria-pressed="true"]:not([data-slot="button"]),
+:root[data-ui-theme="expo"] button[aria-pressed="true"][class*="rounded-full"]:not([data-slot="button"]),
+:root[data-ui-theme="expo"] [data-slot="tabs-trigger"][data-state="active"],
+:root[data-ui-theme="expo"] [role="tab"][aria-selected="true"] {
+ background: linear-gradient(180deg, #ff8f79, var(--expo-coral)) !important;
+ color: #fffaf0 !important;
+ border-color: transparent !important;
+ border-radius: 999px !important;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px #f5a493, 0 2px 0 var(--expo-coral-deep) !important;
+}
+:root[data-ui-theme="expo"] [role="group"] > button[aria-pressed="true"]:not([data-slot="button"]) *,
+:root[data-ui-theme="expo"] button[aria-pressed="true"][class*="rounded-full"]:not([data-slot="button"]) * {
+ color: inherit !important;
+}
+/* The group holding them is a quiet inset track, not a second outline. */
+:root[data-ui-theme="expo"] [role="group"]:has(> button[aria-pressed]) {
+ border-color: transparent !important;
+ background: color-mix(in srgb, var(--foreground) 6%, transparent) !important;
+ box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12) !important;
+ border-radius: 999px !important;
+}
+:root[data-ui-theme="expo"] [role="group"]:has(> button[aria-pressed]) > button {
+ border-radius: 999px !important;
+}
+
+/* Channel header tabs (Messages, Files…): the selected pill is lower, with
+   more room before the icon. */
+:root[data-ui-theme="expo"] .channel-header [data-slot="button"][data-size="sm"] {
+ height: 1.875rem !important;
+ padding-left: 0.75rem !important;
+ padding-right: 0.7rem !important;
+}
+:root[data-ui-theme="expo"] .channel-header [data-slot="button"][data-variant="secondary"][data-size="sm"] {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px var(--expo-edge), 0 2px 0 var(--expo-lip) !important;
+}
+
+/* Sidebar selection: a lifted paper card with a coral icon — no heavy lip. */
+:root[data-ui-theme="expo"] .sidebar-action-row[data-active="true"],
+:root[data-ui-theme="expo"] .sidebar-item-row[data-active="true"] {
+ background: var(--expo-paper) !important;
+ color: var(--foreground) !important;
+ font-weight: 600;
+ border-radius: 10px;
+ box-shadow: 0 1px 0 rgba(43, 45, 72, 0.08), 0 4px 10px -4px rgba(43, 45, 72, 0.3) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] .sidebar-action-row[data-active="true"],
+:root[data-ui-theme="expo"][data-theme="dark"] .sidebar-item-row[data-active="true"] {
+ background: #34365a !important;
+ box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 4px 10px -4px rgba(0, 0, 0, 0.6) !important;
+}
+:root[data-ui-theme="expo"] .sidebar-action-row[data-active="true"] svg,
+:root[data-ui-theme="expo"] .sidebar-item-row[data-active="true"] svg {
+ color: var(--expo-coral) !important;
+}
+
+/* No rule under a window's toolbar band (Memory's "All" row and the like). */
+:root[data-ui-theme="expo"] [data-window-surface] .shrink-0.border-b {
+ border-bottom-color: transparent !important;
+}
+
+/* Avatars carry more weight: a solid tinted disc, bold initials, and a ring
+   in the surface colour so a stack of them reads as separate faces. */
+:root[data-ui-theme="expo"] [data-slot="avatar-fallback"] {
+ background: #e8d9b9 !important;
+ color: var(--expo-navy, #2b2d48) !important;
+ font-weight: 700;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="avatar-fallback"] {
+ background: #4b4e80 !important;
+ color: #fbf4e4 !important;
+}
+:root[data-ui-theme="expo"] [data-slot="avatar"] {
+ box-shadow: 0 0 0 2px var(--card), 0 1px 3px rgba(0, 0, 0, 0.25);
 }
