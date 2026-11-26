@@ -4,7 +4,12 @@ import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import App from './App.tsx';
 import { FarmIntegrationApproval } from './components/integrations/FarmIntegrationApproval.tsx';
 import { installDiagnosticsCapture } from './lib/feedbackDiagnostics.ts';
+import { applyExpoColors } from './lib/theme/expoColors.ts';
 import './index.css';
+
+// Expo's base/accent choices are attributes on <html>; stamp them before the
+// first paint so the stored colours never flash in as coral-on-navy.
+applyExpoColors();
 
 // BEFORE React mounts, so the feedback report can carry the errors thrown while
 // the app was still booting — the ones nobody can reproduce on request. Writes
