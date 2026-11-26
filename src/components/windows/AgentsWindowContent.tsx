@@ -940,8 +940,11 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
 
   return (
     <div className={WINDOW_SHELL}>
-      <div className="flex shrink-0 items-center justify-end gap-2 border-b border-border bg-card/65 px-3 py-2 backdrop-blur-md">
-        <div className="flex shrink-0 items-center gap-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-b border-border bg-card/65 px-3 py-2 backdrop-blur-md">
+        {/* Wraps rather than overflowing: right-aligned and unwrappable, a
+            narrow window pushed the view switch off its LEFT edge, where no
+            scroll could reach it. */}
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
           {!createStep && agents.length > 0 && (
             <div className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-card/40 p-0.5">
               <Button type="button" size="icon-sm" variant={layoutView === 'grid' ? 'default' : 'ghost'} onClick={() => setLayoutView('grid')} aria-label="Grid view" aria-pressed={layoutView === 'grid'} title="Grid view">

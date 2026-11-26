@@ -1464,11 +1464,6 @@
   grid-template-columns: 1fr;
  }
 
- .task-row [data-slot="item-actions"] {
-  width: 100%;
-  justify-content: flex-start;
-  padding-left: 4.25rem;
- }
 }
 
 :root[data-ui-theme="paper"] [data-floating-window] {
@@ -3109,6 +3104,26 @@ body {
    both back. Without them a bulleted list read as two indented paragraphs and
    a table as columns of words run together ("ContrastHow far text…").
    Checklists are label rows in a div (doc-task-list), so they are untouched. */
+/* Task rows in a NARROW Tasks window (a phone, or a window snapped thin):
+   the trailing controls keep their footprint even while hidden, so the
+   wrapping row stranded the title on a line of its own under the chevron and
+   checkbox. Below 36rem the trailing group takes its own line instead, and
+   the leading controls stay beside the title. A container query, not a media
+   query, because a desktop window can be narrow too. */
+.tasks-window { container-type: inline-size; container-name: tasks; }
+@container tasks (max-width: 36rem) {
+ .task-row > [data-slot="item-content"] { flex: 1 1 0%; min-width: 0; }
+ /* Only the TRAILING group drops to its own line, under the title. A phone
+    media rule used to give EVERY actions group width:100% — including the
+    leading chevron/checkbox — which is what stranded the title. */
+ .task-row > [data-slot="item-actions"]:last-child {
+  flex-basis: 100%;
+  min-width: 0;
+  justify-content: flex-end;
+ }
+ .task-row [data-slot="native-select-wrapper"] { max-width: 7rem; }
+}
+
 .doc-editor ul { list-style: disc; }
 .doc-editor ol { list-style: decimal; }
 .doc-editor ul ul { list-style: circle; }
