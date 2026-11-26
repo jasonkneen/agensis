@@ -158,3 +158,42 @@ export const noop = () => { };
 export const asyncNoop = async () => { };
 export const asyncNull = async () => null;
 export const asyncTrue = async () => true;
+
+// --- Inbox -----------------------------------------------------------------
+
+const INBOX: Array<[string, string, string, string, boolean, number]> = [
+  ['approval', 'Ada wants to run a shell command', 'npm run build in agensis-ux — allow once, or always for this folder?', 'Ada', true, 3],
+  ['mention', 'Scout mentioned you in #research', '@you the OpenRouter pricing page changed on Monday; three of our models moved tiers.', 'Scout', true, 18],
+  ['task', 'Quill finished “Release notes: inbox”', 'Ready for review. I kept the language plain and dropped the internal names.', 'Quill', true, 47],
+  ['mention', 'Riley replied in #design', 'Agree on one framed list. Can the bin stay visible while it is confirming?', 'Riley', false, 130],
+  ['task', 'Forge is blocked on signing', 'The notarisation key expired yesterday; nothing ships to the desktop until it is renewed.', 'Forge', false, 260],
+];
+
+export function seedInboxItems() {
+  return INBOX.map(([category, title, body, actorName, unread, minutes], i) => ({
+    id: `${category}:inbox-${i + 1}`,
+    category,
+    title,
+    body,
+    contextKey: `thread:inbox-${i + 1}`,
+    sessionId: null,
+    entityType: null,
+    entityId: null,
+    actorName,
+    createdAt: ago(minutes),
+    unread,
+  }));
+}
+
+// Docs are HTML (a contentEditable editor), not markdown.
+export const SAMPLE_DOC_MARKDOWN = `<h1>Theme engine</h1>
+<p>The Default theme is <strong>generated</strong> from four choices.</p>
+<table><thead><tr><th>Seed</th><th>What it moves</th></tr></thead><tbody>
+<tr><td>Palette</td><td>The tint of every neutral surface and line</td></tr>
+<tr><td>Colour</td><td>The primary: buttons, focus, selection</td></tr>
+<tr><td>Contrast</td><td>How far text and lines sit from the page</td></tr>
+<tr><td>Depth</td><td>Hard, soft or flat shadows</td></tr>
+</tbody></table>
+<h2>Why</h2>
+<ul><li>One engine instead of four hand-written families</li><li>Secondary text is <em>solved</em> to a contrast target, never picked</li></ul>
+<pre><code>const tokens = buildThemeTokens(seed, 'dark');</code></pre>`;

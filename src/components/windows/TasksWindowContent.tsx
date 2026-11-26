@@ -115,7 +115,7 @@ import { Textarea } from '@agensis/ui/components/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 import { cn } from '@/lib/utils';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
-import { MENTION_TILE, SEGMENTED, SEGMENT_ITEM, WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { MENTION_TILE, SCROLL_VIEWPORT_BLOCK, SEGMENTED, SEGMENT_ITEM, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { ROW_REVEAL } from '@/components/common/Section';
 import { TaskGantt, TaskKanban } from './TaskBoardViews';
 import { TaskTable } from './TaskTable';
@@ -632,7 +632,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
 
   return (
     <div
-      className="relative flex h-full flex-col overflow-hidden bg-transparent text-foreground"
+      className="tasks-window relative flex h-full flex-col overflow-hidden bg-transparent text-foreground"
       data-testid={onUploadFiles ? 'task-window-dropzone' : undefined}
       onDragEnter={handleNewAttachmentDragEnter}
       onDragOver={handleNewAttachmentDragOver}
@@ -962,7 +962,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
 
       {view === 'list' ? (
         <div className="flex min-h-0 flex-1 overflow-hidden">
-        <ScrollArea className="min-h-0 min-w-0 flex-1">
+        <ScrollArea className={cn('min-h-0 min-w-0 flex-1', SCROLL_VIEWPORT_BLOCK)}>
           <div className="flex flex-col gap-3 p-3">
             {filteredTopLevel.length === 0 ? (
               <Empty className="min-h-80 border-0">
