@@ -3884,7 +3884,7 @@ function SubThreadListPanel({
             )}
             {otherMyThreads.length > 0 && (
               <div>
-                <div className="ui-section-label sticky top-0 z-10 border-y border-border bg-card/85 px-3 py-1.5 backdrop-blur-md">
+                <div className="ui-section-label sticky top-0 z-10 border-y border-border bg-card/95 px-3 py-1.5">
                   Involving you · other channels
                 </div>
                 <div className="divide-y divide-border">

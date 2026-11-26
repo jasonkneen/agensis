@@ -1323,6 +1323,27 @@ Pinned by `tests/desktop-local-runtime.test.cjs`.
   floating elevation. Target `[data-window-titlebar]` for header styling, never
   `> div:first-child`, which is the entire surface. Apply the active palette
   after clearing inactive families because their managed CSS variables overlap.
+  A new theme idea is a palette seed in `THEME_PALETTES`, not a new family. The
+  engine writes scheme-scoped rules into `<style id="agensis-theme-engine">`;
+  never write palette values inline on `:root` (an inline value beats the dark
+  scope). JS that resolves colours should watch `data-theme-seed` on `<html>`.
+- Window content layout (shared parts in `src/components/common/Section.tsx`
+  and `presentation.ts`):
+  - The title bar already names the window. Content never repeats that name or
+    its icon as a heading or toolbar label; a toolbar holds controls and at most
+    a plain count.
+  - Section labels use `Section` / `SectionHeader` (quiet uppercase label, plain
+    count), not a coloured icon + bold heading + badge.
+  - A run of rows is ONE frame with dividers (`ListGroup` / `ListRow`), not a
+    bordered card per row. Per-row edit/delete use `ROW_REVEAL` (hover, focus,
+    always on touch); a delete waiting for its confirming click stays visible.
+  - View switches use `SEGMENTED` / `SEGMENT_ITEM`. Accent colour is for state
+    and the primary action only; state colours use `text-success`,
+    `text-warning`, `text-destructive`, never raw emerald/amber/red classes.
+  - Only `[data-window-surface]` is glass. Nested `backdrop-blur-*` inside a
+    window is cancelled in `index.css`; don't rely on it.
+  - Look at the change in `/#screens` (DEV gallery, no sign-in, real window
+    contents from local fixtures) before shipping it.
 - HTML, SVG, and XML uploads are served as inert downloads. XML can contain
   executable XHTML/SVG namespaces, so `application/xml` is not a safe inline
   type. Keep both the extension guard and the legacy stored-type guard.
