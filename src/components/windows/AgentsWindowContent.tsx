@@ -1739,7 +1739,7 @@ function AgentFormActionBar({
       // that lives on the field group inside, so the sticky edge is the pane's
       // own edge and no sliver of scrolling text shows above the pinned bar.
       className={cn(
-        'sticky z-10 -mx-3 flex flex-wrap items-center gap-2 bg-card/85 px-3 py-2 backdrop-blur-md',
+        'sticky z-10 -mx-3 flex flex-wrap items-center gap-2 bg-card/95 px-3 py-2',
         placement === 'top' ? 'top-0 border-b' : 'bottom-0 border-t',
         dormant && 'invisible',
       )}
