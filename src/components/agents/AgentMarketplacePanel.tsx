@@ -159,7 +159,7 @@ export function AgentMarketplaceSection({
                   <span className={cn(
                     'rounded-full border px-2 py-0.5 text-3xs font-medium uppercase tracking-wide',
                     isHire
-                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                      ? 'border-warning/40 bg-warning/10 text-warning'
                       : 'border-primary/40 bg-primary/10 text-primary',
                   )}>
                     {isHire ? 'For hire' : 'Template'}

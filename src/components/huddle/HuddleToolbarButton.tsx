@@ -63,7 +63,7 @@ export function HuddleToolbarButton({
   if (connection || (dock?.target?.sessionId === sessionId && dock?.session?.state?.active)) {
     return (
       <span
-        className={cn('flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-emerald-500', className)}
+        className={cn('flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-success', className)}
         title="You are in this huddle"
         aria-label={compact ? 'In huddle' : undefined}
       >

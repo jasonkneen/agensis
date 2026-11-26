@@ -390,7 +390,7 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
                 <span
                   className={cn(
                     'ml-auto shrink-0 rounded-full border px-2 text-[0.6875rem]',
-                    project.status === 'at_risk' ? 'border-destructive/50 text-destructive' : project.status === 'active' ? 'border-emerald-500/50 text-emerald-500' : 'border-border text-muted-foreground',
+                    project.status === 'at_risk' ? 'border-destructive/50 text-destructive' : project.status === 'active' ? 'border-success/50 text-success' : 'border-border text-muted-foreground',
                   )}
                 >
                   {PROJECT_STATUS_LABELS[project.status]}
@@ -419,7 +419,7 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
               aria-label={starred ? `Remove ${project.name} from favourites` : `Add ${project.name} to favourites`}
               aria-pressed={starred}
               onClick={() => setFavourites(prev => toggleFavourite(prev, project.id))}
-              className={cn('absolute top-2.5 right-3 grid size-6 place-items-center rounded-md text-base leading-none hover:bg-muted', starred ? 'text-amber-500' : 'text-muted-foreground')}
+              className={cn('absolute top-2.5 right-3 grid size-6 place-items-center rounded-md text-base leading-none hover:bg-muted', starred ? 'text-warning' : 'text-muted-foreground')}
             >
               {starred ? '★' : '☆'}
             </button>

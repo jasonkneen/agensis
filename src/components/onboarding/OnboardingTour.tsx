@@ -510,7 +510,7 @@ export function OnboardingTour({
                       title="Copy command"
                       className="absolute right-1 top-1 text-muted-foreground"
                     >
-                      {commandCopied ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
+                      {commandCopied ? <Check className="size-3.5 text-success" /> : <Copy className="size-3.5" />}
                     </Button>
                   </div>
                   <div className="mt-2 rounded-md border border-border bg-muted/30 p-2 text-2xs leading-snug text-muted-foreground">
@@ -520,7 +520,7 @@ export function OnboardingTour({
                     </code>
                     . The service stores only the profile name, never the token.
                   </div>
-                  <div className={cn('mt-2 text-2xs font-medium', connected ? 'text-emerald-500' : 'text-muted-foreground')}>
+                  <div className={cn('mt-2 text-2xs font-medium', connected ? 'text-success' : 'text-muted-foreground')}>
                     {connected
                       ? `Connected — @${connectAgent?.handle} is online.`
                       : 'Waiting for the daemon to come online… you can also finish setup and connect later.'}

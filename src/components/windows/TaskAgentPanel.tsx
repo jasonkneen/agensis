@@ -45,7 +45,7 @@ export function TaskAgentPanel({
           <span
             className={cn(
               'size-1.5 rounded-full',
-              state.presence === 'busy' ? 'bg-amber-500' : state.presence === 'online' ? 'bg-emerald-500' : 'bg-muted-foreground/50',
+              state.presence === 'busy' ? 'bg-warning' : state.presence === 'online' ? 'bg-success' : 'bg-muted-foreground/50',
             )}
             aria-hidden
           />

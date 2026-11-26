@@ -353,7 +353,7 @@ export function HuddleDock() {
           <GripVertical className="size-3.5" aria-hidden />
         </button>
         {live ? (
-          <Radio className="size-4 shrink-0 animate-pulse text-emerald-500 motion-reduce:animate-none" aria-hidden />
+          <Radio className="size-4 shrink-0 animate-pulse text-success motion-reduce:animate-none" aria-hidden />
         ) : (
           <Headphones className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         )}
@@ -421,7 +421,7 @@ export function HuddleDock() {
                     ? 'bg-primary/15 text-primary'
                     : 'bg-muted text-muted-foreground',
                   participant.active && 'ring-1 ring-primary',
-                  participant.speaking && 'ring-2 ring-emerald-500',
+                  participant.speaking && 'ring-2 ring-success',
                 )}
               >
                 {participant.kind === 'agent' ? (

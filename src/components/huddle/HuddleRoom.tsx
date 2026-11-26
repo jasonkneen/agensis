@@ -381,7 +381,7 @@ export function HuddleMicButton({ connected, className }: { connected: boolean; 
       variant={isMicrophoneEnabled ? 'ghost' : 'secondary'}
       className={cn(
         'h-7 gap-1 px-2 text-xs',
-        isMicrophoneEnabled && 'text-emerald-600 dark:text-emerald-400',
+        isMicrophoneEnabled && 'text-success',
         className,
       )}
       disabled={toggling}
@@ -421,7 +421,7 @@ export function HuddleSpeakingNow({ className }: { className?: string }) {
             title={p.name || p.identity}
             className={cn(
               'size-1.5 rounded-full transition',
-              p.isSpeaking ? 'bg-emerald-500 ring-2 ring-emerald-500/30' : 'bg-muted-foreground/40',
+              p.isSpeaking ? 'bg-success ring-2 ring-success/30' : 'bg-muted-foreground/40',
             )}
             aria-hidden
           />
@@ -431,7 +431,7 @@ export function HuddleSpeakingNow({ className }: { className?: string }) {
           changed this row's width mid-sentence, which shoved the avatars and
           the controls sideways on every reply. */}
       <span
-        className="w-20 shrink-0 truncate text-xs font-medium text-emerald-600 dark:text-emerald-400"
+        className="w-20 shrink-0 truncate text-xs font-medium text-success"
         aria-live="polite"
       >
         {name}

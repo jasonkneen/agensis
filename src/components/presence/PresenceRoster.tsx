@@ -152,8 +152,8 @@ function secondaryLine(person: WorkspacePresenceUser): string {
 }
 
 function statusDotClass(person: WorkspacePresenceUser): string {
-  if (person.kind === 'agent' && person.status === 'busy') return 'bg-amber-500 animate-pulse';
-  return 'bg-emerald-500';
+  if (person.kind === 'agent' && person.status === 'busy') return 'bg-warning animate-pulse';
+  return 'bg-success';
 }
 
 function statusLabel(person: WorkspacePresenceUser): string {

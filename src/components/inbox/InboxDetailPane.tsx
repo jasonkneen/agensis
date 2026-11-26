@@ -197,8 +197,8 @@ export function InboxDetail({
           )}
 
           {group.category === 'blocker' && (
-            <div className="flex flex-col gap-2 rounded-md border-l-2 border-amber-500 bg-amber-500/[0.06] px-2.5 py-2">
-              <p className="text-xs leading-snug text-amber-700 dark:text-amber-300/90">
+            <div className="flex flex-col gap-2 rounded-md border-l-2 border-warning bg-warning/[0.06] px-2.5 py-2">
+              <p className="text-xs leading-snug text-warning">
                 The agent is waiting on this. It reads your answer back to unblock itself.
               </p>
 

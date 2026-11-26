@@ -191,7 +191,7 @@ export const InboxRow = React.memo(function InboxRow({
               'min-w-0 truncate leading-5 transition-[padding]',
               TEXT_BODY,
               label.tone === 'blocker'
-                ? 'font-medium text-amber-600 dark:text-amber-400/90'
+                ? 'font-medium text-warning'
                 : label.tone === 'error'
                   ? 'font-medium text-destructive/90'
                   : unread ? 'font-medium text-foreground' : 'font-normal text-foreground/80',

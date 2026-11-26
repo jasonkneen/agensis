@@ -207,8 +207,8 @@ export function AccountDialog({ open, onOpenChange, userId, userEmail, defaultTa
                   <span
                     className={
                       newPasswordPolicy.valid
-                        ? 'font-medium text-green-600 dark:text-green-500'
-                        : 'font-medium text-amber-600 dark:text-amber-500'
+                        ? 'font-medium text-success'
+                        : 'font-medium text-warning'
                     }
                   >
                     {newPasswordPolicy.label}

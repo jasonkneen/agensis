@@ -151,7 +151,7 @@ export function ToolStepGroup({ row, compact = false }: { row: TranscriptStepRow
                   waits on the individual call chip inside. */}
               {approvedCount > 0 && (
                 <ShieldCheck
-                  className="size-3 shrink-0 text-emerald-500"
+                  className="size-3 shrink-0 text-success"
                   aria-label={`${approvedCount} approved tool ${approvedCount === 1 ? 'call' : 'calls'}`}
                 />
               )}
@@ -296,8 +296,8 @@ function ToolStepChip({ step, approval }: { step: ChatMessage; approval?: Permis
           conversation; who granted it is in the chip's title. */}
       {approval && (
         <>
-          <ApprovalIcon className={cn('size-3 shrink-0', allowed ? 'text-emerald-500' : 'text-amber-500')} />
-          <span className={cn('shrink-0 font-sans', allowed ? 'text-emerald-600/90 dark:text-emerald-400/90' : 'text-muted-foreground')}>
+          <ApprovalIcon className={cn('size-3 shrink-0', allowed ? 'text-success' : 'text-warning')} />
+          <span className={cn('shrink-0 font-sans', allowed ? 'text-success/90' : 'text-muted-foreground')}>
             {permissionOutcomeBadge(approval)}
           </span>
         </>

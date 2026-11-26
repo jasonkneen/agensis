@@ -2185,7 +2185,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                             fallbackClassName="bg-transparent text-3xs text-muted-foreground"
                           />
                         ) : participant.name.slice(0, 2).toUpperCase()}
-                        {participant.connected && <span className="absolute right-0 bottom-0 size-2 rounded-full border border-card bg-emerald-500" />}
+                        {participant.connected && <span className="absolute right-0 bottom-0 size-2 rounded-full border border-card bg-success" />}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm">{participant.name}</span>
@@ -3143,7 +3143,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                                 fallbackClassName="bg-transparent text-xs text-muted-foreground"
                               />
                             ) : participant.name.slice(0, 2).toUpperCase()}
-                            {participant.connected && <span className="absolute right-0 bottom-0 size-2 rounded-full border border-card bg-emerald-500" />}
+                            {participant.connected && <span className="absolute right-0 bottom-0 size-2 rounded-full border border-card bg-success" />}
                           </span>
                           <span className="min-w-0 flex-1">
                             <span className="block truncate font-medium text-foreground">{participant.name}</span>
@@ -4145,9 +4145,9 @@ const GIT_STATUS_LABEL: Record<GitChangeEntry['status'], string> = {
 };
 
 const GIT_STATUS_CLASS: Record<GitChangeEntry['status'], string> = {
-  modified: 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
-  added: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
-  deleted: 'bg-red-500/15 text-red-700 dark:text-red-400',
+  modified: 'bg-warning/15 text-warning',
+  added: 'bg-success/15 text-success',
+  deleted: 'bg-destructive/15 text-destructive',
   untracked: 'bg-sky-500/15 text-sky-700 dark:text-sky-400',
   renamed: 'bg-violet-500/15 text-violet-700 dark:text-violet-400',
 };
@@ -4309,9 +4309,9 @@ function GitChangesView({ workspaceId }: { workspaceId?: string | null }) {
                   diffIsUntracked
                     ? ''
                     : line.startsWith('+') && !line.startsWith('+++')
-                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                      ? 'bg-success/10 text-success'
                       : line.startsWith('-') && !line.startsWith('---')
-                        ? 'bg-red-500/10 text-red-700 dark:text-red-400'
+                        ? 'bg-destructive/10 text-destructive'
                         : line.startsWith('@@')
                           ? 'text-muted-foreground'
                           : ''
