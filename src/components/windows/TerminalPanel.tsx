@@ -150,7 +150,7 @@ export function TerminalPanel() {
     });
     themeWatcher.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['class', 'data-theme', 'style'],
+      attributeFilter: ['class', 'data-theme', 'data-theme-seed', 'style'],
     });
 
     return () => {

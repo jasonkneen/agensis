@@ -38,7 +38,7 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
       const next = readMermaidTheme();
       setTheme(prev => (prev === next ? prev : next));
     });
-    observer.observe(target, { attributes: true, attributeFilter: ['data-theme', 'data-ui-theme'] });
+    observer.observe(target, { attributes: true, attributeFilter: ['data-theme', 'data-ui-theme', 'data-theme-seed'] });
     return () => observer.disconnect();
   }, []);
 

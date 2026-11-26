@@ -248,7 +248,7 @@ function AppletObject({
     });
     observer.observe(root, {
       attributes: true,
-      attributeFilter: ['data-theme', 'data-ui-theme', 'style'],
+      attributeFilter: ['data-theme', 'data-ui-theme', 'data-theme-seed', 'style'],
     });
     return () => observer.disconnect();
   }, []);

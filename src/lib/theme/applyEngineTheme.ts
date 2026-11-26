@@ -8,6 +8,7 @@ import {
   THEME_DEPTHS,
   THEME_PALETTES,
   buildThemeCss,
+  buildThemeTokens,
   type ThemeAccent,
   type ThemeContrast,
   type ThemeDepth,
@@ -86,6 +87,24 @@ export function syncEngineTheme(seed: ThemeSeed = currentSeed()) {
     document.head.appendChild(el);
   }
   el.textContent = buildThemeCss(seed);
+
+  const root = document.documentElement;
+  // Components that resolve colours in JS (terminal, canvas, Mermaid, code
+  // highlighting) re-read them when an attribute on <html> changes. A
+  // palette or accent change here only rewrites this <style> — no attribute
+  // moves — so stamp the seed, and those watchers fire exactly as they did
+  // when presets wrote inline styles.
+  root.setAttribute('data-theme-seed', `${seed.palette.id}.${seed.accent ? `${seed.accent.h}-${seed.accent.c}` : 'ink'}.${seed.contrast}.${seed.depth}`);
+
+  // The page background behind the app and the mobile status bar
+  // (theme-color) were Graphite's #0c0c0c / #f8f8f8 whatever the palette;
+  // under Nord or Sand that is a visible band at the edges. Default only.
+  if (root.getAttribute('data-ui-theme') === 'default') {
+    const scheme = root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    const bg = buildThemeTokens(seed, scheme)['--background'];
+    root.style.background = bg;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', bg);
+  }
 }
 
 export function setThemePalette(id: string) {

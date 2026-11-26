@@ -20,6 +20,9 @@ import { ActivityWindowContent } from '@/components/windows/ActivityWindowConten
 import { ChatWindowContent } from '@/components/windows/ChatWindowContent';
 import { AppearancePanel } from '@/components/settings/AppearancePanel';
 import { Sidebar } from '@/components/layout/Sidebar';
+import { MemorySection } from '@/components/memory/MemorySection';
+import { SchedulesWindow } from '@/components/windows/SchedulesWindow';
+import { SettingsDialog } from '@/components/settings/SettingsDialog';
 import {
   CURRENT_USER_EMAIL,
   CURRENT_USER_ID,
@@ -124,7 +127,40 @@ const agentTasks = seedTasks().map((task, i) => ({
   completed_at: i % 6 === 4 ? new Date().toISOString() : null,
 }));
 
+const memoryFacts = [
+  ['Release notes go out with every user-visible change', 'process'],
+  ['Default theme is generated from palette, colour, contrast and depth', 'design'],
+  ['Desktop app runs the main checkout through vite dev', 'environment'],
+  ['Never put emoji in UI chrome', 'design'],
+].map(([fact, category], i) => ({ id: `fact-${i}`, workspace_id: WORKSPACE_ID, fact, category, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }));
+
+function SettingsScreen({ tab }: { tab: 'tools' | 'ai' }) {
+  const { mode, setTheme } = useTheme();
+  return (
+    <SettingsDialog
+      open
+      onClose={noop}
+      workspaceName="Main"
+      userEmail="you@example.test"
+      workspace={null}
+      onUpdateWorkspace={noop}
+      themeMode={mode}
+      onThemeChange={setTheme}
+      secretsWorkspaceId={null}
+      isWorkspaceOwner
+      initialTab={tab}
+    />
+  );
+}
+
 const SCREENS: Screen[] = [
+  { id: 'memory', title: 'Memory', icon: <Sparkles className="size-3.5" />, render: () => (
+    <MemorySection facts={memoryFacts} categories={['process', 'design', 'environment']} onAdd={noop} onUpdate={noop} onDelete={noop}
+      workspaceId={WORKSPACE_ID} agents={agents} userId={CURRENT_USER_ID} userEmail="you@example.test" documents={[]} />
+  ) },
+  { id: 'schedules', title: 'Automations', icon: <Activity className="size-3.5" />, render: () => <SchedulesWindow workspaceId={WORKSPACE_ID} agents={agents} sessions={[]} /> },
+  { id: 'settings-tools', title: 'Settings', icon: <Sun className="size-3.5" />, render: () => <SettingsScreen tab="tools" /> },
+  { id: 'settings-ai', title: 'Settings', icon: <Sun className="size-3.5" />, render: () => <SettingsScreen tab="ai" /> },
   { id: 'sidebar', title: 'Sidebar', icon: <Users className="size-3.5" />, render: () => <SidebarScreen /> },
   { id: 'appearance', title: 'Appearance', icon: <Sun className="size-3.5" />, render: () => <AppearanceScreen /> },
   { id: 'users-solo', title: 'Users', icon: <Users className="size-3.5" />, render: () => <UsersWindowContent {...usersProps(seedMembers(1))} /> },
