@@ -995,7 +995,7 @@ function ConnectionsPanel({
                   {info?.configured || liveToken ? 'Credential issued' : 'No credential yet'}
                 </Badge>
                 {liveToken && (
-                  <span className="text-xs text-amber-600 dark:text-amber-400">
+                  <span className="text-xs text-warning">
                     New token shown below — copy it now; it is not stored in plain text.
                   </span>
                 )}
@@ -1141,7 +1141,7 @@ function ConnectionsPanel({
                         onCopy={() => copy('oauth-csec', oauthMinted.clientSecret || '')}
                       />
                     )}
-                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                    <p className="text-xs text-warning">
                       Client secret is shown once. Token auth method: {oauthMinted.tokenEndpointAuthMethod}.
                     </p>
                   </div>

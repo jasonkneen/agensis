@@ -344,8 +344,8 @@ export function NostrCommunitySetup({
         {connected && (
           <div className="space-y-3">
             <div className={connected.connection.status === 'connected'
-              ? 'rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3'
-              : 'rounded-lg border border-amber-500/30 bg-amber-500/10 p-3'}
+              ? 'rounded-lg border border-success/30 bg-success/10 p-3'
+              : 'rounded-lg border border-warning/30 bg-warning/10 p-3'}
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="font-medium">
@@ -419,8 +419,8 @@ export function NostrCommunitySetup({
                         <span className="min-w-0 flex-1 truncate text-sm font-medium">#{channel.name}</span>
                         {channel.subscription && (
                           <span className={subscribed
-                            ? 'shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-3xs font-semibold uppercase text-emerald-700 dark:text-emerald-300'
-                            : 'shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-3xs font-semibold uppercase text-amber-700 dark:text-amber-300'}
+                            ? 'shrink-0 rounded bg-success/15 px-1.5 py-0.5 text-3xs font-semibold uppercase text-success'
+                            : 'shrink-0 rounded bg-warning/15 px-1.5 py-0.5 text-3xs font-semibold uppercase text-warning'}
                           >
                             {subscribed ? 'Live' : 'Paused'}
                           </span>

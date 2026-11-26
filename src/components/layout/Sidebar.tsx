@@ -1569,7 +1569,7 @@ function DirectAgentRow({
 }) {
  const handle = normalizeHandle(agent.handle);
  const status = agent.status || 'offline';
- const statusColor = status === 'online' ? 'bg-emerald-500' : status === 'busy' ? 'bg-amber-500' : 'bg-muted-foreground/40';
+ const statusColor = status === 'online' ? 'bg-success' : status === 'busy' ? 'bg-warning' : 'bg-muted-foreground/40';
  const avatar = agent.avatar || null;
  const profileEnabled = Boolean(agent.agentId || handle);
 
@@ -2187,7 +2187,7 @@ function SessionRow({
         {!source.enabled && (
          <span
           data-testid="nostr-subscription-state"
-          className="shrink-0 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-wide text-amber-700 dark:text-amber-300"
+          className="shrink-0 rounded bg-warning/15 px-1 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-wide text-warning"
          >
           Paused
          </span>

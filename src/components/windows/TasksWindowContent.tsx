@@ -1182,13 +1182,13 @@ function TaskRow({
             {assigneeLabel && (
               <Badge
                 variant="outline"
-                className={cn(assigneeActive && 'border-amber-500/60 text-amber-600 dark:text-amber-400')}
+                className={cn(assigneeActive && 'border-warning/60 text-warning')}
                 title={assigneeActive ? `${assigneeLabel} is working on this` : undefined}
               >
                 {assigneeActive ? (
                   <span className="relative flex size-1.5" aria-hidden>
-                    <span className="absolute inline-flex size-full animate-ping rounded-full bg-amber-500 opacity-75" />
-                    <span className="relative inline-flex size-1.5 rounded-full bg-amber-500" />
+                    <span className="absolute inline-flex size-full animate-ping rounded-full bg-warning opacity-75" />
+                    <span className="relative inline-flex size-1.5 rounded-full bg-warning" />
                   </span>
                 ) : (
                   <User />

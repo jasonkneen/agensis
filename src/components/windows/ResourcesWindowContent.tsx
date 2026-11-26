@@ -95,8 +95,8 @@ function OperationRow({
     >
       <span className={cn(
         'size-2 shrink-0 rounded-full',
-        operation.status === 'completed' && 'bg-emerald-500',
-        (operation.status === 'pending' || operation.status === 'claimed') && 'bg-amber-500',
+        operation.status === 'completed' && 'bg-success',
+        (operation.status === 'pending' || operation.status === 'claimed') && 'bg-warning',
         (operation.status === 'failed' || operation.status === 'rejected') && 'bg-destructive',
         operation.status === 'cancelled' && 'bg-muted-foreground/60',
       )} />
