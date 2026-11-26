@@ -26,6 +26,8 @@ import {
   UserPlus,
   X,
   PanelRightOpen,
+  BookmarkPlus,
+  FolderPlus,
 } from 'lucide-react';
 import type { AgentConnection, MessageAttachment, Task, TaskComment, TaskPriority, TaskStatus, UploadedFile, WorkspaceAgent } from '../../types';
 import type { WorkspaceMember } from '../../hooks/useSharing';
@@ -113,7 +115,7 @@ import { Textarea } from '@agensis/ui/components/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 import { cn } from '@/lib/utils';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
-import { MENTION_TILE, WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { MENTION_TILE, SEGMENTED, SEGMENT_ITEM, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { ROW_REVEAL } from '@/components/common/Section';
 import { TaskGantt, TaskKanban } from './TaskBoardViews';
 import { TaskTable } from './TaskTable';
@@ -181,12 +183,6 @@ const TASK_COMMENT_AVATAR_COLORS = [
   'bg-pink-500',
 ];
 
-// Selected filter/view toggle in the Tasks toolbar: a solid WHITE pill with
-// primary-coloured text, in both light and dark themes, so the active choice
-// reads as a bright chip against the translucent toolbar (the default
-// data-[state=on]:bg-muted was too low-contrast on the dark surface).
-const TASK_TOGGLE_ACTIVE =
-  'data-[state=on]:bg-white data-[state=on]:text-primary data-[state=on]:hover:bg-white data-[state=on]:hover:text-primary';
 
 type AssignmentFilter = TaskAssignmentFilter;
 
@@ -426,6 +422,9 @@ export const TasksWindowContent = memo(function TasksWindowContent({
   }, [groupBy, grouped, filteredTopLevel, members, agents, projects]);
   const labelOptions = useMemo(() => allLabels(allTopLevel), [allTopLevel]);
   const extraFilterCount = activeExtraFilterCount({ priorities: priorityFilter, labels: labelFilter }, groupBy);
+  // Everything the Filter popover can engage, so its button never reads clean
+  // while a filter is hiding tasks.
+  const filterBadgeCount = extraFilterCount + (filter !== 'all' ? 1 : 0) + (agentsOnly ? 1 : 0) + (overdueOnly ? 1 : 0);
 
   useEffect(() => {
     setNewTitle(''); setNewPriority('normal'); setNewAssignee(''); setNewAttachments([]);
@@ -641,19 +640,34 @@ export const TasksWindowContent = memo(function TasksWindowContent({
       onDrop={handleNewAttachmentDrop}
     >
       <div className={cn(WINDOW_TOOLBAR, 'task-window-toolbar h-auto min-h-11 flex-wrap py-1.5 backdrop-blur-md')}>
-        <ToggleGroup
-          type="single"
-          size="sm"
-          variant="outline"
-          value={filter}
-          onValueChange={value => {
-            if (value) setFilter(value as AssignmentFilter);
-          }}
-        >
-          <ToggleGroupItem value="all" className={TASK_TOGGLE_ACTIVE}>All</ToggleGroupItem>
-          <ToggleGroupItem value="mine" className={TASK_TOGGLE_ACTIVE}>Mine</ToggleGroupItem>
-          <ToggleGroupItem value="others" title="Assigned to other workspace members" className={TASK_TOGGLE_ACTIVE}>Others</ToggleGroupItem>
-        </ToggleGroup>
+        {/* View first: it decides what everything else in the band acts on.
+            Icon-only, with the label kept as screen-reader text (and in the
+            title) — five labelled segments were ~380px of a band that wrapped
+            to two rows at any normal window width. */}
+        {!forcedView && (
+          <ToggleGroup
+            type="single"
+            size="sm"
+            className={SEGMENTED}
+            value={view}
+            onValueChange={value => {
+              if (value) setView(value as TaskView);
+            }}
+          >
+            <ToggleGroupItem value="list" title="List view" className={cn(SEGMENT_ITEM, 'px-1.5')}><List /><span className="sr-only">List</span></ToggleGroupItem>
+            <ToggleGroupItem value="kanban" title="Kanban board" className={cn(SEGMENT_ITEM, 'px-1.5')}><Columns3 /><span className="sr-only">Board</span></ToggleGroupItem>
+            <ToggleGroupItem value="table" title="Table view" className={cn(SEGMENT_ITEM, 'px-1.5')}><Table2 /><span className="sr-only">Table</span></ToggleGroupItem>
+            <ToggleGroupItem value="calendar" title="Calendar view" className={cn(SEGMENT_ITEM, 'px-1.5')}><CalendarDays /><span className="sr-only">Calendar</span></ToggleGroupItem>
+            <ToggleGroupItem value="gantt" title="Gantt timeline" className={cn(SEGMENT_ITEM, 'px-1.5')}><GanttChart /><span className="sr-only">Timeline</span></ToggleGroupItem>
+          </ToggleGroup>
+        )}
+        <Input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search tasks"
+          aria-label="Search tasks"
+          className="h-7 w-36 text-xs"
+        />
         <Button
           type="button"
           variant="ghost"
@@ -664,42 +678,52 @@ export const TasksWindowContent = memo(function TasksWindowContent({
         >
           {hideDone ? 'Show done' : 'Hide done'}
         </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          aria-pressed={agentsOnly}
-          onClick={() => setAgentsOnly(v => !v)}
-          title="Only tasks assigned to an agent"
-          className={cn(agentsOnly && 'text-primary')}
-        >
-          Agent-assigned
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          aria-pressed={overdueOnly}
-          onClick={() => setOverdueOnly(v => !v)}
-          title="Only open tasks past their due date"
-          className={cn(overdueOnly && 'text-primary')}
-        >
-          Overdue
-        </Button>
-        <Input
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Search tasks"
-          aria-label="Search tasks"
-          className="h-7 w-36 text-xs"
-        />
         <Popover>
           <PopoverTrigger asChild>
-            <Button type="button" variant="ghost" size="xs" aria-label="Filter and group" className={cn(extraFilterCount > 0 && 'text-primary')}>
-              Filter{extraFilterCount > 0 ? ` · ${extraFilterCount}` : ''}
+            <Button type="button" variant="ghost" size="xs" aria-label="Filter and group" className={cn(filterBadgeCount > 0 && 'text-primary')}>
+              Filter{filterBadgeCount > 0 ? ` · ${filterBadgeCount}` : ''}
             </Button>
           </PopoverTrigger>
           <PopoverContent align="start" className="w-80 space-y-3 p-3" data-testid="filter-popover">
+            {/* Who and which: these were six always-on chips in the toolbar.
+                They live here now, and every engaged one counts on the Filter
+                button — so a filter in force is never out of sight. */}
+            <div>
+              <div className="mb-1.5 text-3xs font-medium tracking-wide text-muted-foreground uppercase">Show</div>
+              <div className="flex flex-wrap gap-1.5">
+                {([['all', 'Everyone'], ['mine', 'Mine'], ['others', 'Others']] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={filter === value}
+                    title={value === 'others' ? 'Assigned to other workspace members' : undefined}
+                    onClick={() => setFilter(value as AssignmentFilter)}
+                    className={cn('rounded-full border border-border px-2.5 py-0.5 text-xs', filter === value ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground')}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <span className="mx-0.5 w-px self-stretch bg-border" aria-hidden />
+                <button
+                  type="button"
+                  aria-pressed={agentsOnly}
+                  title="Only tasks assigned to an agent"
+                  onClick={() => setAgentsOnly(v => !v)}
+                  className={cn('rounded-full border border-border px-2.5 py-0.5 text-xs', agentsOnly ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground')}
+                >
+                  Agent-assigned
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={overdueOnly}
+                  title="Only open tasks past their due date"
+                  onClick={() => setOverdueOnly(v => !v)}
+                  className={cn('rounded-full border border-border px-2.5 py-0.5 text-xs', overdueOnly ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground')}
+                >
+                  Overdue
+                </button>
+              </div>
+            </div>
             <div>
               <div className="mb-1.5 text-3xs font-medium tracking-wide text-muted-foreground uppercase">Priority</div>
               <div className="flex flex-wrap gap-1.5">
@@ -753,8 +777,8 @@ export const TasksWindowContent = memo(function TasksWindowContent({
             <div className="flex items-center border-t border-border pt-2 text-xs">
               <button
                 type="button"
-                disabled={extraFilterCount === 0}
-                onClick={() => { setPriorityFilter([]); setLabelFilter([]); setGroupBy('status'); }}
+                disabled={filterBadgeCount === 0}
+                onClick={() => { setPriorityFilter([]); setLabelFilter([]); setGroupBy('status'); setFilter('all'); setAgentsOnly(false); setOverdueOnly(false); }}
                 className="text-muted-foreground hover:text-foreground disabled:opacity-40"
               >
                 Clear all
@@ -768,7 +792,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           <NativeSelectOption value="due">Sort: Due date</NativeSelectOption>
           <NativeSelectOption value="title">Sort: Title</NativeSelectOption>
         </NativeSelect>
-        <NativeSelect size="sm" className="w-32" value={activeViewId} onChange={e => applySavedView(e.target.value)} aria-label="Saved views">
+        <NativeSelect size="sm" className="w-24" value={activeViewId} onChange={e => applySavedView(e.target.value)} aria-label="Saved views">
           <NativeSelectOption value="">Views</NativeSelectOption>
           {savedViews.map(item => (
             <NativeSelectOption key={item.id} value={item.id}>{item.name}</NativeSelectOption>
@@ -788,29 +812,10 @@ export const TasksWindowContent = memo(function TasksWindowContent({
             Delete view
           </Button>
         )}
-        <Button type="button" variant="ghost" size="xs" aria-expanded={savingView} onClick={() => setSavingView(open => !open)}>
-          Save view
+        <Button type="button" variant="ghost" size="icon-xs" title="Save this view" aria-expanded={savingView} onClick={() => setSavingView(open => !open)}>
+          <BookmarkPlus />
+          <span className="sr-only">Save view</span>
         </Button>
-        {!forcedView && (
-          <>
-        <div className="mx-1 h-5 w-px bg-border" aria-hidden />
-        <ToggleGroup
-          type="single"
-          size="sm"
-          variant="outline"
-          value={view}
-          onValueChange={value => {
-            if (value) setView(value as TaskView);
-          }}
-        >
-          <ToggleGroupItem value="list" title="List view" className={TASK_TOGGLE_ACTIVE}><List />List</ToggleGroupItem>
-          <ToggleGroupItem value="kanban" title="Kanban board" className={TASK_TOGGLE_ACTIVE}><Columns3 />Board</ToggleGroupItem>
-          <ToggleGroupItem value="table" title="Table view" className={TASK_TOGGLE_ACTIVE}><Table2 />Table</ToggleGroupItem>
-          <ToggleGroupItem value="calendar" title="Calendar view" className={TASK_TOGGLE_ACTIVE}><CalendarDays />Calendar</ToggleGroupItem>
-          <ToggleGroupItem value="gantt" title="Gantt timeline" className={TASK_TOGGLE_ACTIVE}><GanttChart />Timeline</ToggleGroupItem>
-        </ToggleGroup>
-          </>
-        )}
         <div className="flex-1" />
         {!projectId && (
           <>
@@ -825,12 +830,13 @@ export const TasksWindowContent = memo(function TasksWindowContent({
             <option key={project.id} value={project.id}>{project.name}</option>
           ))}
         </select>
-        <Button variant="outline" size="sm" onClick={() => setShowProjectForm(true)}>
-          New project
+        <Button variant="ghost" size="icon-xs" title="New project" onClick={() => setShowProjectForm(true)}>
+          <FolderPlus />
+          <span className="sr-only">New project</span>
         </Button>
           </>
         )}
-        <Badge variant="secondary">{openCount} open</Badge>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{openCount} open</span>
       </div>
 
       {savingView && (

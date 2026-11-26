@@ -91,8 +91,17 @@ afterEach(() => {
 
 const titles = () => Array.from(container.querySelectorAll('tbody tr')).map(row => row.querySelectorAll('td')[1]?.textContent ?? '');
 
+// Agent-assigned and Overdue live in the Filter popover (a Radix portal on
+// document.body), so a control not in the window is looked for there, after
+// opening Filter if it is not already open.
 function clickButton(text: string) {
-  const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.trim() === text);
+  const find = (root: ParentNode) => Array.from(root.querySelectorAll('button')).find(b => b.textContent?.trim() === text);
+  let button = find(container) ?? find(document.body);
+  if (!button) {
+    const filter = container.querySelector('button[aria-label="Filter and group"]');
+    if (filter) act(() => { filter.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); });
+    button = find(document.body);
+  }
   if (!button) throw new Error(`no button "${text}"`);
   act(() => {
     button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
