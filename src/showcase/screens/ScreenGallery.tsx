@@ -18,6 +18,7 @@ import { ProjectsWindowContent } from '@/components/windows/ProjectsWindowConten
 import { SkillsWindowContent } from '@/components/windows/SkillsWindowContent';
 import { ActivityWindowContent } from '@/components/windows/ActivityWindowContent';
 import { ChatWindowContent } from '@/components/windows/ChatWindowContent';
+import { AppearancePanel } from '@/components/settings/AppearancePanel';
 import {
   CURRENT_USER_EMAIL,
   CURRENT_USER_ID,
@@ -72,7 +73,17 @@ const usersProps = (members: ReturnType<typeof seedMembers>) => ({
   onChangeMemberRole: asyncNoop,
 });
 
+function AppearanceScreen() {
+  const { mode, setTheme } = useTheme();
+  return (
+    <div className="h-full overflow-auto p-5">
+      <AppearancePanel workspace={null} onUpdateWorkspace={noop} themeMode={mode} onThemeChange={setTheme} />
+    </div>
+  );
+}
+
 const SCREENS: Screen[] = [
+  { id: 'appearance', title: 'Appearance', icon: <Sun className="size-3.5" />, render: () => <AppearanceScreen /> },
   { id: 'users-solo', title: 'Users', icon: <Users className="size-3.5" />, render: () => <UsersWindowContent {...usersProps(seedMembers(1))} /> },
   { id: 'users', title: 'Users', icon: <Users className="size-3.5" />, render: () => <UsersWindowContent {...usersProps(seedMembers())} /> },
   {

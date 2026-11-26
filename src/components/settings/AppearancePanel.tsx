@@ -267,40 +267,6 @@ export function AppearancePanel({
               </ToggleGroup>
             </div>
 
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-3">
-                <div className="ui-section-label">Corners</div>
-                <Badge variant="secondary">
-                  {radiusScale === 0 ? 'Square' : radiusScale >= RADIUS_PILL_THRESHOLD ? 'Pill' : `${radiusMaxPxFrom(radiusScale)}px max`}
-                </Badge>
-              </div>
-              {/* One axis, one control. This was four preset cards whose names
-                  did not even order by radius — "Rounded" (14px) sat between
-                  "Soft" (10px) and "Pill" — so it read as four unrelated styles
-                  rather than more-or-less of one thing, and could not express
-                  anything between them. The slider drives a multiplier that all
-                  thirteen radius tokens derive from. Larger tokens stop at the
-                  displayed ceiling instead of silently exceeding it. */}
-              <Slider
-                value={[radiusScale]}
-                min={RADIUS_SCALE_MIN}
-                max={RADIUS_SCALE_MAX}
-                step={RADIUS_SCALE_STEP}
-                aria-label="Corner rounding"
-                onValueChange={value => {
-                  const next = clampRadiusScale(value[0] ?? radiusScale);
-                  setRadiusScale(next);
-                  setSetting('ui_default_radius', next);
-                  applyRadiusScale(next);
-                }}
-              />
-              <div className="flex items-center justify-between text-3xs text-muted-foreground">
-                <span>Square</span>
-                <span>Pill</span>
-              </div>
-              <FieldDescription>Sets the largest non-pill corner radius. Compact controls stay proportionally tighter.</FieldDescription>
-            </div>
-
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <div className="ui-section-label">Contrast</div>
@@ -334,6 +300,40 @@ export function AppearancePanel({
                   {THEME_DEPTHS.map(d => <ToggleGroupItem key={d.id} value={d.id} title={d.description}>{d.label}</ToggleGroupItem>)}
                 </ToggleGroup>
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="ui-section-label">Corners</div>
+                <Badge variant="secondary">
+                  {radiusScale === 0 ? 'Square' : radiusScale >= RADIUS_PILL_THRESHOLD ? 'Pill' : `${radiusMaxPxFrom(radiusScale)}px max`}
+                </Badge>
+              </div>
+              {/* One axis, one control. This was four preset cards whose names
+                  did not even order by radius — "Rounded" (14px) sat between
+                  "Soft" (10px) and "Pill" — so it read as four unrelated styles
+                  rather than more-or-less of one thing, and could not express
+                  anything between them. The slider drives a multiplier that all
+                  thirteen radius tokens derive from. Larger tokens stop at the
+                  displayed ceiling instead of silently exceeding it. */}
+              <Slider
+                value={[radiusScale]}
+                min={RADIUS_SCALE_MIN}
+                max={RADIUS_SCALE_MAX}
+                step={RADIUS_SCALE_STEP}
+                aria-label="Corner rounding"
+                onValueChange={value => {
+                  const next = clampRadiusScale(value[0] ?? radiusScale);
+                  setRadiusScale(next);
+                  setSetting('ui_default_radius', next);
+                  applyRadiusScale(next);
+                }}
+              />
+              <div className="flex items-center justify-between text-3xs text-muted-foreground">
+                <span>Square</span>
+                <span>Pill</span>
+              </div>
+              <FieldDescription>Sets the largest non-pill corner radius. Compact controls stay proportionally tighter.</FieldDescription>
             </div>
 
             <FieldDescription>Every surface, line and text shade is generated from these choices, in light and dark, and secondary text is always solved to stay readable.</FieldDescription>
