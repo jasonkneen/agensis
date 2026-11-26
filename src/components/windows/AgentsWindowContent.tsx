@@ -184,6 +184,7 @@ import {
   type AgentLayoutView,
 } from '../../lib/agentsView';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
+import { AgentTriageStrip, agentTriageCounts } from '@/components/agents/AgentTriageStrip';
 import { FILTER_CHIP_OFF, FILTER_CHIP_ON, SEGMENTED, SEGMENT_ITEM, WINDOW_SHELL, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { SearchField } from '@/components/common/SearchField';
 import { Label } from '@agensis/ui/components/label';
@@ -1330,6 +1331,15 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 ? { width: `${agentDetailSplit.size}px`, maxWidth: 'calc(100% - 384px)' }
                 : undefined}
             >
+            {agents.length > 0 && (
+              <AgentTriageStrip
+                counts={agentTriageCounts(agents, tasks, presenceCounts.busy)}
+                workingActive={statusFilter.size === 1 && statusFilter.has('busy')}
+                onShowWorking={() => setStatusFilter(
+                  statusFilter.size === 1 && statusFilter.has('busy') ? new Set<AgentPresence>() : new Set<AgentPresence>(['busy']),
+                )}
+              />
+            )}
             {/* Shown when there is something to filter TO, or when the filter is
                 already engaged — otherwise an active filter can hide its own
                 control. */}

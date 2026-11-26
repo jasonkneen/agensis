@@ -116,6 +116,14 @@ function SidebarScreen() {
   );
 }
 
+// Some work assigned to agents so the triage strip has real numbers to show.
+const agentTasks = seedTasks().map((task, i) => ({
+  ...task,
+  assignee_id: agents[i % agents.length].id,
+  status: (['in_review', 'todo', 'in_progress', 'backlog', 'done', 'in_review'] as const)[i % 6],
+  completed_at: i % 6 === 4 ? new Date().toISOString() : null,
+}));
+
 const SCREENS: Screen[] = [
   { id: 'sidebar', title: 'Sidebar', icon: <Users className="size-3.5" />, render: () => <SidebarScreen /> },
   { id: 'appearance', title: 'Appearance', icon: <Sun className="size-3.5" />, render: () => <AppearanceScreen /> },
@@ -125,6 +133,7 @@ const SCREENS: Screen[] = [
     id: 'agents', title: 'Agents', icon: <Bot className="size-3.5" />, render: () => (
       <AgentsWindowContent
         agents={agents}
+        tasks={agentTasks}
         webhooks={[]}
         connections={seedConnections(agents)}
         workspaceId={WORKSPACE_ID}
