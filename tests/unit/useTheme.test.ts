@@ -3,7 +3,6 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { useTheme, type ThemeMode } from '../../src/hooks/useTheme';
 import { clearNormalTheme } from '../../src/showcase/normalThemes';
-import { clearTwTheme } from '../../src/showcase/twThemes';
 import { applyThemePreset } from '../../src/showcase/themePresets';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -51,7 +50,6 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   clearNormalTheme();
-  clearTwTheme();
   document.documentElement.removeAttribute('data-theme');
   document.documentElement.removeAttribute('data-ui-theme');
   applyThemePreset('neutral');
@@ -59,21 +57,27 @@ afterEach(() => {
 });
 
 describe('useTheme family application order', () => {
-  it('migrates the removed Paper Dark mode to regular Dark', () => {
-    window.localStorage.setItem('agensis_theme', 'paper-dark');
-
+  it('migrates stored Paper modes to Expo', () => {
+    window.localStorage.setItem('agensis_theme', 'paper-light');
     render();
+    expect(container.textContent).toBe('expo-light');
+    expect(window.localStorage.getItem('agensis_theme')).toBe('expo-light');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+    expect(document.documentElement.getAttribute('data-ui-theme')).toBe('expo');
+  });
 
-    expect(container.textContent).toBe('dark');
-    expect(window.localStorage.getItem('agensis_theme')).toBe('dark');
+  it('migrates stored Paper Dark to Expo Dark', () => {
+    window.localStorage.setItem('agensis_theme', 'paper-dark');
+    render();
+    expect(container.textContent).toBe('expo-dark');
+    expect(window.localStorage.getItem('agensis_theme')).toBe('expo-dark');
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
-    expect(document.documentElement.getAttribute('data-ui-theme')).toBe('classic');
+    expect(document.documentElement.getAttribute('data-ui-theme')).toBe('expo');
   });
 
   it('keeps the active palette after switching between shared-token families', () => {
     window.localStorage.setItem('agensis_theme', 'normal-light');
     window.localStorage.setItem('agensis_normal_theme', 'carbon');
-    window.localStorage.setItem('agensis_tw_theme', 'gold');
     window.localStorage.setItem('agensis_theme_preset', 'blue');
 
     render();
@@ -81,10 +85,11 @@ describe('useTheme family application order', () => {
     expect(styleValue('--background')).toBe('#f5f4f2');
     expect(styleValue('--primary')).toBe('#d9541e');
 
-    switchTheme('paper-light');
-    expect(styleValue('--background')).toBe('#f2e9d7');
-    expect(styleValue('--card')).toBe('#fdf8ec');
-    expect(styleValue('--primary')).toBe('oklch(0.62 0.19 256)');
+    switchTheme('expo-light');
+    expect(document.documentElement.getAttribute('data-ui-theme')).toBe('expo');
+    expect(styleValue('--background')).toBe('');
+    expect(styleValue('--card')).toBe('');
+    expect(styleValue('--primary')).toBe('');
 
     switchTheme('default-light');
     expect(styleValue('--background')).toBe('');
@@ -98,11 +103,9 @@ describe('useTheme family application order', () => {
     const lightScope = engineCss.split('[data-theme="dark"]')[0];
     expect(lightScope).toContain('--primary: oklch(0.62 0.19 256);');
 
-    // Back into a Classic family: its own tokens return, none of Paper's linger.
+    // Back into a Classic family: its own tokens return, none of Expo's linger.
     switchTheme('normal-dark');
     expect(styleValue('--background')).not.toBe('');
-    expect(styleValue('--background')).not.toBe('#f2e9d7');
-    expect(styleValue('--card')).not.toBe('#fdf8ec');
   });
 
   it('migrates a stored Brutal mode to the matching Default mode', () => {
@@ -124,7 +127,7 @@ describe('useTheme family application order', () => {
     expect(styleValue('--default-radius-scale')).toBe('1.4');
 
     switchTheme('normal-dark');
-    switchTheme('paper-light');
+    switchTheme('expo-light');
     switchTheme('default-light');
     expect(styleValue('--default-radius-scale')).toBe('1.4');
     expect(window.localStorage.getItem('agensis_default_radius')).toBe('1.4');

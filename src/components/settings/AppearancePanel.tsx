@@ -38,7 +38,6 @@ import {
   RADIUS_SCALE_STEP,
 } from '../../showcase/defaultTheme';
 import { NORMAL_THEMES, NORMAL_GROUPS, applyNormalTheme, clearNormalTheme, getStoredNormalTheme } from '../../showcase/normalThemes';
-import { TW_WORLDS, applyTwTheme, getStoredTwTheme } from '../../showcase/twThemes';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
 import { Badge } from '@agensis/ui/components/badge';
 import { Button } from '@agensis/ui/components/button';
@@ -75,12 +74,11 @@ export function AppearancePanel({
   const [contrast, setContrast] = useState<ThemeContrast>(() => getStoredContrast());
   const [depth, setDepth] = useState<ThemeDepth>(() => getStoredDepth());
   const [normalTheme, setNormalTheme] = useState(() => getStoredNormalTheme());
-  const [twTheme, setTwTheme] = useState(() => getStoredTwTheme());
   const isDefaultFamily = themeMode === 'default-light' || themeMode === 'default-dark' || themeMode === 'default-system';
   const isNormalFamily = themeMode === 'normal-light' || themeMode === 'normal-dark';
-  const isPaper = themeMode === 'paper-light';
+  const isExpoFamily = themeMode === 'expo-light' || themeMode === 'expo-dark';
   // Derive which style tab is active from the current mode
-  const themeStyleTab: 'default' | 'classic' = isDefaultFamily ? 'default' : 'classic';
+  const themeStyleTab: 'default' | 'classic' | 'expo' = isDefaultFamily ? 'default' : isExpoFamily ? 'expo' : 'classic';
   const [panelTranslucency, setPanelTranslucency] = useState(initialSettings.ui_panel_translucency);
   const [sidebarTranslucency, setSidebarTranslucency] = useState(initialSettings.ui_sidebar_translucency);
   const [glassBlur, setGlassBlur] = useState(initialSettings.ui_glass_blur);
@@ -91,7 +89,6 @@ export function AppearancePanel({
     { id: 'light', label: 'Light' },
     { id: 'dark', label: 'Dark' },
     { id: 'system', label: 'System' },
-    { id: 'paper-light', label: 'Paper Light' },
   ];
   // Active scheme value for normal tab: map normal-* back to plain light/dark
   const normalSchemeValue: ThemeMode = themeMode === 'normal-light' ? 'light' : themeMode === 'normal-dark' ? 'dark' : themeMode;
@@ -149,8 +146,8 @@ export function AppearancePanel({
       <Field>
         <FieldLabel>Theme</FieldLabel>
 
-        {/* Default | Classic tab bar */}
-        <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted p-1">
+        {/* Default | Classic | Expo tab bar */}
+        <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted p-1">
           <button
             type="button"
             data-selection-control="true"
@@ -176,6 +173,19 @@ export function AppearancePanel({
             className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${themeStyleTab === 'classic' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
           >
             Classic
+          </button>
+          <button
+            type="button"
+            data-selection-control="true"
+            onClick={() => {
+              if (themeStyleTab !== 'expo') {
+                const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+                onThemeChange(dark ? 'expo-dark' : 'expo-light');
+              }
+            }}
+            className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${themeStyleTab === 'expo' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            Expo
           </button>
         </div>
 
@@ -324,6 +334,26 @@ export function AppearancePanel({
           </div>
         )}
 
+        {/* Expo tab content */}
+        {themeStyleTab === 'expo' && (
+          <div className="space-y-4">
+            <ToggleGroup
+              type="single"
+              value={themeMode === 'expo-dark' ? 'dark' : 'light'}
+              onValueChange={value => {
+                if (!value) return;
+                onThemeChange(value === 'dark' ? 'expo-dark' : 'expo-light');
+              }}
+              variant="outline"
+              className="grid w-full grid-cols-2"
+            >
+              <ToggleGroupItem value="light">Light</ToggleGroupItem>
+              <ToggleGroupItem value="dark">Dark</ToggleGroupItem>
+            </ToggleGroup>
+            <FieldDescription>Navy, cream and coral, with tactile controls.</FieldDescription>
+          </div>
+        )}
+
         {/* Classic tab content */}
         {themeStyleTab === 'classic' && (
           <div className="space-y-4">
@@ -342,7 +372,7 @@ export function AppearancePanel({
                 }
               }}
               variant="outline"
-              className="grid w-full grid-cols-2 sm:grid-cols-4"
+              className="grid w-full grid-cols-3"
             >
               {normalSchemeModes.map(mode => (
                 <ToggleGroupItem key={mode.id} value={mode.id}>
@@ -374,48 +404,6 @@ export function AppearancePanel({
                     </ToggleGroupItem>
                   ))}
                 </ToggleGroup>
-              </div>
-            )}
-
-            {/* Paper world grid — repaints the paper; composes with the
-                accent preset above (world paper + your picked accent). */}
-            {isPaper && (
-              <div className="space-y-1.5">
-                <div className="ui-section-label">Paper</div>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  {TW_WORLDS.map(w => {
-                    const active = twTheme === w.id;
-                    return (
-                      <button
-                        key={w.id}
-                        type="button"
-                        onClick={() => {
-                          setTwTheme(w.id);
-                          setSetting('ui_tw_theme', w.id);
-                          applyTwTheme(w.id);
-                        }}
-                        aria-pressed={active}
-                        title={w.label}
-                        className={`relative flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition ${active ? 'border-primary bg-primary/10 ring-2 ring-primary' : 'border-border hover:bg-accent'}`}
-                      >
-                        <span className="flex shrink-0 overflow-hidden rounded-sm border border-border">
-                          {w.swatch.map((c, i) => (
-                            <span key={i} className="size-3.5" style={{ background: c }} />
-                          ))}
-                        </span>
-                        <span className="truncate font-medium">{w.label}</span>
-                        {active && (
-                          <span className="ml-auto flex size-4 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                            <Check className="size-3" strokeWidth={3} />
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-                <FieldDescription>
-                  Repaints the Paper theme’s surfaces. Your accent (above) stays on top — pick a world for the mood, an accent for the highlight.
-                </FieldDescription>
               </div>
             )}
 
