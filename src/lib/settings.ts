@@ -6,7 +6,10 @@ export type UiFontFamily =
   | 'geist' | 'inter' | 'space-grotesk' | 'system' | 'mono'
   | 'manrope' | 'dm-sans' | 'work-sans' | 'plus-jakarta' | 'outfit'
   | 'sora' | 'lexend' | 'albert-sans' | 'bricolage' | 'schibsted'
-  | 'hanken' | 'figtree' | 'jetbrains-mono';
+  | 'hanken' | 'figtree' | 'jetbrains-mono'
+  // Expo companions: raglan's own display face (Archivo) and rounded,
+  // friendly sans that suit tactile pills and lips.
+  | 'archivo' | 'rubik' | 'nunito' | 'fredoka' | 'onest' | 'instrument-sans';
 
 export interface AppSettings {
   ai_default_model: string;
@@ -135,6 +138,18 @@ export function fontFamilyCss(value: UiFontFamily): string {
       return "'Figtree', 'Geist Variable', system-ui, sans-serif";
     case 'jetbrains-mono':
       return "'JetBrains Mono', 'SFMono-Regular', Consolas, monospace";
+    case 'archivo':
+      return "'Archivo', 'Geist Variable', system-ui, sans-serif";
+    case 'rubik':
+      return "'Rubik', 'Geist Variable', system-ui, sans-serif";
+    case 'nunito':
+      return "'Nunito', 'Geist Variable', system-ui, sans-serif";
+    case 'fredoka':
+      return "'Fredoka', 'Geist Variable', system-ui, sans-serif";
+    case 'onest':
+      return "'Onest', 'Geist Variable', system-ui, sans-serif";
+    case 'instrument-sans':
+      return "'Instrument Sans', 'Geist Variable', system-ui, sans-serif";
     case 'geist':
     default:
       return "'Geist Variable', Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
@@ -162,6 +177,12 @@ const UI_FONT_GOOGLE_FAMILY: Partial<Record<UiFontFamily, string>> = {
   hanken: 'Hanken+Grotesk:wght@400;500;600;700',
   figtree: 'Figtree:wght@400;500;600;700',
   'jetbrains-mono': 'JetBrains+Mono:wght@400;500;600;700',
+  archivo: 'Archivo:wght@400;500;600;700;800',
+  rubik: 'Rubik:wght@400;500;600;700',
+  nunito: 'Nunito:wght@400;500;600;700;800',
+  fredoka: 'Fredoka:wght@400;500;600;700',
+  onest: 'Onest:wght@400;500;600;700',
+  'instrument-sans': 'Instrument+Sans:wght@400;500;600;700',
 };
 
 const loadedUiFonts = new Set<UiFontFamily>();

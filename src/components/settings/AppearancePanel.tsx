@@ -16,29 +16,22 @@ import {
 import type { ThemeMode } from '../../hooks/useTheme';
 import type { Workspace } from '../../types';
 import { applyUiAppearanceSettings, getSettings, setSetting, type AppSettings, type UiFontFamily } from '../../lib/settings';
-import { THEME_PRESETS, applyThemePreset } from '../../showcase/themePresets';
-import { EXPO_ACCENTS, EXPO_BASES, getExpoAccent, getExpoBase, setExpoAccent, setExpoBase, type ExpoAccent, type ExpoBase } from '@/lib/theme/expoColors';
-import { THEME_CONTRASTS, THEME_DEPTHS, THEME_PALETTES, buildThemeTokens, type ThemeContrast, type ThemeDepth } from '@/lib/theme/engine';
 import {
-  currentSeed,
-  getStoredContrast,
-  getStoredDepth,
-  getStoredPalette,
-  setThemeContrast,
-  setThemeDepth,
-  setThemePalette,
-} from '@/lib/theme/applyEngineTheme';
-import {
-  applyRadiusScale,
-  clampRadiusScale,
-  radiusMaxPxFrom,
-  radiusScaleFrom,
-  RADIUS_PILL_THRESHOLD,
-  RADIUS_SCALE_MAX,
-  RADIUS_SCALE_MIN,
-  RADIUS_SCALE_STEP,
-} from '../../showcase/defaultTheme';
-import { NORMAL_THEMES, NORMAL_GROUPS, applyNormalTheme, clearNormalTheme, getStoredNormalTheme } from '../../showcase/normalThemes';
+  EXPO_ACCENTS,
+  EXPO_BASES,
+  EXPO_PAPERS,
+  EXPO_PRESETS,
+  applyExpoPreset,
+  getExpoAccent,
+  getExpoBase,
+  getExpoPaper,
+  setExpoAccent,
+  setExpoBase,
+  setExpoPaper,
+  type ExpoAccent,
+  type ExpoBase,
+  type ExpoPaperId,
+} from '@/lib/theme/expoColors';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
 import { Badge } from '@agensis/ui/components/badge';
 import { Button } from '@agensis/ui/components/button';
@@ -69,34 +62,21 @@ export function AppearancePanel({
   const [baseFontSize, setBaseFontSize] = useState(initialSettings.ui_base_font_size);
   const [fontWeight, setFontWeight] = useState(initialSettings.ui_font_weight);
   const [lineHeight, setLineHeight] = useState(initialSettings.ui_line_height);
-  const [themePreset, setThemePreset] = useState(initialSettings.ui_theme_preset);
-  const [radiusScale, setRadiusScale] = useState(() => radiusScaleFrom(initialSettings.ui_default_radius));
-  const [palette, setPalette] = useState(() => getStoredPalette());
-  const [expoAccent, setExpoAccentState] = useState<ExpoAccent>(() => getExpoAccent());
-  const [expoBase, setExpoBaseState] = useState<ExpoBase>(() => getExpoBase());
-  const [contrast, setContrast] = useState<ThemeContrast>(() => getStoredContrast());
-  const [depth, setDepth] = useState<ThemeDepth>(() => getStoredDepth());
-  const [normalTheme, setNormalTheme] = useState(() => getStoredNormalTheme());
-  const isDefaultFamily = themeMode === 'default-light' || themeMode === 'default-dark' || themeMode === 'default-system';
-  const isNormalFamily = themeMode === 'normal-light' || themeMode === 'normal-dark';
-  const isExpoFamily = themeMode === 'expo-light' || themeMode === 'expo-dark';
-  // Derive which style tab is active from the current mode
-  const themeStyleTab: 'default' | 'classic' | 'expo' = isDefaultFamily ? 'default' : isExpoFamily ? 'expo' : 'classic';
-  const [panelTranslucency, setPanelTranslucency] = useState(initialSettings.ui_panel_translucency);
-  const [sidebarTranslucency, setSidebarTranslucency] = useState(initialSettings.ui_sidebar_translucency);
-  const [glassBlur, setGlassBlur] = useState(initialSettings.ui_glass_blur);
+  const readExpoColors = () => ({ base: getExpoBase(), accent: getExpoAccent(), paper: getExpoPaper() });
+  const [expoColors, setExpoColors] = useState(readExpoColors);
+  const syncExpoColors = () => setExpoColors(readExpoColors());
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const backgroundImage = workspace?.background_image || '';
-  // Scheme toggles per tab
-  const normalSchemeModes: Array<{ id: ThemeMode; label: string }> = [
-    { id: 'light', label: 'Light' },
-    { id: 'dark', label: 'Dark' },
-    { id: 'system', label: 'System' },
-  ];
-  // Active scheme value for normal tab: map normal-* back to plain light/dark
-  const normalSchemeValue: ThemeMode = themeMode === 'normal-light' ? 'light' : themeMode === 'normal-dark' ? 'dark' : themeMode;
-  const defaultSchemeValue = themeMode === 'default-dark' ? 'dark' : themeMode === 'default-system' ? 'system' : 'light';
+  // Expo companions first; the rest after. Bricolage, Geist, Inter and Space
+  // Grotesk ship with the app; the others load from Google Fonts on demand.
   const fontOptions: Array<{ id: UiFontFamily; label: string }> = [
+    { id: 'bricolage', label: 'Bricolage Grotesque (Expo default)' },
+    { id: 'archivo', label: 'Archivo' },
+    { id: 'rubik', label: 'Rubik' },
+    { id: 'nunito', label: 'Nunito' },
+    { id: 'fredoka', label: 'Fredoka' },
+    { id: 'onest', label: 'Onest' },
+    { id: 'instrument-sans', label: 'Instrument Sans' },
     { id: 'geist', label: 'Geist' },
     { id: 'inter', label: 'Inter' },
     { id: 'space-grotesk', label: 'Space Grotesk' },
@@ -108,7 +88,6 @@ export function AppearancePanel({
     { id: 'sora', label: 'Sora' },
     { id: 'lexend', label: 'Lexend' },
     { id: 'albert-sans', label: 'Albert Sans' },
-    { id: 'bricolage', label: 'Bricolage Grotesque' },
     { id: 'schibsted', label: 'Schibsted Grotesk' },
     { id: 'hanken', label: 'Hanken Grotesk' },
     { id: 'figtree', label: 'Figtree' },
@@ -146,356 +125,87 @@ export function AppearancePanel({
 
   return (
     <FieldGroup>
+      {/* ONE style — Expo — in light, dark or system. What a person chooses
+          is colour: a preset, or base / accent / surface on their own. Every
+          option is drawn from the same data that paints the app
+          (lib/theme/expoColors.ts), so a swatch is exactly what you get. */}
       <Field>
-        <FieldLabel>Theme</FieldLabel>
-
-        {/* Default | Classic | Expo tab bar */}
-        <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted p-1">
-          <button
-            type="button"
-            data-selection-control="true"
-            onClick={() => {
-              if (!isDefaultFamily) {
-                const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-                onThemeChange(dark ? 'default-dark' : 'default-light');
-              }
-            }}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${themeStyleTab === 'default' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-          >
-            Default
-          </button>
-          <button
-            type="button"
-            data-selection-control="true"
-            onClick={() => {
-              if (themeStyleTab !== 'classic') {
-                const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-                onThemeChange(isNormalFamily ? (dark ? 'normal-dark' : 'normal-light') : (dark ? 'dark' : 'light'));
-              }
-            }}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${themeStyleTab === 'classic' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-          >
-            Classic
-          </button>
-          <button
-            type="button"
-            data-selection-control="true"
-            onClick={() => {
-              if (themeStyleTab !== 'expo') {
-                const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-                onThemeChange(dark ? 'expo-dark' : 'expo-light');
-              }
-            }}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${themeStyleTab === 'expo' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-          >
-            Expo
-          </button>
-        </div>
-
-        {/* Default tab content */}
-        {themeStyleTab === 'default' && (
-          <div className="space-y-4">
-            <ToggleGroup
-              type="single"
-              value={defaultSchemeValue}
-              onValueChange={value => {
-                if (!value) return;
-                const next = value as 'light' | 'dark' | 'system';
-                onThemeChange(next === 'light' ? 'default-light' : next === 'dark' ? 'default-dark' : 'default-system');
-              }}
-              variant="outline"
-              className="grid w-full grid-cols-3"
-            >
-              <ToggleGroupItem value="light">Light</ToggleGroupItem>
-              <ToggleGroupItem value="dark">Dark</ToggleGroupItem>
-              <ToggleGroupItem value="system">System</ToggleGroupItem>
-            </ToggleGroup>
-
-            {/* Palette: the tint of every neutral surface, line and text step.
-                Generated by src/lib/theme/engine.ts, so each swatch is drawn
-                from the same tokens it will apply — in the current scheme. */}
-            <div className="space-y-2">
-              <div className="ui-section-label">Palette</div>
-              <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-                {THEME_PALETTES.map(p => {
-                  const scheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
-                  const t = buildThemeTokens({ ...currentSeed(), palette: p }, scheme);
-                  const active = palette === p.id;
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      data-selection-control="true"
-                      aria-pressed={active}
-                      onClick={() => { setPalette(p.id); setThemePalette(p.id); }}
-                      className={`flex flex-col items-stretch gap-1.5 rounded-lg border p-1.5 text-left transition ${active ? 'border-foreground/60 ring-1 ring-foreground/30' : 'border-border hover:border-foreground/30'}`}
-                    >
-                      <span className="flex h-9 flex-col justify-between overflow-hidden rounded-md border p-1.5" style={{ background: t['--background'], borderColor: t['--border'] }}>
-                        <span className="h-1 w-3/4 rounded-full" style={{ background: t['--foreground'] }} />
-                        <span className="h-1 w-1/2 rounded-full" style={{ background: t['--muted-foreground'] }} />
-                      </span>
-                      <span className="px-0.5 text-xs">{p.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="ui-section-label">Colour</div>
-              <ToggleGroup
-                type="single"
-                value={themePreset}
-                onValueChange={value => {
-                  if (!value) return;
-                  setThemePreset(value);
-                  setSetting('ui_theme_preset', value);
-                  applyThemePreset(value);
-                }}
-                variant="outline"
-                className="grid w-full grid-cols-2 sm:grid-cols-3"
-              >
-                {THEME_PRESETS.map(preset => (
-                  <ToggleGroupItem key={preset.id} value={preset.id} className="gap-2">
-                    <span className="size-3 rounded-sm border border-border" style={{ background: preset.swatch }} />
-                    {preset.label}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <div className="ui-section-label">Contrast</div>
-                <ToggleGroup
-                  type="single"
-                  value={contrast}
-                  onValueChange={value => {
-                    if (!value) return;
-                    setContrast(value as ThemeContrast);
-                    setThemeContrast(value as ThemeContrast);
-                  }}
-                  variant="outline"
-                  className="grid w-full grid-cols-3"
-                >
-                  {THEME_CONTRASTS.map(c => <ToggleGroupItem key={c.id} value={c.id}>{c.label}</ToggleGroupItem>)}
-                </ToggleGroup>
-              </div>
-              <div className="space-y-2">
-                <div className="ui-section-label">Depth</div>
-                <ToggleGroup
-                  type="single"
-                  value={depth}
-                  onValueChange={value => {
-                    if (!value) return;
-                    setDepth(value as ThemeDepth);
-                    setThemeDepth(value as ThemeDepth);
-                  }}
-                  variant="outline"
-                  className="grid w-full grid-cols-3"
-                >
-                  {THEME_DEPTHS.map(d => <ToggleGroupItem key={d.id} value={d.id} title={d.description}>{d.label}</ToggleGroupItem>)}
-                </ToggleGroup>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-3">
-                <div className="ui-section-label">Corners</div>
-                <Badge variant="secondary">
-                  {radiusScale === 0 ? 'Square' : radiusScale >= RADIUS_PILL_THRESHOLD ? 'Pill' : `${radiusMaxPxFrom(radiusScale)}px max`}
-                </Badge>
-              </div>
-              {/* One axis, one control. This was four preset cards whose names
-                  did not even order by radius — "Rounded" (14px) sat between
-                  "Soft" (10px) and "Pill" — so it read as four unrelated styles
-                  rather than more-or-less of one thing, and could not express
-                  anything between them. The slider drives a multiplier that all
-                  thirteen radius tokens derive from. Larger tokens stop at the
-                  displayed ceiling instead of silently exceeding it. */}
-              <Slider
-                value={[radiusScale]}
-                min={RADIUS_SCALE_MIN}
-                max={RADIUS_SCALE_MAX}
-                step={RADIUS_SCALE_STEP}
-                aria-label="Corner rounding"
-                onValueChange={value => {
-                  const next = clampRadiusScale(value[0] ?? radiusScale);
-                  setRadiusScale(next);
-                  setSetting('ui_default_radius', next);
-                  applyRadiusScale(next);
-                }}
-              />
-              <div className="flex items-center justify-between text-3xs text-muted-foreground">
-                <span>Square</span>
-                <span>Pill</span>
-              </div>
-              <FieldDescription>Sets the largest non-pill corner radius. Compact controls stay proportionally tighter.</FieldDescription>
-            </div>
-
-            <FieldDescription>Every surface, line and text shade is generated from these choices, in light and dark, and secondary text is always solved to stay readable.</FieldDescription>
-          </div>
-        )}
-
-        {/* Expo tab content */}
-        {themeStyleTab === 'expo' && (
-          <div className="space-y-4">
-            <ToggleGroup
-              type="single"
-              value={themeMode === 'expo-dark' ? 'dark' : 'light'}
-              onValueChange={value => {
-                if (!value) return;
-                onThemeChange(value === 'dark' ? 'expo-dark' : 'expo-light');
-              }}
-              variant="outline"
-              className="grid w-full grid-cols-2"
-            >
-              <ToggleGroupItem value="light">Light</ToggleGroupItem>
-              <ToggleGroupItem value="dark">Dark</ToggleGroupItem>
-            </ToggleGroup>
-            <FieldDescription>Cream and paper, a base colour and an accent, with tactile controls.</FieldDescription>
-
-            {/* Two choices re-tint the whole family: expo.css mixes every
-                other shade from them (src/lib/theme/expoColors.ts). */}
-            {([
-              ['Base', 'The dark stage, and the text colour in light.', EXPO_BASES, expoBase, (id: string) => { setExpoBaseState(id as ExpoBase); setExpoBase(id as ExpoBase); }],
-              ['Accent', 'Primary buttons and every selected state.', EXPO_ACCENTS, expoAccent, (id: string) => { setExpoAccentState(id as ExpoAccent); setExpoAccent(id as ExpoAccent); }],
-            ] as const).map(([title, hint, options, current, choose]) => (
-              <div key={title} className="space-y-2">
-                <div className="ui-section-label">{title}</div>
-                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={`Expo ${title.toLowerCase()} colour`}>
-                  {options.map(option => {
-                    const active = current === option.id;
-                    return (
-                      <button
-                        key={option.id}
-                        type="button"
-                        role="radio"
-                        aria-checked={active}
-                        aria-label={option.label}
-                        title={option.label}
-                        data-selection-control="true"
-                        onClick={() => choose(option.id)}
-                        className={`size-8 rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? 'ring-2 ring-foreground ring-offset-2 ring-offset-background' : 'hover:scale-110'}`}
-                        style={{ background: option.swatch, boxShadow: 'inset 0 1.5px 0 rgba(255,255,255,0.35), inset 0 0 0 1px rgba(0,0,0,0.15)' }}
-                      />
-                    );
-                  })}
-                </div>
-                <FieldDescription>{hint}</FieldDescription>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Classic tab content */}
-        {themeStyleTab === 'classic' && (
-          <div className="space-y-4">
-            {/* Scheme sub-toggle */}
-            <ToggleGroup
-              type="single"
-              value={normalSchemeValue}
-              onValueChange={value => {
-                if (!value) return;
-                const next = value as ThemeMode;
-                // If a normal theme is active, keep it active while switching scheme
-                if (isNormalFamily && (next === 'light' || next === 'dark')) {
-                  onThemeChange(next === 'light' ? 'normal-light' : 'normal-dark');
-                } else {
-                  onThemeChange(next);
-                }
-              }}
-              variant="outline"
-              className="grid w-full grid-cols-3"
-            >
-              {normalSchemeModes.map(mode => (
-                <ToggleGroupItem key={mode.id} value={mode.id}>
-                  {mode.label}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-
-            {/* Accent color (only when no custom normal theme) */}
-            {!isNormalFamily && (
-              <div className="space-y-2">
-                <div className="ui-section-label">Accent color</div>
-                <ToggleGroup
-                  type="single"
-                  value={themePreset}
-                  onValueChange={value => {
-                    if (!value) return;
-                    setThemePreset(value);
-                    setSetting('ui_theme_preset', value);
-                    applyThemePreset(value);
-                  }}
-                  variant="outline"
-                  className="grid w-full grid-cols-2 sm:grid-cols-3"
-                >
-                  {THEME_PRESETS.map(preset => (
-                    <ToggleGroupItem key={preset.id} value={preset.id} className="gap-2">
-                      <span className="size-3 rounded-sm border border-border" style={{ background: preset.swatch }} />
-                      {preset.label}
-                    </ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
-              </div>
-            )}
-
-            {/* Classic theme grid */}
-            <div className="space-y-3">
-              {NORMAL_GROUPS.map(group => (
-                <div key={group} className="space-y-1.5">
-                  <div className="ui-section-label">{group}</div>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                    {NORMAL_THEMES.filter(t => t.group === group).map(t => {
-                      const active = normalTheme === t.id && isNormalFamily;
-                      return (
-                        <button
-                          key={t.id}
-                          type="button"
-                          onClick={() => {
-                            if (active) {
-                              // Deselect: go back to plain scheme
-                              setNormalTheme('');
-                              setSetting('ui_normal_theme', '');
-                              clearNormalTheme();
-                              const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-                              onThemeChange(dark ? 'dark' : 'light');
-                            } else {
-                              setNormalTheme(t.id);
-                              setSetting('ui_normal_theme', t.id);
-                              applyNormalTheme(t.id);
-                              const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-                              onThemeChange(dark ? 'normal-dark' : 'normal-light');
-                            }
-                          }}
-                          aria-pressed={active}
-                          title={t.label}
-                          className={`relative flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition ${active ? 'border-primary bg-primary/10 ring-2 ring-primary' : 'border-border hover:bg-accent'}`}
-                        >
-                          <span className="flex shrink-0 overflow-hidden rounded-sm border border-border">
-                            {t.swatch.map((c, i) => (
-                              <span key={i} className="size-3.5" style={{ background: c }} />
-                            ))}
-                          </span>
-                          <span className="truncate font-medium">{t.label}</span>
-                          {active && (
-                            <span className="ml-auto flex size-4 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                              <Check className="size-3" strokeWidth={3} />
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <FieldDescription>Standard themes with clean borders and soft depth.</FieldDescription>
-          </div>
-        )}
+        <FieldLabel>Mode</FieldLabel>
+        <ToggleGroup
+          type="single"
+          value={themeMode}
+          onValueChange={value => { if (value) onThemeChange(value as ThemeMode); }}
+          variant="outline"
+          className="grid w-full grid-cols-3"
+        >
+          <ToggleGroupItem value="light">Light</ToggleGroupItem>
+          <ToggleGroupItem value="dark">Dark</ToggleGroupItem>
+          <ToggleGroupItem value="system">System</ToggleGroupItem>
+        </ToggleGroup>
       </Field>
+
+      <Field>
+        <FieldLabel>Presets</FieldLabel>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" role="radiogroup" aria-label="Colour preset">
+          {EXPO_PRESETS.map(preset => {
+            const base = EXPO_BASES.find(b => b.id === preset.base)!;
+            const accent = EXPO_ACCENTS.find(a => a.id === preset.accent)!;
+            const surface = EXPO_PAPERS.find(p => p.id === preset.paper)!;
+            const active = expoColors.base === preset.base && expoColors.accent === preset.accent && expoColors.paper === preset.paper;
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                data-selection-control="true"
+                onClick={() => { applyExpoPreset(preset.id); syncExpoColors(); }}
+                className={`expo-preset flex flex-col items-stretch gap-1.5 rounded-xl p-1.5 text-left text-xs font-medium transition ${active ? 'ring-2 ring-primary' : 'hover:bg-muted/60'}`}
+              >
+                <span className="flex h-9 overflow-hidden rounded-lg border border-border">
+                  <span className="flex-1" style={{ background: surface.cream }} />
+                  <span className="flex-1" style={{ background: base.hex }} />
+                  <span className="w-3" style={{ background: accent.hex }} />
+                </span>
+                <span className="truncate px-0.5">{preset.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </Field>
+
+      {([
+        ['Base', 'The dark stage, and the text colour in light.', EXPO_BASES.map(b => ({ id: b.id, label: b.label, hex: b.hex })), expoColors.base, (id: string) => { setExpoBase(id as ExpoBase); syncExpoColors(); }],
+        ['Accent', 'Primary buttons and every selected state. Text on it switches to stay readable.', EXPO_ACCENTS.map(a => ({ id: a.id, label: a.label, hex: a.hex })), expoColors.accent, (id: string) => { setExpoAccent(id as ExpoAccent); syncExpoColors(); }],
+        ['Surface', 'The light page, cards and the warm edges around them.', EXPO_PAPERS.map(p => ({ id: p.id, label: p.label, hex: p.cream, ring: p.tone })), expoColors.paper, (id: string) => { setExpoPaper(id as ExpoPaperId); syncExpoColors(); }],
+      ] as const).map(([title, hint, options, current, choose]) => (
+        <Field key={title}>
+          <FieldLabel>{title}</FieldLabel>
+          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={`${title} colour`}>
+            {options.map(option => {
+              const active = current === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  aria-label={option.label}
+                  title={option.label}
+                  data-selection-control="true"
+                  onClick={() => choose(option.id)}
+                  className={`size-8 rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? 'ring-2 ring-foreground ring-offset-2 ring-offset-background' : 'hover:scale-110'}`}
+                  style={{
+                    background: option.hex,
+                    boxShadow: `inset 0 1.5px 0 rgba(255,255,255,0.35), inset 0 0 0 1.5px ${'ring' in option ? option.ring : 'rgba(0,0,0,0.15)'}`,
+                  }}
+                />
+              );
+            })}
+          </div>
+          <FieldDescription>{hint}</FieldDescription>
+        </Field>
+      ))}
 
       <Field>
         <FieldLabel htmlFor="ui-font-family">Font</FieldLabel>
@@ -577,59 +287,6 @@ export function AppearancePanel({
         </FieldDescription>
       </Field>
 
-      <Field>
-        <div className="flex items-center justify-between gap-3">
-          <FieldLabel>Panel translucency</FieldLabel>
-          <Badge variant="secondary">{panelTranslucency}%</Badge>
-        </div>
-        <Slider
-          value={[panelTranslucency]}
-          min={35}
-          max={95}
-          step={1}
-          onValueChange={value => {
-            const next = value[0] ?? panelTranslucency;
-            setPanelTranslucency(next);
-            updateAppearanceSetting('ui_panel_translucency', next);
-          }}
-        />
-      </Field>
-
-      <Field>
-        <div className="flex items-center justify-between gap-3">
-          <FieldLabel>Sidebar translucency</FieldLabel>
-          <Badge variant="secondary">{sidebarTranslucency}%</Badge>
-        </div>
-        <Slider
-          value={[sidebarTranslucency]}
-          min={35}
-          max={95}
-          step={1}
-          onValueChange={value => {
-            const next = value[0] ?? sidebarTranslucency;
-            setSidebarTranslucency(next);
-            updateAppearanceSetting('ui_sidebar_translucency', next);
-          }}
-        />
-      </Field>
-
-      <Field>
-        <div className="flex items-center justify-between gap-3">
-          <FieldLabel>Glass blur</FieldLabel>
-          <Badge variant="secondary">{glassBlur}px</Badge>
-        </div>
-        <Slider
-          value={[glassBlur]}
-          min={0}
-          max={32}
-          step={1}
-          onValueChange={value => {
-            const next = value[0] ?? glassBlur;
-            setGlassBlur(next);
-            updateAppearanceSetting('ui_glass_blur', next);
-          }}
-        />
-      </Field>
       <Field>
         <div className="flex items-center justify-between gap-3">
           <FieldLabel>Desktop background</FieldLabel>

@@ -297,8 +297,8 @@ export default defineConfig(({ command }) => ({
         name: 'agensis — AI Workspace',
         short_name: 'agensis',
         description: 'A shared workspace where AI agents work with you, your team, and each other.',
-        theme_color: '#0c0c0c',
-        background_color: '#0c0c0c',
+        theme_color: '#2b2d48',
+        background_color: '#2b2d48',
         display: 'standalone',
         orientation: 'any',
         // The marketing landing page owns `/`; the installed PWA should open

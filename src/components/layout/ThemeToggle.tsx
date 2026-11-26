@@ -15,22 +15,10 @@ const options: { value: ThemeMode; icon: typeof Sun; label: string }[] = [
 
 const cycle: ThemeMode[] = ['light', 'dark', 'system'];
 
-function schemeForMode(mode: ThemeMode): ThemeMode {
-  if (mode === 'default-light') return 'light';
-  if (mode === 'default-dark') return 'dark';
-  if (mode === 'default-system') return 'system';
-  return mode === 'dark' || mode === 'system' ? mode : 'light';
-}
-
 export function ThemeToggle({ mode, onModeChange }: ThemeToggleProps) {
-  const scheme = schemeForMode(mode);
-  const current = options.find(option => option.value === scheme) || options[0];
-  const nextScheme = cycle[(cycle.indexOf(scheme) + 1) % cycle.length] || cycle[0];
-  const isDefaultFamily = mode === 'default-light' || mode === 'default-dark' || mode === 'default-system';
-  const nextMode = isDefaultFamily
-    ? `default-${nextScheme}` as ThemeMode
-    : cycle[(cycle.indexOf(mode) + 1) % cycle.length] || cycle[0];
-  const next = options.find(option => option.value === schemeForMode(nextMode)) || options[0];
+  const current = options.find(option => option.value === mode) || options[0];
+  const nextMode = cycle[(cycle.indexOf(mode) + 1) % cycle.length] || cycle[0];
+  const next = options.find(option => option.value === nextMode) || options[0];
   const Icon = current.icon;
 
   return (

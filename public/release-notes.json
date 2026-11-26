@@ -1,5 +1,18 @@
 [
  {
+  "version": "one-style-expo",
+  "date": "2026-11-26",
+  "title": "One look: Expo, in your colours",
+  "summary": "agensis now has a single style, Expo, in light, dark or system. Pick a preset or mix your own base, accent and surface colours, and a font to go with it.",
+  "highlights": [
+   "Ten colour presets, including Nord, Dracula, Tokyo Night, Gruvbox and Solarized; or choose a base, accent and surface on their own in Settings, Appearance",
+   "Text stays readable whatever you pick: text on buttons switches colour when the accent is pale",
+   "New fonts that suit Expo, including Archivo, Rubik, Nunito, Fredoka, Onest and Instrument Sans",
+   "If you used another theme, you are now on Expo with the same light or dark setting",
+   "Workspaces: the sidebar title switches workspace and desktop, and you can pin favourites under Search"
+  ]
+ },
+ {
   "version": "one-theme-engine",
   "date": "2026-11-26",
   "title": "One theme engine, and calmer windows",
