@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Expand, Eye, EyeOff, Lock, Maximize2, Minimize2, Minus, MoreHorizontal, Share2, Shrink, Trash2, Unlock, X } from 'lucide-react';
+import { Expand, Eye, EyeOff, Lock, Maximize2, Minimize2, Minus, MoreHorizontal, Pin, PinOff, ScreenShare, ScreenShareOff, Share2, Shrink, Trash2, Unlock, X } from 'lucide-react';
+import { toggleTitlebarPin, useTitlebarPins, type TitlebarPinId } from '../../lib/titlebarPins';
 import type { FloatingWindow, PresenceVisibilityMode } from '../../types';
 import { Button } from '@agensis/ui/components/button';
 import {
@@ -724,6 +725,25 @@ export function FloatingWindowShell({
   const canTogglePrivacy = !win.ownerUserId || win.ownerUserId === currentUserId;
   const canToggleLock = !win.ownerUserId || win.ownerUserId === currentUserId;
   const privacyBlanked = Boolean(win.isPrivate && win.ownerUserId && win.ownerUserId !== currentUserId);
+  // The "..." menu's actions, defined once so the menu and the title bar
+  // (where any of them can be pinned) can never drift apart. Every action has
+  // its own icon: Share (a link) and Share this window (live screen) used to
+  // both wear Share2.
+  const titlebarPins = useTitlebarPins();
+  const menuGroups: Array<Array<{ id: TitlebarPinId; icon: React.ReactNode; label: string; pinLabel: string; run: () => void; disabled?: boolean; pressed?: boolean }>> = [
+    [
+      { id: 'share', icon: <Share2 />, label: 'Share', pinLabel: 'Share', run: () => onShare?.(), disabled: !onShare },
+      { id: 'share-window', icon: win.shared ? <ScreenShareOff /> : <ScreenShare />, label: win.shared ? 'Stop sharing this window' : 'Share this window', pinLabel: 'Share this window', run: () => onUpdate(win.id, { shared: !win.shared }), disabled: !canControl, pressed: Boolean(win.shared) },
+    ],
+    [
+      { id: 'maximize', icon: isMaximized ? <Minimize2 /> : <Maximize2 />, label: isMaximized ? 'Restore' : 'Maximize', pinLabel: 'Maximize', run: handleMaximize, disabled: !canControl, pressed: isMaximized },
+      ...(!isMobile && onToggleFullExpand ? [{ id: 'full-expand' as const, icon: isFullExpand ? <Shrink /> : <Expand />, label: isFullExpand ? 'Exit full expand' : 'Full expand', pinLabel: 'Full expand', run: () => onToggleFullExpand(win.id), disabled: !canControl, pressed: isFullExpand }] : []),
+    ],
+    [
+      { id: 'privacy', icon: win.isPrivate ? <EyeOff /> : <Eye />, label: win.isPrivate ? 'Privacy on' : 'Privacy off', pinLabel: 'Privacy', run: () => onUpdate(win.id, { isPrivate: !win.isPrivate }), disabled: !canTogglePrivacy, pressed: Boolean(win.isPrivate) },
+      { id: 'lock', icon: win.locked ? <Lock /> : <Unlock />, label: win.locked ? 'Locked for others' : 'Unlocked for collaborators', pinLabel: 'Lock', run: () => onUpdate(win.id, { locked: !win.locked }), disabled: !canToggleLock, pressed: Boolean(win.locked) },
+    ],
+  ];
 
   const shellStyle: React.CSSProperties = fullViewport
     ? {
@@ -868,6 +888,24 @@ export function FloatingWindowShell({
                   can point at anything on screen and send it to an agent even
                   when no chat is focused. Sits left of the "..." menu. */}
               <GlobalPickerTitlebarControl className="mr-0.5" />
+              {/* Actions pinned from the "..." menu, in menu order. */}
+              {menuGroups.flat().filter(action => titlebarPins.includes(action.id)).map(action => (
+                <Button
+                  key={action.id}
+                  type="button"
+                  variant="outline"
+                  size="icon-xs"
+                  className="window-titlebar-control"
+                  data-titlebar-pinned={action.id}
+                  onClick={action.run}
+                  disabled={action.disabled}
+                  aria-label={action.label}
+                  aria-pressed={action.pressed}
+                  title={action.label}
+                >
+                  {action.icon}
+                </Button>
+              ))}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   {/* The three titlebar controls (overflow / minimize / close)
@@ -883,60 +921,46 @@ export function FloatingWindowShell({
                     <MoreHorizontal />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="min-w-40">
-                  <DropdownMenuGroup>
-                    <DropdownMenuItem
-                      disabled={!onShare}
-                      onSelect={() => onShare?.()}
-                    >
-                      <Share2 />
-                      Share
-                    </DropdownMenuItem>
-                    {/* There is no safe generic duplicate operation: chat
-                        windows are session-keyed and documents/tasks carry
-                        ownership and identity semantics. Do not expose a
-                        menu item that cannot perform a real action. */}
-                    <DropdownMenuItem
-                      disabled={!canControl}
-                      onSelect={() => onUpdate(win.id, { shared: !win.shared })}
-                    >
-                      <Share2 />
-                      {win.shared ? 'Stop sharing this window' : 'Share this window'}
-                    </DropdownMenuItem>
-                  </DropdownMenuGroup>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuGroup>
-                    <DropdownMenuItem disabled={!canControl} onSelect={handleMaximize}>
-                      {isMaximized ? <Minimize2 /> : <Maximize2 />}
-                      {isMaximized ? 'Restore' : 'Maximize'}
-                    </DropdownMenuItem>
-                    {!isMobile && onToggleFullExpand && (
-                      <DropdownMenuItem
-                        disabled={!canControl}
-                        onSelect={() => onToggleFullExpand(win.id)}
-                      >
-                        {isFullExpand ? <Shrink /> : <Expand />}
-                        {isFullExpand ? 'Exit full expand' : 'Full expand'}
-                      </DropdownMenuItem>
-                    )}
-                  </DropdownMenuGroup>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuGroup>
-                    <DropdownMenuItem
-                      disabled={!canTogglePrivacy}
-                      onSelect={() => onUpdate(win.id, { isPrivate: !win.isPrivate })}
-                    >
-                      {win.isPrivate ? <EyeOff /> : <Eye />}
-                      {win.isPrivate ? 'Privacy on' : 'Privacy off'}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      disabled={!canToggleLock}
-                      onSelect={() => onUpdate(win.id, { locked: !win.locked })}
-                    >
-                      {win.locked ? <Lock /> : <Unlock />}
-                      {win.locked ? 'Locked for others' : 'Unlocked for collaborators'}
-                    </DropdownMenuItem>
-                  </DropdownMenuGroup>
+                <DropdownMenuContent align="end" className="min-w-52">
+                  {menuGroups.map((group, index) => (
+                    <React.Fragment key={index}>
+                      {index > 0 && <DropdownMenuSeparator />}
+                      <DropdownMenuGroup>
+                        {group.map(action => {
+                          const pinned = titlebarPins.includes(action.id);
+                          return (
+                            <DropdownMenuItem
+                              key={action.id}
+                              disabled={action.disabled}
+                              onSelect={action.run}
+                              className="group/menu-action"
+                            >
+                              {action.icon}
+                              <span className="min-w-0 flex-1">{action.label}</span>
+                              {/* Pin to the title bar. A button inside the item:
+                                  it must not also run the item, so it stops
+                                  the pointer and click before Radix sees them. */}
+                              <button
+                                type="button"
+                                aria-pressed={pinned}
+                                aria-label={pinned ? `Unpin ${action.pinLabel} from the title bar` : `Pin ${action.pinLabel} to the title bar`}
+                                title={pinned ? 'Unpin from title bar' : 'Pin to title bar'}
+                                onPointerDown={event => event.stopPropagation()}
+                                onPointerUp={event => event.stopPropagation()}
+                                onClick={event => { event.preventDefault(); event.stopPropagation(); toggleTitlebarPin(action.id); }}
+                                className={cn(
+                                  'window-menu-pin -mr-1 ml-2 rounded-md p-1 text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
+                                  pinned ? 'text-foreground' : 'opacity-40 group-hover/menu-action:opacity-100 group-focus/menu-action:opacity-100',
+                                )}
+                              >
+                                {pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+                              </button>
+                            </DropdownMenuItem>
+                          );
+                        })}
+                      </DropdownMenuGroup>
+                    </React.Fragment>
+                  ))}
                   <DropdownMenuSeparator />
                   <DropdownMenuGroup>
                     <DropdownMenuItem

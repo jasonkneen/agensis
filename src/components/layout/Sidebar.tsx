@@ -14,6 +14,8 @@ import {
  Users,
  Brain,
  ChevronRight,
+ Building2,
+ MessageSquareWarning,
  Code2,
  Copy,
  CreditCard,
@@ -245,6 +247,14 @@ interface SidebarProps {
  presenceSlot?: React.ReactNode;
  /** Workspace-rail slot the collapsed sidebar portals its toggle + notification icons into. */
  collapsedSlot?: HTMLElement | null;
+ /** Replaces the plain title: the workspace + desktop picker (WorkspaceSwitcher). */
+ workspaceSwitcherSlot?: React.ReactNode;
+ /** Pinned workspaces, rendered directly under Search. */
+ pinnedWorkspacesSlot?: React.ReactNode;
+ /** Footer: send feedback. */
+ onOpenFeedback?: () => void;
+ /** Footer: tenants admin (system owners only). */
+ onOpenTenants?: () => void;
 }
 
 export const Sidebar = React.memo(function Sidebar({
@@ -319,6 +329,10 @@ export const Sidebar = React.memo(function Sidebar({
  notificationsSlot,
  presenceSlot,
  collapsedSlot,
+ workspaceSwitcherSlot,
+ pinnedWorkspacesSlot,
+ onOpenFeedback,
+ onOpenTenants,
 }: SidebarProps) {
  // Feeds the agent-work store for every live-elapsed badge in the app (sidebar
  // rows AND the thread indicator). Mounted here because the sidebar is the one
@@ -676,12 +690,9 @@ export const Sidebar = React.memo(function Sidebar({
       <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Collapse sidebar">
        <PanelLeftClose />
       </Button>
+      {workspaceSwitcherSlot ?? (
       <button
        type="button"
-       // text-sm, not text-base: beside the collapse toggle, the bell and +,
-       // a 16px label left ~85px at the 220px minimum width and clipped even
-       // "Workspace 1" to "Workspa…". The full name is in the tooltip for
-       // anything longer still.
        className="sidebar-workspace-switch flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
        onClick={onOpenWorkspaceGrid || onCreateWorkspace}
        aria-label="Switch desktop"
@@ -689,10 +700,15 @@ export const Sidebar = React.memo(function Sidebar({
       >
        <span className="min-w-0 truncate text-left">{workspaceLabel}</span>
       </button>
+      )}
       {notificationsSlot}
+      {/* New workspace lives in the picker and the footer; with the switcher
+          in the title a third "+" here was the same action again. */}
+      {!workspaceSwitcherSlot && (
       <Button type="button" variant="ghost" size="icon-sm" onClick={onCreateWorkspace} aria-label="Create workspace">
        <Plus />
       </Button>
+      )}
      </div>
     </div>
 
@@ -704,6 +720,8 @@ export const Sidebar = React.memo(function Sidebar({
       <Search className="size-4 shrink-0" />
       <span className="min-w-0 flex-1 truncate text-left">Search...</span>
      </button>
+
+    {pinnedWorkspacesSlot}
 
     <ScrollArea className="min-h-0 flex-1 px-2 [&_[data-radix-scroll-area-viewport]>div]:!block">
      {/* gap-0.5, not gap-1: with ~14 entries the inter-row gap is counted
@@ -1147,6 +1165,27 @@ export const Sidebar = React.memo(function Sidebar({
 
     <div ref={footerRef} className="flex shrink-0 flex-col gap-2 p-2">
      {getStartedSlot}
+     {/* What the workspace rail used to carry at its foot, as wide buttons
+         now that the rail is gone. */}
+     {(onOpenFeedback || onOpenTenants || workspaceSwitcherSlot) && (
+      <div className="sidebar-footer-actions flex gap-1.5">
+       {workspaceSwitcherSlot && (
+        <Button type="button" variant="outline" size="sm" className="min-w-0 flex-1" onClick={onCreateWorkspace}>
+         <Plus data-icon="inline-start" /> <span className="truncate">Workspace</span>
+        </Button>
+       )}
+       {onOpenFeedback && (
+        <Button type="button" variant="outline" size="sm" className="min-w-0 flex-1" onClick={onOpenFeedback}>
+         <MessageSquareWarning data-icon="inline-start" /> <span className="truncate">Feedback</span>
+        </Button>
+       )}
+       {onOpenTenants && (
+        <Button type="button" variant="outline" size="sm" className="min-w-0 flex-1" onClick={onOpenTenants}>
+         <Building2 data-icon="inline-start" /> <span className="truncate">Tenants</span>
+        </Button>
+       )}
+      </div>
+     )}
      <div className="flex items-center gap-2">
       <DropdownMenu>
        <DropdownMenuTrigger asChild>

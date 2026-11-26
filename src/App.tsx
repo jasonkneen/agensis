@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { Globe, SquareTerminal, MessageSquare, FileText, Brain, Layers3, CheckCircle2, Activity, Bot, Database, Library, Trash2, Settings, Sparkles, Command, Wrench, Pencil, Plus, Users, Ungroup, Minimize2, Maximize2, ArrowRight, Clock, Inbox, Building2, Zap, X } from 'lucide-react';
 import { useIsMobile } from './hooks/use-mobile';
 import { Sidebar } from './components/layout/Sidebar';
-import { WorkspaceRail } from './components/layout/WorkspaceRail';
+import { PinnedWorkspaces, WorkspaceSwitcher, usePinnedWorkspaces } from './components/layout/WorkspaceSwitcher';
 import { NetworkStatusBar } from './components/layout/NetworkStatusBar';
 import { HomeCanvas } from './components/home/HomeCanvas';
 import { FloatingWindowShell } from './components/windows/FloatingWindowShell';
@@ -90,12 +90,7 @@ import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settin
 import { applyDefaultRadius } from './showcase/defaultTheme';
 import { applyThemePreset } from './showcase/themePresets';
 import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT } from './lib/workspaceLayout';
-import {
-  clampWorkspaceRailWidth,
-  pickInitialWorkspaceId,
-  readWorkspaceRailWidth,
-  WORKSPACE_RAIL_COLLAPSED_WIDTH,
-} from './lib/workspaceRail';
+import { pickInitialWorkspaceId } from './lib/workspaceRail';
 import {
   buildDesktopOverlay,
   DESKTOP_TIER_EMPTY_MESSAGE,
@@ -188,7 +183,6 @@ const InboxWindowContent = lazy(() => import('./components/inbox/InboxWindowCont
 const TOUR_KEY = 'agensis_tour_complete';
 const SIDEBAR_KEY = 'agensis_sidebar_collapsed';
 const ACTIVE_WORKSPACE_KEY = 'agensis_active_workspace';
-const WORKSPACE_RAIL_WIDTH_KEY = 'agensis_workspace_rail_width';
 const PRESENCE_VISIBILITY_KEY = 'agensis_presence_visibility';
 const PRESENCE_FAVORITES_KEY = 'agensis_presence_favorites';
 const CANVAS_BACKGROUNDS = WORKSPACE_BACKGROUND_IMAGES;
@@ -737,31 +731,17 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     () => localStorage.getItem(ACTIVE_WORKSPACE_KEY) || '',
   );
   const [showTour, setShowTour] = useState(false);
-  // The workspace rail is resizable, and its width is the canvas viewport's
-  // leading inset (Sidebar's `leadingInset`), so App owns it rather than the
-  // rail — a width kept private to the rail would leave every floating window
-  // positioned against the old one. The rail commits once per drag, on release.
-  const [workspaceRailWidth, setWorkspaceRailWidth] = useState(
-    () => readWorkspaceRailWidth(localStorage.getItem(WORKSPACE_RAIL_WIDTH_KEY)),
-  );
-  const handleWorkspaceRailWidthChange = useCallback((next: number) => {
-    const clamped = clampWorkspaceRailWidth(next);
-    setWorkspaceRailWidth(clamped);
-    localStorage.setItem(WORKSPACE_RAIL_WIDTH_KEY, String(clamped));
-  }, []);
-  // The feedback launcher is now a fixed button in the workspace rail; it opens
+  // The feedback launcher is a wide button in the sidebar footer; it opens
   // the dialog owned by <FeedbackButton> (mounted at the app root) through this
   // imperative handle. Stable callback so the memoised rail does not re-render.
   const feedbackRef = useRef<FeedbackHandle>(null);
   const handleOpenFeedback = useCallback(() => feedbackRef.current?.open(), []);
   const isMobile = useIsMobile();
-  // Phone: the rail rides inside the off-canvas drawer beside a full-width
-  // sidebar, so it stays the icon strip whatever width was saved on desktop.
-  const renderedRailWidth = isMobile ? WORKSPACE_RAIL_COLLAPSED_WIDTH : workspaceRailWidth;
   // Phone: the sidebar is an off-canvas drawer (opened by the workspace hamburger)
   // instead of an inline rail, so the workspace canvas gets the full screen width.
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
-  // Rail node the collapsed sidebar portals into (see WorkspaceRail).
+  const { pins: pinnedWorkspaces, togglePin: togglePinnedWorkspace } = usePinnedWorkspaces();
+  // Floating node the collapsed sidebar portals its Expand control into.
   const [railSidebarSlot, setRailSidebarSlot] = useState<HTMLDivElement | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const stored = localStorage.getItem(SIDEBAR_KEY);
@@ -806,8 +786,6 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     hiddenWorkspaces,
     hideWorkspace,
     restoreWorkspace,
-    moveWorkspace,
-    reorderWorkspace,
   } = useWorkspaceRailPrefs(workspaces);
   const {
     connections: nostrConnections,
@@ -2591,37 +2569,48 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
           )}
           style={isMobile ? { padding: WORKSPACE_CHROME_GAP } : undefined}
         >
-          {/* Workspace switcher, pinned outside the sidebar. On desktop the
-              wrapper is `contents`, so this is a direct flex child of the shell
-              row and lands at the far left; on phone it rides inside the
-              off-canvas drawer beside the sidebar rather than eating screen
-              width the canvas needs. */}
-          <WorkspaceRail
-            workspaces={railWorkspaces}
-            activeWorkspaceId={activeWorkspaceId}
-            onSelectWorkspace={setActiveWorkspaceId}
-            onRenameWorkspace={handleRenameWorkspace}
-            onReorderWorkspace={moveWorkspace}
-            onReorderWorkspaceTo={reorderWorkspace}
-            onHideWorkspace={hideWorkspace}
-            hiddenWorkspaces={hiddenWorkspaces}
-            onRestoreWorkspace={restoreWorkspace}
-            onOpenTenants={isSystemOwner ? handleOpenTenants : undefined}
-            onOpenFeedback={handleOpenFeedback}
-            onCreateWorkspace={handleCreateWorkspace}
-            loading={wsLoading || workspaceReadiness.status === 'pending' || workspaceReadiness.status === 'missing' || workspaceReadiness.status === 'preparing'}
-            loadError={workspaceReadiness.status === 'unavailable' ? workspaceReadiness.reason : null}
-            onRetry={workspaceReadiness.canRetry ? retryWorkspaceSetup : undefined}
-            titlebarInset={isMobile ? 0 : DESKTOP_TITLEBAR_INSET}
-            // Phone: the rail rides inside the off-canvas drawer beside a
-            // full sidebar, so it stays the icon strip and is not resizable.
-            width={renderedRailWidth}
-            onWidthChange={handleWorkspaceRailWidthChange}
-            resizable={!isMobile}
-            sidebarSlotRef={setRailSidebarSlot}
-          />
+          {/* The workspace rail is gone: the sidebar title is the switcher
+              and pinned workspaces sit under Search (WorkspaceSwitcher.tsx).
+              Collapsed, the sidebar has no column at all; its Expand control
+              portals into this slot, which floats beside the traffic lights. */}
+          {!isMobile && (
+            <div
+              ref={setRailSidebarSlot}
+              data-collapsed-sidebar-slot
+              className="fixed z-[2147483100] flex items-center gap-1 empty:hidden"
+              style={{ left: DESKTOP_TITLEBAR_INSET ? 80 : 8, top: DESKTOP_TITLEBAR_INSET ? 10 : 8 }}
+            />
+          )}
           <Sidebar
             collapsedSlot={railSidebarSlot}
+            workspaceSwitcherSlot={(
+              <WorkspaceSwitcher
+                workspaces={railWorkspaces}
+                hiddenWorkspaces={hiddenWorkspaces}
+                activeWorkspaceId={activeWorkspaceId}
+                onSelectWorkspace={setActiveWorkspaceId}
+                onRenameWorkspace={handleRenameWorkspace}
+                onHideWorkspace={hideWorkspace}
+                onRestoreWorkspace={restoreWorkspace}
+                onCreateWorkspace={handleCreateWorkspace}
+                desktops={layers}
+                activeDesktopId={viewedLayerId}
+                onSelectDesktop={activateLayer}
+                onOpenDesktopGrid={handleOpenCanvasGrid}
+                pins={pinnedWorkspaces}
+                onTogglePin={togglePinnedWorkspace}
+              />
+            )}
+            pinnedWorkspacesSlot={(
+              <PinnedWorkspaces
+                workspaces={railWorkspaces}
+                activeWorkspaceId={activeWorkspaceId}
+                pins={pinnedWorkspaces}
+                onSelectWorkspace={setActiveWorkspaceId}
+              />
+            )}
+            onOpenFeedback={handleOpenFeedback}
+            onOpenTenants={isSystemOwner ? handleOpenTenants : undefined}
             workspace={activeWorkspace}
             activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
             overlay={isMobile}
@@ -2629,7 +2618,7 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
             // The rail sits left of the sidebar, so the canvas viewport's left
             // inset is rail + sidebar, not sidebar alone. The rail is resizable,
             // so this is its LIVE width, never the 52px collapsed constant.
-            leadingInset={isMobile ? 0 : renderedRailWidth}
+            leadingInset={0}
             collapsed={isMobile ? false : sidebarCollapsed}
             onToggleCollapse={isMobile ? handleCloseMobileDrawer : handleToggleSidebar}
             onOpenCommandPalette={handleOpenCommandPalette}

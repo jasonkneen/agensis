@@ -372,7 +372,7 @@
 
 /* One "selected" style: the raised coral pill, for every segment, filter
    chip and tab that says it is the current choice. */
-:root[data-ui-theme="expo"] [role="group"] > button[aria-pressed="true"]:not([data-slot="button"]),
+:root[data-ui-theme="expo"] [role="group"][class*="inline-flex"] > button[aria-pressed="true"]:not([data-slot="button"]),
 :root[data-ui-theme="expo"] button[aria-pressed="true"][class*="rounded-full"]:not([data-slot="button"]),
 :root[data-ui-theme="expo"] [data-slot="tabs-trigger"][data-state="active"],
 :root[data-ui-theme="expo"] [role="tab"][aria-selected="true"] {
@@ -382,18 +382,18 @@
  border-radius: 999px !important;
  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-coral), white 35%), 0 2px 0 var(--expo-coral-deep) !important;
 }
-:root[data-ui-theme="expo"] [role="group"] > button[aria-pressed="true"]:not([data-slot="button"]) *,
+:root[data-ui-theme="expo"] [role="group"][class*="inline-flex"] > button[aria-pressed="true"]:not([data-slot="button"]) *,
 :root[data-ui-theme="expo"] button[aria-pressed="true"][class*="rounded-full"]:not([data-slot="button"]) * {
  color: inherit !important;
 }
 /* The group holding them is a quiet inset track, not a second outline. */
-:root[data-ui-theme="expo"] [role="group"]:has(> button[aria-pressed]) {
+:root[data-ui-theme="expo"] [role="group"][class*="inline-flex"]:has(> button[aria-pressed]) {
  border-color: transparent !important;
  background: color-mix(in srgb, var(--foreground) 6%, transparent) !important;
  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12) !important;
  border-radius: 999px !important;
 }
-:root[data-ui-theme="expo"] [role="group"]:has(> button[aria-pressed]) > button {
+:root[data-ui-theme="expo"] [role="group"][class*="inline-flex"]:has(> button[aria-pressed]) > button {
  border-radius: 999px !important;
 }
 
@@ -490,4 +490,13 @@
 :root[data-ui-theme="expo"] .workspace-window-dock .dock-window-group {
  border-color: transparent !important;
  background: color-mix(in srgb, var(--foreground) 7%, transparent) !important;
+}
+
+/* Dark buttons need a visible edge: the surface edge (9% white) vanished on
+   the dark stage, so outline and secondary pills read as flat text. */
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="button"][data-variant="outline"],
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="button"][data-variant="secondary"],
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="select-trigger"],
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="toggle-group-item"]:not([data-state="on"]) {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.14), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 3px 0 var(--expo-lip) !important;
 }

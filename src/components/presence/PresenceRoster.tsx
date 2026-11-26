@@ -244,7 +244,7 @@ export function PresenceRoster({
     <div data-presence-panel className="relative flex flex-col items-end gap-2">
       <Popover open={open} onOpenChange={setOpen}>
         <div
-          className="presence-top-row order-1 group/presence-row flex items-center gap-1 rounded-full border bg-popover/90 p-1 shadow-[3px_3px_0_var(--sh-border)] backdrop-blur"
+          className="presence-top-row order-1 group/presence-row flex items-center gap-1 rounded-full p-0.5"
           onMouseEnter={openOnHover}
           onMouseLeave={closeOnHover}
         >
