@@ -2599,6 +2599,9 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
                 onOpenDesktopGrid={handleOpenCanvasGrid}
                 pins={pinnedWorkspaces}
                 onTogglePin={togglePinnedWorkspace}
+                loading={wsLoading || workspaceReadiness.status === 'pending' || workspaceReadiness.status === 'missing' || workspaceReadiness.status === 'preparing'}
+                loadError={workspaceReadiness.status === 'unavailable' ? workspaceReadiness.reason : null}
+                onRetry={workspaceReadiness.canRetry ? retryWorkspaceSetup : undefined}
               />
             )}
             pinnedWorkspacesSlot={(
