@@ -4838,3 +4838,17 @@ rather than one more per-panel hook {
   animation: none;
  }
 }
+
+/* Workspace switcher: the selected workspace and desktop are unmistakable —
+   the accent wash with an accent edge, not just a trailing check. Expo
+   overrides with its raised coral pill (expo.css). */
+[data-switcher-option][data-selected="true"] {
+ background: color-mix(in srgb, var(--primary) 14%, transparent);
+ box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 45%, transparent);
+ color: var(--foreground);
+ font-weight: 600;
+}
+[data-pinned-workspace][data-active="true"] .workspace-tile-swatch {
+ box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.92), 0 2px 6px -1px rgba(0, 0, 0, 0.3);
+ opacity: 1;
+}

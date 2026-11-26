@@ -107,9 +107,9 @@ export function WorkspaceSwitcher({
           data-workspace-switcher
           aria-label="Switch workspace or desktop"
           title={[active?.name, activeDesktop?.name].filter(Boolean).join(' · ')}
-          className="workspace-switcher-trigger flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1 text-left outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-muted/70"
+          className="workspace-switcher-trigger flex min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-border bg-card px-2 py-1.5 text-left shadow-sm outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-muted/70"
         >
-          {active && <Tile tile={active} className="size-7 text-[0.6875rem]" />}
+          {active && <Tile tile={active} className="size-8 text-xs" />}
           <span className="flex min-w-0 flex-1 flex-col leading-tight">
             <span className="truncate text-sm font-semibold">{active?.name ?? 'Workspace'}</span>
             {activeDesktop && <span className="truncate text-xs text-muted-foreground">{activeDesktop.name}</span>}
