@@ -42,6 +42,7 @@ import {
   type WorkspaceResourceOperationKind,
 } from '@/features/workspace-resources';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
+import { ListGroup } from '@/components/common/Section';
 
 interface ResourcesWindowContentProps {
   workspaceId: string;
@@ -70,6 +71,10 @@ function requestPreview(value: Record<string, unknown> | undefined): string {
   return jsonPreview(value);
 }
 
+// Same selection treatment as SkillsWindowContent: neutral wash + 2px primary edge.
+const ROW_OFF = 'hover:bg-foreground/[0.03]';
+const ROW_ON = 'bg-foreground/[0.05] shadow-[inset_2px_0_0_var(--primary)]';
+
 function OperationRow({
   operation,
   selected,
@@ -84,8 +89,8 @@ function OperationRow({
       type="button"
       onClick={onSelect}
       className={cn(
-        'control-outer-ring flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors',
-        selected ? 'border-primary/55 bg-primary/8' : 'border-border/70 bg-card/45 hover:bg-muted/50',
+        'flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors',
+        selected ? ROW_ON : ROW_OFF,
       )}
     >
       <span className={cn(
@@ -429,7 +434,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
               </EmptyHeader>
             </Empty>
           ) : (
-            <div className="space-y-2">
+            <ListGroup>
               {resources.map(resource => {
                 const steward = stewardById.get(resource.steward_agent_id);
                 return (
@@ -438,10 +443,8 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                     type="button"
                     onClick={() => { setSelectedId(resource.id); setActiveOperationId(null); setFormError(null); }}
                     className={cn(
-                      'control-outer-ring w-full rounded-xl border p-3 text-left transition-colors',
-                      selectedId === resource.id
-                        ? 'border-primary/60 bg-primary/8'
-                        : 'border-border/70 bg-card/45 hover:bg-muted/50',
+                      'w-full px-3 py-2.5 text-left transition-colors',
+                      selectedId === resource.id ? ROW_ON : ROW_OFF,
                       resource.status === 'archived' && 'opacity-65',
                       resource.deleted_at && 'opacity-55',
                     )}
@@ -458,7 +461,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                   </button>
                 );
               })}
-            </div>
+            </ListGroup>
           )}
         </div>
 
@@ -623,7 +626,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                   </p>
                 ) : (
                   <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(180px,0.7fr)_minmax(0,1fr)]">
-                    <div className="space-y-2">
+                    <ListGroup className="self-start">
                       {selectedOperations.map(operation => (
                         <OperationRow
                           key={operation.id}
@@ -632,7 +635,7 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                           onSelect={() => { void handleSelectOperation(operation); }}
                         />
                       ))}
-                    </div>
+                    </ListGroup>
                     <div className="min-h-40 rounded-xl border border-border bg-muted/15 p-3">
                       {!activeOperation ? (
                         <p className="text-xs text-muted-foreground">Select an operation to inspect its request and result.</p>
@@ -651,9 +654,9 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
                             </div>
                           )}
                           {activeProgress && (
-                            <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
+                            <div className="rounded-lg border border-border bg-muted/40 p-3">
                               <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div className="ui-section-label font-semibold text-primary">
+                                <div className="ui-section-label font-semibold">
                                   {isLiveResourceOperation(activeOperation) ? 'Live progress' : 'Last checkpoint'} · {activeProgress.phase}
                                 </div>
                                 {activeProgress.percent !== null && (

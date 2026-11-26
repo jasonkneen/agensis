@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Globe2, Link2, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@agensis/ui/components/button';
+import { ROW_REVEAL } from '@/components/common/Section';
 import { Checkbox } from '@agensis/ui/components/checkbox';
 import {
   AlertDialog,
@@ -396,13 +397,14 @@ export function NostrCommunitySetup({
                   This identity cannot currently see any Nostr channels.
                 </p>
               )}
+              <div className="divide-y divide-border/70 overflow-hidden rounded-lg border border-border empty:hidden">
               {connected.channels.map(channel => {
                 const unavailable = channel.archived || channel.visibility === 'private';
                 const subscribed = channel.subscription?.enabled === true;
                 const selectionChecked = channel.subscription ? subscribed : selected.has(channel.id);
                 const toggleUnavailable = busy !== null || (unavailable && !subscribed);
                 return (
-                  <div key={channel.id} className="flex items-start gap-3 rounded-lg border border-border p-3">
+                  <div key={channel.id} className="group/row flex items-start gap-3 p-3">
                     <Checkbox
                       id={`nostr-channel-${channel.id}`}
                       checked={selectionChecked}
@@ -441,6 +443,7 @@ export function NostrCommunitySetup({
                         type="button"
                         variant="ghost"
                         size="icon-xs"
+                        className={ROW_REVEAL}
                         aria-label={`Remove #${channel.name} from Agensis`}
                         title={`Remove #${channel.name} from Agensis`}
                         onClick={() => setDeleteTarget({ kind: 'channel', channel })}
@@ -452,6 +455,7 @@ export function NostrCommunitySetup({
                   </div>
                 );
               })}
+              </div>
             </div>
           </div>
         )}

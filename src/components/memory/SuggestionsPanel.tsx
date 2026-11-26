@@ -69,8 +69,7 @@ export function SuggestionsPanel({ workspaceId, facts, documents }: SuggestionsP
       <div className="shrink-0 border-b border-border bg-card px-3 py-2.5">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="ui-panel-title">Suggestions</h2>
-            <p className="ui-meta mt-0.5">
+            <p className="ui-meta">
               {pendingCount === 0
                 ? 'Nothing waiting on you.'
                 : `${pendingCount} suggestion${pendingCount === 1 ? '' : 's'} waiting on you.`}

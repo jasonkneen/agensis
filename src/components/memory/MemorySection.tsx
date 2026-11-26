@@ -147,7 +147,6 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
       <div className="shrink-0 border-b border-border bg-card px-3 py-2.5">
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="ui-panel-title">Memory</h2>
             <p className="ui-meta">
               {facts.length} persistent fact{facts.length === 1 ? '' : 's'} stored
             </p>

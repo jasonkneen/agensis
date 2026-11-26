@@ -22,6 +22,7 @@ import { Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle }
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-group';
 import { cn } from '@/lib/utils';
+import { ROW_REVEAL } from '@/components/common/Section';
 
 interface FileUploadProps {
   files: UploadedFile[];
@@ -269,9 +270,9 @@ export function FileUpload({ files, onUpload, onDelete }: FileUploadProps) {
             </Empty>
           ) : filteredFiles.length > 0 ? (
             viewMode === 'list' ? (
-              <div className="space-y-2">
+              <div className="divide-y divide-border/70 overflow-hidden rounded-lg border border-border bg-card/50">
                 {filteredFiles.map(file => (
-                  <Item key={file.id} variant="outline">
+                  <Item key={file.id} className="group/row rounded-none">
                     <ItemMedia variant="icon" className="size-8 rounded-md border bg-muted">
                       {getFileIcon(file.type)}
                     </ItemMedia>
@@ -282,7 +283,7 @@ export function FileUpload({ files, onUpload, onDelete }: FileUploadProps) {
                       </ItemDescription>
                     </ItemContent>
                     <ItemActions>
-                      <Button type="button" variant="ghost" size="icon-xs" onClick={() => onDelete(file.id)} title="Delete file">
+                      <Button type="button" variant="ghost" size="icon-xs" className={ROW_REVEAL} onClick={() => onDelete(file.id)} title="Delete file">
                         <Trash2 data-icon="inline-start" className="size-3.5" />
                       </Button>
                     </ItemActions>

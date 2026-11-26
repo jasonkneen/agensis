@@ -69,6 +69,7 @@ import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Spinner } from '@agensis/ui/components/spinner';
 import { Switch } from '@agensis/ui/components/switch';
 import { cn } from '@/lib/utils';
+import { ROW_REVEAL } from '@/components/common/Section';
 import { AppearancePanel } from './AppearancePanel';
 
 interface SettingsDialogProps {
@@ -529,9 +530,9 @@ function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
         not choose models directly.
       </FieldDescription>
       {gateways.length > 0 && (
-        <div className="mt-2 space-y-1.5">
+        <div className="mt-2 divide-y divide-border/70 overflow-hidden rounded-lg border border-border bg-card/50">
           {gateways.map(gateway => (
-            <div key={gateway.id} className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 text-sm">
+            <div key={gateway.id} className="group/row flex min-w-0 items-center gap-2 px-3 py-2 text-sm">
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{gateway.name}</div>
                 <div className="truncate text-xs text-muted-foreground" title={gateway.base_url}>
@@ -552,6 +553,7 @@ function GatewaysManager({ workspaceId }: { workspaceId: string | null }) {
                 type="button"
                 variant={confirmDeleteId === gateway.id ? 'destructive' : 'ghost'}
                 size="icon-xs"
+                className={cn(confirmDeleteId !== gateway.id && ROW_REVEAL)}
                 onClick={() => {
                   if (confirmDeleteId !== gateway.id) {
                     setConfirmDeleteId(gateway.id);
@@ -675,7 +677,7 @@ function ToolsPanel({ workspace }: { workspace: Workspace | null }) {
 
       <Field>
         <FieldLabel>CLIs</FieldLabel>
-        <div className="grid gap-1">
+        <div className="divide-y divide-border/70 overflow-hidden rounded-lg border border-border bg-card/50">
           {capabilities.clis.map(cli => {
             const detail = (() => {
               if (!cli.available) return cli.command;
@@ -686,7 +688,7 @@ function ToolsPanel({ workspace }: { workspace: Workspace | null }) {
               return bits.join(' · ');
             })();
             return (
-              <Item key={cli.id} variant="outline" size="sm">
+              <Item key={cli.id} size="sm" className="rounded-none">
                 <ItemContent>
                   <ItemTitle>{cli.label}</ItemTitle>
                   <ItemDescription className="truncate" title={detail}>{detail}</ItemDescription>
@@ -700,9 +702,9 @@ function ToolsPanel({ workspace }: { workspace: Workspace | null }) {
 
       <Field>
         <FieldLabel>SDK packages</FieldLabel>
-        <div className="grid gap-1">
+        <div className="divide-y divide-border/70 overflow-hidden rounded-lg border border-border bg-card/50">
           {capabilities.packages.map(pkg => (
-            <Item key={pkg.name} variant="outline" size="sm">
+            <Item key={pkg.name} size="sm" className="rounded-none">
               <ItemContent>
                 <ItemTitle>{pkg.name}</ItemTitle>
                 <ItemDescription>{pkg.version || pkg.path || 'Not installed in this app'}</ItemDescription>
@@ -715,9 +717,9 @@ function ToolsPanel({ workspace }: { workspace: Workspace | null }) {
 
       <Field>
         <FieldLabel>Skill and config libraries</FieldLabel>
-        <div className="grid gap-1">
+        <div className="divide-y divide-border/70 overflow-hidden rounded-lg border border-border bg-card/50">
           {capabilities.skills.map(skill => (
-            <Item key={skill.id} variant="outline" size="sm">
+            <Item key={skill.id} size="sm" className="rounded-none">
               <ItemContent>
                 <ItemTitle>{skill.label}</ItemTitle>
                 <ItemDescription>{skill.path}</ItemDescription>
@@ -1583,7 +1585,7 @@ function VaultEntryRow({
     : 'Not set';
 
   return (
-    <div className="rounded-md border bg-card/50 px-2.5 py-2">
+    <div className="group/row rounded-md border bg-card/50 px-2.5 py-2">
       <div className="flex items-center gap-2">
         <KeyRound className="size-3.5 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1">
@@ -1600,6 +1602,7 @@ function VaultEntryRow({
             variant="ghost"
             size="icon-xs"
             aria-label={`Delete ${title}`}
+            className={ROW_REVEAL}
             onClick={() => void onDelete()}
           >
             <Trash2 className="size-4" />
