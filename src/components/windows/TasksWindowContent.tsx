@@ -114,6 +114,7 @@ import { ToggleGroup, ToggleGroupItem } from '@agensis/ui/components/toggle-grou
 import { cn } from '@/lib/utils';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
 import { MENTION_TILE, WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { ROW_REVEAL } from '@/components/common/Section';
 import { TaskGantt, TaskKanban } from './TaskBoardViews';
 import { TaskTable } from './TaskTable';
 import { AssigneeOptions } from './AssigneeOptions';
@@ -1136,7 +1137,7 @@ function TaskRow({
 
   return (
     <div id={`task-row-${task.id}`} className={`task-card ${expanded ? 'task-card-expanded' : ''}`}>
-      <Item variant="outline" className="task-row items-center">
+      <Item variant="outline" className="task-row group/row items-center">
         <ItemActions className="gap-1">
           <Button type="button" variant="ghost" size="icon-xs" className="size-[30px]" onClick={() => setExpanded(value => !value)} aria-label={expanded ? 'Collapse task' : 'Expand task'}>
             {expanded ? <ChevronDown className="size-[15px]" /> : <ChevronRight className="size-[15px]" />}
@@ -1214,6 +1215,12 @@ function TaskRow({
               Open chat
             </Button>
           )}
+          {/* Revealed on hover / keyboard focus (always on touch). The row's
+              status is already its group heading and a real assignee already
+              shows as a chip, so two always-on selects per row only repeated
+              what the list says — every row read "Unassigned · To do · bin".
+              "Open chat" above stays visible: it is news, not an edit. */}
+          <div className={cn('flex items-center gap-1', ROW_REVEAL)}>
           <NativeSelect
             value={task.assignee_id || ''}
             onChange={e => onChangeAssignee(e.target.value || null)}
@@ -1239,6 +1246,7 @@ function TaskRow({
           <Button type="button" variant="ghost" size="icon-xs" className="size-[30px]" onClick={onDelete} aria-label="Delete task">
             <Trash2 className="size-[15px]" />
           </Button>
+          </div>
         </ItemActions>
       </Item>
 

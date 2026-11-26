@@ -46,6 +46,8 @@ import {
 } from '@agensis/ui/components/empty';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
 import { SearchField } from '@/components/common/SearchField';
+import { ListGroup, SectionHeader } from '@/components/common/Section';
+import { cn } from '@/lib/utils';
 
 // One agent on a skill row. The selected avatar (automatic Blobatar by
 // default) carries identity; initials remain only as a fallback for old or
@@ -121,6 +123,12 @@ interface SkillsWindowContentProps {
 // describeSkillUnavailable): most skill names in this list are names a machine
 // reported, and inventing a plausible body for one would be worse than the
 // empty state.
+
+// Rows live in one ListGroup frame; selection is a wash plus a 2px edge in
+// the primary colour, not a full accent border round one card among many.
+const SKILL_ROW_OFF = 'hover:bg-foreground/[0.03]';
+const SKILL_ROW_ON = 'bg-foreground/[0.05] shadow-[inset_2px_0_0_var(--primary)]';
+
 export function SkillsWindowContent({ agents, agentConnections, systemCapabilities, workspaceId }: SkillsWindowContentProps) {
   const [query, setQuery] = useState('');
   const [selection, setSelection] = useState<SkillsSelection>(null);
@@ -327,8 +335,8 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
         <div className="space-y-4 p-3">
           {filteredSkills.length > 0 && (
             <section>
-              <h3 className="ui-section-label mb-2">Agent skills</h3>
-              <div className="space-y-1.5">
+              <SectionHeader title="Agent skills" count={filteredSkills.length} className="mb-1" />
+              <ListGroup>
                 {filteredSkills.map(skill => {
                   const active = isSelected(selection, { kind: 'skill', name: skill.name });
                   return (
@@ -337,14 +345,10 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                       type="button"
                       onClick={() => select({ kind: 'skill', name: skill.name })}
                       aria-pressed={active}
-                      className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
-                        active
-                          ? 'border-primary bg-primary/5'
-                          : 'border-border bg-card/40 hover:bg-card/70'
-                      }`}
+                      className={cn('block w-full px-3 py-2.5 text-left transition-colors', active ? SKILL_ROW_ON : SKILL_ROW_OFF)}
                     >
                       <div className="flex items-center gap-2">
-                        <Sparkles className="size-3.5 shrink-0 text-primary" />
+                        <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
                         <span className="truncate text-sm font-medium text-foreground">{skill.name}</span>
                         {/* "Written here" is the one fact about a row that the
                             chips cannot carry: it means the PROCEDURE exists in
@@ -379,14 +383,14 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                     </button>
                   );
                 })}
-              </div>
+              </ListGroup>
             </section>
           )}
 
           {filteredLibraries.length > 0 && (
             <section>
-              <h3 className="ui-section-label mb-2">Skill libraries</h3>
-              <div className="space-y-1.5">
+              <SectionHeader title="Skill libraries" count={filteredLibraries.length} className="mb-1" />
+              <ListGroup>
                 {filteredLibraries.map(lib => {
                   const active = isSelected(selection, { kind: 'library', id: lib.id });
                   return (
@@ -395,11 +399,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                       type="button"
                       onClick={() => select({ kind: 'library', id: lib.id })}
                       aria-pressed={active}
-                      className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors ${
-                        active
-                          ? 'border-primary bg-primary/5'
-                          : 'border-border bg-card/40 hover:bg-card/70'
-                      }`}
+                      className={cn('flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors', active ? SKILL_ROW_ON : SKILL_ROW_OFF)}
                     >
                       <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1">
@@ -410,7 +410,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                     </button>
                   );
                 })}
-              </div>
+              </ListGroup>
             </section>
           )}
 

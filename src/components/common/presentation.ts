@@ -24,6 +24,20 @@ export const FILTER_CHIP_OFF = 'border-border bg-card/40 text-muted-foreground h
 export const WINDOW_TOOLBAR = 'flex h-11 shrink-0 items-center gap-2 border-b border-border px-3';
 
 /**
+ * A segmented control: one choice of a few views (Dashboard / Projects /
+ * Teams, Yours / All). Selection is a raised paper chip, NOT an accent fill —
+ * accent is for the primary action and for state, and a view switch is
+ * neither. Items work as Radix ToggleGroup items (data-state) or plain buttons
+ * with aria-pressed.
+ */
+export const SEGMENTED = 'inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-border bg-muted/50 p-0.5 text-xs font-medium';
+
+export const SEGMENT_ITEM =
+  'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-muted-foreground transition hover:text-foreground '
+  + 'aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm '
+  + 'data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm';
+
+/**
  * The root element of a window's content: fills the frame, stacks its bands,
  * clips its own overflow, and paints NOTHING — the window shell behind it owns
  * the surface, which is why this is `bg-transparent` rather than `bg-card`.
