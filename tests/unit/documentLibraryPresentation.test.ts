@@ -16,9 +16,14 @@ describe('document library presentation', () => {
     expect(css).toContain('.document-library-list-row[data-selected="true"]');
   });
 
-  it('opts its row controls out of the Default theme card-elevation catch-all', () => {
+  // The Default family's card-elevation catch-all went with Default (Expo is
+  // the one style). The row controls keep their opt-out, and any catch-all
+  // that lifts bordered raw buttons — in either stylesheet — must honour it.
+  it('keeps its row controls out of any bordered-button card-elevation catch-all', () => {
     expect(component.match(/data-flat-control/g)?.length).toBe(2);
-    expect(css).toMatch(/button:not\(\[data-slot="button"\]\):not\(\[data-flat-control\]\)\[class~="border"\]/);
+    const expo = readFileSync(resolve(process.cwd(), 'src/styles/expo.css'), 'utf8');
+    const catchAlls = `${css}\n${expo}`.match(/button:not\(\[data-slot="button"\]\)[^{,]*\[class~="border"\]/g) ?? [];
+    for (const selector of catchAlls) expect(selector).toContain(':not([data-flat-control])');
   });
 
   it('selects a provenance source directly instead of toggling the document off', () => {
