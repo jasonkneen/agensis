@@ -69,8 +69,7 @@ export function SuggestionsPanel({ workspaceId, facts, documents }: SuggestionsP
       <div className="shrink-0 border-b border-border bg-card px-3 py-2.5">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="ui-panel-title">Suggestions</h2>
-            <p className="ui-meta mt-0.5">
+            <p className="ui-meta">
               {pendingCount === 0
                 ? 'Nothing waiting on you.'
                 : `${pendingCount} suggestion${pendingCount === 1 ? '' : 's'} waiting on you.`}
@@ -228,7 +227,7 @@ function SuggestionRow({
           )}
 
           {duplicate && !suggestion.decision && (
-            <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-500">
+            <p className="mt-2 flex items-start gap-1.5 text-xs text-warning">
               <CopyCheck className="mt-0.5 size-3.5 shrink-0" />
               <span className="min-w-0">
                 Looks like {duplicate.kind === 'fact' ? 'a fact' : 'a document'} you already have:

@@ -89,7 +89,6 @@ import { cn } from './lib/utils';
 import { applyUiAppearanceSettings, getSetting, getSettings } from './lib/settings';
 import { applyDefaultRadius } from './showcase/defaultTheme';
 import { applyThemePreset } from './showcase/themePresets';
-import { applyNeoTheme } from './showcase/neoThemes';
 import { WORKSPACE_CHROME_GAP, WORKSPACE_DOCK_BOTTOM_OFFSET, WORKSPACE_DOCK_HEIGHT } from './lib/workspaceLayout';
 import {
   clampWorkspaceRailWidth,
@@ -879,8 +878,6 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
     applyUiAppearanceSettings(settings);
     applyThemePreset(settings.ui_theme_preset);
     applyDefaultRadius(settings.ui_default_radius);
-    // Seed the persisted neo theme so it's ready when the neo family activates.
-    applyNeoTheme(settings.ui_neo_theme);
   }, []);
   const { layers, layersWorkspaceId, activeLayer, activeLayerId, createLayer, activateLayer, deleteLayer, updateLayer, baseLayerId } = useCanvasLayers(activeWorkspaceId || null);
 

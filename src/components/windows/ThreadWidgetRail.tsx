@@ -472,13 +472,13 @@ function WidgetItemRow({ item, onToggleDone, onAnswer, onDelete, onJumpToMessage
     <li className="thread-widget-item-row group/row flex flex-col gap-0.5 rounded-md px-2 py-1 hover:bg-muted/50">
       <div className="flex items-start gap-1.5">
         {isBlocker ? (
-          <Hand className={cn('mt-0.5 size-3 shrink-0', isAnswered ? 'text-muted-foreground' : 'text-amber-500')} />
+          <Hand className={cn('mt-0.5 size-3 shrink-0', isAnswered ? 'text-muted-foreground' : 'text-warning')} />
         ) : (
           <button
             type="button"
             className={cn(
               'mt-0.5 flex size-3.5 shrink-0 items-center justify-center rounded border',
-              isDone ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-muted-foreground',
+              isDone ? 'border-success bg-success text-white' : 'border-muted-foreground',
             )}
             title={isDone ? 'Mark open' : 'Mark done'}
             aria-label={isDone ? 'Mark open' : 'Mark done'}
@@ -543,7 +543,7 @@ function WidgetItemRow({ item, onToggleDone, onAnswer, onDelete, onJumpToMessage
         ) : (
           <button
             type="button"
-            className="ml-5 w-fit rounded bg-amber-500/15 px-1.5 py-0.5 text-3xs font-medium text-amber-600 hover:bg-amber-500/25 dark:text-amber-400"
+            className="ml-5 w-fit rounded bg-warning/15 px-1.5 py-0.5 text-3xs font-medium text-warning hover:bg-warning/25"
             onClick={() => setAnswering(true)}
           >
             Respond

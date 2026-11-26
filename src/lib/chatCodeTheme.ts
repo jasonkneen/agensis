@@ -1,6 +1,5 @@
 import { useSyncExternalStore } from 'react';
 import type { ThemeInput } from '@streamdown/code';
-import { getStoredNeoTheme } from '../showcase/neoThemes';
 import { getStoredNormalTheme } from '../showcase/normalThemes';
 import { getStoredTwTheme } from '../showcase/twThemes';
 
@@ -42,7 +41,6 @@ function readChatPalette(): string {
   const root = document.documentElement;
   const family = root.dataset.uiTheme || 'default';
 
-  if (family === 'neo') return getStoredNeoTheme();
   if (family === 'paper') return getStoredTwTheme();
   if (root.hasAttribute('data-normal-theme-group')) return getStoredNormalTheme();
   return '';
@@ -59,7 +57,6 @@ function subscribeToTheme(onChange: () => void): () => void {
       'data-ui-theme',
       'data-normal-theme',
       'data-normal-theme-group',
-      'data-neo-style',
       'style',
     ],
   });

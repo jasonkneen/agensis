@@ -61,9 +61,9 @@ function StatusDot({ tone }: { tone: NotificationTone }) {
       aria-hidden
       className={cn(
         'mt-1.5 size-2 shrink-0 rounded-full',
-        tone === 'online' && 'bg-emerald-500',
+        tone === 'online' && 'bg-success',
         tone === 'offline' && 'bg-muted-foreground/40',
-        tone === 'pending' && 'bg-amber-500',
+        tone === 'pending' && 'bg-warning',
         tone === 'info' && 'bg-sky-500',
       )}
     />
@@ -296,13 +296,13 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
           {hasUnseen && badgeCount === 0 && (
             <span
               aria-hidden
-              className="absolute bottom-0 right-0 size-2.5 rounded-full border-2 border-background bg-emerald-500"
+              className="absolute bottom-0 right-0 size-2.5 rounded-full border-2 border-background bg-success"
             />
           )}
           {badgeCount > 0 && (
             <span
               aria-hidden
-              className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-red-500 px-1 text-3xs font-semibold leading-none text-white"
+              className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-destructive px-1 text-3xs font-semibold leading-none text-white"
             >
               {badgeCount > 9 ? '9+' : badgeCount}
             </span>
@@ -393,7 +393,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
                       onClick={() => { setOpen(false); if (entry.source === 'task') feeds.onOpenTask(entry.target); else feeds.onOpenInbox(); }}
                       className="flex w-full items-start gap-2.5 px-3 py-2 text-left text-sm hover:bg-muted/60"
                     >
-                      <span aria-hidden className={cn('mt-1.5 size-2 shrink-0 rounded-full', entry.unread ? (entry.tone === 'urgent' ? 'bg-red-500' : 'bg-primary') : 'bg-transparent')} />
+                      <span aria-hidden className={cn('mt-1.5 size-2 shrink-0 rounded-full', entry.unread ? (entry.tone === 'urgent' ? 'bg-destructive' : 'bg-primary') : 'bg-transparent')} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate leading-snug">{entry.heading}</span>
                         <span className="block truncate text-2xs text-muted-foreground">{entry.detail}</span>
@@ -424,7 +424,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
                       <span className="font-medium">{item.label}</span>{' '}
                       {item.isNew ? 'wants to register as' : 'wants to connect as'}{' '}
                       <span className="font-medium">@{item.handle}</span>
-                      <span className="ml-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-3xs font-medium text-amber-600 dark:text-amber-400">
+                      <span className="ml-1 rounded bg-warning/15 px-1.5 py-0.5 text-3xs font-medium text-warning">
                         Approval pending
                       </span>
                     </p>
@@ -440,7 +440,7 @@ export function NotificationsBell({ workspaceId, variant = 'floating', updateNot
                           {item.mode === 'available' ? 'A new version is available' : "What's new"}
                         </span>
                         {item.mode === 'available' && (
-                          <span className="ml-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-3xs font-medium text-amber-600 dark:text-amber-400">
+                          <span className="ml-1 rounded bg-warning/15 px-1.5 py-0.5 text-3xs font-medium text-warning">
                             Update available
                           </span>
                         )}

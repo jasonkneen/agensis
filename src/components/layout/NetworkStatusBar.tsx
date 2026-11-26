@@ -36,8 +36,8 @@ export function NetworkStatusBar({ online, syncing, pendingCount, syncError, onS
         variant={isError ? 'destructive' : 'default'}
         className={cn(
           'flex items-center gap-2 rounded-none border-x-0 border-t-0 px-4 py-1.5 text-xs',
-          isWarning && 'border-yellow-500/30 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400',
-          online && !syncError && pendingCount === 0 && 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400',
+          isWarning && 'border-warning/30 bg-warning/10 text-warning',
+          online && !syncError && pendingCount === 0 && 'border-success/30 bg-success/10 text-success',
         )}
       >
       {!online ? (

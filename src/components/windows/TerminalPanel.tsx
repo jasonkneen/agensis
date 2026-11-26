@@ -119,6 +119,14 @@ export function TerminalPanel() {
         }),
       );
       term.focus();
+    }).catch((error: unknown) => {
+      // The main process THROWS when the shell cannot be started (node-pty's
+      // "posix_spawnp failed." when spawn-helper lost its exec bit). Without
+      // this the promise rejected silently and the panel sat on "starting"
+      // forever — a terminal that never loads, with no reason given.
+      if (disposed) return;
+      setStatus('unavailable');
+      setDetail(error instanceof Error ? error.message : String(error));
     });
 
     const typed = term.onData(data => {

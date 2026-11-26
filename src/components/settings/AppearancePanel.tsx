@@ -37,7 +37,6 @@ import {
   RADIUS_SCALE_MIN,
   RADIUS_SCALE_STEP,
 } from '../../showcase/defaultTheme';
-import { NEO_THEMES, NEO_GROUPS, applyNeoTheme, resolveNeoStyle } from '../../showcase/neoThemes';
 import { NORMAL_THEMES, NORMAL_GROUPS, applyNormalTheme, clearNormalTheme, getStoredNormalTheme } from '../../showcase/normalThemes';
 import { TW_WORLDS, applyTwTheme, getStoredTwTheme } from '../../showcase/twThemes';
 import { WORKSPACE_BACKGROUNDS } from '../../lib/backgrounds';
@@ -75,15 +74,13 @@ export function AppearancePanel({
   const [palette, setPalette] = useState(() => getStoredPalette());
   const [contrast, setContrast] = useState<ThemeContrast>(() => getStoredContrast());
   const [depth, setDepth] = useState<ThemeDepth>(() => getStoredDepth());
-  const [neoTheme, setNeoTheme] = useState(initialSettings.ui_neo_theme);
   const [normalTheme, setNormalTheme] = useState(() => getStoredNormalTheme());
   const [twTheme, setTwTheme] = useState(() => getStoredTwTheme());
   const isDefaultFamily = themeMode === 'default-light' || themeMode === 'default-dark' || themeMode === 'default-system';
-  const isNeoFamily = themeMode === 'neo-light' || themeMode === 'neo-dark';
   const isNormalFamily = themeMode === 'normal-light' || themeMode === 'normal-dark';
   const isPaper = themeMode === 'paper-light';
   // Derive which style tab is active from the current mode
-  const themeStyleTab: 'default' | 'classic' | 'brutal' = isDefaultFamily ? 'default' : isNeoFamily ? 'brutal' : 'classic';
+  const themeStyleTab: 'default' | 'classic' = isDefaultFamily ? 'default' : 'classic';
   const [panelTranslucency, setPanelTranslucency] = useState(initialSettings.ui_panel_translucency);
   const [sidebarTranslucency, setSidebarTranslucency] = useState(initialSettings.ui_sidebar_translucency);
   const [glassBlur, setGlassBlur] = useState(initialSettings.ui_glass_blur);
@@ -152,8 +149,8 @@ export function AppearancePanel({
       <Field>
         <FieldLabel>Theme</FieldLabel>
 
-        {/* Default | Classic | Brutal tab bar */}
-        <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted p-1">
+        {/* Default | Classic tab bar */}
+        <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-muted p-1">
           <button
             type="button"
             data-selection-control="true"
@@ -179,19 +176,6 @@ export function AppearancePanel({
             className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${themeStyleTab === 'classic' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
           >
             Classic
-          </button>
-          <button
-            type="button"
-            data-selection-control="true"
-            onClick={() => {
-              if (!isNeoFamily) {
-                const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-                onThemeChange(dark ? 'neo-dark' : 'neo-light');
-              }
-            }}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${themeStyleTab === 'brutal' ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-          >
-            Brutal
           </button>
         </div>
 
@@ -487,76 +471,6 @@ export function AppearancePanel({
             </div>
 
             <FieldDescription>Standard themes with clean borders and soft depth.</FieldDescription>
-          </div>
-        )}
-
-        {/* Brutal tab content */}
-        {themeStyleTab === 'brutal' && (
-          <div className="space-y-4">
-            {/* Neo scheme sub-toggle */}
-            <ToggleGroup
-              type="single"
-              value={themeMode}
-              onValueChange={value => {
-                if (value) onThemeChange(value as ThemeMode);
-              }}
-              variant="outline"
-              className="grid w-full grid-cols-2"
-            >
-              <ToggleGroupItem value="neo-light">Neo Light</ToggleGroupItem>
-              <ToggleGroupItem value="neo-dark">Neo Dark</ToggleGroupItem>
-            </ToggleGroup>
-
-            {/* Neo theme grid */}
-            <div className="space-y-3">
-              {NEO_GROUPS.map(group => (
-                <div key={group} className="space-y-1.5">
-                  <div className="ui-section-label">{group}</div>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                    {NEO_THEMES.filter(t => t.group === group).map(t => {
-                      const active = neoTheme === t.id;
-                      const profile = resolveNeoStyle(t);
-                      const swatchRadius = profile.radius === 'sharp' ? '0px' : profile.radius === 'soft' ? '9999px' : '4px';
-                      return (
-                        <button
-                          key={t.id}
-                          type="button"
-                          onClick={() => {
-                            setNeoTheme(t.id);
-                            setSetting('ui_neo_theme', t.id);
-                            applyNeoTheme(t.id);
-                            if (!isNeoFamily) {
-                              const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-                              onThemeChange(dark ? 'neo-dark' : 'neo-light');
-                            }
-                          }}
-                          aria-pressed={active}
-                          title={t.label}
-                          className={`relative flex items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm transition ${active ? 'border-primary bg-primary/10 ring-2 ring-primary' : 'border-border hover:bg-accent'}`}
-                        >
-                          <span className="flex shrink-0 overflow-hidden border border-border" style={{ borderRadius: swatchRadius }}>
-                            {t.swatch.map((c, i) => (
-                              <span key={i} className="size-3.5" style={{ background: c }} />
-                            ))}
-                          </span>
-                          <span
-                            className="truncate font-medium"
-                            style={{ fontWeight: profile.weight, letterSpacing: profile.spacing, textTransform: profile.transform as 'uppercase' | 'none' | 'capitalize' | 'lowercase' }}
-                          >{t.label}</span>
-                          {active && (
-                            <span className="ml-auto flex size-4 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                              <Check className="size-3" strokeWidth={3} />
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <FieldDescription>Crisp edges, bold accents and solid surfaces.</FieldDescription>
           </div>
         )}
       </Field>

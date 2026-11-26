@@ -31,7 +31,6 @@ export interface AppSettings {
    * those to the rounding they described rather than dropping to the default.
    */
   ui_default_radius: number | string;
-  ui_neo_theme: string;
   ui_normal_theme: string;
   ui_tw_theme: string;
   ui_panel_translucency: number;
@@ -57,7 +56,6 @@ const DEFAULTS: AppSettings = {
   ui_line_height: 1.5,
   ui_theme_preset: 'neutral',
   ui_default_radius: 'soft',
-  ui_neo_theme: 'blueprint',
   ui_normal_theme: '',
   ui_tw_theme: 'gold',
   // Panels sit over a wallpaper, so every percent of transparency is contrast

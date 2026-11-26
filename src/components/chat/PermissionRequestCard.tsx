@@ -76,10 +76,10 @@ export function PermissionRequestCard({
     return (
       <div className={cn('min-w-0 py-1', indent)}>
         <div className="flex min-w-0 items-center gap-2 border-l border-border pl-2.5 text-2xs text-muted-foreground">
-          <Icon className={cn('size-3.5 shrink-0', allowed ? 'text-emerald-500' : '')} aria-hidden />
+          <Icon className={cn('size-3.5 shrink-0', allowed ? 'text-success' : '')} aria-hidden />
           <span className="truncate font-mono" title={summary}>{shortenPathsIn(summary)}</span>
           <span
-            className={cn('shrink-0 font-medium', allowed ? 'text-emerald-600/90 dark:text-emerald-400/90' : '')}
+            className={cn('shrink-0 font-medium', allowed ? 'text-success/90' : '')}
             title={permissionOutcomeLabel(request)}
           >
             {permissionOutcomeBadge(request)}
@@ -104,10 +104,10 @@ export function PermissionRequestCard({
       <div
         role="group"
         aria-label="Permission request"
-        className="min-w-0 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3"
+        className="min-w-0 rounded-lg border border-warning/40 bg-warning/5 p-3"
       >
         <div className="flex min-w-0 items-start gap-2">
-          <ShieldAlert className="mt-0.5 size-4 shrink-0 text-amber-500" aria-hidden />
+          <ShieldAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
           <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold text-foreground">Waiting on you to approve a tool call</p>
             <p className="mt-1 break-words font-mono text-2xs leading-5 text-muted-foreground">{summary}</p>
@@ -146,7 +146,7 @@ export function PermissionRequestCard({
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
                   'disabled:cursor-not-allowed disabled:opacity-50',
                   scope === 'once'
-                    ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-600 hover:border-emerald-500 dark:text-emerald-400'
+                    ? 'border-success/50 bg-success/10 text-success hover:border-success'
                     : 'border-border bg-muted text-muted-foreground hover:border-ring hover:text-foreground',
                 )}
               >

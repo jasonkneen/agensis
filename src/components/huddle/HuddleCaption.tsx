@@ -107,7 +107,7 @@ export function HuddleCaption({
       <span
         className={cn(
           'flex shrink-0 items-center gap-1 font-medium',
-          hearing ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground',
+          hearing ? 'text-success' : 'text-muted-foreground',
         )}
       >
         {hearing ? (
@@ -127,7 +127,7 @@ export function HuddleCaption({
       </span>
 
       {speakingName && !outputMuted && (
-        <span className="flex shrink-0 items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
+        <span className="flex shrink-0 items-center gap-1 font-medium text-success">
           <Volume2 className="size-3 animate-pulse motion-reduce:animate-none" aria-hidden />
           <span className="max-w-24 truncate">{speakingName}</span>
         </span>

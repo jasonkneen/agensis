@@ -192,7 +192,7 @@ export function NewChannelDialog({
                 />
               </div>
               {duplicate && (
-                <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-400">
+                <p className="mt-1.5 text-xs text-warning">
                   A channel called "{duplicate}" already exists. That is allowed — names are
                   not unique — but the two will be hard to tell apart.
                 </p>
@@ -370,7 +370,7 @@ function BridgeSetup({
       </DialogHeader>
 
       {spec?.warning && (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-foreground">
+        <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs text-foreground">
           {spec.warning}
         </div>
       )}
@@ -439,7 +439,7 @@ function BridgeSetup({
       )}
 
       {created?.needsDaemon && (
-        <p className="text-sm text-amber-600 dark:text-amber-400">
+        <p className="text-sm text-warning">
           The channel is connected, but no Relay host is online in this workspace yet —
           this bridge starts as soon as one connects.
         </p>

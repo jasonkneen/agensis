@@ -114,10 +114,6 @@ export function applyThemePreset(id: string) {
   } catch {
     /* ignore */
   }
-  // The Neo family owns its full palette via the neo theme registry
-  // (neoThemes.ts). Leave its inline overrides untouched so a brand-hue preset
-  // can't clobber the active neo theme; the choice is still persisted above.
-  if (root.getAttribute('data-ui-theme') === 'neo') return;
   // Clear any prior preset overrides first so switching presets is clean.
   for (const key of MANAGED_KEYS) root.style.removeProperty(key);
   // The Default family GENERATES its palette (src/lib/theme/engine.ts), accent

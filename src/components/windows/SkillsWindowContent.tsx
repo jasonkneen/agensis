@@ -506,8 +506,8 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                     silently showing the other body is how somebody edits a skill
                     for an hour and never sees their change. */}
                 {content?.available && content.shadowsWorkspaceSkill && (
-                  <p className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs text-foreground">
-                    <Info className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+                  <p className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/5 p-2.5 text-xs text-foreground">
+                    <Info className="mt-0.5 size-3.5 shrink-0 text-warning" />
                     <span>
                       A skill with this name is also written here, but the body above wins —
                       {content.source === 'daemon'
@@ -587,7 +587,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                     </p>
                   ) : selectedSkill.advertised ? (
                     <p className="flex items-start gap-2 text-sm text-foreground">
-                      <Radio className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
+                      <Radio className="mt-0.5 size-3.5 shrink-0 text-success" />
                       <span>A connected daemon advertised this skill itself, so a machine really has it.</span>
                     </p>
                   ) : selectedSkill.origin === 'catalog' ? (
@@ -629,7 +629,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                           </Badge>
                           <Badge variant="outline" className="shrink-0 text-2xs">{agent.runMode}</Badge>
                           {agent.connected && (
-                            <span className="size-2 shrink-0 rounded-full bg-emerald-500" title="Connected" aria-label="Connected" />
+                            <span className="size-2 shrink-0 rounded-full bg-success" title="Connected" aria-label="Connected" />
                           )}
                         </div>
                       ))}

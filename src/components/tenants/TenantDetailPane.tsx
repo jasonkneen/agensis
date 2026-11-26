@@ -255,7 +255,7 @@ function CostBlock({
       )}
 
       {cost.unpricedNote && (
-        <p className={cn('mt-2 leading-snug text-amber-600 dark:text-amber-400', TEXT_META)}>
+        <p className={cn('mt-2 leading-snug text-warning', TEXT_META)}>
           {cost.unpricedNote}
         </p>
       )}

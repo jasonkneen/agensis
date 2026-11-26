@@ -389,8 +389,8 @@ export function AuthPage({
                       <span
                         className={
                           passwordPolicy.valid
-                            ? 'font-medium text-green-600 dark:text-green-500'
-                            : 'font-medium text-amber-600 dark:text-amber-500'
+                            ? 'font-medium text-success'
+                            : 'font-medium text-warning'
                         }
                       >
                         {passwordPolicy.label}

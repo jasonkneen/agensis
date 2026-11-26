@@ -321,7 +321,7 @@ export function WorkspaceDashboard({
             <ul className="divide-y divide-border">
               {deadlines.map(({ task, due }) => (
                 <li key={task.id} className="flex items-center gap-2 py-2 text-sm">
-                  <span className={cn('size-2 shrink-0 rounded-full', due < now ? 'bg-destructive' : 'bg-amber-500')} />
+                  <span className={cn('size-2 shrink-0 rounded-full', due < now ? 'bg-destructive' : 'bg-warning')} />
                   <span className="truncate">{task.title}</span>
                   <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                     {projectName(task.project_id)} · {due < now ? `${Math.max(1, Math.round((now - due) / DAY))}d overdue` : new Date(due).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}

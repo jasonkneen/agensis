@@ -632,7 +632,7 @@ export function TaskGantt({
                 // Width of the shape the alongside label has to clear.
                 const shapeWidth = span.kind === 'point' ? dayWidth : width;
                 const statusTint = task.status === 'done'
-                  ? 'border-emerald-500/40 bg-emerald-500/25'
+                  ? 'border-success/40 bg-success/25'
                   : task.status === 'cancelled'
                     ? 'border-border bg-muted'
                     : 'border-primary/40 bg-primary/25';

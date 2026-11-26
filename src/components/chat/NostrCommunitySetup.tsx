@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Globe2, Link2, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@agensis/ui/components/button';
+import { ROW_REVEAL } from '@/components/common/Section';
 import { Checkbox } from '@agensis/ui/components/checkbox';
 import {
   AlertDialog,
@@ -343,8 +344,8 @@ export function NostrCommunitySetup({
         {connected && (
           <div className="space-y-3">
             <div className={connected.connection.status === 'connected'
-              ? 'rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3'
-              : 'rounded-lg border border-amber-500/30 bg-amber-500/10 p-3'}
+              ? 'rounded-lg border border-success/30 bg-success/10 p-3'
+              : 'rounded-lg border border-warning/30 bg-warning/10 p-3'}
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="font-medium">
@@ -396,13 +397,14 @@ export function NostrCommunitySetup({
                   This identity cannot currently see any Nostr channels.
                 </p>
               )}
+              <div className="divide-y divide-border/70 overflow-hidden rounded-lg border border-border empty:hidden">
               {connected.channels.map(channel => {
                 const unavailable = channel.archived || channel.visibility === 'private';
                 const subscribed = channel.subscription?.enabled === true;
                 const selectionChecked = channel.subscription ? subscribed : selected.has(channel.id);
                 const toggleUnavailable = busy !== null || (unavailable && !subscribed);
                 return (
-                  <div key={channel.id} className="flex items-start gap-3 rounded-lg border border-border p-3">
+                  <div key={channel.id} className="group/row flex items-start gap-3 p-3">
                     <Checkbox
                       id={`nostr-channel-${channel.id}`}
                       checked={selectionChecked}
@@ -417,8 +419,8 @@ export function NostrCommunitySetup({
                         <span className="min-w-0 flex-1 truncate text-sm font-medium">#{channel.name}</span>
                         {channel.subscription && (
                           <span className={subscribed
-                            ? 'shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-3xs font-semibold uppercase text-emerald-700 dark:text-emerald-300'
-                            : 'shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-3xs font-semibold uppercase text-amber-700 dark:text-amber-300'}
+                            ? 'shrink-0 rounded bg-success/15 px-1.5 py-0.5 text-3xs font-semibold uppercase text-success'
+                            : 'shrink-0 rounded bg-warning/15 px-1.5 py-0.5 text-3xs font-semibold uppercase text-warning'}
                           >
                             {subscribed ? 'Live' : 'Paused'}
                           </span>
@@ -441,6 +443,7 @@ export function NostrCommunitySetup({
                         type="button"
                         variant="ghost"
                         size="icon-xs"
+                        className={ROW_REVEAL}
                         aria-label={`Remove #${channel.name} from Agensis`}
                         title={`Remove #${channel.name} from Agensis`}
                         onClick={() => setDeleteTarget({ kind: 'channel', channel })}
@@ -452,6 +455,7 @@ export function NostrCommunitySetup({
                   </div>
                 );
               })}
+              </div>
             </div>
           </div>
         )}

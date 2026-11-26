@@ -86,7 +86,16 @@ function renderWindow() {
 }
 
 const titles = () => Array.from(container.querySelectorAll('tbody tr')).map(row => row.querySelectorAll('td')[1]?.textContent ?? '');
-const buttonByText = (text: string) => Array.from(container.querySelectorAll('button')).find(b => b.textContent?.trim() === text) as HTMLButtonElement;
+// Agent-assigned and Overdue live in the Filter popover (a portal on
+// document.body): look in the window first, then open Filter and look there.
+const buttonByText = (text: string): HTMLButtonElement => {
+  const find = (root: ParentNode) => Array.from(root.querySelectorAll('button')).find(b => b.textContent?.trim() === text) as HTMLButtonElement | undefined;
+  const inWindow = find(container) ?? find(document.body);
+  if (inWindow) return inWindow;
+  const filter = container.querySelector('button[aria-label="Filter and group"]');
+  if (filter) act(() => { filter.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); });
+  return find(document.body) as HTMLButtonElement;
+};
 const click = (el: Element) =>
   act(() => {
     el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));

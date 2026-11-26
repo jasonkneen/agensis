@@ -217,7 +217,7 @@ export function AgentModelPicker({
             Restart to apply
           </Button>
         ) : (
-          <span className="text-2xs text-amber-600 dark:text-amber-400">restart to apply</span>
+          <span className="text-2xs text-warning">restart to apply</span>
         )
       )}
       {error && <span className="text-2xs text-destructive">{error}</span>}

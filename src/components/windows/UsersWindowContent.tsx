@@ -462,8 +462,8 @@ export const UsersWindowContent = memo(function UsersWindowContent({
                 </div>
                 {newAudience === 'controller' && (
                   <div className="mt-3 space-y-3 border-t pt-3">
-                    <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs leading-relaxed">
-                      <ShieldCheck className="mt-0.5 size-4 shrink-0 text-amber-700 dark:text-amber-400" />
+                    <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-2.5 text-xs leading-relaxed">
+                      <ShieldCheck className="mt-0.5 size-4 shrink-0 text-warning" />
                       <span>
                         Owner-only control enrollment. The link lasts five minutes and returns one named,
                         expiring credential. It cannot read private chats, grant roles, read raw vault values,
@@ -675,7 +675,7 @@ function roleBadgeVariant(role: string): 'default' | 'secondary' | 'outline' {
 function JoinLinkStateBadge({ state }: { state: JoinLinkLifecycleState }) {
   if (state === 'redeemed') {
     return (
-      <Badge variant="default" className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-400">
+      <Badge variant="default" className="bg-success/15 text-success">
         redeemed
       </Badge>
     );
@@ -688,7 +688,7 @@ function JoinLinkStateBadge({ state }: { state: JoinLinkLifecycleState }) {
     );
   }
   return (
-    <Badge variant="secondary" className="bg-amber-500/15 text-amber-700 dark:text-amber-400">
+    <Badge variant="secondary" className="bg-warning/15 text-warning">
       pending
     </Badge>
   );

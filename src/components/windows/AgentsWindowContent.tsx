@@ -184,6 +184,7 @@ import {
   type AgentLayoutView,
 } from '../../lib/agentsView';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
+import { AgentTriageStrip, agentTriageCounts } from '@/components/agents/AgentTriageStrip';
 import { FILTER_CHIP_OFF, FILTER_CHIP_ON, SEGMENTED, SEGMENT_ITEM, WINDOW_SHELL, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { SearchField } from '@/components/common/SearchField';
 import { Label } from '@agensis/ui/components/label';
@@ -1125,7 +1126,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                       {agentBundleReview.requirements.map(requirement => (
                         <div key={requirement.name} className="flex items-center justify-between gap-2 text-muted-foreground">
                           <span className="truncate">{requirement.name}</span>
-                          <span className={requirement.status === 'needs_setup' ? 'text-amber-600 dark:text-amber-300' : 'text-foreground'}>
+                          <span className={requirement.status === 'needs_setup' ? 'text-warning' : 'text-foreground'}>
                             {requirement.status === 'needs_setup' ? 'needs setup' : requirement.status === 'embedded' ? 'included' : 'available'}
                           </span>
                         </div>
@@ -1330,6 +1331,15 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 ? { width: `${agentDetailSplit.size}px`, maxWidth: 'calc(100% - 384px)' }
                 : undefined}
             >
+            {agents.length > 0 && (
+              <AgentTriageStrip
+                counts={agentTriageCounts(agents, tasks, presenceCounts.busy)}
+                workingActive={statusFilter.size === 1 && statusFilter.has('busy')}
+                onShowWorking={() => setStatusFilter(
+                  statusFilter.size === 1 && statusFilter.has('busy') ? new Set<AgentPresence>() : new Set<AgentPresence>(['busy']),
+                )}
+              />
+            )}
             {/* Shown when there is something to filter TO, or when the filter is
                 already engaged — otherwise an active filter can hide its own
                 control. */}
@@ -1385,7 +1395,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                           : FILTER_CHIP_OFF,
                       )}
                     >
-                      <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden />
+                      <span className="size-1.5 rounded-full bg-success" aria-hidden />
                       Active
                       <span className="tabular-nums opacity-70">{activeCount}</span>
                     </button>
@@ -1499,7 +1509,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                           </span>
                           {live && (
                             <span
-                              className="absolute -bottom-0.5 -right-0.5 z-10 size-3.5 rounded-full border-2 border-card bg-emerald-500"
+                              className="absolute -bottom-0.5 -right-0.5 z-10 size-3.5 rounded-full border-2 border-card bg-success"
                               title="Connected"
                               aria-hidden
                             />
@@ -2287,7 +2297,7 @@ function AgentForm({
           const dangling = unresolvedSkillTokens(parseSkillTokens(skills), skillEntries);
           if (dangling.length === 0) return null;
           return (
-            <FieldDescription className="text-amber-600 dark:text-amber-500">
+            <FieldDescription className="text-warning">
               {dangling.length === 1
                 ? <>No procedure exists for <code className="font-mono">{dangling[0]}</code> — the agent will claim the name without being able to read it. Write it in Skills, or connect a machine that has it.</>
                 : <>No procedure exists for {dangling.length} of these ({dangling.slice(0, 4).join(', ')}{dangling.length > 4 ? '…' : ''}) — the agent will claim those names without being able to read them.</>}
@@ -2862,14 +2872,14 @@ function AgentDetailPane({
             <AgentDetailField label="Model" value={displayModel(agent.model)} />
             <AgentDetailField label="Updated" value={formatAgentDate(agent.updated_at)} />
             {ampAgent && !isConnected && <div className="text-xs text-muted-foreground">Connect this agent to a machine running agensis-agent and Amp.</div>}
-            {ampAgent && isConnected && !ampRuntime && <div className="text-xs text-amber-600 dark:text-amber-400">Amp status is unavailable. Update agensis-agent on the connected machine.</div>}
+            {ampAgent && isConnected && !ampRuntime && <div className="text-xs text-warning">Amp status is unavailable. Update agensis-agent on the connected machine.</div>}
             {ampAgent && ampRuntime?.available && (
-              <div className="text-xs text-emerald-600 dark:text-emerald-400">
+              <div className="text-xs text-success">
                 Amp ready{ampRuntime.project?.name ? ` · ${ampRuntime.project.name}` : ''}{ampRuntime.version ? ` · ${ampRuntime.version}` : ''}
               </div>
             )}
             {ampAgent && ampRuntime && !ampRuntime.available && (
-              <div className="text-xs text-amber-600 dark:text-amber-400">{ampRuntimeStatusText(ampRuntime.reason)}</div>
+              <div className="text-xs text-warning">{ampRuntimeStatusText(ampRuntime.reason)}</div>
             )}
           </AgentDetailSection>
 
@@ -2922,7 +2932,7 @@ function AgentDetailPane({
                       {hasCapabilities && (
                         <div className="mt-1.5 space-y-1">
                           {capAmp && (
-                            <div className={capAmp.available ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
+                            <div className={capAmp.available ? 'text-success' : 'text-warning'}>
                               Amp: {capAmp.available ? `ready${capAmp.project?.name ? ` · ${capAmp.project.name}` : ''}` : ampRuntimeStatusText(capAmp.reason)}
                             </div>
                           )}
@@ -3556,7 +3566,7 @@ function AgentConnectDialog({
                     )}
                   </div>
                   {localRunning && localStatusLabel && (
-                    <div className="mt-2 space-y-1 text-xs text-emerald-600 dark:text-emerald-400">
+                    <div className="mt-2 space-y-1 text-xs text-success">
                       <p>Running · {localStatusLabel}</p>
                     </div>
                   )}
@@ -3621,7 +3631,7 @@ function AgentConnectDialog({
                   The token authenticates the agent as @{handle}. Tokens are stored hashed and shown
                   once — copy it now.
                 </p>
-                <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-400">
+                <div className="mt-2 flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-xs text-warning">
                   <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
                   <span>Generating a token replaces the agent&apos;s previous one. Re-Start desktop ACP
                     or update any CLI daemon that was using the old token.</span>
@@ -3827,7 +3837,7 @@ function ConnectionDot({ count, busy = false, title }: { count: number; busy?: b
   const connected = count > 0;
   // Match the three-tier presence palette used by the sidebar dots and the
   // notifications bell: online = emerald, busy = amber (pulsing), offline = grey.
-  const tone = !connected ? 'bg-muted-foreground/40' : busy ? 'bg-amber-500' : 'bg-emerald-500';
+  const tone = !connected ? 'bg-muted-foreground/40' : busy ? 'bg-warning' : 'bg-success';
   const baseLabel = !connected
     ? 'Not connected'
     : busy
@@ -4472,7 +4482,7 @@ function SharingSection({ agent, connection, onUpdateAgent }: {
                   {SHARING_CHANNEL_DESCRIPTIONS[channel]}
                 </p>
                 {blockNote && (
-                  <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">{blockNote}</p>
+                  <p className="mt-0.5 text-xs text-warning">{blockNote}</p>
                 )}
               </div>
               <Button
@@ -4712,10 +4722,10 @@ function agentPresenceStatus(agent: WorkspaceAgent, connections: AgentConnection
 }
 
 const AGENT_PRESENCE_FILTERS: Array<{ key: AgentPresence; label: string; tone: string }> = [
-  { key: 'busy', label: 'Busy', tone: 'bg-amber-500' },
-  { key: 'idle', label: 'Idle', tone: 'bg-emerald-500' },
+  { key: 'busy', label: 'Busy', tone: 'bg-warning' },
+  { key: 'idle', label: 'Idle', tone: 'bg-success' },
   { key: 'disconnected', label: 'Disconnected', tone: 'bg-muted-foreground/40' },
-  { key: 'inactive', label: 'Inactive', tone: 'bg-rose-500' },
+  { key: 'inactive', label: 'Inactive', tone: 'bg-destructive' },
 ];
 
 function agentHandle(value: string) {

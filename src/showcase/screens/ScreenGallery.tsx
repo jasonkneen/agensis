@@ -19,6 +19,7 @@ import { SkillsWindowContent } from '@/components/windows/SkillsWindowContent';
 import { ActivityWindowContent } from '@/components/windows/ActivityWindowContent';
 import { ChatWindowContent } from '@/components/windows/ChatWindowContent';
 import { AppearancePanel } from '@/components/settings/AppearancePanel';
+import { Sidebar } from '@/components/layout/Sidebar';
 import {
   CURRENT_USER_EMAIL,
   CURRENT_USER_ID,
@@ -82,7 +83,49 @@ function AppearanceScreen() {
   );
 }
 
+function SidebarScreen() {
+  const { mode, setTheme } = useTheme();
+  const workspace = { id: WORKSPACE_ID, name: 'Main', created_at: new Date().toISOString() } as never;
+  const sessions = ['general', 'design', 'release-notes'].map((title, i) => ({
+    id: `s-${i}`, workspace_id: WORKSPACE_ID, title, model: 'auto', created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  })) as never;
+  return (
+    <div className="relative h-full w-[248px] overflow-hidden border-r border-border">
+      <Sidebar
+        workspace={workspace}
+        collapsed={false}
+        onToggleCollapse={noop}
+        onOpenCommandPalette={noop}
+        onNewChat={noop}
+        onNewDocument={noop}
+        onUploadFile={noop}
+        onCreateWorkspace={noop}
+        onDocumentOpen={noop}
+        onSessionOpen={noop}
+        onOpenMemory={noop}
+        recents={[]}
+        sessions={sessions}
+        floatingWindows={[]}
+        themeMode={mode}
+        onThemeChange={setTheme}
+        userEmail="you@example.test"
+        onSignOut={noop}
+        onOpenSettings={noop}
+      />
+    </div>
+  );
+}
+
+// Some work assigned to agents so the triage strip has real numbers to show.
+const agentTasks = seedTasks().map((task, i) => ({
+  ...task,
+  assignee_id: agents[i % agents.length].id,
+  status: (['in_review', 'todo', 'in_progress', 'backlog', 'done', 'in_review'] as const)[i % 6],
+  completed_at: i % 6 === 4 ? new Date().toISOString() : null,
+}));
+
 const SCREENS: Screen[] = [
+  { id: 'sidebar', title: 'Sidebar', icon: <Users className="size-3.5" />, render: () => <SidebarScreen /> },
   { id: 'appearance', title: 'Appearance', icon: <Sun className="size-3.5" />, render: () => <AppearanceScreen /> },
   { id: 'users-solo', title: 'Users', icon: <Users className="size-3.5" />, render: () => <UsersWindowContent {...usersProps(seedMembers(1))} /> },
   { id: 'users', title: 'Users', icon: <Users className="size-3.5" />, render: () => <UsersWindowContent {...usersProps(seedMembers())} /> },
@@ -90,6 +133,7 @@ const SCREENS: Screen[] = [
     id: 'agents', title: 'Agents', icon: <Bot className="size-3.5" />, render: () => (
       <AgentsWindowContent
         agents={agents}
+        tasks={agentTasks}
         webhooks={[]}
         connections={seedConnections(agents)}
         workspaceId={WORKSPACE_ID}

@@ -530,7 +530,9 @@ export function SubThreadPanel({
                 }
               }}
               placeholder={SUB_THREAD_COMPOSER_PLACEHOLDER}
-              disabled={streaming}
+              // Typing stays open while a reply streams, as in the main
+              // composer: handleSend already refuses to send mid-stream, so
+              // locking the box only stopped people drafting their next line.
               rows={1}
               className={COMPOSER_TEXTAREA_CLASS}
               onInput={e => autosizeComposer(e.currentTarget)}

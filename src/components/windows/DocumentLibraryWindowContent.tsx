@@ -136,9 +136,9 @@ function DiffView({ result }: { result: DiffResult }) {
                     key={`${hunkIndex}-${lineIndex}`}
                     className={
                       line.op === 'added'
-                        ? 'bg-emerald-500/10'
+                        ? 'bg-success/10'
                         : line.op === 'removed'
-                          ? 'bg-rose-500/10'
+                          ? 'bg-destructive/10'
                           : ''
                     }
                   >
