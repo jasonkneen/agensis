@@ -690,7 +690,7 @@ export const Sidebar = React.memo(function Sidebar({
       <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Collapse sidebar">
        <PanelLeftClose />
       </Button>
-      {workspaceSwitcherSlot ?? (
+      {workspaceSwitcherSlot ? <div className="flex-1" /> : (
       <button
        type="button"
        className="sidebar-workspace-switch flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -711,6 +711,10 @@ export const Sidebar = React.memo(function Sidebar({
       )}
      </div>
     </div>
+
+    {/* The switcher gets a row of its own: beside the traffic lights, the
+        collapse toggle and the bell it had ~70px and showed "W…". */}
+    {workspaceSwitcherSlot && <div className="sidebar-switcher-row mx-2 mb-2 flex">{workspaceSwitcherSlot}</div>}
 
     <button
       type="button"
