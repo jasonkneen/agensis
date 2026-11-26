@@ -116,16 +116,32 @@ export function seedTasks(): Task[] {
 }
 
 export function seedActivity(): ActivityEvent[] {
-  return TASKS.map(([title], i) => ({
+  // Shaped like a real feed: an agent flapping on and off (the run that
+  // collapses), a sender posting several messages, and one-off task events.
+  const rows: Array<[ActivityEvent['event_type'], string, number, Record<string, unknown>]> = [
+    ['agent_connected' as ActivityEvent['event_type'], '@coder connected', 3, {}],
+    ['agent_disconnected' as ActivityEvent['event_type'], '@coder disconnected', 4, {}],
+    ['agent_connected' as ActivityEvent['event_type'], '@coder connected', 14, {}],
+    ['agent_disconnected' as ActivityEvent['event_type'], '@coder disconnected', 15, {}],
+    ['agent_connected' as ActivityEvent['event_type'], '@coder connected', 75, {}],
+    ['agent_disconnected' as ActivityEvent['event_type'], '@coder disconnected', 76, {}],
+    ['agent_connected' as ActivityEvent['event_type'], '@spark-1 connected', 80, {}],
+    ['task_created', 'Unify theme families into one engine', 95, {}],
+    ['message_sent' as ActivityEvent['event_type'], 'Ada: message', 100, { content: 'Yes, the window title already says Users.', sender_name: 'Ada', role: 'assistant' }],
+    ['message_sent' as ActivityEvent['event_type'], 'Ada: message', 104, { content: 'I will keep the role picker on one row.', sender_name: 'Ada', role: 'assistant' }],
+    ['message_sent' as ActivityEvent['event_type'], 'Ada: message', 109, { content: 'Pushed the Users window change.', sender_name: 'Ada', role: 'assistant' }],
+    ['task_created', 'Audit empty states', 200, {}],
+  ];
+  return rows.map(([event_type, title, minutes, metadata], i) => ({
     id: `event-${i + 1}`,
     workspace_id: WORKSPACE_ID,
     user_id: CURRENT_USER_ID,
-    event_type: 'task_created' as ActivityEvent['event_type'],
+    event_type,
     entity_type: 'task',
     entity_id: `task-${i + 1}`,
     title,
-    metadata: {},
-    created_at: ago(i * 47),
+    metadata,
+    created_at: ago(minutes),
   }));
 }
 
