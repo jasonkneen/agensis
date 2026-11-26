@@ -1,7 +1,7 @@
 // The Show desktop row's PLACEMENT and its accessible state, which only a mount
 // can show. `resolveShowDesktop` (showDesktop.test.ts) proves what a press does;
 // this proves the control that fires it is where the ask put it — directly under
-// Inbox, in both the expanded sidebar and the collapsed rail — and that it
+// Inbox — and that it
 // announces its toggle state rather than looking like another launcher.
 //
 // Written with createElement so it stays a .ts file inside the existing
@@ -83,12 +83,18 @@ describe('Desktop row', () => {
     expect(order[inbox + 1]).toBe('Desktop');
   });
 
-  it('sits directly under Inbox in the collapsed rail too', () => {
+  // Collapsed, the sidebar has no column of its own: it folds away and only
+  // an Expand control crosses over, portalled into the slot it is given.
+  it('collapsed, renders no column — only Expand, into its slot', () => {
     mount({ collapsed: true, onShowDesktop: () => {} });
-    const order = rows().map(labelOf);
-    const inbox = order.findIndex(label => label === 'Inbox');
-    expect(inbox).toBeGreaterThanOrEqual(0);
-    expect(order[inbox + 1]).toBe('Desktop');
+    expect(container.querySelector('[data-sidebar-panel]')).toBeNull();
+    expect(findRow('Desktop')).toBeUndefined();
+    act(() => root.unmount());
+    const slot = document.createElement('div');
+    document.body.appendChild(slot);
+    mount({ collapsed: true, collapsedSlot: slot, onShowDesktop: () => {} });
+    expect(slot.querySelector('[aria-label="Expand sidebar"]')).not.toBeNull();
+    slot.remove();
   });
 
   // Tasks and Memory moved up to join Inbox and Desktop in the fixed block
@@ -98,13 +104,6 @@ describe('Desktop row', () => {
   // than left to be reshuffled silently.
   it('leads a fixed top block of Inbox, Desktop, Tasks, Memory', () => {
     mount({ onShowDesktop: () => {}, onOpenTasks: () => {} });
-    const order = rows().map(labelOf);
-    const inbox = order.findIndex(label => label === 'Inbox');
-    expect(order.slice(inbox, inbox + 4)).toEqual(['Inbox', 'Desktop', 'Tasks', 'Memory']);
-  });
-
-  it('uses that same block order in the collapsed rail', () => {
-    mount({ collapsed: true, onShowDesktop: () => {}, onOpenTasks: () => {} });
     const order = rows().map(labelOf);
     const inbox = order.findIndex(label => label === 'Inbox');
     expect(order.slice(inbox, inbox + 4)).toEqual(['Inbox', 'Desktop', 'Tasks', 'Memory']);
@@ -169,7 +168,7 @@ describe('Desktop row', () => {
     expect(findRow('Desktop')).toBeUndefined();
   });
 
-  it('exposes a working file upload action in expanded and collapsed sidebars', () => {
+  it('exposes a working file upload action in the sidebar', () => {
     const onUploadFile = vi.fn();
     mount({ onUploadFile });
     expect(findRow('Upload files')).toBeDefined();
@@ -180,8 +179,5 @@ describe('Desktop row', () => {
     act(() => input?.dispatchEvent(new Event('change', { bubbles: true })));
     expect(onUploadFile).toHaveBeenCalledWith([file]);
 
-    act(() => root.unmount());
-    mount({ collapsed: true, onUploadFile });
-    expect(findRow('Upload files')).toBeDefined();
   });
 });

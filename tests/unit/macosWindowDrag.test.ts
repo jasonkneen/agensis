@@ -112,12 +112,11 @@ describe('macOS titlebar drag band', () => {
     expect(band.getAttribute('style')).toMatch(new RegExp(`height:\\s*${DESKTOP_TITLEBAR_INSET}px`));
   });
 
-  it('gives the collapsed sidebar the same drag region', () => {
+  // Collapsed, the sidebar draws no column at all, so it owns no band either:
+  // the column beside it carries the window's drag region.
+  it('collapsed, the sidebar draws no column and so no band of its own', () => {
     mount(Sidebar, { ...sidebarProps(), titlebarInset: DESKTOP_TITLEBAR_INSET });
-
-    const [band] = dragRegions();
-    expect(band).toBeDefined();
-    expect(band.classList.contains('titlebar-drag-region')).toBe(true);
+    expect(dragRegions()).toHaveLength(0);
   });
 
   it('covers no control — the band is behind the rows, not over them', () => {

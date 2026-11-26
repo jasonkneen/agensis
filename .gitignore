@@ -94,3 +94,6 @@ src/dev-local/*
 /attachments/
 /pinned/
 /investigation.cany/
+
+# Local computer-use agent session state
+.cua/

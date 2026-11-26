@@ -761,6 +761,8 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
   // Phone: the sidebar is an off-canvas drawer (opened by the workspace hamburger)
   // instead of an inline rail, so the workspace canvas gets the full screen width.
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  // Rail node the collapsed sidebar portals into (see WorkspaceRail).
+  const [railSidebarSlot, setRailSidebarSlot] = useState<HTMLDivElement | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const stored = localStorage.getItem(SIDEBAR_KEY);
     // No saved preference yet → collapse by default on phone-width viewports,
@@ -2616,8 +2618,10 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
             width={renderedRailWidth}
             onWidthChange={handleWorkspaceRailWidthChange}
             resizable={!isMobile}
+            sidebarSlotRef={setRailSidebarSlot}
           />
           <Sidebar
+            collapsedSlot={railSidebarSlot}
             workspace={activeWorkspace}
             activeLayerName={viewedLayer.name || activeWorkspace?.name || 'Personal'}
             overlay={isMobile}
@@ -2768,7 +2772,11 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
             every floating window, which numbers itself from 100 up inside this
             stacking context (useWindows.ts). */}
         <div
-          className="relative z-[var(--z-content)] flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+          className={cn(
+            'relative z-[var(--z-content)] flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden',
+            // Rounded left corners (index.css). Not on phone: the column is the screen edge there.
+            !isMobile && 'canvas-column',
+          )}
           style={{
             // Canvas column sits to the RIGHT of the full-height sidebar, so the
             // macOS traffic lights (top-left, over the sidebar) never overlap it —
