@@ -853,6 +853,32 @@
  }
 }
 
+/* The canvas column's rounded corners are made by filling the two corner
+   notches with the SIDEBAR's surface (.canvas-column::before/::after). Those
+   fills painted the sidebar's base and top gradient but not this accent wash,
+   so each notch read as a darker patch beside the sidebar instead of the
+   sidebar running round the corner. Every sidebar layer is viewport-anchored
+   (background-attachment: fixed), so adding the wash here lines it up exactly.
+   :root raises specificity over the notch rule wherever it is declared. */
+@supports (color: color-mix(in srgb, red, red)) {
+ :root .canvas-column::before,
+ :root .canvas-column::after {
+  background:
+   radial-gradient(125% 80% at 0% 0%, color-mix(in srgb, var(--accent) 14%, transparent) 0%, color-mix(in srgb, var(--accent) 6%, transparent) 38%, transparent 72%),
+   linear-gradient(180deg, color-mix(in srgb, var(--foreground) 5%, transparent), transparent 32%),
+   color-mix(in srgb, var(--card) var(--agensis-sidebar-alpha, 88%), transparent);
+  background-attachment: fixed;
+ }
+ :root[data-theme="light"] .canvas-column::before,
+ :root[data-theme="light"] .canvas-column::after {
+  background:
+   radial-gradient(125% 80% at 0% 0%, color-mix(in srgb, var(--accent) 7%, transparent) 0%, color-mix(in srgb, var(--accent) 3%, transparent) 38%, transparent 72%),
+   linear-gradient(180deg, color-mix(in srgb, var(--foreground) 5%, transparent), transparent 32%),
+   color-mix(in srgb, var(--card) var(--agensis-sidebar-alpha, 88%), transparent);
+  background-attachment: fixed;
+ }
+}
+
 .sidebar-workspace-pill {
  min-height: 34px;
  overflow: visible;
