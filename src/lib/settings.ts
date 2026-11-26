@@ -32,7 +32,6 @@ export interface AppSettings {
    */
   ui_default_radius: number | string;
   ui_normal_theme: string;
-  ui_tw_theme: string;
   ui_panel_translucency: number;
   ui_sidebar_translucency: number;
   ui_glass_blur: number;
@@ -57,7 +56,6 @@ const DEFAULTS: AppSettings = {
   ui_theme_preset: 'neutral',
   ui_default_radius: 'soft',
   ui_normal_theme: '',
-  ui_tw_theme: 'gold',
   // Panels sit over a wallpaper, so every percent of transparency is contrast
   // spent on decoration. 76/74 let enough of the image through that text on a
   // busy wallpaper became hard to read — the same class of problem as the

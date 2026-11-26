@@ -37,7 +37,7 @@ describe('themeSignature', () => {
 
   it('moves when the theme family changes', () => {
     const before = themeSignature(root);
-    root.setAttribute('data-ui-theme', 'paper');
+    root.setAttribute('data-ui-theme', 'expo');
     expect(themeSignature(root)).not.toBe(before);
   });
 

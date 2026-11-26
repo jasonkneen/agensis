@@ -123,6 +123,8 @@ export function applyThemePreset(id: string) {
     syncEngineTheme();
     return;
   }
+  // Expo has a fixed coral primary; presets must not override it inline.
+  if (root.getAttribute('data-ui-theme') === 'expo') return;
   if (!preset.reset) {
     for (const [key, value] of Object.entries(preset.vars)) {
       root.style.setProperty(key, value);

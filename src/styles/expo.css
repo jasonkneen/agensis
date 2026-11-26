@@ -1,0 +1,283 @@
+/* ==========================================================================
+   Expo — the tactile family (replaced Paper).
+
+   After the "Agentic Expo" UI in raglan: navy ink on cream and paper, a coral
+   primary, mustard / mint / sky for state, and controls you could press — a
+   cream pill with a 2px inner edge sitting on a hard "lip" that shortens when
+   it is pushed. Dark mode is raglan's navy stage with cream ink.
+
+   Everything is scoped to :root[data-ui-theme="expo"], so no other family can
+   see it. Surfaces are OPAQUE: the tactile look is a lip and an edge, not
+   glass, and a blurred backdrop under a lipped control reads as smudge.
+   ========================================================================== */
+
+:root[data-ui-theme="expo"] {
+ --expo-navy: #2b2d48;
+ --expo-navy-2: #4a4c6e;
+ --expo-coral: #e8735f;
+ --expo-coral-deep: #b8412b;
+ --expo-mustard: #f2c94c;
+ --expo-mint: #7fc8a9;
+ --expo-sky: #8fb7f0;
+ --expo-cream: #fbf4e4;
+ --expo-paper: #fffaf0;
+ --expo-ease: cubic-bezier(0.32, 0.72, 0, 1);
+ --expo-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+ --radius: 14px;
+ --radius-sm: 8px;
+ --radius-md: 10px;
+ --radius-lg: 14px;
+ --radius-xl: 18px;
+ --radius-2xl: 20px;
+}
+
+/* ---- Light: cream page, paper cards, navy ink --------------------------- */
+:root[data-ui-theme="expo"][data-theme="light"] {
+ --expo-edge: #e2c99e;
+ --expo-lip: #c9a676;
+ --expo-drop: 0 10px 14px -8px rgba(20, 20, 40, 0.28);
+ --expo-pill: linear-gradient(180deg, #fff9ee, #f3e2c4);
+
+ --canvas-base: #f4ecdb;
+ --canvas-elevated: var(--expo-paper);
+ --canvas-raised: #efe3c9;
+ --canvas-overlay: var(--expo-paper);
+ --border: #e4d5b6;
+ --border-subtle: #ece0c6;
+ --border-strong: var(--expo-edge);
+ --ink: var(--expo-navy);
+ --ink-secondary: #545670;
+ --ink-muted: #7d7e95;
+ --ink-inverse: var(--expo-paper);
+ --accent: var(--expo-coral);
+ --accent-hover: #d95f4b;
+ --accent-subtle: color-mix(in srgb, var(--expo-coral) 14%, transparent);
+ --accent-border: color-mix(in srgb, var(--expo-coral) 40%, transparent);
+ --success: #2f8a63;
+ --warning: #a8770b;
+ --error: #c8452f;
+
+ --background: #f4ecdb;
+ --foreground: var(--expo-navy);
+ --card: var(--expo-paper);
+ --card-foreground: var(--expo-navy);
+ --popover: var(--expo-paper);
+ --popover-foreground: var(--expo-navy);
+ --primary: var(--expo-coral);
+ --primary-foreground: #fffaf0;
+ --secondary: #efe3c9;
+ --secondary-foreground: var(--expo-navy);
+ --muted: #efe3c9;
+ --muted-foreground: #545670;
+ --sh-accent: #f3e6cb;
+ --sh-accent-foreground: var(--expo-navy);
+ --sh-border: #e4d5b6;
+ --input: var(--expo-edge);
+ --ring: var(--expo-coral);
+ --destructive: #c8452f;
+ --sidebar: #efe5cf;
+ --sidebar-foreground: var(--expo-navy);
+ --sidebar-primary: var(--expo-coral);
+ --sidebar-primary-foreground: #fffaf0;
+ --sidebar-accent: #f6ead2;
+ --sidebar-accent-foreground: var(--expo-navy);
+ --sidebar-border: #e4d5b6;
+ --sidebar-ring: var(--expo-coral);
+
+ --shadow-sm: 0 2px 0 var(--expo-lip);
+ --shadow-md: 0 3px 0 var(--expo-lip), var(--expo-drop);
+ --shadow-lg: 0 4px 0 var(--expo-lip), 0 16px 26px -12px rgba(20, 20, 40, 0.32);
+ --shadow-xl: 0 5px 0 var(--expo-lip), 0 22px 34px -14px rgba(20, 20, 40, 0.36);
+ --shadow-window: 0 4px 0 var(--expo-lip), 0 22px 34px -16px rgba(20, 20, 40, 0.34);
+ --chrome-cast: 1px 0 0 var(--expo-edge);
+ color-scheme: light;
+}
+
+/* ---- Dark: raglan's navy stage, cream ink -------------------------------- */
+:root[data-ui-theme="expo"][data-theme="dark"] {
+ --expo-edge: rgba(255, 255, 255, 0.09);
+ --expo-lip: #1d1e33;
+ --expo-drop: 0 14px 22px -10px rgba(8, 8, 20, 0.6);
+ --expo-pill: linear-gradient(180deg, #4a4c6e, #3a3c5a);
+
+ --canvas-base: var(--expo-navy);
+ --canvas-elevated: #33355a;
+ --canvas-raised: #3b3d62;
+ --canvas-overlay: #3a3c61;
+ --border: #45476b;
+ --border-subtle: #3a3c5f;
+ --border-strong: #55577c;
+ --ink: var(--expo-cream);
+ --ink-secondary: #c9c8dc;
+ --ink-muted: #9796b3;
+ --ink-inverse: var(--expo-navy);
+ --accent: var(--expo-coral);
+ --accent-hover: #ff8f79;
+ --accent-subtle: color-mix(in srgb, var(--expo-coral) 18%, transparent);
+ --accent-border: color-mix(in srgb, var(--expo-coral) 45%, transparent);
+ --success: var(--expo-mint);
+ --warning: var(--expo-mustard);
+ --error: #ff8f79;
+
+ --background: var(--expo-navy);
+ --foreground: var(--expo-cream);
+ --card: #33355a;
+ --card-foreground: var(--expo-cream);
+ --popover: #3a3c61;
+ --popover-foreground: var(--expo-cream);
+ --primary: var(--expo-coral);
+ --primary-foreground: #fffaf0;
+ --secondary: #3b3d62;
+ --secondary-foreground: var(--expo-cream);
+ --muted: #3b3d62;
+ --muted-foreground: #c9c8dc;
+ --sh-accent: #404268;
+ --sh-accent-foreground: var(--expo-cream);
+ --sh-border: #45476b;
+ --input: #4a4c6e;
+ --ring: var(--expo-coral);
+ --destructive: #ff8f79;
+ --sidebar: #25273f;
+ --sidebar-foreground: var(--expo-cream);
+ --sidebar-primary: var(--expo-coral);
+ --sidebar-primary-foreground: #fffaf0;
+ --sidebar-accent: #33355a;
+ --sidebar-accent-foreground: var(--expo-cream);
+ --sidebar-border: #3a3c5f;
+ --sidebar-ring: var(--expo-coral);
+
+ --shadow-sm: 0 2px 0 var(--expo-lip);
+ --shadow-md: 0 3px 0 var(--expo-lip), var(--expo-drop);
+ --shadow-lg: 0 4px 0 var(--expo-lip), 0 18px 30px -12px rgba(8, 8, 20, 0.6);
+ --shadow-xl: 0 5px 0 var(--expo-lip), 0 24px 38px -14px rgba(8, 8, 20, 0.66);
+ --shadow-window: 0 5px 0 var(--expo-lip), 0 22px 34px -14px rgba(8, 8, 20, 0.6);
+ --chrome-cast: 1px 0 0 #1d1e33;
+ color-scheme: dark;
+}
+
+/* ---- Surfaces: opaque, edged, on a lip ----------------------------------- */
+:root[data-ui-theme="expo"] [data-window-surface],
+:root[data-ui-theme="expo"] [data-slot="dialog-content"],
+:root[data-ui-theme="expo"] [data-slot="alert-dialog-content"] {
+ background: var(--card) !important;
+ backdrop-filter: none !important;
+ -webkit-backdrop-filter: none !important;
+ border-color: transparent !important;
+ box-shadow: inset 0 0 0 1.5px var(--expo-edge), var(--shadow-window) !important;
+}
+
+:root[data-ui-theme="expo"] [data-slot="popover-content"],
+:root[data-ui-theme="expo"] [data-slot="dropdown-menu-content"],
+:root[data-ui-theme="expo"] [data-slot="context-menu-content"],
+:root[data-ui-theme="expo"] [data-slot="select-content"],
+:root[data-ui-theme="expo"] [data-slot="hover-card-content"] {
+ background: var(--popover) !important;
+ backdrop-filter: none !important;
+ -webkit-backdrop-filter: none !important;
+ border-color: transparent !important;
+ box-shadow: inset 0 0 0 1.5px var(--expo-edge), var(--shadow-lg) !important;
+}
+
+:root[data-ui-theme="expo"] [data-sidebar-panel] {
+ background: var(--sidebar) !important;
+ backdrop-filter: none !important;
+ -webkit-backdrop-filter: none !important;
+}
+:root[data-ui-theme="expo"] .sidebar-accent-wash { display: none; }
+:root[data-ui-theme="expo"] .canvas-column::before,
+:root[data-ui-theme="expo"] .canvas-column::after {
+ background: var(--sidebar) !important;
+ backdrop-filter: none !important;
+ -webkit-backdrop-filter: none !important;
+}
+
+/* ---- Buttons: pills you press ------------------------------------------- */
+:root[data-ui-theme="expo"] [data-slot="button"] {
+ border-radius: 999px;
+ font-weight: 600;
+ transition: transform 120ms var(--expo-ease), box-shadow 120ms var(--expo-ease), background-color 120ms var(--expo-ease);
+}
+
+/* Primary: coral, deep-coral lip. */
+:root[data-ui-theme="expo"] [data-slot="button"][data-variant="default"] {
+ background: linear-gradient(180deg, #ff8f79, var(--expo-coral)) !important;
+ color: #fffaf0 !important;
+ border-color: transparent !important;
+ box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px #f5a493, 0 3px 0 var(--expo-coral-deep), 0 8px 12px -8px rgba(20, 20, 40, 0.45) !important;
+}
+
+/* Secondary / outline controls and choice triggers: the cream (or navy) pill. */
+:root[data-ui-theme="expo"] [data-slot="button"][data-variant="outline"],
+:root[data-ui-theme="expo"] [data-slot="button"][data-variant="secondary"],
+:root[data-ui-theme="expo"] [data-slot="select-trigger"],
+:root[data-ui-theme="expo"] [data-slot="toggle-group-item"] {
+ background: var(--expo-pill) !important;
+ color: var(--foreground) !important;
+ border-color: transparent !important;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.55), inset 0 0 0 1.5px var(--expo-edge), 0 3px 0 var(--expo-lip) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="button"][data-variant="outline"],
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="button"][data-variant="secondary"],
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="select-trigger"],
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="toggle-group-item"] {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.12), inset 0 0 0 1.5px var(--expo-edge), 0 3px 0 var(--expo-lip) !important;
+}
+
+/* The selected choice in a group is the coral pill. */
+:root[data-ui-theme="expo"] [data-slot="toggle-group-item"][data-state="on"] {
+ background: linear-gradient(180deg, #ff8f79, var(--expo-coral)) !important;
+ color: #fffaf0 !important;
+ box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px #f5a493, 0 3px 0 var(--expo-coral-deep) !important;
+}
+
+/* Pressed: the pill sinks onto its lip. */
+:root[data-ui-theme="expo"] [data-slot="button"]:not(:disabled):active,
+:root[data-ui-theme="expo"] [data-slot="toggle-group-item"]:active,
+:root[data-ui-theme="expo"] [data-slot="select-trigger"]:active {
+ transform: translateY(2px);
+}
+:root[data-ui-theme="expo"] [data-slot="button"][data-variant="default"]:not(:disabled):active {
+ box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px #f5a493, 0 1px 0 var(--expo-coral-deep) !important;
+}
+:root[data-ui-theme="expo"] [data-slot="button"][data-variant="outline"]:not(:disabled):active,
+:root[data-ui-theme="expo"] [data-slot="button"][data-variant="secondary"]:not(:disabled):active {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.4), inset 0 0 0 1.5px var(--expo-edge), 0 1px 0 var(--expo-lip) !important;
+}
+
+/* Ghost buttons stay quiet: a cream wash on hover, no lip. */
+:root[data-ui-theme="expo"] [data-slot="button"][data-variant="ghost"]:hover {
+ background: var(--sh-accent) !important;
+}
+
+/* ---- Fields: pressed into the surface ------------------------------------ */
+:root[data-ui-theme="expo"] [data-slot="input"],
+:root[data-ui-theme="expo"] [data-slot="textarea"],
+:root[data-ui-theme="expo"] [data-slot="input-group"],
+:root[data-ui-theme="expo"] [data-slot="native-select"] {
+ background: var(--expo-paper) !important;
+ border-color: transparent !important;
+ border-radius: 12px;
+ box-shadow: inset 0 2px 3px rgba(43, 45, 72, 0.16), inset 0 0 0 1.5px var(--expo-edge) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="input"],
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="textarea"],
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="input-group"],
+:root[data-ui-theme="expo"][data-theme="dark"] [data-slot="native-select"] {
+ background: #26283f !important;
+ box-shadow: inset 0 2px 3px rgba(0, 0, 0, 0.35), inset 0 0 0 1.5px var(--expo-edge) !important;
+}
+
+/* ---- Labels: raglan's letter-spaced caps ---------------------------------- */
+:root[data-ui-theme="expo"] .ui-section-label,
+:root[data-ui-theme="expo"] .sidebar-section-trigger {
+ letter-spacing: 0.12em;
+ font-weight: 700;
+}
+
+/* ---- Lists and rows: one frame, a paper card on a small lip --------------- */
+:root[data-ui-theme="expo"] .sidebar-action-row[data-active="true"],
+:root[data-ui-theme="expo"] .sidebar-item-row[data-active="true"] {
+ background: var(--expo-pill) !important;
+ box-shadow: inset 0 0 0 1.5px var(--expo-edge), 0 2px 0 var(--expo-lip);
+}

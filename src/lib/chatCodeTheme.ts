@@ -1,7 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { ThemeInput } from '@streamdown/code';
 import { getStoredNormalTheme } from '../showcase/normalThemes';
-import { getStoredTwTheme } from '../showcase/twThemes';
 
 export type ChatShikiThemePair = [light: ThemeInput, dark: ThemeInput];
 
@@ -39,9 +38,7 @@ export function chatShikiThemesFor(paletteId: string): ChatShikiThemePair {
 function readChatPalette(): string {
   if (typeof document === 'undefined') return '';
   const root = document.documentElement;
-  const family = root.dataset.uiTheme || 'default';
 
-  if (family === 'paper') return getStoredTwTheme();
   if (root.hasAttribute('data-normal-theme-group')) return getStoredNormalTheme();
   return '';
 }

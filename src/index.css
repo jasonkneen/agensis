@@ -38,6 +38,8 @@
    The variable build is one file rather than the four static weights the
    Google URL requested. */
 @import "@fontsource-variable/bricolage-grotesque";
+/* The Expo family (replaced Paper) lives in its own sheet. */
+@import "./styles/expo.css";
 
 /* shadcn dark variant is driven by the app's existing [data-theme="dark"]
    attribute (set by useTheme) — one theme system, no .dark class. */
@@ -265,363 +267,28 @@
  color-scheme: light;
 }
 
-:root[data-ui-theme="paper"][data-theme="light"] {
- /* Four distinct warm tiers (base ↔ raised were near-identical before, so
-     surfaces read as one flat cream). Paper carries a touch more gold. */
- --canvas-base: #f2e9d7;
- --canvas-elevated: #fdf8ec;
- --canvas-raised: #ebe0ca;
- --canvas-overlay: #fffdf6;
- --border: #e2d5bb;
- --border-subtle: #ede2ce;
- --border-strong: #c7bca4;
- --ink: #2a2722;
- --ink-secondary: #6f695f;
- --ink-muted: #918979;
- /* Accent tokens derive from --primary so a picked accent preset (which sets
-     --primary) flows through TW; with the default (neutral) preset --primary is
-     TW's gold, so this is visually identical to the old hardcoded values. */
- --accent: var(--primary);
- --accent-hover: color-mix(in srgb, var(--primary) 82%, var(--foreground) 18%);
- --accent-subtle: color-mix(in srgb, var(--primary) 12%, transparent);
- --accent-border: color-mix(in srgb, var(--primary) 32%, transparent);
- --success: #2db37c;
- --warning: #e8a330;
- --error: #e8532a;
- --shadow-sm: 0 2px 8px -2px rgba(50, 35, 10, 0.12);
- --shadow-md: 0 12px 30px -18px rgba(50, 35, 10, 0.24), 0 2px 6px -2px rgba(50, 35, 10, 0.1);
- --shadow-lg: 0 18px 50px -20px rgba(50, 35, 10, 0.28), 0 2px 8px -2px rgba(50, 35, 10, 0.12);
- --shadow-window: 0 12px 28px -18px rgba(50, 35, 10, 0.34);
- --background: #f2e9d7;
- --foreground: #2a2722;
- --card: #fdf8ec;
- --card-foreground: #2a2722;
- --popover: #fdf8ec;
- --popover-foreground: #2a2722;
- --primary: #d98a24;
- --primary-foreground: #3a2408;
- --secondary: #ebe0ca;
- --secondary-foreground: #2a2722;
- --muted: #ebe0ca;
- --muted-foreground: #6f695f;
- --sh-accent: #e8ddc8;
- --sh-accent-foreground: #2a2722;
- --sh-border: #e2d5bb;
- --input: #e2d5bb;
- --ring: var(--primary);
-}
-
-:root[data-ui-theme="paper"][data-theme="dark"] {
- /* Warmer espresso ramp — surfaces lean into brown/gold rather than neutral
-     grey-black, so the dark mode reads as warm-dark with dimension. */
- --canvas-base: #17150f;
- --canvas-elevated: #221d14;
- --canvas-raised: #2c2518;
- --canvas-overlay: #372d1c;
- --border: #4d4230;
- --border-subtle: #37301f;
- --border-strong: #756550;
- --ink: #f5ecdc;
- --ink-secondary: #c8bba7;
- --ink-muted: #8d806e;
- /* Derived from --primary — see the light block. Dark-mode hover lightens
-     toward white (the light block darkens toward ink). */
- --accent: var(--primary);
- --accent-hover: color-mix(in srgb, var(--primary) 82%, white 18%);
- --accent-subtle: color-mix(in srgb, var(--primary) 14%, transparent);
- --accent-border: color-mix(in srgb, var(--primary) 34%, transparent);
- --success: #65d7a0;
- --warning: #f0b85d;
- --error: #f27d5f;
- --shadow-sm: 0 2px 8px -2px rgba(0, 0, 0, 0.4);
- --shadow-md: 0 14px 36px -18px rgba(0, 0, 0, 0.65), 0 2px 8px -2px rgba(0, 0, 0, 0.45);
- --shadow-lg: 0 18px 54px -20px rgba(0, 0, 0, 0.75), 0 2px 10px -2px rgba(0, 0, 0, 0.5);
- --shadow-window: 0 12px 28px -18px rgba(0, 0, 0, 0.62);
- --background: #17150f;
- --foreground: #f5ecdc;
- --card: #221d14;
- --card-foreground: #f5ecdc;
- --popover: #221d14;
- --popover-foreground: #f5ecdc;
- --primary: #f0b85d;
- --primary-foreground: #101010;
- --secondary: #2c2518;
- --secondary-foreground: #f5ecdc;
- --muted: #2c2518;
- /* Sits between --ink-secondary (#c8bba7) and --ink-muted (#8d806e) so the
-     secondary/muted/low ramp keeps three distinct steps (was == secondary). */
- --muted-foreground: #a89c88;
- --sh-accent: #372d1c;
- --sh-accent-foreground: #f5ecdc;
- --sh-border: #4d4230;
- --input: #4d4230;
- --ring: var(--primary);
-}
-
-:root[data-ui-theme="paper"] body,
-:root[data-ui-theme="paper"] button,
-:root[data-ui-theme="paper"] input,
-:root[data-ui-theme="paper"] textarea,
-:root[data-ui-theme="paper"] select,
-:root[data-ui-theme="paper"] [data-floating-window],
-:root[data-ui-theme="paper"] [data-slot="dialog-content"],
-:root[data-ui-theme="paper"] [data-slot="alert-dialog-content"],
-:root[data-ui-theme="paper"] [data-slot="popover-content"] {
- font-family: var(--agensis-ui-font-family, 'Bricolage Grotesque Variable', 'Bricolage Grotesque', system-ui, -apple-system, sans-serif);
-}
-
-:root[data-ui-theme="paper"][data-theme="light"] {
- --tw-control-outline: #4a3f2e;
- --tw-control-fill: rgba(255, 255, 255, 0.58);
- --tw-control-hover: rgba(255, 255, 255, 0.74);
- --tw-control-inset: rgba(255, 255, 255, 0.92);
- --tw-control-bevel: rgba(87, 66, 40, 0.2);
- --tw-control-shadow: 0 2px 3px -1px rgba(50, 36, 16, 0.22);
- /* Accent-driven controls follow --primary (so accent presets flow through);
-     the neutral --tw-control-* and the decorative --tw-gold-* flourish stay
-     fixed to preserve Paper's warm-paper character. Outline is a dark shade
-     (legible as text/border), fills are light washes. */
- --tw-control-ring: color-mix(in srgb, var(--primary) 40%, transparent);
- --tw-accent-outline: color-mix(in srgb, var(--primary) 72%, var(--foreground) 28%);
- --tw-accent-fill: color-mix(in srgb, var(--primary) 16%, transparent);
- --tw-accent-hover: color-mix(in srgb, var(--primary) 28%, transparent);
- --tw-gold-outline: #9f7a2c;
- --tw-gold-fill: #fff3c1;
-}
-
-:root[data-ui-theme="paper"][data-theme="dark"] {
- --tw-control-outline: #c2ad8f;
- --tw-control-fill: rgba(46, 41, 31, 0.7);
- --tw-control-hover: rgba(62, 54, 40, 0.84);
- --tw-control-inset: rgba(255, 255, 255, 0.1);
- --tw-control-bevel: rgba(0, 0, 0, 0.42);
- --tw-control-shadow: 0 2px 5px -2px rgba(0, 0, 0, 0.58);
- /* Dark: outline is a light shade of --primary (text on dark fill); fills are
-     dark shades mixed toward the canvas so any accent hue stays in-family.
-     Neutral --tw-control-* and decorative --tw-gold-* stay fixed. */
- --tw-control-ring: color-mix(in srgb, var(--primary) 44%, transparent);
- --tw-accent-outline: color-mix(in srgb, var(--primary) 80%, white 20%);
- --tw-accent-fill: color-mix(in srgb, var(--primary) 30%, var(--canvas-base));
- --tw-accent-hover: color-mix(in srgb, var(--primary) 42%, var(--canvas-base));
- --tw-gold-outline: #f0c468;
- --tw-gold-fill: rgba(118, 79, 28, 0.82);
-}
-
-:root[data-ui-theme="paper"] [data-slot="input-group"],
-:root[data-ui-theme="paper"] [data-slot="dialog-content"],
-:root[data-ui-theme="paper"] [data-slot="alert-dialog-content"],
-:root[data-ui-theme="paper"] [data-slot="card"],
-:root[data-ui-theme="paper"] [data-slot="select-content"] {
- border-color: color-mix(in srgb, var(--tw-control-outline) 18%, transparent);
- background: var(--tw-control-fill);
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  var(--shadow-sm);
-}
 
 /* Only the three that are painted on the canvas itself get the filter. An
    input-group and a card are always inside a panel that is already frosted, and
    every one of them is a separate compositor render surface — a form with eight
    input groups was eight backdrop snapshots per frame for a blur nobody can see
    through --tw-control-fill. */
-:root[data-ui-theme="paper"] [data-slot="dialog-content"],
-:root[data-ui-theme="paper"] [data-slot="alert-dialog-content"],
-:root[data-ui-theme="paper"] [data-slot="select-content"] {
- backdrop-filter: var(--agensis-glass-filter);
- -webkit-backdrop-filter: var(--agensis-glass-filter);
-}
 
-:root[data-ui-theme="paper"] [data-slot="button"],
-:root[data-ui-theme="paper"] [data-slot="select-trigger"],
-:root[data-ui-theme="paper"] [data-slot="toggle-group-item"] {
- border-radius: 12px;
- transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
-}
-
-:root[data-ui-theme="paper"] [data-slot="button"][data-size^="icon"],
-:root[data-ui-theme="paper"] [data-slot="select-trigger"],
-:root[data-ui-theme="paper"] [data-slot="button"][data-variant="outline"],
-:root[data-ui-theme="paper"] [data-slot="button"][data-variant="secondary"],
-:root[data-ui-theme="paper"] [data-slot="toggle-group-item"] {
- color: var(--tw-control-outline);
- border-color: var(--tw-control-outline);
- border-width: 1px;
- background: var(--tw-control-fill);
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  inset 0 -3px 0 var(--tw-control-bevel),
-  var(--tw-control-shadow);
-}
-
-:root[data-ui-theme="paper"] [data-slot="button"][data-variant="default"] {
- border-color: var(--tw-accent-outline);
- background: linear-gradient(180deg, var(--tw-accent-fill), color-mix(in srgb, var(--tw-accent-fill) 72%, var(--accent) 28%));
- color: var(--tw-accent-outline);
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  inset 0 -3px 0 color-mix(in srgb, var(--tw-accent-outline) 26%, transparent),
-  var(--tw-control-shadow);
-}
-
-:root[data-ui-theme="paper"] [data-slot="button"][data-variant="ghost"]:not(.settings-nav-row) {
- border-color: transparent;
- background: transparent;
- box-shadow: none;
-}
-
-:root[data-ui-theme="paper"] [data-slot="button"][data-size^="icon"][data-variant="ghost"] {
- border-color: var(--tw-control-outline);
- background: var(--tw-control-fill);
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  inset 0 -3px 0 var(--tw-control-bevel),
-  var(--tw-control-shadow);
-}
-
-:root[data-ui-theme="paper"] [data-slot="button"]:hover,
-:root[data-ui-theme="paper"] [data-slot="select-trigger"]:hover,
-:root[data-ui-theme="paper"] [data-slot="toggle-group-item"]:hover {
- background: var(--tw-control-hover);
-}
-
-:root[data-ui-theme="paper"] [data-slot="button"]:active {
- transform: translateY(1px);
-}
-
-:root[data-ui-theme="paper"] .settings-nav-row {
- border-color: transparent;
- background: transparent;
- box-shadow: none;
- justify-content: flex-start;
-}
-
-:root[data-ui-theme="paper"] .settings-nav-row[data-variant="secondary"] {
- border-color: var(--tw-accent-outline);
- background: var(--tw-accent-fill);
- color: var(--tw-accent-outline);
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  inset 0 -3px 0 color-mix(in srgb, var(--tw-accent-outline) 20%, transparent),
-  var(--tw-control-shadow);
-}
 
 /* THE SEARCH FIELD is a control and keeps the full treatment. Rows do not. */
-:root[data-ui-theme="paper"] .sidebar-search {
- position: relative;
- overflow: hidden;
- border-width: 1px !important;
- border-style: solid !important;
- border-color: var(--tw-control-outline) !important;
- color: var(--ink-secondary) !important;
- background:
-  linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),
-  var(--tw-control-fill) !important;
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  inset 0 -3px 0 var(--tw-control-bevel),
-  var(--tw-control-shadow) !important;
-}
+
 
 /* SIDEBAR ROWS ARE A FLAT LIST. The owner asked twice: no frame on the rows,
    the button look ONLY when selected. Framing every row turned the sidebar into
    a stack of identical pills with no hierarchy and nothing to distinguish the
    row you are actually on — which is the one thing the frame is FOR.
    Hover and selected (below) put the treatment back. */
-:root[data-ui-theme="paper"] .sidebar-action-row {
- /* Height is --sidebar-action-row-h, set to 2rem for this theme at the top of
-    the file. The reason is unchanged: the selected row is a bar of the same
-    family as the search bar directly above it, and at the base 1.55rem it read
-    as a shorter, meaner pill sitting under a taller one. Only paper frames
-    the selection, so the frame's proportions matter here. */
- position: relative;
- overflow: hidden;
- border-width: 1px !important;
- border-style: solid !important;
- border-color: transparent !important;
- color: var(--ink-secondary) !important;
- background: transparent !important;
- box-shadow: none !important;
-}
 
-:root[data-ui-theme="paper"] .sidebar-rail-button::before {
- content: "";
- position: absolute;
- top: 0.42rem;
- left: 0.62rem;
- right: 0.62rem;
- height: 1px;
- border-radius: 999px;
- background: color-mix(in srgb, var(--tw-control-inset) 78%, transparent);
- pointer-events: none;
-}
 
 /* .knowledge-context-trigger used to be a header button here; the Knowledge
    control is now a submenu row inside the channel overflow menu and must not
    pick up the gold button skin. */
-:root[data-ui-theme="paper"] .channel-header [data-slot="button"][data-variant="secondary"] {
- border-color: color-mix(in srgb, var(--tw-gold-outline) 74%, transparent) !important;
- color: var(--tw-gold-outline) !important;
- background:
-  linear-gradient(180deg, rgba(255, 255, 255, 0.36), transparent 45%),
-  var(--tw-gold-fill) !important;
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  inset 0 -3px 0 color-mix(in srgb, var(--tw-gold-outline) 28%, transparent),
-  var(--tw-control-shadow) !important;
-}
 
-:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-action-row,
-:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-search {
- border-color: color-mix(in srgb, var(--tw-accent-outline) 66%, transparent) !important;
- background:
-  linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 14%, transparent), transparent 32%, rgba(0, 0, 0, 0.18) 100%),
-  var(--tw-accent-fill) !important;
- box-shadow:
-  inset 0 1px 0 color-mix(in srgb, var(--tw-accent-outline) 34%, transparent),
-  inset 0 -4px 0 rgba(0, 0, 0, 0.26),
-  0 2px 5px -2px rgba(0, 0, 0, 0.58) !important;
-}
-
-:root[data-ui-theme="paper"] .sidebar-action-row:hover,
-:root[data-ui-theme="paper"] .sidebar-search:hover,
-:root[data-ui-theme="paper"] .sidebar-action-row[data-active="true"] {
- border-color: color-mix(in srgb, var(--tw-accent-outline) 72%, transparent) !important;
- color: var(--tw-accent-outline) !important;
- background:
-  linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 32%, transparent), transparent 42%),
-  var(--tw-accent-hover) !important;
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  inset 0 -3px 0 color-mix(in srgb, var(--tw-accent-outline) 20%, transparent),
-  var(--tw-control-shadow) !important;
-}
-
-:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-action-row:hover,
-:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-search:hover,
-:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-action-row[data-active="true"] {
- background:
-  linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 16%, transparent), transparent 30%, rgba(0, 0, 0, 0.22) 100%),
-  var(--tw-accent-hover) !important;
-}
-
-:root[data-ui-theme="paper"] .sidebar-item-row {
- border-color: transparent !important;
- background: transparent !important;
- box-shadow: none !important;
-}
-
-:root[data-ui-theme="paper"] .sidebar-item-row:hover {
- background: var(--tw-control-hover) !important;
-}
-
-:root[data-ui-theme="paper"] .home-suggestion-pill {
- border-color: var(--tw-control-outline);
- color: var(--tw-control-outline);
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  inset 0 -3px 0 var(--tw-control-bevel),
-  var(--tw-control-shadow);
-}
 
 .home-workspace-composer {
  background: color-mix(in srgb, var(--canvas-elevated) 94%, transparent) !important;
@@ -1239,12 +906,7 @@
    reads as a rendering artefact beside them. They also inset every sidebar row
    6px on the right for offset-shadow clearance (see the width rules below), so
    the rule ends where the rows do instead of overhanging them. */
-:root[data-ui-theme="paper"] .sidebar-group-divider {
- flex-basis: 2px;
- height: 2px;
- margin-inline: 0 6px;
- background: var(--border);
-}
+
 
 /* ============================================================================
    SIDEBAR VERTICAL RHYTHM — ONE SOURCE, and the reason it has to be one.
@@ -1285,14 +947,6 @@
  --sidebar-agent-row-h: 2.1rem;
 }
 
-:root[data-ui-theme="paper"] {
- /* Match the SEARCH FIELD's height (min-h-8 = 2rem) — see the action-row rule
-    in the paper block. Stated as the SHARED variable, not as a
-    `min-height: … !important` on the row: a theme adjusting the metric is part
-    of the system, a theme restating a height is what put neo 1.6x out and made
-    a base-scope change a no-op. */
- --sidebar-action-row-h: 2rem;
-}
 
 /* The Collapsible that wraps one section: its heading and that heading's items.
    Owns the gap above the section so the rhythm is tunable from the block above
@@ -1492,49 +1146,12 @@
 
 }
 
-:root[data-ui-theme="paper"] [data-floating-window] {
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  var(--shadow-window);
-}
 
 /* Full-view (maximized / full-bounds) windows are edge-to-edge inside <main>'s
    overflow-hidden, so the themed wrapper shadow clips into a hard straight line.
    Full-bleed panels don't float — kill the wrapper shadow (matches the inner
    surface's shadow-none in FloatingWindowShell). */
-:root[data-ui-theme="paper"] [data-floating-window][data-window-view-mode="full"] {
- box-shadow: none;
-}
 
-:root[data-ui-theme="paper"] [data-slot="input-group-addon"][data-align="block-end"] {
- min-height: 44px;
- align-items: center;
- padding-top: 6px;
- padding-bottom: 6px;
-}
-
-:root[data-ui-theme="paper"] [data-slot="input-group-addon"]>div {
- align-items: center;
-}
-
-:root[data-ui-theme="paper"] [data-slot="button"][data-size^="icon"],
-:root[data-ui-theme="paper"] .canvas-toolbar [data-slot="toggle-group-item"] {
- display: inline-grid;
- place-items: center;
- line-height: 1;
- padding: 0;
-}
-
-:root[data-ui-theme="paper"] [data-slot="button"] svg,
-:root[data-ui-theme="paper"] [data-slot="select-trigger"] svg,
-:root[data-ui-theme="paper"] .canvas-toolbar [data-slot="toggle-group-item"] svg {
- display: block;
- margin: 0;
-}
-
-:root[data-ui-theme="paper"] .canvas-toolbar {
- align-items: center;
-}
 
 .channel-header>div {
  align-items: center;
@@ -1565,20 +1182,6 @@
  line-height: 1.15 !important;
 }
 
-:root[data-ui-theme="paper"] .canvas-toolbar [data-slot="toggle-group-item"] {
- min-width: 36px;
- height: 36px;
-}
-
-:root[data-ui-theme="paper"] .model-selector-trigger {
- min-width: 128px;
- align-items: center;
- line-height: 1;
-}
-
-:root[data-ui-theme="paper"] .model-selector-trigger {
- min-height: 36px;
-}
 
 /* No backdrop-filter here. .channel-shell always renders inside
    [data-window-surface] (FloatingWindowShell), which already frosts the
@@ -1937,11 +1540,6 @@
  -webkit-backdrop-filter: var(--agensis-glass-filter) !important;
 }
 
-:root[data-ui-theme="paper"] {
- --theme-glass-surface: color-mix(in srgb, var(--card) var(--agensis-panel-alpha, 88%), transparent);
- --theme-glass-raised: color-mix(in srgb, var(--popover) var(--agensis-panel-alpha, 88%), transparent);
- --theme-glass-muted: color-mix(in srgb, var(--muted) calc(var(--agensis-panel-alpha, 88%) - 18%), transparent);
-}
 
 /* The glass FILL for the two heavy families. Kept on all of them — the tint is
    the look. The blur that used to ride along with it is not: everything below
@@ -1950,40 +1548,19 @@
    further down explains, only paid twice over because these rules and that one
    both fired. --theme-glass-surface is an ~88% fill; stacked three deep down the
    scroller there is no backdrop left for the inner passes to blur. */
-:root[data-ui-theme="paper"] .channel-shell,
-:root[data-ui-theme="paper"] .channel-message-surface,
-:root[data-ui-theme="paper"] .channel-message-surface [data-slot="message-scroller-viewport"],
-:root[data-ui-theme="paper"] .channel-message-surface [data-slot="message-scroller-content"] {
- background: var(--theme-glass-surface) !important;
-}
+
 
 /* The window surface IS the glass edge against the wallpaper, so it keeps its
    blur. It is the only element in the old list that was not nested in another
    blurred one. */
-:root[data-ui-theme="paper"] [data-window-surface] {
- background: var(--theme-glass-surface) !important;
- backdrop-filter: var(--agensis-glass-filter);
- -webkit-backdrop-filter: var(--agensis-glass-filter);
-}
+
 
 /* Raised chrome that lives INSIDE an already-frosted window: fill only. */
-:root[data-ui-theme="paper"] .channel-header,
-:root[data-ui-theme="paper"] .channel-composer,
-:root[data-ui-theme="paper"] .channel-side-panel,
-:root[data-ui-theme="paper"] [data-slot="card"] {
- background: var(--theme-glass-raised) !important;
-}
+
 
 /* Top-level portals: these are siblings of the window layer, painted straight
    onto the canvas, so their blur is the real one and stays. */
-:root[data-ui-theme="paper"] [data-slot="dialog-content"],
-:root[data-ui-theme="paper"] [data-slot="popover-content"],
-:root[data-ui-theme="paper"] [data-slot="dropdown-menu-content"],
-:root[data-ui-theme="paper"] [data-slot="command"] {
- background: var(--theme-glass-raised) !important;
- backdrop-filter: var(--agensis-glass-filter);
- -webkit-backdrop-filter: var(--agensis-glass-filter);
-}
+
 
 /* LIST ROWS GET A FILL, NEVER A FILTER.
    These four selectors are per-record: one activity event, one task, one item,
@@ -2000,12 +1577,7 @@
    invalidates constantly). It is kept only because ~137 call sites in src/**.tsx
    depend on the tint; the fix is a real .glass-row class on those sites, at
    which point this selector should go. */
-:root[data-ui-theme="paper"] .activity-row,
-:root[data-ui-theme="paper"] .task-row,
-:root[data-ui-theme="paper"] [data-slot="item"],
-:root[data-ui-theme="paper"] [class*="bg-card"] {
- background-color: var(--theme-glass-muted) !important;
-}
+
 
 [data-canvas-item-id][data-transforming="true"] {
  will-change: transform;
@@ -2396,24 +1968,6 @@
  }
 }
 
-:root[data-ui-theme="paper"] [data-slot="badge"] {
- min-height: 1.35rem;
- border-color: color-mix(in srgb, var(--border) 82%, transparent) !important;
- background: color-mix(in srgb, var(--secondary) 82%, transparent) !important;
- color: var(--secondary-foreground) !important;
- line-height: 1 !important;
- font-size: 0.72rem !important;
- font-weight: 650 !important;
-}
-
-/* paper: restore the filled accent look for active/selected badges,
-   matching the paper primary button treatment (the base badge rule above
-   forces a secondary fill on every badge, which would otherwise flatten this). */
-:root[data-ui-theme="paper"] [data-slot="badge"][data-variant="default"] {
- border-color: var(--tw-accent-outline) !important;
- background: linear-gradient(180deg, var(--tw-accent-fill), color-mix(in srgb, var(--tw-accent-fill) 72%, var(--accent) 28%)) !important;
- color: var(--tw-accent-outline) !important;
-}
 
 /* Interactive chips (filter pills) render as <button data-slot="badge">.
    Give them pointer + hover feedback consistently across all themes. */
@@ -2447,10 +2001,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
 
 /* Lists and compact filters are part of the information plane, not raised
    controls. Theme colour still applies; hard per-row shadows do not. */
-:root[data-ui-theme="paper"] [data-flat-control][data-slot="item"],
-:root[data-ui-theme="paper"] [data-flat-control][data-slot="badge"] {
- box-shadow: none !important;
-}
+
 
 .memory-list-row:last-child {
  border-bottom-width: 0;
@@ -2468,9 +2019,7 @@ button[data-slot="badge"][data-variant="default"]:hover {
 /* The theme-level flat rule above is deliberately more specific than the base
    row. Restore the selected marker at that same specificity so Neo and Paper
    do not turn selection into background colour alone. */
-:root[data-ui-theme="paper"] [data-flat-control][data-slot="item"].memory-file-row[aria-pressed="true"] {
- box-shadow: inset 2px 0 0 var(--primary) !important;
-}
+
 
 .memory-file-body .chat-markdown {
  font-size: 0.875rem;
@@ -4576,140 +4125,6 @@ select {
  border-radius: 0 !important;
 }
 
-:root[data-ui-theme="paper"] .sidebar-action-row,
-:root[data-ui-theme="paper"] .sidebar-search,
-:root[data-ui-theme="paper"] .sidebar-section-trigger,
-:root[data-ui-theme="paper"] .sidebar-folder-trigger,
-:root[data-ui-theme="paper"] .sidebar-item-row,
-/* The DM row, for the same reason it was added to neo's list: left out, it is
-   the ONE row that runs the full panel width, so the selected DM's fill reaches
-   the panel edge while every other selected row stops 6px short of it. */
-:root[data-ui-theme="paper"] .sidebar-agent-row {
- width: calc(100% - 6px) !important;
- max-width: calc(100% - 6px) !important;
- margin-left: 0 !important;
- margin-right: 6px !important;
-}
-
-/* ── Paper: section-header card ── */
-:root[data-ui-theme="paper"] .sidebar-section-header {
- /* A SECTION HEADING IS NOT A CONTROL. paper frames its controls, and
-    applying that to every heading turned the sidebar into a stack of identical
-    boxes with no hierarchy left. Selections keep their frame — that is what the
-    frame is FOR: showing which one you are on. */
- position: relative;
- overflow: hidden;
- box-sizing: border-box;
- width: calc(100% - 6px) !important;
- max-width: calc(100% - 6px) !important;
- margin-right: 6px !important;
- /* 0 for this theme, not 4px. The 4px was the gap under a bordered CONTROL;
-    the frame is gone (border-width above) and the section content's own pt-0.5
-    is the gap a heading needs under it. Four sections' worth of it was 16px of
-    the space between headings the owner flagged. */
- margin-bottom: var(--sidebar-row-clearance) !important;
- border-width: 0 !important;
- border-style: solid !important;
- border-color: transparent !important;
- border-radius: 10px !important;
- /* No min-height, for the same reason as neo above: `border-width: 0` took the
-    control frame off this heading, and a heading does not need the height that
-    frame was sized for. */
- color: var(--ink-secondary) !important;
- background: transparent !important;
- box-shadow: none !important;
- padding-inline: 0.3rem 0.2rem !important;
-}
-
-:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-section-header {
- border-color: color-mix(in srgb, var(--tw-accent-outline) 66%, transparent) !important;
- background:
-  linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 14%, transparent), transparent 32%, rgba(0, 0, 0, 0.18) 100%),
-  var(--tw-accent-fill) !important;
- box-shadow:
-  inset 0 1px 0 color-mix(in srgb, var(--tw-accent-outline) 34%, transparent),
-  inset 0 -4px 0 rgba(0, 0, 0, 0.26),
-  0 2px 5px -2px rgba(0, 0, 0, 0.58) !important;
-}
-
-:root[data-ui-theme="paper"] .sidebar-section-header:hover {
- border-color: color-mix(in srgb, var(--tw-accent-outline) 72%, transparent) !important;
- color: var(--tw-accent-outline) !important;
- background:
-  linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 32%, transparent), transparent 42%),
-  var(--tw-accent-hover) !important;
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  inset 0 -3px 0 color-mix(in srgb, var(--tw-accent-outline) 20%, transparent),
-  var(--tw-control-shadow) !important;
-}
-
-:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-section-header:hover {
- background:
-  linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 16%, transparent), transparent 30%, rgba(0, 0, 0, 0.22) 100%),
-  var(--tw-accent-hover) !important;
-}
-
-/* Trigger inside TW header owns no border/shadow */
-:root[data-ui-theme="paper"] .sidebar-section-header .sidebar-section-trigger {
- width: auto !important;
- max-width: none !important;
- margin-right: 0 !important;
- background: transparent !important;
- border: none !important;
- box-shadow: none !important;
-}
-
-:root[data-ui-theme="paper"] .sidebar-section-header .sidebar-section-trigger:hover {
- background: transparent !important;
-}
-
-/* TW folder triggers: card style */
-:root[data-ui-theme="paper"] .sidebar-folder-trigger {
- position: relative;
- overflow: hidden;
- border-width: 1px !important;
- border-style: solid !important;
- border-color: var(--tw-control-outline) !important;
- color: var(--ink-secondary) !important;
- background:
-  linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 28%, transparent), transparent 42%),
-  var(--tw-control-fill) !important;
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  inset 0 -3px 0 var(--tw-control-bevel),
-  var(--tw-control-shadow) !important;
- min-height: 1.9rem !important;
-}
-
-:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-folder-trigger {
- border-color: color-mix(in srgb, var(--tw-accent-outline) 66%, transparent) !important;
- background:
-  linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 14%, transparent), transparent 32%, rgba(0, 0, 0, 0.18) 100%),
-  var(--tw-accent-fill) !important;
- box-shadow:
-  inset 0 1px 0 color-mix(in srgb, var(--tw-accent-outline) 34%, transparent),
-  inset 0 -4px 0 rgba(0, 0, 0, 0.26),
-  0 2px 5px -2px rgba(0, 0, 0, 0.58) !important;
-}
-
-:root[data-ui-theme="paper"] .sidebar-folder-trigger:hover {
- border-color: color-mix(in srgb, var(--tw-accent-outline) 72%, transparent) !important;
- color: var(--tw-accent-outline) !important;
- background:
-  linear-gradient(180deg, color-mix(in srgb, var(--tw-control-inset) 32%, transparent), transparent 42%),
-  var(--tw-accent-hover) !important;
- box-shadow:
-  inset 0 1px 0 var(--tw-control-inset),
-  inset 0 -3px 0 color-mix(in srgb, var(--tw-accent-outline) 20%, transparent),
-  var(--tw-control-shadow) !important;
-}
-
-:root[data-ui-theme="paper"][data-theme="dark"] .sidebar-folder-trigger:hover {
- background:
-  linear-gradient(180deg, color-mix(in srgb, var(--tw-accent-outline) 16%, transparent), transparent 30%, rgba(0, 0, 0, 0.22) 100%),
-  var(--tw-accent-hover) !important;
-}
 
 /* Final glass binding: panel translucency slider must affect every major panel. */
 .channel-shell {
@@ -4967,9 +4382,7 @@ rather than one more per-panel hook {
 }
 
 /* Light mode (base theme only — not neo, not paper) panels get a white border */
-:root[data-theme="light"]:not([data-ui-theme="paper"]) [data-window-surface] {
- border-color: rgba(255, 255, 255, 0.85) !important;
-}
+
 
 /* ── Agent status feed (sidebar bottom): pixel-art speech bubble + typewriter ──
    The pixel aesthetic is CSS-only chrome: a stepped bubble border drawn with
