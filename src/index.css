@@ -1856,6 +1856,21 @@
  -webkit-backdrop-filter: none !important;
 }
 
+/* ONE glass layer per window, and it is the window surface — the only thing
+   that actually meets the wallpaper. Toolbars, side panels, sticky headers and
+   cards inside a window were each adding their own backdrop-blur (Agents: one
+   per agent card, 7 layers with 6 agents, growing with the roster). Each is a
+   separate offscreen compositing pass re-run whenever anything under it moves,
+   and it blurs a surface that is already frosted — or, in the desktop app,
+   already OPAQUE — so it costs GPU every frame and changes nothing visible.
+   Tailwind's backdrop-blur-* utilities also bypassed --agensis-glass-filter,
+   so the Settings glass-blur slider (and its 0 = off escape hatch) could not
+   reach them. Measured in /#screens: Agents 7 → 0, Tasks 2 → 0. */
+[data-window-surface] [class*="backdrop-blur"] {
+ backdrop-filter: none !important;
+ -webkit-backdrop-filter: none !important;
+}
+
 /* Depth: floating windows are lifted off the canvas with a layered ambient +
    contact shadow (theme-aware via --shadow-*) rather than a single flat drop.
    Applied to the outer wrapper — not the surface — so it never clobbers the

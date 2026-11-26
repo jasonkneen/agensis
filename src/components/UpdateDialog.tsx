@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { SparklesIcon, RocketIcon, ChevronRight, X } from 'lucide-react';
 import {
   Dialog,
@@ -42,7 +43,14 @@ function versionLabel(note: ReleaseNote): string {
   return isDateLike && normalized === note.date ? note.date : `${v} · ${note.date}`;
 }
 
-export function UpdateDialog({ open, onOpenChange, notes, mode, onReload }: UpdateDialogProps) {
+// memo: this dialog is mounted for the app's whole life and its body builds
+// the feature gallery plus EVERY release note and highlight. Radix discards
+// those elements while closed, but only after they were created — so every
+// app re-render paid for the entire changelog. A renderer CPU profile of the
+// desktop app put it at ~34% of busy time. Every prop is state or a stable
+// callback (AppUpdateManager), so memo skips it until something it shows
+// actually changes.
+export const UpdateDialog = memo(function UpdateDialog({ open, onOpenChange, notes, mode, onReload }: UpdateDialogProps) {
   const available = mode === 'available';
   const [latest, ...older] = notes;
 
@@ -184,4 +192,4 @@ export function UpdateDialog({ open, onOpenChange, notes, mode, onReload }: Upda
       </DialogContent>
     </Dialog>
   );
-}
+});
