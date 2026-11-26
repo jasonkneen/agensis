@@ -34,10 +34,20 @@ export function isBlobatarAvatar(value: string | null | undefined) {
   return String(value || '').trim().toLowerCase().startsWith(BLOBATAR_AVATAR_PREFIX);
 }
 
-/** Empty and legacy `AI` values are the old implicit default, not a manual choice. */
+/**
+ * Bare 1–3 letter text ("CO", "AI") is a placeholder some create paths stored
+ * instead of a real avatar; no picker option produces it, so it gets a
+ * Blobatar like an empty value rather than rendering as initials.
+ */
+const PLACEHOLDER_TEXT_AVATAR = /^[\p{L}\p{N}]{1,3}$/u;
+
+/** Empty, legacy `AI`, and bare-initials values are the implicit default, not a manual choice. */
 export function isAutomaticAgentAvatar(value: string | null | undefined) {
   const normalized = String(value || '').trim();
-  return !normalized || normalized.toUpperCase() === LEGACY_DEFAULT_AGENT_AVATAR || isBlobatarAvatar(normalized);
+  return !normalized
+    || normalized.toUpperCase() === LEGACY_DEFAULT_AGENT_AVATAR
+    || PLACEHOLDER_TEXT_AVATAR.test(normalized)
+    || isBlobatarAvatar(normalized);
 }
 
 /** Convert the implicit default to a compact marker while preserving manual avatars verbatim. */

@@ -1507,7 +1507,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                         {/* Outer relative has no overflow — live badge must sit outside the
                             rounded clip or the corner radius crops it to a crescent. */}
                         <span className="relative grid size-16 shrink-0 place-items-center">
-                          <span className="grid size-full place-items-center overflow-hidden rounded-2xl bg-muted text-2xl ring-1 ring-inset ring-black/5 dark:ring-white/10">
+                          <span className="agents-list-card-avatar relative grid size-full place-items-center overflow-hidden rounded-2xl bg-muted text-2xl ring-1 ring-inset ring-black/5 dark:ring-white/10">
                             <AgentAvatarPreview value={agent.avatar} seed={agent.name} className="size-full" />
                           </span>
                           {live && (
@@ -2906,7 +2906,7 @@ function AgentDetailPane({
 
           {activeConnections.length > 0 && (
             <AgentDetailSection title="Connections">
-              <div className="space-y-1.5">
+              <div className="divide-y divide-border/60">
                 {activeConnections.map(connection => {
                   // A freshly-connected daemon can arrive with `capabilities` present but its
                   // skills/clis/mcpServers arrays not yet populated (the capability payload lands on
@@ -2920,60 +2920,32 @@ function AgentDetailPane({
                   const capAmp = caps?.runtimes?.amp;
                   const hasCapabilities = capSkills.length > 0 || capClis.length > 0 || capMcpServers.length > 0 || capSharedModels.length > 0 || Boolean(capAmp);
                   return (
-                    <div key={connection.id} className="rounded-md border bg-muted/35 px-2 py-1.5 text-xs">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <Monitor className="size-3 shrink-0" />
-                        <span className="font-medium text-foreground">{connection.status}</span>
-                        <span className="min-w-0 flex-1 truncate text-muted-foreground">{connection.host || connection.cwd || 'remote'}</span>
+                    <div key={connection.id} className="min-w-0 py-2 first:pt-0 last:pb-0">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Monitor className="size-3.5 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium" title={connection.host || undefined}>{connection.host || connection.cwd || 'remote'}</span>
+                        <span className={cn('inline-flex shrink-0 items-center gap-1 text-xs font-medium', connection.status === 'online' ? 'text-success' : 'text-muted-foreground')}>
+                          <span className={cn('size-1.5 rounded-full', connection.status === 'online' ? 'bg-success' : 'bg-muted-foreground')} />
+                          {connection.status}
+                        </span>
                         {connection.last_seen_at && (
-                          <span className="shrink-0 text-muted-foreground/70" title={`Last heartbeat: ${formatAgentDate(connection.last_seen_at)}`}>
-                            HB {formatRelativeTime(connection.last_seen_at)}
+                          <span className="shrink-0 text-xs text-muted-foreground" title={`Last heartbeat: ${formatAgentDate(connection.last_seen_at)}`}>
+                            {formatRelativeTime(connection.last_seen_at)}
                           </span>
                         )}
                       </div>
-                      {connection.cwd && <div className="mt-1 truncate text-muted-foreground" title={connection.cwd}>{connection.cwd}</div>}
+                      {connection.cwd && <div className="mt-1 truncate font-mono text-xs text-muted-foreground" title={connection.cwd}>{connection.cwd}</div>}
                       {hasCapabilities && (
-                        <div className="mt-1.5 space-y-1">
+                        <div className="mt-2.5 space-y-2.5">
                           {capAmp && (
-                            <div className={capAmp.available ? 'text-success' : 'text-warning'}>
+                            <div className={cn('text-xs', capAmp.available ? 'text-success' : 'text-warning')}>
                               Amp: {capAmp.available ? `ready${capAmp.project?.name ? ` · ${capAmp.project.name}` : ''}` : ampRuntimeStatusText(capAmp.reason)}
                             </div>
                           )}
-                          {capSkills.length > 0 && (
-                            <div className="flex flex-wrap gap-1">
-                              <span className="shrink-0 text-muted-foreground/60">Skills:</span>
-                              {capSkills.slice(0, 8).map(s => (
-                                <span key={s} className="rounded bg-primary/10 px-1 py-0.5 text-3xs text-primary">{s}</span>
-                              ))}
-                              {capSkills.length > 8 && <span className="text-muted-foreground/60">+{capSkills.length - 8}</span>}
-                            </div>
-                          )}
-                          {capClis.length > 0 && (
-                            <div className="flex flex-wrap gap-1">
-                              <span className="shrink-0 text-muted-foreground/60">CLIs:</span>
-                              {capClis.map(c => (
-                                <span key={c} className="rounded bg-muted px-1 py-0.5 text-3xs font-mono text-muted-foreground">{c}</span>
-                              ))}
-                            </div>
-                          )}
-                          {capMcpServers.length > 0 && (
-                            <div className="flex flex-wrap gap-1">
-                              <span className="shrink-0 text-muted-foreground/60">MCP:</span>
-                              {capMcpServers.slice(0, 6).map(m => (
-                                <span key={m} className="rounded bg-muted px-1 py-0.5 text-3xs text-muted-foreground">{m}</span>
-                              ))}
-                              {capMcpServers.length > 6 && <span className="text-muted-foreground/60">+{capMcpServers.length - 6}</span>}
-                            </div>
-                          )}
-                          {capSharedModels.length > 0 && (
-                            <div className="flex flex-wrap gap-1">
-                              <span className="shrink-0 text-muted-foreground/60">Shared models:</span>
-                              {capSharedModels.slice(0, 6).map(model => (
-                                <span key={model.id} className="rounded bg-primary/10 px-1 py-0.5 text-3xs text-primary">{model.name || model.id}</span>
-                              ))}
-                              {capSharedModels.length > 6 && <span className="text-muted-foreground/60">+{capSharedModels.length - 6}</span>}
-                            </div>
-                          )}
+                          <ConnectionCapabilityGroup label="Skills" items={capSkills} limit={8} />
+                          <ConnectionCapabilityGroup label="CLIs" items={capClis} mono />
+                          <ConnectionCapabilityGroup label="MCP" items={capMcpServers} limit={6} />
+                          <ConnectionCapabilityGroup label="Shared models" items={capSharedModels.map(model => model.name || model.id)} limit={6} />
                         </div>
                       )}
                     </div>
@@ -4557,6 +4529,26 @@ function AgentDetailTokenSection({ title, items, empty }: { title: string; items
         <div className="text-sm text-muted-foreground">{empty}</div>
       )}
     </AgentDetailSection>
+  );
+}
+
+// One labelled row of capability chips inside a Connections entry. Uses the
+// same outline Badge chip as AgentDetailTokenSection so the pane reads as one
+// design language instead of a second, smaller chip style.
+function ConnectionCapabilityGroup({ label, items, limit, mono }: { label: string; items: string[]; limit?: number; mono?: boolean }) {
+  if (items.length === 0) return null;
+  const shown = limit ? items.slice(0, limit) : items;
+  const hidden = items.length - shown.length;
+  return (
+    <div className="min-w-0">
+      <div className="mb-1 text-xs font-semibold text-muted-foreground">{label}</div>
+      <div className="agent-token-row flex flex-wrap gap-1.5">
+        {shown.map((item, index) => (
+          <Badge key={`${item}-${index}`} variant="outline" className={cn('agent-token-chip', mono && 'font-mono')} title={item}>{item}</Badge>
+        ))}
+        {hidden > 0 && <Badge variant="outline" className="agent-token-chip text-muted-foreground">+{hidden}</Badge>}
+      </div>
+    </div>
   );
 }
 

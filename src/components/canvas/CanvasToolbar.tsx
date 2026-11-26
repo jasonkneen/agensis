@@ -84,7 +84,7 @@ export function CanvasToolbar({
           const Icon = tool.icon;
           return (
             <ToggleGroupItem key={tool.id} value={tool.id} title={tool.label} aria-label={tool.label} className="min-w-8 px-0">
-              <Icon data-icon="inline-start" className="size-4" />
+              <Icon className="size-4" />
             </ToggleGroupItem>
           );
         })}

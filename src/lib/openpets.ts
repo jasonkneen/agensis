@@ -1,5 +1,5 @@
 import { apiAuthHeaders, apiUrl } from './backendClient';
-import { isBlobatarAvatar, renderAgentAvatar } from './agentAvatars';
+import { isAutomaticAgentAvatar, renderAgentAvatar } from './agentAvatars';
 
 export interface OpenPetCatalogPage {
   version: number;
@@ -74,7 +74,7 @@ export function isImageAvatar(value: string | null | undefined) {
   const normalized = String(value || '').trim();
   return Boolean(
     normalized
-    && (isBlobatarAvatar(normalized) || normalized.toUpperCase() === 'AI' || /^(https?:\/\/|\/|data:image\/|blob:)/i.test(normalized)),
+    && (isAutomaticAgentAvatar(normalized) || /^(https?:\/\/|\/|data:image\/|blob:)/i.test(normalized)),
   );
 }
 

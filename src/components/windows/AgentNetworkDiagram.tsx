@@ -450,6 +450,13 @@ export function AgentNetworkDiagram({
                 <stop offset="100%" stopColor={STATUS_META[s].color} stopOpacity="0" />
               </radialGradient>
             ))}
+            {/* Top-edge shine on node discs, faded at the ends — the same
+                50%-white highlight the raised buttons carry. */}
+            <linearGradient id="node-shine" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor="#fff" stopOpacity="0" />
+              <stop offset="50%" stopColor="#fff" stopOpacity="0.5" />
+              <stop offset="100%" stopColor="#fff" stopOpacity="0" />
+            </linearGradient>
           </defs>
 
           {/* Range rings — hairline orbits that make the tiers legible. */}
@@ -589,6 +596,14 @@ function centerLabel(label: string, r: number): string {
   return truncateLabel(label, Math.max(4, Math.floor((r * 1.78) / (CENTER_MIN_PX * 0.56))));
 }
 
+/** Arc across the top of a disc of radius `r`, from 10 to 2 o'clock. */
+function shineArc(r: number): string {
+  const a0 = (-150 * Math.PI) / 180;
+  const a1 = (-30 * Math.PI) / 180;
+  const p = (a: number) => `${(r * Math.cos(a)).toFixed(2)} ${(r * Math.sin(a)).toFixed(2)}`;
+  return `M ${p(a0)} A ${r} ${r} 0 0 1 ${p(a1)}`;
+}
+
 function MeshNodeShape({ node, isCenter, focused, selected, layout, canPop, fan, onActivate, onHover }: {
   node: MeshNode;
   isCenter: boolean;
@@ -666,6 +681,8 @@ function MeshNodeShape({ node, isCenter, focused, selected, layout, canPop, fan,
       <circle r={r} fill="var(--card)" stroke={node.color} strokeOpacity={0.9}
         strokeWidth={focused || selected ? 2.5 : 1.75} style={{ transition: 'stroke-width .15s' }} />
       <circle r={r - 5} fill="none" stroke={node.accent} strokeOpacity={0.7} strokeWidth={1.25} />
+      <path d={shineArc(r - 2.5)} fill="none" stroke="url(#node-shine)" strokeWidth={1.5}
+        strokeLinecap="round" pointerEvents="none" />
 
       {isCenter ? (
         <>

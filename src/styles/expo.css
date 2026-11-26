@@ -171,7 +171,8 @@
 :root[data-ui-theme="expo"] [data-slot="dropdown-menu-content"],
 :root[data-ui-theme="expo"] [data-slot="context-menu-content"],
 :root[data-ui-theme="expo"] [data-slot="select-content"],
-:root[data-ui-theme="expo"] [data-slot="hover-card-content"] {
+:root[data-ui-theme="expo"] [data-slot="hover-card-content"],
+:root[data-ui-theme="expo"] .canvas-toolbar {
  background: var(--popover) !important;
  backdrop-filter: none !important;
  -webkit-backdrop-filter: none !important;
@@ -312,10 +313,24 @@
    off the corner fills that paint the sidebar colour round the curve, and the
    wallpaper showed in the notch. The curve comes from those fills. */
 :root[data-ui-theme="expo"][data-theme="light"] .canvas-column {
- box-shadow: -1px 0 0 rgba(43, 45, 72, 0.06), -14px 0 30px -18px rgba(43, 45, 72, 0.45);
+ --canvas-edge-dark: rgba(43, 45, 72, 0.06);
+ box-shadow: -14px 0 30px -18px rgba(43, 45, 72, 0.45);
 }
 :root[data-ui-theme="expo"][data-theme="dark"] .canvas-column {
- box-shadow: -1px 0 0 rgba(0, 0, 0, 0.25), -14px 0 30px -16px rgba(0, 0, 0, 0.7);
+ --canvas-edge-dark: rgba(0, 0, 0, 0.25);
+ box-shadow: -14px 0 30px -16px rgba(0, 0, 0, 0.7);
+}
+/* The edge used to be a left-only -1px line on the column; the other three
+   sides sit flush with the window frame, so it only read on the left. Drawn
+   INSIDE the column instead, above every window and the corner fills, it
+   frames the whole central panel on all four sides. */
+:root[data-ui-theme="expo"] .canvas-column-edge {
+ position: absolute;
+ inset: 0;
+ z-index: 2147483001;
+ pointer-events: none;
+ border-radius: var(--radius-xl) 0 0 var(--radius-xl);
+ box-shadow: inset 0 0 0 1px var(--canvas-edge-dark, rgba(0, 0, 0, 0.25)),inset 0 0 0 2.5px var(--expo-edge);
 }
 
 /* No rule under a title: the title bar and the channel header sit straight
@@ -493,12 +508,18 @@
 }
 
 /* Dark buttons need a visible edge: the surface edge (9% white) vanished on
-   the dark stage, so outline and secondary pills read as flat text. */
+   the dark stage, so outline and secondary pills read as flat text. The top
+   shine matches the workspace switcher's (50% white), not a faint 14%. */
 :root[data-ui-theme="expo"][data-theme="dark"] [data-slot="button"][data-variant="outline"],
 :root[data-ui-theme="expo"][data-theme="dark"] [data-slot="button"][data-variant="secondary"],
 :root[data-ui-theme="expo"][data-theme="dark"] [data-slot="select-trigger"],
 :root[data-ui-theme="expo"][data-theme="dark"] [data-slot="toggle-group-item"]:not([data-state="on"]) {
- box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.14), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 3px 0 var(--expo-lip) !important;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 3px 0 var(--expo-lip) !important;
+}
+/* The agents status-filter chips draw their own 1px border, so they take
+   only the top shine, keeping the control-outer-ring halo it replaces. */
+:root[data-ui-theme="expo"][data-theme="dark"] .agents-status-filter > button {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), 0 0 0 1px var(--control-outer-ring) !important;
 }
 
 /* Switcher: the selected workspace / desktop row is the raised coral pill;
@@ -514,4 +535,45 @@
  background: var(--expo-pill) !important;
  border-color: transparent !important;
  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px var(--expo-edge), 0 3px 0 var(--expo-lip) !important;
+}
+
+/* Agent cards (Agents window grid) take the same raised-pill treatment as the
+   buttons: top shine, inset edge, and a lip under them. Hover lifts the card
+   further onto a deeper lip; the selected card's edge picks up its accent. */
+:root[data-ui-theme="expo"] .agents-list-card {
+ border-color: transparent !important;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.55), inset 0 0 0 1.5px var(--expo-edge), 0 3px 0 var(--expo-lip) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] .agents-list-card {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 3px 0 var(--expo-lip) !important;
+}
+:root[data-ui-theme="expo"] .agents-list-card:hover {
+ transform: translateY(-3px);
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.6), inset 0 0 0 1.5px var(--expo-edge), 0 5px 0 var(--expo-lip), 0 16px 26px -12px rgba(20, 20, 40, 0.32) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] .agents-list-card:hover {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.55), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 32%), 0 5px 0 var(--expo-lip), 0 18px 30px -12px rgba(8, 8, 20, 0.6) !important;
+}
+:root[data-ui-theme="expo"] .agents-list-card[data-agent-selected="true"] {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px color-mix(in oklab, var(--agent-accent, var(--expo-coral)), transparent 35%), 0 3px 0 var(--expo-lip) !important;
+}
+/* Agent detail pane: the summary card and every section card take the same
+   raised-pill shine as the agent cards (no hover lift — they aren't buttons). */
+:root[data-ui-theme="expo"] :is(.agent-detail-summary, .agent-detail-section) {
+ border-color: transparent !important;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.55), inset 0 0 0 1.5px var(--expo-edge), 0 3px 0 var(--expo-lip) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] :is(.agent-detail-summary, .agent-detail-section) {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 3px 0 var(--expo-lip) !important;
+}
+/* The avatar tile inside the card carries the same 50%-white top shine. It is
+   an overlay, not the tile's own inset shadow, so image avatars that fill the
+   tile don't paint over it. */
+:root[data-ui-theme="expo"] .agents-list-card-avatar::after {
+ content: "";
+ position: absolute;
+ inset: 0;
+ border-radius: inherit;
+ pointer-events: none;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5);
 }

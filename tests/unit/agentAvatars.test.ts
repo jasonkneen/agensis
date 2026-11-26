@@ -23,6 +23,13 @@ describe('agent avatars', () => {
     expect(isAutomaticAgentAvatar('/agent-avatars/set1-fox-hoodie.png')).toBe(false);
   });
 
+  it('gives bare-initials placeholders a Blobatar instead of rendering text', () => {
+    expect(isAutomaticAgentAvatar('CO')).toBe(true);
+    expect(resolveAgentAvatar('CO', 'Coder')).toBe('blobatar:coder');
+    expect(isImageAvatar('CO')).toBe(true);
+    expect(isAutomaticAgentAvatar('icon:bot')).toBe(false);
+  });
+
   it('keeps manual choices and renders automatic values locally', () => {
     const manual = '/agent-avatars/set1-fox-hoodie.png';
     expect(resolveAgentAvatar(manual, 'Researcher')).toBe(manual);

@@ -3049,6 +3049,9 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
 
             </CanvasDropZone>
           </main>
+          {/* Hairline round the whole central panel, painted above every window
+              (themes opt in via .canvas-column-edge; unstyled it draws nothing). */}
+          {!isMobile && <div className="canvas-column-edge" aria-hidden />}
         </div>
 
         {showTour && (
