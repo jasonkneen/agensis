@@ -391,9 +391,6 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
 
 /* A full-size window curves with the column's corner fills, so its inner
    (offset) border follows the curve instead of being cut square. */
-:root[data-ui-theme="expo"] .canvas-column [data-window-view-mode="full"] [data-window-surface] {
- border-radius: var(--radius-xl) 0 0 var(--radius-xl) !important;
-}
 
 /* One "selected" style: the raised coral pill, for every segment, filter
    chip and tab that says it is the current choice. */
@@ -568,4 +565,17 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
  border-radius: inherit;
  pointer-events: none;
  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5);
+}
+
+/* Full-size windows sit inset 6px on top, right and bottom (FloatingWindowShell
+   FULL_BLEED_EDGE_INSET). The wallpaper is one <img> behind the whole app, so
+   that gap showed it as a ragged strip and in the window's corners. While a
+   full-size window is showing, the column itself is painted in the chrome
+   colour — the inset reads as a frame, the same surface as the sidebar — and
+   the window is rounded on every corner to match the inset. */
+:root[data-ui-theme="expo"] .canvas-column:has([data-floating-window][data-window-view-mode="full"]:not([data-window-hidden="true"])) {
+ background: var(--expo-chrome);
+}
+:root[data-ui-theme="expo"] .canvas-column [data-window-view-mode="full"] [data-window-surface] {
+ border-radius: var(--radius-xl) !important;
 }
