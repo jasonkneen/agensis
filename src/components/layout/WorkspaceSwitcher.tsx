@@ -71,6 +71,11 @@ export interface WorkspaceSwitcherProps {
   onOpenDesktopGrid?: () => void;
   pins: readonly string[];
   onTogglePin: (id: string) => void;
+  /** Workspaces still settling (pre-session, missing, preparing). */
+  loading?: boolean;
+  /** Why workspaces could not load, when they could not. */
+  loadError?: string | null;
+  onRetry?: () => void;
 }
 
 /** The sidebar title: current workspace + desktop, opening the picker. */
@@ -89,6 +94,9 @@ export function WorkspaceSwitcher({
   onOpenDesktopGrid,
   pins,
   onTogglePin,
+  loading = false,
+  loadError = null,
+  onRetry,
 }: WorkspaceSwitcherProps) {
   const [open, setOpen] = React.useState(false);
   const [renamingId, setRenamingId] = React.useState<string | null>(null);
@@ -98,6 +106,37 @@ export function WorkspaceSwitcher({
   const activeDesktop = desktops.find(d => d.id === activeDesktopId);
 
   const close = () => { setOpen(false); setRenamingId(null); };
+
+  // Never a blank card. While workspaces settle it says so (and is busy for
+  // assistive tech); if they could not load it says why and offers Retry.
+  // These were the rail's loading states; they moved here with it.
+  if (!active && (loading || loadError)) {
+    const showLoading = loading && !loadError;
+    return (
+      <div
+        data-workspace-switcher-status
+        aria-busy={showLoading ? 'true' : undefined}
+        role="status"
+        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-border bg-card px-2 py-1.5 text-sm"
+      >
+        {showLoading ? (
+          <>
+            <span aria-hidden="true" className="size-8 shrink-0 animate-pulse rounded-[9px] bg-muted" />
+            <span className="truncate text-muted-foreground">Loading workspaces…</span>
+          </>
+        ) : (
+          <>
+            <span className="min-w-0 flex-1 truncate text-muted-foreground" title={loadError ?? undefined}>{loadError}</span>
+            {onRetry && (
+              <button type="button" onClick={onRetry} className="shrink-0 rounded-md px-2 py-1 font-medium text-foreground underline underline-offset-2 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                Retry
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
 
   return (
     <Popover open={open} onOpenChange={next => { setOpen(next); if (!next) setRenamingId(null); }}>
