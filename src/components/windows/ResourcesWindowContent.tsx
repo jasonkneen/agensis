@@ -303,9 +303,9 @@ export function ResourcesWindowContent({ workspaceId, agents }: ResourcesWindowC
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-border p-4">
+        {/* No "Shared resources" heading: the window is titled exactly that. */}
         <div className="max-w-2xl">
-          <div className="text-sm font-semibold">Shared resources</div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             A resource agent is the gatekeeper for each context, knowledge, tooling, or code resource.
             Workspace-visible resources are reached through the steward agent (or its connected CLI), so normal
             agent tools remain the execution surface while the resource stays protected.

@@ -22,6 +22,10 @@ import { AppearancePanel } from '@/components/settings/AppearancePanel';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { MemorySection } from '@/components/memory/MemorySection';
 import { InboxWindowContent } from '@/components/inbox/InboxWindowContent';
+import { ResourcesWindowContent } from '@/components/windows/ResourcesWindowContent';
+import { FileUpload } from '@/components/files/FileUpload';
+import { NostrCommunitySetup } from '@/components/chat/NostrCommunitySetup';
+import { Dialog, DialogContent } from '@agensis/ui/components/dialog';
 import { HomeCanvas } from '@/components/home/HomeCanvas';
 import { DocWindowContent } from '@/components/windows/DocWindowContent';
 import { ChatThreadPanel } from '@/components/chat/ChatThreadPanel';
@@ -44,6 +48,12 @@ import {
   seedTasks,
   seedInboxItems,
   SAMPLE_DOC_MARKDOWN,
+  SYSTEM_CAPABILITIES,
+  GATEWAYS,
+  RESOURCES,
+  UPLOADED_FILES,
+  NOSTR_CONNECTION,
+  NOSTR_CHANNELS,
 } from './galleryFixtures';
 
 interface Screen {
@@ -148,11 +158,11 @@ function SettingsScreen({ tab }: { tab: 'tools' | 'ai' }) {
       onClose={noop}
       workspaceName="Main"
       userEmail="you@example.test"
-      workspace={null}
+      workspace={{ id: WORKSPACE_ID, name: 'Main', local_path: '/work/agensis' } as never}
       onUpdateWorkspace={noop}
       themeMode={mode}
       onThemeChange={setTheme}
-      secretsWorkspaceId={null}
+      secretsWorkspaceId={WORKSPACE_ID}
       isWorkspaceOwner
       initialTab={tab}
     />
@@ -169,6 +179,11 @@ if (typeof window !== 'undefined' && !(window as { __galleryFetch?: boolean })._
   window.fetch = async (input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     if (/\/inbox(\?|$)/.test(url)) return json({ items: seedInboxItems(), unreadCount: 3 });
+    if (url.includes('/backend/system/capabilities')) return json(SYSTEM_CAPABILITIES);
+    if (/\/resources\/[^/]+\/operations/.test(url)) return json([]);
+    if (/\/resources(\?|$)/.test(url)) return json(RESOURCES);
+    if (/\/nostr-communities\/[^/]+\/channels(\?|$)/.test(url)) return json(NOSTR_CHANNELS);
+    if (/\/gateways(\?|$)/.test(url)) return json(GATEWAYS);
     if (url.includes('/backend/')) return json([]);
     return realFetch(input, init);
   };
@@ -182,6 +197,18 @@ const sampleDoc = {
 const threadMessages = seedMessages().map((m, i) => ({ ...m, thread_parent_id: i === 0 ? null : 'msg-1' }));
 
 const SCREENS: Screen[] = [
+  { id: 'resources', title: 'Resources', icon: <Sparkles className="size-3.5" />, render: () => <ResourcesWindowContent workspaceId={WORKSPACE_ID} agents={agents} /> },
+  { id: 'files', title: 'Files', icon: <Sparkles className="size-3.5" />, render: () => (
+    <div className="h-full overflow-auto p-4"><FileUpload files={UPLOADED_FILES as never} onUpload={noop} onDelete={noop} /></div>
+  ) },
+  { id: 'nostr', title: 'Nostr community', icon: <Hash className="size-3.5" />, render: () => (
+    // It is a dialog body in the app (needs Dialog for its DialogTitle).
+    <Dialog open>
+      <DialogContent className="max-w-2xl">
+        <NostrCommunitySetup workspaceId={WORKSPACE_ID} onBack={noop} onClose={noop} onCreate={() => null} existingConnection={NOSTR_CONNECTION as never} />
+      </DialogContent>
+    </Dialog>
+  ) },
   { id: 'inbox', title: 'Inbox', icon: <Users className="size-3.5" />, render: () => <InboxWindowContent workspaceId={WORKSPACE_ID} agents={agents} onReplyInThread={async () => ({ delivered: true })} /> },
   { id: 'home', title: 'Home', icon: <Sun className="size-3.5" />, render: () => (
     <div className="relative h-full"><HomeCanvas documents={[]} agents={agents} workspaceId={WORKSPACE_ID} memoryFacts={[]} onSendMessage={noop} onOpenNewDocument={noop} workspaceName="Main" /></div>

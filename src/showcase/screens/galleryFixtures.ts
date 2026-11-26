@@ -197,3 +197,65 @@ export const SAMPLE_DOC_MARKDOWN = `<h1>Theme engine</h1>
 <h2>Why</h2>
 <ul><li>One engine instead of four hand-written families</li><li>Secondary text is <em>solved</em> to a contrast target, never picked</li></ul>
 <pre><code>const tokens = buildThemeTokens(seed, 'dark');</code></pre>`;
+
+// --- Settings / Resources / Files / Nostr (data those surfaces fetch) --------
+
+const cli = (id: string, label: string, available: boolean, version: string | null) =>
+  ({ id, label, command: id, available, path: available ? `/usr/local/bin/${id}` : null, version, install_hint: available ? null : `npm i -g ${id}` });
+
+export const SYSTEM_CAPABILITIES = {
+  checkedAt: new Date().toISOString(),
+  workspacePath: '/work/agensis',
+  clis: [cli('claude', 'Claude Code', true, '2.4.1'), cli('codex', 'Codex', true, '0.92.0'), cli('amp', 'Amp', false, null), cli('grok', 'Grok', true, '1.3.0')],
+  packages: [
+    { name: '@anthropic-ai/claude-agent-sdk', available: true, version: '0.9.2', path: '/work/node_modules/@anthropic-ai/claude-agent-sdk' },
+    { name: 'node-pty', available: true, version: '1.1.0', path: '/work/node_modules/node-pty' },
+  ],
+  skills: [
+    { id: 'claude-skills', label: 'Claude skills', type: 'claude', path: '~/.claude/skills', available: true, count: 24 },
+    { id: 'codex-skills', label: 'Codex skills', type: 'codex', path: '~/.codex/skills', available: true, count: 6 },
+  ],
+  codexAppServer: { available: true, command: 'codex app-server', transports: ['stdio'] },
+};
+
+export const GATEWAYS = [
+  { id: 'gw-1', workspace_id: WORKSPACE_ID, name: 'OpenRouter', base_url: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-sonnet', protocol: 'openai', has_key: true },
+  { id: 'gw-2', workspace_id: WORKSPACE_ID, name: 'Local Ollama', base_url: 'http://localhost:11434/v1', model: 'qwen3:32b', protocol: 'openai', has_key: false },
+];
+
+export const RESOURCES = [
+  ['Production database', 'Postgres behind the API; reads are open, writes go through the steward', 'database', 'agent-4', 'active'],
+  ['Release pipeline', 'Builds, signs and publishes the desktop app', 'deployment', 'agent-1', 'active'],
+  ['Design tokens', 'The theme engine seeds and palettes', 'context', 'agent-3', 'archived'],
+].map(([name, description, facet, steward, status], i) => ({
+  id: `res-${i + 1}`, workspace_id: WORKSPACE_ID, steward_agent_id: steward, controller_id: null, name, description, facet,
+  descriptor: {}, version: 3 + i, visibility: 'workspace', status, deleted_at: null, created_by: CURRENT_USER_ID,
+  created_at: ago(60 * 24 * (i + 2)), updated_at: ago(90 * (i + 1)),
+}));
+
+export const UPLOADED_FILES = [
+  ['brand-guidelines.pdf', 2_480_000, 'application/pdf'],
+  ['onboarding-flow.fig', 8_120_000, 'application/octet-stream'],
+  ['release-checklist.md', 6_200, 'text/markdown'],
+  ['hero-wallpaper.webp', 412_000, 'image/webp'],
+].map(([name, size, type], i) => ({
+  id: `file-${i + 1}`, workspace_id: WORKSPACE_ID, name: name as string, size: size as number, type: type as string,
+  storage_path: `uploads/${name}`, created_at: ago(60 * (i + 1) * 7),
+}));
+
+export const NOSTR_CONNECTION = {
+  id: 'nostr-1', workspaceId: WORKSPACE_ID, relayHttpUrl: 'https://relay.example.test', relayWsUrl: 'wss://relay.example.test',
+  communityId: 'agent-builders', host: 'relay.example.test', name: 'Agent Builders', description: 'People building agent tools in the open',
+  relayPubkey: 'npub1relay', memberPubkey: 'npub1you', policyVersion: '1', status: 'active', lastError: '', subscriptions: [],
+};
+
+export const NOSTR_CHANNELS = [
+  ['general', 'Anything about building agents', true, true],
+  ['show-and-tell', 'Demos and screenshots', true, false],
+  ['mcp', 'Model Context Protocol servers', true, true],
+  ['hiring', 'Jobs and contracts', false, false],
+].map(([name, description, joined, subscribed], i) => ({
+  id: `nc-${i + 1}`, name: name as string, description: description as string, type: 'chat', visibility: 'public' as const,
+  archived: false, joined: joined as boolean,
+  subscription: subscribed ? { bridgeId: `br-${i}`, channelId: `nc-${i + 1}`, sessionId: `s-n${i}`, enabled: i !== 2, status: i === 2 ? 'paused' : 'live', lastError: '' } : null,
+}));
