@@ -14,7 +14,7 @@ export const CANVAS_APPS: CanvasAppDefinition[] = [
   {
     id: 'task-kanban',
     name: 'Task Kanban',
-    description: 'A live task board applet for workspace tasks and agent run notes',
+    description: 'A live task board artifact for workspace tasks and agent run notes',
     category: 'workspace',
     buildHtml: buildTaskKanbanAppHtml,
   },
@@ -57,6 +57,15 @@ export function extractHtmlFromDocContent(content: string): string {
 }
 
 export const APPLETS_FOLDER = 'Applets';
+
+/**
+ * What a document folder is CALLED on screen. Applets are "Artifacts" to the
+ * person using the app; the stored folder stays 'Applets' so existing
+ * documents, and every query that finds them by folder, keep working.
+ */
+export function folderDisplayName(folder: string): string {
+  return folder === APPLETS_FOLDER ? 'Artifacts' : folder;
+}
 
 export interface AgensisAppletInit {
   state: Record<string, unknown>;
@@ -345,7 +354,7 @@ ${AGENSIS_APPLET_THEME_JS}
         var node = document.getElementById("runs");
         node.innerHTML = runs.length ? runs.map(function (run) {
           return '<div class="run"><span>' + String(run.prompt || "Agent run").replace(/[<>&"]/g, "") + '</span><span>' + run.status + '</span></div>';
-        }).join("") : "No agent runs queued in this applet.";
+        }).join("") : "No agent runs queued in this artifact.";
       }
       document.getElementById("createTask").addEventListener("click", function () {
         var title = document.getElementById("newTitle").value.trim();

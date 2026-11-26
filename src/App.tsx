@@ -2380,11 +2380,11 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
   const handleCreateCustomApplet = useCallback(async () => {
     const { session, failure } = await createSession('auto', { canvas_id: activeLayerId });
     if (!session) {
-      reportWriteFailure('start the applet chat', failure);
+      reportWriteFailure('start the artifact chat', failure);
       return;
     }
 
-    const title = 'Create a canvas applet';
+    const title = 'Create a canvas artifact';
     await updateSession(session.id, { title });
     openWindow('chat', { title, sessionId: session.id, canvasId: activeLayerId, ownerUserId: user?.id });
 

@@ -177,7 +177,7 @@ function AppletObject({
   const parsed = parseAppletState(obj.text_content);
   const appId = parsed.appId || obj.file_name || 'applet';
   const appDefinition = CANVAS_APPS.find(app => app.id === appId);
-  const appletTitle = obj.file_name || appDefinition?.name || 'Canvas applet';
+  const appletTitle = obj.file_name || appDefinition?.name || 'Canvas artifact';
   // NET-06: the documents list is metadata-only, so a doc-backed applet must
   // fetch its source doc's body on demand instead of reading it off the list.
   const [docBackedHtml, setDocBackedHtml] = useState<string | null>(null);
@@ -197,7 +197,7 @@ function AppletObject({
     });
     return () => { cancelled = true; };
   }, [parsed.docId, documents]);
-  const appletHtml = docBackedHtml || appDefinition?.buildHtml() || obj.src || '<!doctype html><html><body>Empty applet</body></html>';
+  const appletHtml = docBackedHtml || appDefinition?.buildHtml() || obj.src || '<!doctype html><html><body>Empty artifact</body></html>';
   const themedAppletHtml = injectAppletHostTheme(appletHtml, readAppletTheme());
 
   const sendInit = useCallback(() => {
@@ -268,7 +268,7 @@ function AppletObject({
     if (message.type === 'agensis:setState') {
       // BUGFIX: a doc-backed applet's obj.text_content carries { appId, docId, state }.
       // Rebuilding it as { appId, state } here (dropping docId) made docBackedHtml's
-      // effect bail on the very next render, falling through to the "Empty applet"
+      // effect bail on the very next render, falling through to the "Empty artifact"
       // placeholder — i.e. every doc-backed applet blanked itself out the moment it
       // called agensis:setState, which the SDK contract asks every applet to do.
       // Preserve docId when present so the doc body stays the source of truth.
@@ -302,7 +302,7 @@ function AppletObject({
       return;
     }
     if (message.type === 'agensis:crash') {
-      setCrash(String(payload.message || 'Applet crashed'));
+      setCrash(String(payload.message || 'Artifact crashed'));
     }
   };
 
@@ -382,7 +382,7 @@ function AppletObject({
         key={reloadKey}
         ref={iframeRef}
         data-canvas-applet-frame
-        title={obj.file_name || 'Canvas applet'}
+        title={obj.file_name || 'Canvas artifact'}
         srcDoc={themedAppletHtml}
         sandbox="allow-forms allow-modals allow-popups allow-scripts"
         style={{
@@ -415,7 +415,7 @@ function AppletObject({
           }}
         >
           <AlertTriangle style={{ width: 22, height: 22, color: 'var(--error)' }} />
-          <strong style={{ fontSize: 13 }}>Applet crashed</strong>
+          <strong style={{ fontSize: 13 }}>Artifact crashed</strong>
           <span style={{ maxWidth: 360, color: 'var(--ink-secondary)', fontSize: 12 }}>{crash}</span>
           <button
             type="button"
