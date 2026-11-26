@@ -1172,20 +1172,20 @@ export const Sidebar = React.memo(function Sidebar({
      {/* What the workspace rail used to carry at its foot, as wide buttons
          now that the rail is gone. */}
      {(onOpenFeedback || onOpenTenants || workspaceSwitcherSlot) && (
-      <div className="sidebar-footer-actions flex gap-1.5">
+      <div className="sidebar-footer-actions @container flex gap-1.5">
        {workspaceSwitcherSlot && (
         <Button type="button" variant="outline" size="sm" className="h-7 min-w-0 flex-1 gap-1 px-1.5 text-xs" onClick={onCreateWorkspace} aria-label="New workspace" title="New workspace">
-         <Plus data-icon="inline-start" /> <span className="truncate">New</span>
+         <Plus data-icon="inline-start" /> <span className="hidden truncate @[16rem]:inline">New</span>
         </Button>
        )}
        {onOpenFeedback && (
-        <Button type="button" variant="outline" size="sm" className="h-7 min-w-0 flex-1 gap-1 px-1.5 text-xs" onClick={onOpenFeedback}>
-         <MessageSquareWarning data-icon="inline-start" /> <span className="truncate">Feedback</span>
+        <Button type="button" variant="outline" size="sm" className="h-7 min-w-0 flex-1 gap-1 px-1.5 text-xs" onClick={onOpenFeedback} aria-label="Send feedback" title="Send feedback">
+         <MessageSquareWarning data-icon="inline-start" /> <span className="hidden truncate @[16rem]:inline">Feedback</span>
         </Button>
        )}
        {onOpenTenants && (
-        <Button type="button" variant="outline" size="sm" className="h-7 min-w-0 flex-1 gap-1 px-1.5 text-xs" onClick={onOpenTenants}>
-         <Building2 data-icon="inline-start" /> <span className="truncate">Tenants</span>
+        <Button type="button" variant="outline" size="sm" className="h-7 min-w-0 flex-1 gap-1 px-1.5 text-xs" onClick={onOpenTenants} aria-label="Tenants" title="Tenants">
+         <Building2 data-icon="inline-start" /> <span className="hidden truncate @[16rem]:inline">Tenants</span>
         </Button>
        )}
       </div>
