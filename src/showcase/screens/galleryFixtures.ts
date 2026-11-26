@@ -233,15 +233,6 @@ export const RESOURCES = [
   created_at: ago(60 * 24 * (i + 2)), updated_at: ago(90 * (i + 1)),
 }));
 
-export const UPLOADED_FILES = [
-  ['brand-guidelines.pdf', 2_480_000, 'application/pdf'],
-  ['onboarding-flow.fig', 8_120_000, 'application/octet-stream'],
-  ['release-checklist.md', 6_200, 'text/markdown'],
-  ['hero-wallpaper.webp', 412_000, 'image/webp'],
-].map(([name, size, type], i) => ({
-  id: `file-${i + 1}`, workspace_id: WORKSPACE_ID, name: name as string, size: size as number, type: type as string,
-  storage_path: `uploads/${name}`, created_at: ago(60 * (i + 1) * 7),
-}));
 
 export const NOSTR_CONNECTION = {
   id: 'nostr-1', workspaceId: WORKSPACE_ID, relayHttpUrl: 'https://relay.example.test', relayWsUrl: 'wss://relay.example.test',
