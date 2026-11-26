@@ -4373,12 +4373,62 @@ rather than one more per-panel hook {
    full-strength version while the rest sit at 55% AND at the 60% opacity the
    swatch already carries for inactive tiles — two multiplied differences, on
    top of the left-edge marker and the squarer radius. */
+/* Workspace tiles read as OBJECTS, not outlined boxes. Every tile used to wear
+   a dark outline at 55% of the text colour (and the active one a solid one),
+   which boxed the whole rail. Depth now comes from the tile's own fill: a
+   soft top highlight, a hairline edge in its own tone, and a gentle gradient,
+   so it works on any identity colour in any theme. The letters get weight and
+   a faint shadow so white stays legible on light fills like amber. */
 .workspace-tile-swatch {
- border-color: color-mix(in srgb, var(--foreground) 55%, transparent);
+ border-color: transparent !important;
+ background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(0, 0, 0, 0.06));
+ box-shadow:
+  inset 0 1px 0 rgba(255, 255, 255, 0.35),
+  inset 0 0 0 1px rgba(0, 0, 0, 0.12),
+  0 1px 2px rgba(0, 0, 0, 0.18) !important;
+ font-weight: 700 !important;
+ text-shadow: 0 1px 0 rgba(0, 0, 0, 0.22);
+}
+[data-workspace-rail-tile]:not([data-active="true"]) .workspace-tile-swatch {
+ /* Dimmed, not washed out: a little colour stays so "which is which" holds. */
+ opacity: 0.72 !important;
+ filter: saturate(0.85);
+}
+[data-workspace-rail-tile]:not([data-active="true"]):hover .workspace-tile-swatch {
+ opacity: 1 !important;
+ filter: none;
 }
 
+/* The workspace you are in: a ring with a gap of the rail's own colour, not a
+   dark outline. */
 [data-workspace-rail-tile][data-active="true"] .workspace-tile-swatch {
- border-color: var(--foreground);
+ box-shadow:
+  inset 0 1px 0 rgba(255, 255, 255, 0.35),
+  inset 0 0 0 1px rgba(0, 0, 0, 0.12),
+  0 0 0 2px var(--rail-gap, var(--card)),
+  0 0 0 3.5px color-mix(in srgb, var(--foreground) 70%, transparent) !important;
+}
+
+/* Expo: the tactile version — the tile sits on a lip in its own darker tone,
+   the active ring and the left marker are coral. */
+:root[data-ui-theme="expo"] [data-workspace-rail] { --rail-gap: var(--expo-chrome); }
+:root[data-ui-theme="expo"] .workspace-tile-swatch {
+ border-radius: 11px !important;
+ box-shadow:
+  inset 0 1.5px 0 rgba(255, 255, 255, 0.4),
+  inset 0 0 0 1.5px rgba(0, 0, 0, 0.1),
+  0 2px 0 rgba(0, 0, 0, 0.22) !important;
+}
+:root[data-ui-theme="expo"] [data-workspace-rail-tile][data-active="true"] .workspace-tile-swatch {
+ box-shadow:
+  inset 0 1.5px 0 rgba(255, 255, 255, 0.4),
+  inset 0 0 0 1.5px rgba(0, 0, 0, 0.1),
+  0 2px 0 rgba(0, 0, 0, 0.22),
+  0 0 0 2.5px var(--rail-gap),
+  0 0 0 4.5px var(--expo-coral) !important;
+}
+:root[data-ui-theme="expo"] [data-workspace-rail-tile][data-active="true"] > span.absolute {
+ background: var(--expo-coral) !important;
 }
 
 /* Light mode (base theme only — not neo, not paper) panels get a white border */
