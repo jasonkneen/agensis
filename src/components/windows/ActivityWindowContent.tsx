@@ -12,6 +12,7 @@ import {
   Send,
   UserPlus,
   X,
+  ChevronRight,
 } from 'lucide-react';
 import type { ActivityEvent, ActivityEventType } from '../../types';
 import { Button } from '@agensis/ui/components/button';
@@ -55,6 +56,7 @@ import {
   takeActivityWindow,
 } from '../../lib/activityFeed';
 import { oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
+import { groupActivityRuns } from '../../lib/activityRuns';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useActivityEventComments } from '../../hooks/useActivityEventComments';
 
@@ -173,28 +175,30 @@ function countByFamily(events: ActivityEvent[]): Record<ActivityFilter, number> 
  * mid-click — which is exactly what the inbox version could not promise, because
  * there the server returned only the requested slice.
  */
-function ActivityFilterTabs({
+/**
+ * The summary: one tile per kind of activity in the log — how many, and when
+ * the last one happened. It IS the filter: pick a tile to narrow the feed,
+ * "All" to widen it. Replaced a tab row plus a strip of identically coloured
+ * segments that gave no overview at all.
+ */
+function ActivitySummaryTiles({
   tabs,
   filter,
   counts,
+  lastAt,
   onChange,
 }: {
   tabs: Array<{ id: ActivityFilter; label: string }>;
   filter: ActivityFilter;
   counts: Record<ActivityFilter, number>;
+  lastAt: Partial<Record<ActivityFilter, string>>;
   onChange: (filter: ActivityFilter) => void;
 }) {
   return (
-    <div
-      role="group"
-      aria-label="Filter activity"
-      className={cn(
-        'flex min-w-0 items-center gap-0.5 overflow-x-auto rounded-lg bg-muted/70 p-0.5',
-        '[scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
-      )}
-    >
+    <div role="group" aria-label="Filter activity" className="grid grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-1.5 px-3 pt-3">
       {tabs.map(tab => {
         const active = tab.id === filter;
+        const last = lastAt[tab.id];
         return (
           <button
             key={tab.id}
@@ -202,15 +206,17 @@ function ActivityFilterTabs({
             onClick={() => onChange(tab.id)}
             aria-pressed={active}
             className={cn(
-              'flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-xs font-medium transition-colors',
+              'flex min-w-0 flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors',
               'focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2',
-              active ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+              active ? 'border-foreground/25 bg-foreground/[0.06]' : 'border-border hover:bg-foreground/[0.03]',
             )}
           >
-            {tab.label}
-            {counts[tab.id] > 0 && (
-              <span className="tabular-nums text-muted-foreground/70">{counts[tab.id]}</span>
-            )}
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              {tab.id !== 'all' && <span className="size-1.5 shrink-0 rounded-full" style={{ background: familyDotColor(tab.id) }} aria-hidden />}
+              {tab.label}
+            </span>
+            <span className="text-lg font-semibold leading-tight tabular-nums text-foreground">{counts[tab.id]}</span>
+            <span className="truncate text-2xs text-muted-foreground">{last ? `last ${formatAgo(last)}` : '\u00a0'}</span>
           </button>
         );
       })}
@@ -218,8 +224,21 @@ function ActivityFilterTabs({
   );
 }
 
+/** "3m ago", "2h ago", "yesterday", "Nov 12". */
+function formatAgo(iso: string): string {
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms)) return '';
+  const min = Math.round(ms / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h}h ago`;
+  if (h < 48) return 'yesterday';
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 const ACTOR_TABS: Array<{ id: ActivityActorFilter; label: string }> = [
-  { id: 'anyone', label: 'Anyone' },
+  { id: 'anyone', label: 'Everyone' },
   { id: 'person', label: 'People' },
   { id: 'agent', label: 'Agents' },
 ];
@@ -236,6 +255,9 @@ function ActivityActorTabs({
 }) {
   return (
     <div role="group" aria-label="Filter activity by who did it" className="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/70 p-0.5">
+      {/* "From", so this cannot be read as the Agents tile above it: that tile
+          is a KIND of activity, this is WHO did it. */}
+      <span className="px-1.5 text-xs text-muted-foreground">From</span>
       {ACTOR_TABS.map(tab => {
         const active = tab.id === filter;
         return (
@@ -354,48 +376,6 @@ function ActivityEventComments({ eventId, workspaceId, currentUserId }: { eventI
 // whole point is "you can see the shape of the work at a glance" — in our case
 // that is the mix of docs vs tasks vs agent calls over the page, not raw timing.
 // ---------------------------------------------------------------------------
-function ActivityTimeline({
-  events,
-  selectedId,
-  onSelect,
-}: {
-  events: ActivityEvent[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-}) {
-  if (events.length === 0) return null;
-  return (
-    <div className="trajectory-timeline">
-      <div className="trajectory-timeline-labels" aria-hidden="true">
-        <span><span className="trajectory-timeline-dot" style={{ background: familyDotColor('docs'), width: 7, height: 7 }} /> Docs</span>
-        <span><span className="trajectory-timeline-dot" style={{ background: familyDotColor('tasks'), width: 7, height: 7 }} /> Tasks</span>
-        <span><span className="trajectory-timeline-dot" style={{ background: familyDotColor('messages'), width: 7, height: 7 }} /> Messages</span>
-        <span><span className="trajectory-timeline-dot" style={{ background: familyDotColor('agents'), width: 7, height: 7 }} /> Agents</span>
-      </div>
-      <div className="trajectory-timeline-track" role="img" aria-label="Activity timeline">
-        {events.map((event) => {
-          const family = activityFamilyFor(event);
-          const selected = event.id === selectedId;
-          return (
-            <button
-              key={event.id}
-              type="button"
-              title={activityEntryLabel(event)}
-              aria-label={activityEntryLabel(event)}
-              onClick={() => onSelect(event.id)}
-              className="group relative h-full min-w-[2px] flex-1 rounded-[2px] transition-opacity"
-              style={{
-                background: familyDotColor(family),
-                opacity: selected ? 1 : 0.55,
-              }}
-            />
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 // The tabbed right-hand inspector, trajectory-style. Each selected event opens a
 // Summary / Metadata / Comments triad instead of a single scrolling column —
 // the same "detail has structure" move the trajectory record inspector makes.
@@ -469,6 +449,23 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
   );
 
   const counts = useMemo(() => countByFamily(events), [events]);
+  // Newest event per kind, for "last 3m ago" on each summary tile. Events
+  // arrive newest-first, so the first one seen per family wins.
+  const lastAt = useMemo(() => {
+    const out: Partial<Record<ActivityFilter, string>> = {};
+    for (const event of events) {
+      if (!out.all) out.all = event.created_at;
+      const family = ACTIVITY_FAMILY[event.event_type];
+      if (family && !out[family]) out[family] = event.created_at;
+    }
+    return out;
+  }, [events]);
+  const [openRuns, setOpenRuns] = useState<Set<string>>(() => new Set());
+  const toggleRun = (key: string) => setOpenRuns(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
   // Only offer a tab for something that is actually in the log. A workspace that
   // has never touched the canvas should not be shown a Canvas tab reading 0.
   const tabs = useMemo(
@@ -549,6 +546,41 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
   // you were reading in the detail pane.
   const selectedEvent = selectedId ? events.find(e => e.id === selectedId) ?? null : null;
 
+  // One event row. `nested` rows sit inside an opened run and skip the fade
+  // ramp: the reader asked to see them.
+  const renderRow = (event: ActivityEvent, nested: boolean) => {
+    const selected = event.id === selectedId;
+    // Depth is GLOBAL, not per-day: the ramp follows how far down the feed a
+    // row is, and a day boundary would otherwise restart it at full strength.
+    const depth = rowDepth.get(event.id) ?? 0;
+    const opacity = selected || nested ? 1 : activityRowOpacity(depth, windowed.length, expanded);
+    const full = activityEntryText(event);
+    return (
+      <div
+        key={event.id}
+        className={cn('activity-row activity-row-fade', event.id === enteringId && 'activity-row-enter')}
+        style={{ opacity }}
+      >
+        <button
+          type="button"
+          onClick={() => setSelectedId(selected ? null : event.id)}
+          title={`${full}\n${formatFullDate(event.created_at)}`}
+          className={cn(
+            'group flex w-full items-center gap-2 rounded-md border-l-2 border-transparent px-1.5 py-1 text-left text-sm transition-colors',
+            selected ? 'border-l-primary bg-primary/10' : 'hover:bg-muted/50',
+          )}
+        >
+          <span className={cn('shrink-0 font-mono text-xs tabular-nums text-muted-foreground', !nested && 'w-[6.2rem] whitespace-nowrap')}>{formatClock(event.created_at)}</span>
+          <span className="shrink-0 text-muted-foreground [&_svg]:size-4">{iconFor(event.event_type)}</span>
+          <span className="min-w-0 flex-1 truncate">{activityEntryLabel(event)}</span>
+          {/* The kind of activity as a dot, not a shouted badge on every row:
+              the tiles above carry the names. */}
+          <span className="size-1.5 shrink-0 rounded-full" style={{ background: familyDotColor(activityFamilyFor(event)) }} title={activityFamilyFor(event)} aria-hidden />
+        </button>
+      </div>
+    );
+  };
+
   if (loading && events.length === 0) {
     return (
       <Empty className="h-full border-0">
@@ -580,10 +612,10 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
     <div className="flex h-full min-h-0 flex-col">
       {/* Trajectory-style sticky toolbar: family fold filters on the left, a
           live ledger search pinned to the right. */}
+      {tabs.length > 1 && (
+        <ActivitySummaryTiles tabs={tabs} filter={activeFilter} counts={counts} lastAt={lastAt} onChange={setFilter} />
+      )}
       <div className="activity-tray-toolbar">
-        {tabs.length > 1 && (
-          <ActivityFilterTabs tabs={tabs} filter={activeFilter} counts={counts} onChange={setFilter} />
-        )}
         {actorCounts.person > 0 && actorCounts.agent > 0 && (
           <ActivityActorTabs filter={activeActor} counts={actorCounts} onChange={setActorFilter} />
         )}
@@ -598,13 +630,6 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
           />
         </div>
       </div>
-
-      {/* The segmented overview strip — the trajectory screen's headline visual.
-          Rendered over the visible WINDOW (not the whole loaded page): the strip
-          maps one segment to one row you can actually see in the list, and a
-          workspace with ten thousand events does not create ten thousand flex
-          buttons. */}
-      <ActivityTimeline events={windowed} selectedId={selectedId} onSelect={(id) => setSelectedId(selectedId === id ? null : id)} />
 
       <div className="flex min-h-0 flex-1">
       {/* Radix wraps viewport content in a `display: table` div, which sizes to the
@@ -633,45 +658,46 @@ export const ActivityWindowContent = React.memo(function ActivityWindowContent({
           {days.map(group => (
             <section key={group.label} className="flex flex-col">
               <Marker variant="separator" className="px-1.5 py-1">
-                <MarkerContent className="ui-section-label">{group.label}</MarkerContent>
+                <MarkerContent className="ui-section-label">
+                  {group.label}
+                  <span className="ml-1.5 tabular-nums normal-case opacity-70">{group.items.length}</span>
+                </MarkerContent>
               </Marker>
               <div className="flex flex-col">
-                {group.items.map(event => {
-                  const selected = event.id === selectedId;
-                  // Depth is GLOBAL, not per-day: the ramp follows how far down
-                  // the feed a row is, and a day boundary would otherwise restart
-                  // it at full strength halfway down the list.
-                  const depth = rowDepth.get(event.id) ?? 0;
-                  // A selected row is being read — never dim it out from under
-                  // the reader just because it sits low in the window.
-                  const opacity = selected ? 1 : activityRowOpacity(depth, windowed.length, expanded);
-                  // Shortened for the row, full for the tooltip — a shortened path
-                  // is a label, so the exact one stays one hover away.
-                  const full = activityEntryText(event);
+                {groupActivityRuns(group.items, e => activityFamilyFor(e), e => activityEntryLabel(e)).map(item => {
+                  if (item.kind === 'event') return renderRow(item.event, false);
+                  const { run } = item;
+                  const open = openRuns.has(run.key);
+                  const opacity = activityRowOpacity(rowDepth.get(run.events[0].id) ?? 0, windowed.length, expanded);
+                  const range = run.oldest === run.newest ? formatClock(run.newest) : `${formatClock(run.oldest).slice(0, 5)}–${formatClock(run.newest).slice(0, 5)}`;
                   return (
-                    <div
-                      key={event.id}
-                      className={cn('activity-row activity-row-fade', event.id === enteringId && 'activity-row-enter')}
-                      style={{ opacity }}
-                    >
-                    <button
-                      type="button"
-                      onClick={() => setSelectedId(selected ? null : event.id)}
-                      title={`${full}\n${formatFullDate(event.created_at)}`}
-                      className={cn(
-                        'group flex w-full items-center gap-2 rounded-md border-l-2 border-transparent px-1.5 py-1 text-left text-sm transition-colors',
-                        selected ? 'border-l-primary bg-primary/10' : 'hover:bg-muted/50',
+                    <div key={run.key} className="flex flex-col" style={{ opacity: open ? 1 : opacity }}>
+                      {/* A run: the same subject doing the same kind of thing,
+                          over and over. One line of summary; open it for each
+                          event. */}
+                      <button
+                        type="button"
+                        onClick={() => toggleRun(run.key)}
+                        aria-expanded={open}
+                        className="group flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm transition-colors hover:bg-muted/50"
+                      >
+                        <span className="w-[6.2rem] shrink-0 whitespace-nowrap font-mono text-xs tabular-nums text-muted-foreground">{range}</span>
+                        <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
+                        <span className="min-w-0 flex-1 truncate">
+                          <span className="font-medium">{run.subject}</span>
+                          <span className="text-muted-foreground">
+                            {run.verbs.slice(0, 3).map(([verb, n]) => (verb === 'message' ? ` · ${n} messages` : ` · ${verb} ${n}`)).join('')}
+                            {run.verbs.length > 3 ? ` · +${run.verbs.length - 3} more` : ''}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">{run.events.length}</span>
+                        <span className="size-1.5 shrink-0 rounded-full" style={{ background: familyDotColor(activityFamilyFor(run.events[0])) }} aria-hidden />
+                      </button>
+                      {open && (
+                        <div className="ml-[7rem] border-l border-border/70 pl-1">
+                          {run.events.map(event => renderRow(event, true))}
+                        </div>
                       )}
-                    >
-                      <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">{formatClock(event.created_at)}</span>
-                      <span className="shrink-0 text-muted-foreground [&_svg]:size-4">{iconFor(event.event_type)}</span>
-                      <span className="min-w-0 flex-1 truncate">{activityEntryLabel(event)}</span>
-                      {/* Trajectory-style family tag: a coloured block naming the
-                          kind of work, the same grammar the timeline strip uses. */}
-                      <span className={cn('activity-family-tag shrink-0', familyTagClass(activityFamilyFor(event)))}>
-                        {activityFamilyFor(event) === 'all' ? event.event_type.replace(/_/g, ' ') : activityFamilyFor(event)}
-                      </span>
-                    </button>
                     </div>
                   );
                 })}
