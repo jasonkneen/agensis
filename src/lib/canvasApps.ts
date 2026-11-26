@@ -76,7 +76,7 @@ export interface AgensisAppletInit {
  * two ways, and BOTH write the same `--agensis-*` custom properties:
  *   1. Static: `injectAppletHostTheme` bakes a <style> into the iframe srcDoc
  *      (correct first paint, no JS needed) — see readAppletTheme() for the token
- *      list. Values are already resolved (e.g. --agensis-radius-md: 0px in neo).
+ *      list. Values are already resolved (e.g. --agensis-radius-md scales with the Default family's corner setting).
  *   2. Live: on theme switch a `agensis:init` postMessage carries theme.tokens
  *      and AGENSIS_APPLET_THEME_JS re-writes the same `--agensis-*` names.
  *
@@ -85,7 +85,7 @@ export interface AgensisAppletInit {
  * canonical names go stale on live switch (baked once into srcDoc). Reading the
  * `--agensis-*` alias keeps both paths coherent. Any applet that includes
  * AGENSIS_APPLET_BASE_CSS + AGENSIS_APPLET_THEME_JS inherits themed controls
- * (radius, shadow, border weight, accent) across classic / neo / paper.
+ * (radius, shadow, border weight, accent) across default / classic / paper.
  */
 export const AGENSIS_APPLET_BASE_CSS = `
     :root {
@@ -105,7 +105,7 @@ export const AGENSIS_APPLET_BASE_CSS = `
       --app-ok: var(--agensis-success, #2f9b69);
       --app-warn: var(--agensis-warning, #d6942c);
       --app-err: var(--agensis-error, #d64c4c);
-      /* Shape — flow straight from the active theme (0px+hard-shadow in neo-brutal,
+      /* Shape — flow straight from the active theme (hard offset shadows in Default,
          rounded+soft in classic/paper). */
       --app-radius: var(--agensis-radius-md, 8px);
       --app-radius-sm: var(--agensis-radius-sm, 6px);
@@ -126,7 +126,6 @@ export const AGENSIS_APPLET_THEME_JS = `
         document.body.dataset.family = theme.family || "classic";
         document.body.dataset.scheme = theme.scheme || "light";
         var tokens = theme.tokens || {};
-        if (tokens.neoStyle) document.body.dataset.neoStyle = tokens.neoStyle;
         var root = document.documentElement;
         for (var key in tokens) {
           if (!Object.prototype.hasOwnProperty.call(tokens, key)) continue;
@@ -209,23 +208,6 @@ function buildTaskKanbanAppHtml() {
     .mini { padding: 4px 7px; font-size: 11px; box-shadow: none; }
     .runs { border-top: var(--app-border-w) solid var(--app-line); background: var(--app-soft); max-height: 76px; overflow: auto; padding: 7px 8px; color: var(--app-muted); font-size: 12px; }
     .run { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
-    /* Neo family: chunkier weight, accent lane headers, and the signature
-       press-into-the-shadow interaction. Radius/shadow/border already flow from
-       the theme tokens above, so no per-family shape overrides are needed. */
-    body[data-family="neo"] { font-weight: 650; }
-    body[data-family="neo"] .lane h2 {
-      background: var(--app-accent);
-      color: var(--app-accent-ink);
-    }
-    body[data-family="neo"] button.secondary,
-    body[data-family="neo"] .pill {
-      background: var(--app-panel);
-      color: var(--app-ink);
-    }
-    body[data-family="neo"] button:active {
-      transform: translate(var(--agensis-shadow-x, 2px), var(--agensis-shadow-y, 2px));
-      box-shadow: none;
-    }
     @media (max-width: 760px) {
       .toolbar, .agentbar { grid-template-columns: 1fr; }
       .board { grid-template-columns: repeat(4, minmax(150px, 72vw)); }
@@ -401,7 +383,7 @@ function buildCalculatorAppHtml() {
 ${AGENSIS_APPLET_BASE_CSS}
   /* Calculator palette derives entirely from the shared theme contract, so the
      control colours, radius and border weight track the active app theme
-     (classic / neo-brutal / paper, light + dark). */
+     (default / classic / paper, light + dark). */
   :root {
     --bg: var(--app-bg);
     --surface: var(--app-panel);
