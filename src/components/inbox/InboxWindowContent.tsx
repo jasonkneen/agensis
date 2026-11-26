@@ -390,6 +390,7 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
           onToggleSelect={handleToggleSelect}
           onMarkRead={markReadReporting}
           onOpenSession={onOpenSession}
+          agents={agents}
         />
 
         {/* An invisible 12px grab strip whose hairline only appears under the
@@ -440,6 +441,8 @@ interface InboxListProps {
   onToggleSelect?: (key: string, extend: boolean) => void;
   onMarkRead: (key: string) => void;
   onOpenSession?: InboxOpenSession;
+  /** Lets a row from an agent show that agent's face instead of initials. */
+  agents?: WorkspaceAgent[];
 }
 
 const NO_KEYS: ReadonlySet<string> = new Set<string>();
@@ -457,7 +460,15 @@ export function InboxList({
   onToggleSelect = noop,
   onMarkRead,
   onOpenSession,
+  agents,
 }: InboxListProps) {
+  // Rows carry only a display name, so the agent is matched by name. People
+  // (and unnamed senders) miss the map and keep their initials.
+  const agentsByName = useMemo(() => {
+    const map = new Map<string, WorkspaceAgent>();
+    for (const agent of agents ?? []) map.set(agent.name.trim().toLowerCase(), agent);
+    return map;
+  }, [agents]);
   // Arrow keys walk the rows; the rows are real buttons, so Enter/Space already
   // open them and no extra key handling is needed.
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -525,6 +536,7 @@ export function InboxList({
         onToggleSelect={onToggleSelect}
         onMarkRead={onMarkRead}
         onOpenSession={onOpenSession}
+        agent={agentsByName.get(row.sender.trim().toLowerCase()) ?? null}
       />
     ));
 

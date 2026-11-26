@@ -1,6 +1,8 @@
 import React from 'react';
 import { Check, ExternalLink, MailOpen } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { AgentAvatar } from '@/components/agents/AgentAvatar';
+import type { WorkspaceAgent } from '@/types';
 import { CATEGORY_ICON, ROW_AVATAR, } from './inboxPresentation';
 import { ROW_PADDING } from '@/components/common/presentation';
 import { FOCUS_RING, PILL_BUTTON, ROW_WASH_HOVER, ROW_WASH_SELECTED, TEXT_BODY, TEXT_META } from '@/components/common/presentation';
@@ -46,6 +48,8 @@ interface InboxRowProps {
   onToggleSelect: (key: string, extend: boolean) => void;
   onMarkRead: (key: string) => void;
   onOpenSession?: InboxOpenSession;
+  /** The workspace agent behind this row's sender, when it is one. */
+  agent?: WorkspaceAgent | null;
 }
 
 export const InboxRow = React.memo(function InboxRow({
@@ -57,6 +61,7 @@ export const InboxRow = React.memo(function InboxRow({
   onToggleSelect,
   onMarkRead,
   onOpenSession,
+  agent = null,
 }: InboxRowProps) {
   const { group, when, label, sender, initials, preview } = row;
   const unread = group.unreadCount > 0;
@@ -129,6 +134,7 @@ export const InboxRow = React.memo(function InboxRow({
           title={selectionMode ? 'Shift-click to select a range' : 'Select for bulk actions'}
           className={cn(
             ROW_AVATAR,
+            'inbox-row-avatar overflow-hidden',
             checked
               ? 'bg-primary text-primary-foreground'
               : selectionMode
@@ -145,7 +151,11 @@ export const InboxRow = React.memo(function InboxRow({
               checked || selectionMode ? 'opacity-0' : 'group-hover/row:opacity-0',
             )}
           >
-            {initials || <CategoryIcon className="size-3.5" />}
+            {agent ? (
+              <AgentAvatar avatar={agent.avatar} name={agent.name} initials={initials} className="size-8" />
+            ) : (
+              initials || <CategoryIcon className="size-3.5" />
+            )}
           </span>
           <Check
             aria-hidden="true"

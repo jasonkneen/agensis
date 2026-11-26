@@ -560,8 +560,8 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
 }
 /* The avatar tile inside the card carries the same 50%-white top shine. It is
    an overlay, not the tile's own inset shadow, so image avatars that fill the
-   tile don't paint over it. */
-:root[data-ui-theme="expo"] .agents-list-card-avatar::after {
+   tile don't paint over it. The inbox row avatar takes the same shine. */
+:root[data-ui-theme="expo"] :is(.agents-list-card-avatar, .inbox-row-avatar)::after {
  content: "";
  position: absolute;
  inset: 0;
