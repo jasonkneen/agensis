@@ -380,7 +380,7 @@ export function HomeCanvas({
               onKeyDown={handleKeyDown}
               placeholder="Message the workspace..."
               rows={1}
-              className="max-h-36 min-h-[2.75rem] px-3 py-2.5 text-sm leading-relaxed placeholder:text-muted-foreground/85"
+              className="max-h-48 min-h-20 px-3 py-2.5 text-sm leading-relaxed placeholder:text-muted-foreground/85"
             />
             <InputGroupAddon align="block-end" className="min-h-10 justify-end gap-1 px-2 pb-2 pt-0">
               <InputGroupButton
