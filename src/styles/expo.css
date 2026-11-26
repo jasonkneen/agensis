@@ -579,3 +579,10 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
 :root[data-ui-theme="expo"] .canvas-column [data-window-view-mode="full"] [data-window-surface] {
  border-radius: var(--radius-xl) !important;
 }
+/* With a full-size window up, the column's hairline frame sat at the outer
+   edge of the inset gap — a second rim round the panel (Jason: "remove that
+   outer edge … so the panel is floating"). The panel floats on the chrome
+   instead; the frame still outlines the bare wallpaper when no window is up. */
+:root[data-ui-theme="expo"] .canvas-column:has([data-floating-window][data-window-view-mode="full"]:not([data-window-hidden="true"])) > .canvas-column-edge {
+ display: none;
+}
