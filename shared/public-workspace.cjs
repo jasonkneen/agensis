@@ -73,6 +73,8 @@ const MAX_LISTINGS = 200;
  *             'task' -> the task must resolve and not sit in a private project
  *   detail    the ONE named source of `detail` at 'full', or absent
  *   entity    the entity kind that may be named at 'title', or absent
+ *   title     'agent' -> the stored title is NOT used; the public title is
+ *             "<public agent name> <verb>", or absent for an unknown agent
  */
 const PUBLIC_EVENT_TYPES = Object.freeze({
  task_created: { category: 'tasks', ceiling: 'title', gate: 'task', entity: 'task' },
@@ -89,8 +91,10 @@ const PUBLIC_EVENT_TYPES = Object.freeze({
  // Titles written by older clients can carry an invitee's address.
  member_joined: { category: 'people', ceiling: 'category' },
  canvas_updated: { category: 'canvas', ceiling: 'title' },
- agent_connected: { category: 'agents', ceiling: 'title', entity: 'agent' },
- agent_disconnected: { category: 'agents', ceiling: 'title', entity: 'agent' },
+ // The stored title is "@<handle> connected"; the handle never leaves (see
+ // publicAgent), so the public title is rebuilt from the public display name.
+ agent_connected: { category: 'agents', ceiling: 'title', entity: 'agent', title: 'agent', verb: 'connected' },
+ agent_disconnected: { category: 'agents', ceiling: 'title', entity: 'agent', title: 'agent', verb: 'disconnected' },
 });
 
 /** Every type a policy row may name: the events above plus agent activity. */
@@ -129,11 +133,22 @@ const NEVER_LEAVES_PATTERNS = Object.freeze([
  // URLs and bare hosts with a scheme or www.
  /\b[a-z][a-z0-9+.-]*:\/\//i,
  /\bwww\.[^\s]+/i,
+ // bare hostnames: a dotted name ending in a common or private-network TLD,
+ // localhost, IPv4 addresses, and host:port
+ /\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|net|org|io|dev|app|ai|co|me|sh|xyz|cloud|tech|site|online|info|biz|us|uk|de|fr|eu|ca|au|jp|local|localdomain|internal|intranet|lan|corp|home|arpa|test|example|invalid|onion)\b/i,
+ /\blocalhost\b/i,
+ /\b\d{1,3}(?:\.\d{1,3}){3}\b/,
+ /\b[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)*:\d{2,5}\b/i,
  // file paths: absolute, home, relative, Windows
  /(?:^|[\s(`'"])(?:~|\.{1,2})?\/[^\s/]+\/[^\s]*/,
  /(?:^|[\s(`'"])~\//,
  /\b[a-z]:\\/i,
  /(?:^|[\s(`'"])[\w.-]+\/[\w.-]+\.[a-z0-9]{1,6}\b/i,
+ // relative paths with no extension: three or more segments, a dot-directory,
+ // or two segments under a well-known source/system directory
+ /(?:^|[\s(`'"])[\w.-]+\/[\w.-]+\/[\w.-]+/,
+ /(?:^|[\s(`'"])\.[\w-]+\/[\w.-]+/,
+ /(?:^|[\s(`'"])(?:src|lib|app|apps|packages|pkg|tests?|spec|docs|server|shared|client|components|scripts|bin|dist|build|out|node_modules|vendor|config|public|assets|cmd|internal|etc|usr|var|tmp|opt|home|Users|srv|mnt|Volumes)\/[\w.-]+/,
  // credentials and token shapes
  /\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/,
  /\b(?:agw|aga|agc|ghp|gho|ghs|ghu|github_pat|xox[abprs])_[A-Za-z0-9_-]{6,}/,
@@ -306,10 +321,13 @@ function publicProjection(row, policy, shareFlags) {
  const event = { id, at, type, category: spec.category };
  if (DETAIL_RANK[level] < DETAIL_RANK.title) return event;
 
- const title = scrubPublicText(row.title, MAX_TITLE);
+ const knownAgent = isAgentEvent && isUuid(String(row.actor_agent_id || ''));
+ const title = spec.title === 'agent'
+  ? (knownAgent ? scrubPublicText(`${scrubPublicText(row.actor_agent_name, 80) || 'Agent'} ${spec.verb}`, MAX_TITLE) : '')
+  : scrubPublicText(row.title, MAX_TITLE);
  if (title) event.title = title;
 
- if (isAgentEvent && isUuid(String(row.actor_agent_id || ''))) {
+ if (knownAgent) {
   event.actor = {
    kind: 'agent',
    id: String(row.actor_agent_id),

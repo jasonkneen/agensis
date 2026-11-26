@@ -149,6 +149,19 @@ test('every never-leaves pattern drops the whole field, never a substring', () =
   'Authorization: Bearer abcdefghijklmnop',
   'hash 0123456789abcdef0123456789abcdef',
   'blob ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123',
+  // relative paths with no extension
+  'Edited src/components/Button',
+  'Touched packages/ui',
+  'Looked in .github/workflows',
+  'Moved notes/2026/plans around',
+  // bare hostnames, IPs and host:port
+  'Deployed to api.internal.example',
+  'Pinged build-box.local again',
+  'Synced db.acme.corp',
+  'Checked status.agensis.io',
+  'Served on localhost',
+  'Hit 10.0.4.17 twice',
+  'Listening on spark-1:3142',
  ];
  for (const text of cases) {
   assert.equal(scrubPublicText(text, 160), '', `kept: ${text}`);
@@ -159,6 +172,25 @@ test('every never-leaves pattern drops the whole field, never a substring', () =
  // Ordinary text passes, and an agent handle is not an email.
  assert.equal(scrubPublicText('@claude connected', 160), '@claude connected');
  assert.equal(scrubPublicText('Task created: Q1/Q2 plan', 160), 'Task created: Q1/Q2 plan');
+ for (const ordinary of ['Task created: Ship the hall', 'Review and/or merge', 'Meeting at 10:30', 'Bump to v2.1.0', 'Done. Next up']) {
+  assert.equal(scrubPublicText(ordinary, 160), ordinary, `dropped ordinary text: ${ordinary}`);
+ }
+});
+
+test('agent connect events never carry the stored "@handle" title, only the public name', () => {
+ const p = policy({ agent_connected: ['public', 'title'], agent_disconnected: ['public', 'title'] });
+ for (const [type, verb] of [['agent_connected', 'connected'], ['agent_disconnected', 'disconnected']]) {
+  const r = row({
+   event_type: type, entity_type: 'agent', entity_id: AGENT, title: `@scout-secret-handle ${verb}`,
+   actor_kind: 'agent', actor_agent_id: AGENT, actor_agent_name: 'Scout', user_id: null,
+  });
+  const event = publicProjection(r, p, null);
+  assert.equal(event.title, `Scout ${verb}`);
+  assert.equal(JSON.stringify(event).includes('scout-secret-handle'), false);
+  // An agent the workspace does not hold gets no title at all, not the stored one.
+  const unknown = publicProjection({ ...r, actor_kind: '', actor_agent_id: '', actor_agent_name: '' }, p, null);
+  assert.equal('title' in unknown, false);
+ }
 });
 
 test('event types outside the publishable set never leave, and the validator refuses them', () => {
@@ -295,6 +327,7 @@ function fakeDb(state) {
    return q.includes('order by e.created_at desc') ? [...matched].reverse() : matched;
   }
   if (q.startsWith('select * from marketplace_listings')) return state.listings || [];
+  if (q.startsWith('select to_char(now()')) return [{ now: '2026-11-25T09:00:00.000000Z' }];
   throw new Error(`Unexpected SQL: ${q}`);
  };
  db.calls = calls;
@@ -412,4 +445,76 @@ test('reader: a message_sent leaves only for a PLAIN message in an open session'
  assert.match(branch, /coalesce\(m\.message_kind, ''\) = ''/);
  assert.match(branch, /coalesce\(ms\.visibility, 'workspace'\) <> 'private'/);
  assert.match(branch, /coalesce\(ms\.folder, ''\) <> 'direct messages'/);
+});
+
+test('stream: no never-leaves field reaches an SSE event or agent frame', async () => {
+ const { createPublicStreamHub } = require('../server/public-workspace-routes.cjs');
+ const state = baseState();
+ state.policy[WS] = POLICY_EVENT_TYPES.map((event_type) => ({ event_type, level: 'public', detail: 'full' }));
+ state.agents = state.agents.map((agent) => ({
+  ...agent,
+  system_prompt: 'PROMPT-SENTINEL', soul: 'SOUL-SENTINEL', instructions: 'INSTR-SENTINEL', handle: 'HANDLE-SENTINEL',
+  metadata: { host_folders: ['/srv/HOSTFOLDER-SENTINEL'] }, connect_token_hash: 'TOKEN-SENTINEL', model: 'MODEL-SENTINEL',
+ }));
+ state.connections = [
+  { agent_id: AGENT, status: 'online', share_policy: null, host: 'HOST-SENTINEL', cwd: '/srv/CWD-SENTINEL' },
+  { agent_id: AGENT_2, status: 'online', share_policy: null },
+ ];
+ state.jobs = [{ agent_id: AGENT, tool_name: 'Bash', tool_detail: 'TOOLARGS-SENTINEL' }];
+ const ev = (id, sec, fields) => ({
+  id, at: `2026-11-25T10:00:${String(sec).padStart(2, '0')}.000000Z`, workspace_id: WS, user_id: USER, user_display_name: 'Robin',
+  entity_type: '', entity_id: null, metadata: {}, session_open: null, task_visible: null, message_content: null, ...fields,
+ });
+ state.events = [
+  ev('ok-msg', 1, { event_type: 'message_sent', entity_type: 'message', entity_id: 'm1', title: 'Robin: hello all', session_open: true, message_content: 'hello all' }),
+  ev('dm', 2, { event_type: 'message_sent', entity_type: 'message', entity_id: 'm2', title: 'Robin: DMTITLE-SENTINEL', session_open: false, message_content: 'DMBODY-SENTINEL', metadata: { content: 'DMMETA-SENTINEL' } }),
+  ev('mem', 3, { event_type: 'memory_added', entity_type: 'memory', title: 'Memory added: MEMORY-SENTINEL' }),
+  ev('task', 4, { event_type: 'task_created', entity_type: 'task', entity_id: TASK, title: 'Task created: PRIVTASK-SENTINEL', task_visible: false }),
+  ev('path', 5, { event_type: 'canvas_updated', title: 'Edited src/components/PATH-SENTINEL' }),
+  ev('host', 6, { event_type: 'comment_created', title: 'See HOST-SENTINEL.internal.example' }),
+  ev('email', 7, { event_type: 'comment_created', title: 'mail EMAIL-SENTINEL@example.com', user_display_name: 'robin@example.com' }),
+  ev('conn', 8, { event_type: 'agent_connected', entity_type: 'agent', entity_id: AGENT, user_id: null, title: '@HANDLE-SENTINEL connected' }),
+  ev('prov', 9, { event_type: 'provider_call', title: 'PROVIDER-SENTINEL' }),
+  ev('doc', 10, { event_type: 'document_created', entity_type: 'document', title: 'New document: DOCAGENT-SENTINEL', user_id: null, metadata: { actor_kind: 'agent', actor_id: AGENT_2 } }),
+ ];
+ // AGENT_2 withholds documents, so its document event must not leave.
+ state.agents[1].sharing = { tools: false, documents: false };
+
+ const reader = createPublicWorkspaceReader({ db: fakeDb(state) });
+ const frames = [];
+ const hub = createPublicStreamHub({ reader, setTimer: () => ({}), clearTimer: () => {} });
+ const workspace = await reader.loadPublicWorkspace(WS);
+ const policyMap = await reader.loadPolicy(WS);
+ const summary = await reader.summaryFor(workspace, policyMap);
+ await hub.join({
+  workspace, policy: policyMap, summary,
+  res: { write: (chunk) => frames.push(chunk), end() {} }, reservation: hub.reserve('1'),
+ });
+ // Both agents go busy, so the tick sends agent frames (with activity for AGENT).
+ state.connections = state.connections.map((connection) => ({ ...connection, status: 'busy' }));
+ await hub.tick(WS);
+ hub.reset();
+
+ const parsed = frames.map((chunk) => {
+  const [eventLine, dataLine] = chunk.trim().split('\n');
+  return { event: eventLine.slice('event: '.length), data: JSON.parse(dataLine.slice('data: '.length)) };
+ });
+ const events = parsed.filter((frame) => frame.event === 'event').map((frame) => frame.data);
+ const agents = parsed.filter((frame) => frame.event === 'agent').map((frame) => frame.data);
+ assert.ok(events.length > 0 && agents.length === 2, 'the test sent real event and agent frames');
+ assert.deepEqual(events.map((event) => event.id).sort(), ['conn', 'email', 'host', 'mem', 'ok-msg', 'path'].sort());
+ assert.equal(events.find((event) => event.id === 'conn').title, 'Scout connected');
+ assert.equal(agents.find((agent) => agent.id === AGENT).activity, 'run');
+ for (const agent of agents) {
+  assert.deepEqual(Object.keys(agent).filter((key) => key !== 'activity').sort(), ['accentColor', 'avatar', 'id', 'name', 'runMode', 'status']);
+ }
+ const wire = frames.join('');
+ for (const sentinel of [
+  'PROMPT-SENTINEL', 'SOUL-SENTINEL', 'INSTR-SENTINEL', 'HANDLE-SENTINEL', 'HOSTFOLDER-SENTINEL', 'TOKEN-SENTINEL',
+  'MODEL-SENTINEL', 'HOST-SENTINEL', 'CWD-SENTINEL', 'TOOLARGS-SENTINEL', 'DMTITLE-SENTINEL', 'DMBODY-SENTINEL',
+  'DMMETA-SENTINEL', 'MEMORY-SENTINEL', 'PRIVTASK-SENTINEL', 'PATH-SENTINEL', 'EMAIL-SENTINEL', 'example.com',
+  'PROVIDER-SENTINEL', 'DOCAGENT-SENTINEL', USER,
+ ]) {
+  assert.equal(wire.includes(sentinel), false, `${sentinel} reached the stream`);
+ }
 });

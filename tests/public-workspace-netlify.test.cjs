@@ -28,7 +28,7 @@ let handler;
 test.before(async () => {
  process.env.AUTH_SECRET = 'public-ws-netlify-secret';
  mock.module('@netlify/database', {
-  exports: {
+  namedExports: {
    getDatabase: () => ({
     pool: {
      async query(sql, params = []) {

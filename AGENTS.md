@@ -414,7 +414,10 @@ A workspace whose `visibility` is `'public'` answers four no-sign-in GETs:
   events need an open session (`sessionOpenSql`), task events need a task
   outside a private project. `activity_events` is client-authored, so nothing
   the event row claims is trusted for this. Text that survives is
-  pattern-scrubbed (emails, URLs, paths, token shapes); a hit drops the field.
+  pattern-scrubbed (emails, URLs, bare hostnames / IPs / host:port, paths with
+  or without an extension, token shapes); a hit drops the field.
+  `agent_connected` / `agent_disconnected` never use the stored title (it is
+  `@<handle> …`); the public title is rebuilt from the public agent name.
 - **No oracle.** Private, missing and malformed ids answer one identical 404,
   stream route included.
 - **Writes are manage-gated and audited** (`workspace.visibility_changed`,
