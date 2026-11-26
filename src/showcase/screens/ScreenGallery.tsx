@@ -275,6 +275,8 @@ const SCREENS: Screen[] = [
         channelTitle="general"
         currentUserId={CURRENT_USER_ID}
         onSendMessage={noop}
+        threadReplyCounts={{ 'msg-2': 3 }}
+        onOpenThread={noop}
       />
     ),
   },
