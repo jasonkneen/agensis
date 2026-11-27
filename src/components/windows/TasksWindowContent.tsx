@@ -648,7 +648,7 @@ export const TasksWindowContent = memo(function TasksWindowContent({
           <ToggleGroup
             type="single"
             size="sm"
-            className={SEGMENTED}
+            className={cn(SEGMENTED, 'gap-1')}
             value={view}
             onValueChange={value => {
               if (value) setView(value as TaskView);
