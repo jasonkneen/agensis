@@ -86,9 +86,10 @@ export function TaskKanban({
             <div
               key={status}
               className={cn(
-                'flex w-64 shrink-0 flex-col gap-2 rounded-lg border border-border bg-card/40 p-2 transition-colors',
+                'task-kanban-column flex w-64 shrink-0 flex-col gap-2 rounded-lg border border-border bg-card/40 p-2 transition-colors',
                 dragOver === status && 'border-primary/60 bg-primary/5',
               )}
+              data-drag-over={dragOver === status || undefined}
               onDragOver={e => {
                 if (!dragTaskId) return;
                 e.preventDefault();
