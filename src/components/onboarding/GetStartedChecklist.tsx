@@ -44,7 +44,7 @@ export function GetStartedChecklist({
   const total = steps.length;
 
   return (
-    <div className="pointer-events-auto w-full select-none rounded-xl border border-border bg-card p-3 shadow-lg">
+    <div className="sidebar-footer-card pointer-events-auto w-full select-none rounded-xl border border-border bg-card p-3 shadow-lg">
       <div className="flex items-center gap-2">
         <span className="text-sm font-semibold text-foreground">Get started</span>
         <span className="text-xs tabular-nums text-muted-foreground">{doneCount}/{total}</span>

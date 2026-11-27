@@ -20,7 +20,7 @@ interface PageTipCardProps {
  */
 export function PageTipCard({ tip, collapsed, onToggleCollapse, onDismiss }: PageTipCardProps) {
   return (
-    <div className="pointer-events-auto w-full select-none rounded-xl border border-border bg-card p-3 shadow-lg">
+    <div className="sidebar-footer-card pointer-events-auto w-full select-none rounded-xl border border-border bg-card p-3 shadow-lg">
       <div className="flex items-center gap-2">
         <Lightbulb className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="text-sm font-semibold text-foreground">Tip</span>
