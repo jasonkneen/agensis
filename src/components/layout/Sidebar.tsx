@@ -1169,27 +1169,6 @@ export const Sidebar = React.memo(function Sidebar({
 
     <div ref={footerRef} className="flex shrink-0 flex-col gap-2 p-2">
      {getStartedSlot}
-     {/* What the workspace rail used to carry at its foot, as wide buttons
-         now that the rail is gone. */}
-     {(onOpenFeedback || onOpenTenants || workspaceSwitcherSlot) && (
-      <div className="sidebar-footer-actions @container flex gap-1.5">
-       {workspaceSwitcherSlot && (
-        <Button type="button" variant="outline" size="sm" className="h-7 min-w-0 flex-1 gap-1 px-1.5 text-xs" onClick={onCreateWorkspace} aria-label="New workspace" title="New workspace">
-         <Plus data-icon="inline-start" /> <span className="hidden truncate @[16rem]:inline">New</span>
-        </Button>
-       )}
-       {onOpenFeedback && (
-        <Button type="button" variant="outline" size="sm" className="h-7 min-w-0 flex-1 gap-1 px-1.5 text-xs" onClick={onOpenFeedback} aria-label="Send feedback" title="Send feedback">
-         <MessageSquareWarning data-icon="inline-start" /> <span className="hidden truncate @[16rem]:inline">Feedback</span>
-        </Button>
-       )}
-       {onOpenTenants && (
-        <Button type="button" variant="outline" size="sm" className="h-7 min-w-0 flex-1 gap-1 px-1.5 text-xs" onClick={onOpenTenants} aria-label="Tenants" title="Tenants">
-         <Building2 data-icon="inline-start" /> <span className="hidden truncate @[16rem]:inline">Tenants</span>
-        </Button>
-       )}
-      </div>
-     )}
      <div className="flex items-center gap-2">
       <DropdownMenu>
        <DropdownMenuTrigger asChild>
@@ -1208,6 +1187,26 @@ export const Sidebar = React.memo(function Sidebar({
         </button>
        </DropdownMenuTrigger>
        <DropdownMenuContent align="start" side="top" className="w-56">
+        {/* What the workspace rail used to carry at its foot. */}
+        {workspaceSwitcherSlot && (
+         <DropdownMenuItem onSelect={onCreateWorkspace}>
+          <Plus className="size-4" />
+          New workspace
+         </DropdownMenuItem>
+        )}
+        {onOpenFeedback && (
+         <DropdownMenuItem onSelect={onOpenFeedback}>
+          <MessageSquareWarning className="size-4" />
+          Send feedback
+         </DropdownMenuItem>
+        )}
+        {onOpenTenants && (
+         <DropdownMenuItem onSelect={onOpenTenants}>
+          <Building2 className="size-4" />
+          Tenants
+         </DropdownMenuItem>
+        )}
+        {(workspaceSwitcherSlot || onOpenFeedback || onOpenTenants) && <DropdownMenuSeparator />}
         <DropdownMenuItem onSelect={() => openAccountDialog('profile')}>
          <UserRound className="size-4" />
          Edit profile
