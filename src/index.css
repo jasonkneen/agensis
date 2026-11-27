@@ -895,7 +895,10 @@ div:has(> .canvas-column) [data-sidebar-panel] {
  justify-content: center;
  flex: 0 0 1.75rem;
  width: 1.75rem;
- height: 1.75rem;
+ /* Same height as the trigger beside it. At 1.75rem it was the tallest thing
+    in the header, so sections with a + sat ~6px further apart than those
+    without, and that extra height was most of the gap between headings. */
+ height: calc(var(--sidebar-section-trigger-h) + var(--sidebar-row-frame));
  margin-left: auto;
  border-radius: calc(var(--radius) * 0.75);
  color: var(--muted-foreground);
@@ -984,7 +987,7 @@ div:has(> .canvas-column) [data-sidebar-panel] {
     in Sidebar.tsx, so it was invisible to this block and could not be tuned
     with the rest of the rhythm. At 0.75rem it was the single largest piece of
     non-content height in the column: five sections spent 56px on it. */
- --sidebar-section-gap: 0.375rem;
+ --sidebar-section-gap: 0.25rem;
  --sidebar-action-row-h: 1.55rem;
  --sidebar-item-row-h: 1.5rem;
  --sidebar-section-trigger-h: 1.35rem;
