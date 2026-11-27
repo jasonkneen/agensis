@@ -55,7 +55,7 @@ export function AgentTriageStrip({
     { key: 'doneToday', label: 'Done today' },
   ];
   return (
-    <div className="mb-3 grid grid-cols-4 gap-px overflow-hidden rounded-lg border border-border bg-border" role="group" aria-label="Agent triage">
+    <div className="agents-triage-strip relative mb-3 grid grid-cols-4 gap-px overflow-hidden rounded-lg border border-border bg-border" role="group" aria-label="Agent triage">
       {tiles.map(tile => {
         const body = (
           <>

@@ -603,6 +603,24 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
 :root[data-ui-theme="expo"][data-theme="dark"] .sidebar-footer-card {
  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 3px 0 var(--expo-lip) !important;
 }
+/* The Agents triage strip is the same shiny panel. Its tiles fill the strip
+   and would cover an inset shadow, so the shine and edge ride an ::after
+   overlay; the lip stays on the strip itself. */
+:root[data-ui-theme="expo"] .agents-triage-strip {
+ border-color: transparent !important;
+ box-shadow: 0 3px 0 var(--expo-lip) !important;
+}
+:root[data-ui-theme="expo"] .agents-triage-strip::after {
+ content: "";
+ position: absolute;
+ inset: -1px; /* over the strip's 1px border too */
+ border-radius: inherit;
+ pointer-events: none;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.55), inset 0 0 0 1.5px var(--expo-edge);
+}
+:root[data-ui-theme="expo"][data-theme="dark"] .agents-triage-strip::after {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%);
+}
 /* Task board columns are the same shiny panels. While a card is dragged over
    one, its edge picks up the accent so the drop target still reads. */
 :root[data-ui-theme="expo"] .task-kanban-column {
