@@ -209,7 +209,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
                 </EmptyDescription>
               </EmptyHeader>
               {!activeCategory && (
-                <Button type="button" variant="outline" size="sm" onClick={() => setAddingNew(true)}>
+                <Button type="button" size="xs" onClick={() => setAddingNew(true)}>
                   <Plus data-icon="inline-start" />
                   Add Memory
                 </Button>
