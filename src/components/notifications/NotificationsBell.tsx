@@ -64,7 +64,7 @@ function StatusDot({ tone }: { tone: NotificationTone }) {
         tone === 'online' && 'bg-success',
         tone === 'offline' && 'bg-muted-foreground/40',
         tone === 'pending' && 'bg-warning',
-        tone === 'info' && 'bg-sky-500',
+        tone === 'info' && 'bg-info',
       )}
     />
   );

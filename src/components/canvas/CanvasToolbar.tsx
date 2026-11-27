@@ -39,7 +39,7 @@ const PALETTE = [
   { value: '#06b6d4', className: 'bg-cyan-500' },
   { value: '#3b82f6', className: 'bg-blue-500' },
   { value: '#ec4899', className: 'bg-pink-500' },
-  { value: '#8b5cf6', className: 'bg-violet-500' },
+  { value: '#8b5cf6', className: 'bg-agent' },
   { value: '#ffffff', className: 'bg-white' },
 ];
 

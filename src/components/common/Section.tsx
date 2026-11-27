@@ -27,7 +27,7 @@ export function SectionHeader({
     <div className={cn('flex min-h-7 items-center gap-2 px-0.5', className)}>
       <h2 className="ui-section-label">{title}</h2>
       {typeof count === 'number' && (
-        <span className="text-[0.6875rem] tabular-nums text-muted-foreground/80">{count}</span>
+        <span className="text-2xs tabular-nums text-muted-foreground/80">{count}</span>
       )}
       {action && <div className="ml-auto flex items-center gap-1">{action}</div>}
     </div>

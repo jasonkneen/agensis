@@ -182,7 +182,7 @@ export function TaskTable({
         </div>
       )}
       <div className="min-h-0 flex-1 overflow-auto">
-        <Table className="table-fixed text-[0.8125rem]" style={{ width: tableWidth, minWidth: '100%' }}>
+        <Table className="table-fixed text-xs-plus" style={{ width: tableWidth, minWidth: '100%' }}>
           <TableHeader className="sticky top-0 z-10 bg-card">
             <TableRow>
               <TableHead className="relative" style={{ width: widths.select }}>
@@ -240,7 +240,7 @@ export function TaskTable({
                       <input
                         autoFocus
                         aria-label="Task title"
-                        className="w-full rounded border border-primary bg-card px-1 py-0.5 text-[0.8125rem] outline-none"
+                        className="w-full rounded border border-primary bg-card px-1 py-0.5 text-xs-plus outline-none"
                         value={editing?.draft ?? ''}
                         onChange={e => setEditing(current => (current ? { ...current, draft: e.target.value } : current))}
                         onKeyDown={onEditKey}
@@ -262,7 +262,7 @@ export function TaskTable({
                   <TableCell>
                     <span className="flex flex-wrap gap-1">
                       {(task.labels ?? []).map(label => (
-                        <span key={label} className="rounded bg-muted px-1.5 text-[0.6875rem] text-muted-foreground">
+                        <span key={label} className="rounded bg-muted px-1.5 text-2xs text-muted-foreground">
                           {label}
                         </span>
                       ))}
@@ -271,7 +271,7 @@ export function TaskTable({
                   <TableCell onClick={e => e.stopPropagation()}>
                     <select
                       aria-label={`Project for ${task.title}`}
-                      className="w-full truncate rounded border border-transparent bg-transparent text-[0.8125rem] hover:border-border"
+                      className="w-full truncate rounded border border-transparent bg-transparent text-xs-plus hover:border-border"
                       value={task.project_id ?? ''}
                       onChange={e => onUpdateTask(task.id, { project_id: e.target.value || null })}
                     >
@@ -294,7 +294,7 @@ export function TaskTable({
                         autoFocus
                         aria-label="Estimate"
                         placeholder="e.g. 2d"
-                        className="w-full rounded border border-primary bg-card px-1 py-0.5 text-[0.8125rem] outline-none"
+                        className="w-full rounded border border-primary bg-card px-1 py-0.5 text-xs-plus outline-none"
                         value={editing?.draft ?? ''}
                         onChange={e => setEditing(current => (current ? { ...current, draft: e.target.value } : current))}
                         onKeyDown={onEditKey}

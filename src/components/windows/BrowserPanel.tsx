@@ -3,6 +3,8 @@ import { ArrowLeft, ArrowRight, RotateCw, TriangleAlert } from 'lucide-react';
 import { Button } from '@agensis/ui/components/button';
 import { Input } from '@agensis/ui/components/input';
 import { apiAuthHeaders, apiBaseUrl } from '@/lib/backendClient';
+import { nextBrowserZoom, type ZoomCommand } from '@/lib/zoom';
+import { registerZoomHandler } from '@/lib/zoomRouter';
 
 /**
  * A browsing pane inside an ordinary floating window.
@@ -45,6 +47,9 @@ interface WebviewElement extends HTMLElement {
   goForward: () => void;
   reload: () => void;
   getURL: () => string;
+  /** Guest-local zoom. Independent of the embedder's zoom factor. */
+  setZoomFactor?: (factor: number) => void;
+  getZoomFactor?: () => number;
 }
 
 interface ScramjetFrameLike {
@@ -197,6 +202,8 @@ export function BrowserPanel({
   const [url, setUrl] = useState(initialUrl);
   const [address, setAddress] = useState(initialUrl);
   const [blocked, setBlocked] = useState(false);
+  // The guest's own zoom factor, mirrored so the address bar can report it.
+  const [pageZoom, setPageZoom] = useState(1);
 
   const webviewRef = useRef<WebviewElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -359,6 +366,31 @@ export function BrowserPanel({
     else setUrl(current => `${current}`);
   };
 
+  /**
+   * Zoom THIS page, not the app.
+   *
+   * A desktop guest keeps its own zoom factor, so the page scales inside the
+   * same window and every other pane is untouched — the behaviour of a browser.
+   * There is no equivalent for the web engines: an <iframe> and the scramjet
+   * frame are cross-document, so CSS-transforming them would zoom the frame's
+   * layout box rather than the page, and the guest's own Ctrl+= already reaches
+   * it natively. So this declines (`false`) there, and the app zooms itself.
+   */
+  const zoomBrowser = useCallback((command: ZoomCommand): boolean => {
+    if (engine !== 'desktop') return false;
+    const view = webviewRef.current;
+    if (!view || typeof view.setZoomFactor !== 'function') return false;
+    const current = typeof view.getZoomFactor === 'function' ? view.getZoomFactor() : 1;
+    const next = nextBrowserZoom(current, command);
+    if (next === current) return true;
+    view.setZoomFactor(next);
+    // The guest repaints at the new scale; tell the panel so its label is honest.
+    setPageZoom(next);
+    return true;
+  }, [engine]);
+
+  useEffect(() => registerZoomHandler('browser', zoomBrowser, webviewRef.current), [zoomBrowser]);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-1 border-b border-border/60 px-2 py-1.5">
@@ -398,6 +430,19 @@ export function BrowserPanel({
             className="h-7 text-xs"
           />
         </form>
+        {/* Cmd+= zooms THIS page, not the app. The chip is the only evidence the
+            page is zoomed once the tab is longer in use, so it shows whenever the
+            factor is off 100% — clicking it resets. */}
+        {engine === 'desktop' && pageZoom !== 1 && (
+          <button
+            type="button"
+            onClick={() => zoomBrowser('reset')}
+            title="Reset page zoom"
+            className="shrink-0 rounded px-1.5 py-0.5 text-3xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            {Math.round(pageZoom * 100)}%
+          </button>
+        )}
       </div>
 
       <div className="relative min-h-0 flex-1">

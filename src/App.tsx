@@ -532,7 +532,7 @@ function KnowledgeContextControl({
         className="gap-2 px-2 py-1.5"
         title={enabled ? `Workspace context includes ${title}` : 'Workspace context is off'}
       >
-        <CheckCircle2 className={enabled ? 'text-pink-500' : 'text-muted-foreground'} />
+        <CheckCircle2 className={enabled ? 'text-knowledge' : 'text-muted-foreground'} />
         <span>Knowledge</span>
         <Badge variant="secondary" className="ml-auto h-5 rounded-md border-0 px-1.5 text-3xs shadow-none">
           {activeTotal}
@@ -578,7 +578,7 @@ function KnowledgeContextControl({
                 <span
                   className={cn(
                     'flex size-6 shrink-0 items-center justify-center rounded-md transition-colors',
-                    contributing ? 'bg-pink-500/10 text-pink-500' : 'bg-muted text-muted-foreground',
+                    contributing ? 'bg-knowledge-subtle text-knowledge' : 'bg-muted text-muted-foreground',
                   )}
                 >
                   {item.icon}
@@ -588,7 +588,7 @@ function KnowledgeContextControl({
                   className={cn(
                     'ml-auto inline-flex min-w-[1.75rem] justify-center rounded-md px-1.5 py-0.5 text-2xs font-medium tabular-nums transition-colors',
                     contributing
-                      ? 'bg-pink-500/10 text-pink-600 dark:text-pink-400'
+                      ? 'bg-knowledge-subtle text-knowledge'
                       : 'text-muted-foreground/60',
                   )}
                 >
@@ -2980,7 +2980,7 @@ function AuthenticatedApp({ auth }: { auth: AuthenticatedAuthState }) {
               */}
               {((!isFullExpandMode && dockEntries.length > 0) || drawToolAvailable) && (
               <div
-                className="workspace-window-dock agensis-glass-panel absolute left-1/2 z-[11000] flex max-w-[calc(100%-12rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-[16px] border p-[5px] shadow-md"
+                className="workspace-window-dock agensis-glass-panel absolute left-1/2 z-[11000] flex max-w-[calc(100%-12rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-xl border p-[5px] shadow-md"
                 style={{ bottom: WORKSPACE_DOCK_BOTTOM_OFFSET, height: WORKSPACE_DOCK_HEIGHT }}
               >
                 {!isFullExpandMode && dockEntries.map(entry => {
@@ -4575,7 +4575,7 @@ function WorkspaceDesktopOverlay({
           this workspace. Never the `icon` column — see workspaceGlyph. */}
       <span
         aria-hidden="true"
-        className="flex size-9 shrink-0 items-center justify-center rounded-lg text-[0.8125rem] font-semibold tracking-tight text-white"
+        className="flex size-9 shrink-0 items-center justify-center rounded-lg text-xs-plus font-semibold tracking-tight text-white"
         style={{ backgroundColor: tile.color }}
       >
         {tile.initials}
@@ -4605,6 +4605,11 @@ function WorkspaceDesktopOverlay({
       <div className="pointer-events-none absolute inset-0 bg-[var(--home-bg-overlay)]" />
       <div className="pointer-events-none absolute inset-0 bg-black/10 backdrop-blur-md" />
       <div
+        // Pointer-only: this stops a click reaching the dismiss-on-backdrop
+        // handler above. It is not a control, it adds no action for the user,
+        // and the panel's real controls are inside it — so it must NOT be
+        // focusable or announced. role="presentation" says exactly that.
+        role="presentation"
         onClick={(e) => e.stopPropagation()}
         className="relative flex h-full max-h-full w-full max-w-6xl flex-col gap-4"
       >

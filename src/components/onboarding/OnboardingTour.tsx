@@ -84,7 +84,7 @@ const STEPS: StepMeta[] = [
   {
     id: 'connect',
     icon: Terminal,
-    accent: 'from-violet-500/25 to-violet-500/5 text-violet-500 ring-violet-500/20',
+    accent: 'from-agent/(25) to-agent/(5) text-agent ring-agent-border',
     eyebrow: 'Step 2',
     title: 'Link a Relay host.',
     body: 'Run work on this machine via Start on this Mac (Claude Agent SDK / Codex app-server) or the agensis CLI. Optional, but this is where local files and tools live.',
@@ -547,7 +547,7 @@ export function OnboardingTour({
                 onClick={() => setStep(i)}
                 aria-label={`Go to step ${i + 1}`}
                 className={cn(
-                  'h-1.5 rounded-full transition-all',
+                  'h-1.5 rounded-full transition-[width,background-color]',
                   i === step ? 'w-5 bg-primary' : 'w-1.5 bg-muted-foreground/30 hover:bg-muted-foreground/50',
                 )}
               />

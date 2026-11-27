@@ -67,6 +67,19 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
  --success: #2f8a63;
  --warning: #a8770b;
  --error: #c8452f;
+ /* The agent / info / knowledge roles, matched to the Expo palette rather than
+    inherited: this family overrides every other state colour, so without these
+    three the agent chip, the info dot and the knowledge badge would fall back to
+    the app default mid-theme — the one thing a theme family must never do.
+    Values chosen against the cream surface for >=4.5:1 text contrast. */
+ --agent: color-mix(in oklab, var(--expo-coral), var(--expo-navy) 62%);
+ --agent-subtle: color-mix(in srgb, var(--expo-coral) 12%, transparent);
+ --agent-border: color-mix(in srgb, var(--expo-coral) 34%, transparent);
+ --info: var(--expo-navy);
+ --info-subtle: color-mix(in srgb, var(--expo-navy) 11%, transparent);
+ --info-border: color-mix(in srgb, var(--expo-navy) 32%, transparent);
+ --knowledge: color-mix(in oklab, var(--expo-coral), var(--expo-navy) 34%);
+ --knowledge-subtle: color-mix(in srgb, var(--expo-coral) 16%, transparent);
 
  --background: color-mix(in oklab, var(--expo-tone) 9%, var(--expo-cream));
  --foreground: var(--expo-navy);
@@ -129,6 +142,14 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
  --success: var(--expo-mint);
  --warning: var(--expo-mustard);
  --error: #ff8f79;
+ --agent: color-mix(in oklab, var(--expo-coral), white 46%);
+ --agent-subtle: color-mix(in srgb, var(--expo-coral) 18%, transparent);
+ --agent-border: color-mix(in srgb, var(--expo-coral) 44%, transparent);
+ --info: color-mix(in oklab, var(--expo-cream), var(--expo-coral) 22%);
+ --info-subtle: color-mix(in srgb, var(--expo-cream) 15%, transparent);
+ --info-border: color-mix(in srgb, var(--expo-cream) 40%, transparent);
+ --knowledge: color-mix(in oklab, var(--expo-coral), white 30%);
+ --knowledge-subtle: color-mix(in srgb, var(--expo-coral) 22%, transparent);
 
  --background: var(--expo-navy);
  --foreground: var(--expo-cream);

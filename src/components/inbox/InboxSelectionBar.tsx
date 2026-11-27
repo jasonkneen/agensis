@@ -70,7 +70,7 @@ export function InboxSelectionBar({
         aria-label={allSelected ? 'Select none' : 'Select all'}
         title={allSelected ? 'Select none' : 'Select all'}
         className={cn(
-          '-ml-0.5 flex size-5 shrink-0 items-center justify-center rounded-[5px] transition-colors',
+          '-ml-0.5 flex size-5 shrink-0 items-center justify-center rounded-sm transition-colors',
           FOCUS_RING,
           allSelected
             ? 'bg-primary text-primary-foreground'

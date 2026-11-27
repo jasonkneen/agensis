@@ -73,7 +73,7 @@ export const TenantRow = React.memo(function TenantRow({ row, selected, onSelect
             and lands near-circular on a 32px tile in some themes. */}
         <span
           aria-hidden="true"
-          className="flex size-8 shrink-0 items-center justify-center rounded-[9px] text-xs font-semibold tracking-tight text-white"
+          className="flex size-8 shrink-0 items-center justify-center rounded-tile text-xs font-semibold tracking-tight text-white"
           style={{ backgroundColor: color }}
         >
           {initials}
@@ -104,7 +104,7 @@ export const TenantRow = React.memo(function TenantRow({ row, selected, onSelect
             {cost && (
               <span
                 className={cn(
-                  'shrink-0 rounded-[4px] bg-muted px-1.5 py-px font-medium tabular-nums leading-5 text-foreground/80',
+                  'shrink-0 rounded-sm bg-muted px-1.5 py-px font-medium tabular-nums leading-5 text-foreground/80',
                   TEXT_META,
                 )}
                 title="Estimated spend since metering started"

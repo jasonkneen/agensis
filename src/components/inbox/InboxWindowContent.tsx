@@ -537,18 +537,23 @@ export function InboxList({
     ));
 
   return (
-    <ScrollArea className={cn('min-h-0 flex-1', SCROLL_VIEWPORT_BLOCK)}>
+    <ScrollArea
+      className={cn(
+        'min-h-0 flex-1 [--scroll-fade-size:--spacing(6)] *:data-[slot=scroll-area-viewport]:scroll-fade-y',
+        SCROLL_VIEWPORT_BLOCK,
+      )}
+    >
       {/* Approvals and blockers sit under "Needs you now", everything else under
           "Earlier", both newest first, as in the approved inbox mock. Rows draw no
           dividers of their own — see InboxRow. Capped and centred (LIST_COLUMN_CLASS)
           so a wide window doesn't stretch rows into a thin edge-to-edge ribbon. */}
       <div className={cn('flex flex-col pb-2', LIST_COLUMN_CLASS)} onKeyDown={handleKeyDown}>
         {pinned.length > 0 && (
-          <p className="px-4 pt-2 pb-1 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">Needs you now</p>
+          <p className="px-4 pt-2 pb-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground">Needs you now</p>
         )}
         {renderRows(pinned)}
         {earlier.length > 0 && pinned.length > 0 && (
-          <p className="px-4 pt-4 pb-1 text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">Earlier</p>
+          <p className="px-4 pt-4 pb-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground">Earlier</p>
         )}
         {renderRows(earlier)}
       </div>

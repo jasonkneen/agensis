@@ -235,7 +235,7 @@ export const CampaignComposer = React.memo(function CampaignComposer({ accounts,
                         type="button"
                         onClick={() => updateCondition(category.id, { negate: !condition?.negate })}
                         className={cn(
-                          'ml-auto rounded-md border px-2 py-0.5 text-[0.7rem] transition',
+                          'ml-auto rounded-md border px-2 py-0.5 text-2xs transition',
                           condition?.negate
                             ? 'border-primary/60 bg-primary/10 text-primary'
                             : 'border-border text-muted-foreground hover:text-foreground',
@@ -453,7 +453,7 @@ export const CampaignComposer = React.memo(function CampaignComposer({ accounts,
                       <span className={cn('min-w-0 flex-1 truncate font-medium text-foreground', TEXT_BODY)}>
                         {campaign.title}
                       </span>
-                      <Badge variant="secondary" className="text-[0.65rem]">
+                      <Badge variant="secondary" className="text-3xs">
                         {campaignSurfaceLabel(campaign.surface)}
                       </Badge>
                     </div>

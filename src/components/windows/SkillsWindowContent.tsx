@@ -81,7 +81,7 @@ function AgentChip({ agent, onOpen }: { agent: SkillAgentRef; onOpen: () => void
       }`}
     >
       <span
-        className={`flex size-4 shrink-0 items-center justify-center rounded-full text-[8px] font-semibold leading-none text-white ${advertised ? '' : 'opacity-60'}`}
+        className={`flex size-4 shrink-0 items-center justify-center rounded-full text-avatar font-semibold leading-none text-white ${advertised ? '' : 'opacity-60'}`}
         style={{ backgroundColor: agent.color }}
         aria-hidden="true"
       >
@@ -90,7 +90,7 @@ function AgentChip({ agent, onOpen }: { agent: SkillAgentRef; onOpen: () => void
           name={agent.name}
           initials={agent.initials}
           className="size-4 rounded-full"
-          fallbackClassName="bg-transparent text-[8px] text-white"
+          fallbackClassName="bg-transparent text-avatar text-white"
         />
       </span>
       <span className="truncate">{agent.name}</span>
@@ -608,7 +608,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                       {selectedSkill.agents.map(agent => (
                         <div key={`${agent.id}:${agent.source}`} className="flex items-center gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5">
                           <span
-                            className="flex size-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold leading-none text-white"
+                            className="flex size-5 shrink-0 items-center justify-center rounded-full text-4xs font-semibold leading-none text-white"
                             style={{ backgroundColor: agent.color }}
                             aria-hidden="true"
                           >
@@ -617,7 +617,7 @@ export function SkillsWindowContent({ agents, agentConnections, systemCapabiliti
                               name={agent.name}
                               initials={agent.initials}
                               className="size-5 rounded-full"
-                              fallbackClassName="bg-transparent text-[9px] text-white"
+                              fallbackClassName="bg-transparent text-4xs text-white"
                             />
                           </span>
                           <div className="min-w-0 flex-1">

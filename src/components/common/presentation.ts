@@ -68,7 +68,7 @@ export const TEXT_BODY = 'text-sm';
 export const TEXT_META = 'text-xs';
 
 /** Uppercase micro-labels only. Below this, type stops being readable. */
-export const TEXT_MICRO = 'text-[0.65rem]';
+export const TEXT_MICRO = 'text-3xs';
 
 /**
  * Caps and centres the row column, same move as the chat window's

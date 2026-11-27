@@ -467,7 +467,7 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
                 )}
               >
                 <MessageSquareWarning className="size-4 shrink-0" />
-                {expanded && <span className="truncate text-[0.8125rem]">Feedback</span>}
+                {expanded && <span className="truncate text-xs-plus">Feedback</span>}
               </button>
             </TooltipTrigger>
             {!expanded && <TooltipContent side="right">Send feedback</TooltipContent>}
@@ -501,11 +501,11 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
                   slot to fill rather than an existing workspace's identity. */}
               <span
                 aria-hidden="true"
-                className="flex size-9 shrink-0 items-center justify-center rounded-[11px] border border-dashed border-border transition-all duration-150 group-hover:rounded-[7px] group-hover:border-foreground/40"
+                className="flex size-9 shrink-0 items-center justify-center rounded-tile border border-dashed border-border transition-[border-radius,border-color] duration-150 group-hover:rounded-tile-tight group-hover:border-foreground/40"
               >
                 <Plus className="size-4" />
               </span>
-              {expanded && <span className="min-w-0 flex-1 truncate text-[0.8125rem] tracking-tight">Add new</span>}
+              {expanded && <span className="min-w-0 flex-1 truncate text-xs-plus tracking-tight">Add new</span>}
             </button>
           </TooltipTrigger>
           {/* Redundant once the button says what it does. */}
@@ -529,13 +529,13 @@ export const WorkspaceRail = React.memo(function WorkspaceRail({
                 onClick={onOpenTenants}
                 aria-label="Tenants"
                 className={cn(
-                  'flex h-9 items-center rounded-[11px] border border-transparent text-muted-foreground transition-colors',
+                  'flex h-9 items-center rounded-tile border border-transparent text-muted-foreground transition-colors',
                   'hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   expanded ? 'w-full gap-2 px-2.5' : 'mx-auto w-9 justify-center',
                 )}
               >
                 <Building2 className="size-4 shrink-0" />
-                {expanded && <span className="truncate text-[0.8125rem]">Tenants</span>}
+                {expanded && <span className="truncate text-xs-plus">Tenants</span>}
               </button>
             </TooltipTrigger>
             {!expanded && <TooltipContent side="right">Tenants</TooltipContent>}
@@ -684,10 +684,10 @@ function WorkspaceRow({
           // light, lighter in dark) and stay visible against an arbitrary
           // identity fill, which is a relationship to a theme token, not a
           // literal. The transparent border stays so gaining one costs no shift.
-          'workspace-tile-swatch flex size-9 shrink-0 items-center justify-center border border-transparent text-[0.8125rem] font-semibold tracking-tight text-white shadow-sm transition-all duration-150',
+          'workspace-tile-swatch flex size-9 shrink-0 items-center justify-center border border-transparent text-xs-plus font-semibold tracking-tight text-white shadow-sm transition-[background-color,box-shadow] duration-150',
           tile.active
-            ? 'rounded-[7px] shadow'
-            : 'rounded-[11px] opacity-60 group-hover:rounded-[7px] group-hover:opacity-100 group-hover:shadow',
+            ? 'rounded-tile-tight shadow'
+            : 'rounded-tile opacity-60 group-hover:rounded-tile-tight group-hover:opacity-100 group-hover:shadow',
         )}
         style={{ backgroundColor: tile.color }}
       >
@@ -701,7 +701,7 @@ function WorkspaceRow({
           onDoubleClick={onRename ? (event => { event.preventDefault(); event.stopPropagation(); setRenaming(true); }) : undefined}
           title={onRename ? 'Double-click to rename' : undefined}
           className={cn(
-            'min-w-0 flex-1 truncate text-[0.8125rem] font-medium tracking-tight',
+            'min-w-0 flex-1 truncate text-xs-plus font-medium tracking-tight',
             tile.active ? 'font-semibold text-foreground' : 'text-muted-foreground group-hover:text-foreground',
           )}
         >
@@ -716,7 +716,7 @@ function WorkspaceRow({
       <div className="flex w-full shrink-0 items-center gap-2 px-2">
         <span
           aria-hidden="true"
-          className="flex size-9 shrink-0 items-center justify-center rounded-[7px] text-[0.8125rem] font-semibold tracking-tight text-white"
+          className="flex size-9 shrink-0 items-center justify-center rounded-tile-tight text-xs-plus font-semibold tracking-tight text-white"
           style={{ backgroundColor: tile.color }}
         >
           {tile.glyph}

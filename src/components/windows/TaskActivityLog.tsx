@@ -48,7 +48,7 @@ export function TaskActivityLog({
             return (
               <li key={item.id} className="flex items-center gap-2 text-xs">
                 <span
-                  className="grid size-5 shrink-0 place-items-center rounded-full bg-primary/20 text-[0.5rem] font-semibold"
+                  className="grid size-5 shrink-0 place-items-center rounded-full bg-primary/20 text-avatar font-semibold"
                   title={member?.email ?? 'An agent or the system'}
                 >
                   {member ? initials(member.email) : 'AI'}

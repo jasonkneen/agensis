@@ -1969,11 +1969,11 @@ function ItemRow({
        is the more urgent fact, and stacking both would crowd a 20px-tall row. */}
    {presenceUsers.length === 0 && trailing}
    {presenceUsers.length > 0 && (
-    <span className="ml-auto flex shrink-0 items-center gap-0.5 transition-all duration-150 group-hover:gap-1">
+    <span className="ml-auto flex shrink-0 items-center gap-0.5 transition-[gap] duration-150 group-hover:gap-1">
      {presenceUsers.slice(0, 3).map(person => (
       <span
        key={person.userId}
-       className="flex size-2 items-center justify-center overflow-hidden rounded-full text-[0px] font-semibold leading-none text-white ring-1 ring-background transition-all duration-150 group-hover:size-4 group-hover:text-[9px]"
+       className="flex size-2 items-center justify-center overflow-hidden rounded-full text-avatar font-semibold leading-none text-white ring-1 ring-background transition-[width,height,background-color] duration-150 group-hover:size-4"
        style={{ backgroundColor: person.color }}
        title={`${person.name}${person.typing ? ' is typing' : ' is active'}`}
       >
@@ -1996,7 +1996,7 @@ const ITEM_FOLDERS = ['General', 'Work', 'Research', 'Drafts', 'Ideas', 'Webhook
 function RowChip({ kind }: { kind: 'SPLIT' | 'SUB' }) {
  return (
   <span
-   className="inline-flex w-9 shrink-0 items-center justify-center rounded-sm bg-primary/15 px-1 py-0.5 text-[9px] font-bold uppercase leading-none tracking-wide text-primary"
+   className="inline-flex w-9 shrink-0 items-center justify-center rounded-sm bg-primary/15 px-1 py-0.5 text-4xs font-bold uppercase leading-none tracking-wide text-primary"
    title={kind === 'SPLIT' ? 'Split of the thread above' : 'Sub-thread of the thread above'}
   >
    {kind}
@@ -2226,7 +2226,7 @@ function SessionRow({
        <>
         <span
          data-testid="nostr-source-chip"
-         className="shrink-0 rounded border border-sky-500/30 bg-sky-500/10 px-1 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-wide text-sky-700 dark:text-sky-300"
+         className="shrink-0 rounded border border-info-border bg-info-subtle px-1 py-0.5 text-4xs font-semibold uppercase leading-none tracking-wide text-info"
          title="Mirrored from a Nostr community"
         >
          Nostr
@@ -2234,7 +2234,7 @@ function SessionRow({
         {!source.enabled && (
          <span
           data-testid="nostr-subscription-state"
-          className="shrink-0 rounded bg-warning/15 px-1 py-0.5 text-[9px] font-semibold uppercase leading-none tracking-wide text-warning"
+          className="shrink-0 rounded bg-warning/15 px-1 py-0.5 text-4xs font-semibold uppercase leading-none tracking-wide text-warning"
          >
           Paused
          </span>
@@ -2250,7 +2250,7 @@ function SessionRow({
         {presenceUsers.slice(0, 3).map(person => (
          <span
           key={person.userId}
-          className="flex size-2 items-center justify-center overflow-hidden rounded-full text-[0px] font-semibold leading-none text-white ring-1 ring-background"
+          className="flex size-2 items-center justify-center overflow-hidden rounded-full text-avatar font-semibold leading-none text-white ring-1 ring-background"
           style={{ backgroundColor: person.color }}
           title={`${person.name}${person.typing ? ' is typing' : ' is active'}`}
          >
@@ -2383,7 +2383,7 @@ function LibrarySourceChips({ sources }: { sources: LibrarySource[] }) {
    {agents.slice(0, 2).map(agent => (
     <span
      key={agent.id}
-     className="flex size-3.5 items-center justify-center overflow-hidden rounded-full text-[7px] font-semibold leading-none text-white ring-1 ring-background"
+     className="flex size-3.5 items-center justify-center overflow-hidden rounded-full text-avatar font-semibold leading-none text-white ring-1 ring-background"
      style={{ backgroundColor: agent.color, opacity: agent.connected ? 1 : 0.55 }}
      title={`${agent.name}${agent.connected ? '' : ' (offline — this is the last copy it sent)'}`}
     >
@@ -2392,7 +2392,7 @@ function LibrarySourceChips({ sources }: { sources: LibrarySource[] }) {
       name={agent.name}
       initials={agent.initials}
       className="size-3.5 rounded-full"
-      fallbackClassName="bg-transparent text-[7px] text-white"
+      fallbackClassName="bg-transparent text-avatar text-white"
      />
     </span>
    ))}

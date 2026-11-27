@@ -39,7 +39,7 @@ const avatarColors = [
   'bg-green-500',
   'bg-cyan-500',
   'bg-blue-500',
-  'bg-violet-500',
+  'bg-agent',
   'bg-pink-500',
 ];
 

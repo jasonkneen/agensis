@@ -168,7 +168,7 @@ export function UploadedFileRow({ file, onOpen }: { file: UploadedFile; onOpen: 
       <UploadedFileThumb file={file} />
       <span className="flex min-w-0 flex-1 flex-col leading-tight">
         <FileNameText name={name} />
-        <span className="text-[0.68rem] text-muted-foreground">
+        <span className="text-2xs text-muted-foreground">
           {formatBytes(file.size)}
           {uploadedOn ? ` · ${uploadedOn}` : ''}
         </span>
@@ -200,7 +200,7 @@ export function ProjectFileRow({
       </span>
       <span className="flex min-w-0 flex-1 flex-col leading-tight">
         <FileNameText name={displayName} />
-        <span className="truncate text-[0.68rem] text-muted-foreground">
+        <span className="truncate text-2xs text-muted-foreground">
           {formatBytes(file.size)}
           {folderPath ? ` · ${folderPath}` : ''}
         </span>

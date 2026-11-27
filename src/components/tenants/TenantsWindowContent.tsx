@@ -389,7 +389,7 @@ export function TenantList({
         <div className={LIST_COLUMN_CLASS}>
           {[0, 1, 2, 3].map(index => (
             <div key={index} className={cn('flex items-start gap-2.5', ROW_PADDING)}>
-              <Skeleton className="size-8 shrink-0 rounded-[9px]" />
+              <Skeleton className="size-8 shrink-0 rounded-tile" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <Skeleton className="h-3 w-28" />

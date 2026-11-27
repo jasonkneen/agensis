@@ -23,14 +23,14 @@ function peopleList(members: WorkspaceMember[], agents: WorkspaceAgent[]): Direc
 }
 
 const AgentTag = ({ children }: { children: string }) => (
-  <span className="rounded-full border border-violet-500/50 px-2 text-[0.6875rem] text-violet-500">{children}</span>
+  <span className="rounded-full border border-agent-border px-2 text-2xs text-agent">{children}</span>
 );
 
 function Avatar({ name, isAgent }: { name: string; isAgent: boolean }) {
   return (
     <span
       title={name}
-      className={cn('grid size-6 place-items-center rounded-full border-2 border-card text-[0.5625rem] font-semibold', isAgent ? 'bg-violet-500/20 text-violet-500' : 'bg-primary/20')}
+      className={cn('grid size-6 place-items-center rounded-full border-2 border-card text-4xs font-semibold', isAgent ? 'bg-agent-subtle text-agent' : 'bg-primary/20')}
     >
       {name.replace('@', '').slice(0, 2).toUpperCase()}
     </span>
@@ -80,7 +80,7 @@ function TeamCard({ team, people, tasks, agentIds, actions }: { team: Team; peop
                     checked={team.member_ids.includes(person.id)}
                     onChange={() => void actions.updateTeam(team.id, { member_ids: toggleMember(team.member_ids, person.id) })}
                   />
-                  <span className={cn(person.isAgent && 'text-violet-500')}>{person.name}</span>
+                  <span className={cn(person.isAgent && 'text-agent')}>{person.name}</span>
                 </label>
               </li>
             ))}

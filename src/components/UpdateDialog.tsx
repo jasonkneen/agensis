@@ -105,7 +105,7 @@ export const UpdateDialog = memo(function UpdateDialog({ open, onOpenChange, not
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium">{latest.title}</span>
                     {available && (
-                      <Badge variant="secondary" className="text-[0.65rem]">
+                      <Badge variant="secondary" className="text-3xs">
                         Latest
                       </Badge>
                     )}
@@ -146,14 +146,14 @@ export const UpdateDialog = memo(function UpdateDialog({ open, onOpenChange, not
                     {older.map((note, i) => (
                       <li key={`${note.version}-${i}`} className="flex flex-col gap-0.5">
                         <div className="flex items-baseline gap-2">
-                          <span className="text-[0.8125rem] font-medium leading-snug">
+                          <span className="text-xs-plus font-medium leading-snug">
                             {note.title}
                           </span>
-                          <span className="ml-auto shrink-0 text-[0.6875rem] text-muted-foreground/70">
+                          <span className="ml-auto shrink-0 text-2xs text-muted-foreground/70">
                             {note.date}
                           </span>
                         </div>
-                        <p className="text-[0.8125rem] leading-snug text-foreground/70">
+                        <p className="text-xs-plus leading-snug text-foreground/70">
                           {note.summary}
                         </p>
                         {note.highlights && note.highlights.length > 0 && (
@@ -161,7 +161,7 @@ export const UpdateDialog = memo(function UpdateDialog({ open, onOpenChange, not
                             {note.highlights.map((h, j) => (
                               <li
                                 key={j}
-                                className="list-disc text-[0.8125rem] leading-snug text-foreground/60 marker:text-primary/50"
+                                className="list-disc text-xs-plus leading-snug text-foreground/60 marker:text-primary/50"
                               >
                                 {h}
                               </li>

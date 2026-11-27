@@ -104,10 +104,36 @@ describe('mono typography', () => {
   });
 
   it('routes every mono surface through that token, not a literal stack', () => {
+    // An @font-face BLOCK is not a surface — its font-family is the name being
+    // DEFINED, and the rule below is what makes that name resolvable. Stripping
+    // the blocks first means a bundled face (the terminal's Nerd-patched Plex,
+    // see public/fonts/blex-nerd-font-mono) never counts as a literal stack,
+    // while every real declaration still has to defer to the token.
     const live = cssWithoutComments();
+    const withoutFaceBlocks: string[] = [];
+    let cursor = 0;
+    while (true) {
+      const start = live.indexOf('@font-face', cursor);
+      if (start === -1) { withoutFaceBlocks.push(live.slice(cursor)); break; }
+      withoutFaceBlocks.push(live.slice(cursor, start));
+      const open = live.indexOf('{', start);
+      // Walk to the matching brace so nested blocks cannot confuse the skip.
+      let depth = 0;
+      let index = open;
+      for (; index < live.length; index += 1) {
+        if (live[index] === '{') depth += 1;
+        else if (live[index] === '}') {
+          depth -= 1;
+          if (depth === 0) break;
+        }
+      }
+      cursor = index + 1;
+    }
+    const surfaces = withoutFaceBlocks.join('');
+
     // Inline code, code blocks and the neo theme each used to carry their own
     // stack. Each must now defer.
-    const monoDeclarations = [...live.matchAll(/font-family:\s*([^;]+);/g)]
+    const monoDeclarations = [...surfaces.matchAll(/font-family:\s*([^;]+);/g)]
       .map(m => m[1].trim())
       .filter(value => /mono/i.test(value));
 

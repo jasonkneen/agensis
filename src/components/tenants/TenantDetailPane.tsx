@@ -129,7 +129,7 @@ export function TenantDetailPane({
           <div className="flex min-w-0 items-start gap-2.5">
             <span
               aria-hidden="true"
-              className="flex size-8 shrink-0 items-center justify-center rounded-[9px] text-xs font-semibold tracking-tight text-white"
+              className="flex size-8 shrink-0 items-center justify-center rounded-tile text-xs font-semibold tracking-tight text-white"
               style={{ backgroundColor: tenantTileColor(shown) }}
             >
               {tenantInitials(shown)}
@@ -186,7 +186,7 @@ export function TenantDetailPane({
 
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-t border-border/60 pt-3 text-xs">
             <dt className="text-muted-foreground">Account id</dt>
-            <dd className="min-w-0 break-all font-mono text-[0.7rem] text-foreground/80">{shown.id}</dd>
+            <dd className="min-w-0 break-all font-mono text-2xs text-foreground/80">{shown.id}</dd>
             <dt className="text-muted-foreground">Registered</dt>
             <dd className="min-w-0 text-foreground/80">{tenantJoinedLabel(shown.created_at) || 'Unknown'}</dd>
             <dt className="text-muted-foreground">Last active</dt>
@@ -326,7 +326,7 @@ function WorkspaceGroup({
               >
                 <span
                   aria-hidden="true"
-                  className="flex size-7 shrink-0 items-center justify-center rounded-[8px] text-[0.65rem] font-semibold tracking-tight text-white"
+                  className="flex size-7 shrink-0 items-center justify-center rounded-tile-tight text-3xs font-semibold tracking-tight text-white"
                   style={{ backgroundColor: row.color }}
                 >
                   {row.initials}
@@ -335,7 +335,7 @@ function WorkspaceGroup({
                   <div className={cn('flex min-w-0 items-center gap-1.5 leading-5', TEXT_BODY)}>
                     <span className="min-w-0 truncate font-medium text-foreground">{row.name}</span>
                     {row.isSystem && (
-                      <span className={cn('shrink-0 rounded-[4px] bg-muted px-1 py-px font-medium text-muted-foreground/90', TEXT_META)}>
+                      <span className={cn('shrink-0 rounded-sm bg-muted px-1 py-px font-medium text-muted-foreground/90', TEXT_META)}>
                         System
                       </span>
                     )}

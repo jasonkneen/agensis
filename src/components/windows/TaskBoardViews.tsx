@@ -127,7 +127,19 @@ export function TaskKanban({
                   <div
                     key={task.id}
                     draggable
+                    // A draggable card is still a selection control: Tab must
+                    // reach it and Enter/Space must select it, or the board is
+                    // pointer-only for anyone who cannot drag.
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Select ${task.title}`}
+                    aria-pressed={selectedTaskId === task.id}
                     onClick={() => onSelectTask(task.id)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      onSelectTask(task.id);
+                    }}
                     onDragStart={e => {
                       setDragTaskId(task.id);
                       // Some browsers refuse to start an HTML5 drag with no payload.
@@ -559,13 +571,26 @@ export function TaskGantt({
               {rows.map((row, i) => (
                 <div
                   key={row.task.id}
+                  // The row band is the Gantt's primary click target, so it has
+                  // to be the keyboard target too: a bare <div onClick> is
+                  // unreachable by Tab and invisible to a screen reader.
+                  role={isHeaderRow(row) ? undefined : 'button'}
+                  tabIndex={isHeaderRow(row) ? undefined : 0}
+                  aria-label={isHeaderRow(row) ? undefined : `Select ${row.task.title ?? 'task'}`}
                   className={cn(
                     'absolute left-0 cursor-pointer border-b border-border/40',
                     selectedTaskId === row.task.id && 'bg-muted',
                     isHeaderRow(row) && 'bg-muted/60',
+                    !isHeaderRow(row) && 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
                   )}
                   style={{ top: rowTop(i), height: GANTT_ROW_HEIGHT, width: contentWidth }}
                   onClick={() => (isHeaderRow(row) ? undefined : onSelectTask(row.task.id))}
+                  onKeyDown={(event) => {
+                    if (isHeaderRow(row)) return;
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    onSelectTask(row.task.id);
+                  }}
                 />
               ))}
 
@@ -701,10 +726,18 @@ export function TaskGantt({
                       // is derived from them, so it CLICKS to select rather than
                       // dragging — moving a summary would move nothing real.
                       <span
-                        className="pointer-events-auto relative flex cursor-pointer items-center"
+                        className="pointer-events-auto relative flex cursor-pointer items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
                         style={{ width, height: GANTT_ROW_HEIGHT }}
                         title={tooltip}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Select summary ${task.title ?? 'task'}`}
                         onClick={() => onSelectTask(task.id)}
+                        onKeyDown={(event) => {
+                          if (event.key !== 'Enter' && event.key !== ' ') return;
+                          event.preventDefault();
+                          onSelectTask(task.id);
+                        }}
                       >
                         <span
                           className={cn(
@@ -807,7 +840,18 @@ export function TaskGantt({
                           maxWidth: GANTT_ALONGSIDE_LABEL_MAX,
                         }}
                         title={tooltip}
+                        // The pinned name is the row's only remaining click
+                        // target once the shape is too small to hold a title, so
+                        // it has to be Tab-reachable and activatable by keyboard.
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Select ${task.title}`}
                         onClick={() => onSelectTask(task.id)}
+                        onKeyDown={(event) => {
+                          if (event.key !== 'Enter' && event.key !== ' ') return;
+                          event.preventDefault();
+                          onSelectTask(task.id);
+                        }}
                       >
                         {row.depth > 0 && (
                           <CornerDownRight className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />

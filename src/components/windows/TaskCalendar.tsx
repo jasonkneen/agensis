@@ -223,7 +223,7 @@ export function TaskCalendar({
         </form>
       )}
 
-      <div className="grid shrink-0 grid-cols-7 border-b border-border bg-card text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
+      <div className="grid shrink-0 grid-cols-7 border-b border-border bg-card text-2xs uppercase tracking-wide text-muted-foreground">
         {WEEKDAYS.map(day => (
           <div key={day} className="border-r border-border px-2 py-1.5 last:border-r-0">{day}</div>
         ))}
@@ -262,7 +262,7 @@ export function TaskCalendar({
               <div className="mb-1 flex items-center">
                 <span
                   className={cn(
-                    'grid size-5 place-items-center rounded-full text-[0.6875rem]',
+                    'grid size-5 place-items-center rounded-full text-2xs',
                     isToday && 'bg-destructive font-semibold text-white',
                   )}
                 >
@@ -277,7 +277,7 @@ export function TaskCalendar({
                     return (
                       <div
                         key={`event-${event.id}`}
-                        className="flex items-center gap-1 rounded border border-dashed border-muted-foreground/60 px-1.5 py-0.5 text-[0.6875rem]"
+                        className="flex items-center gap-1 rounded border border-dashed border-muted-foreground/60 px-1.5 py-0.5 text-2xs"
                         title={event.title}
                       >
                         <span className="min-w-0 flex-1 truncate">{time}{event.title}</span>
@@ -306,7 +306,7 @@ export function TaskCalendar({
                       }}
                       onClick={() => onSelectTask(task.id)}
                       className={cn(
-                        'truncate rounded border-l-2 px-1.5 py-0.5 text-left text-[0.6875rem]',
+                        'truncate rounded border-l-2 px-1.5 py-0.5 text-left text-2xs',
                         overdue ? 'border-destructive bg-destructive/10 text-destructive' : 'border-primary bg-primary/10',
                         done && 'border-muted-foreground bg-muted text-muted-foreground line-through',
                         selectedTaskId === task.id && 'ring-1 ring-primary',
@@ -318,7 +318,7 @@ export function TaskCalendar({
                   );
                 })}
                 {items.length > MAX_CHIPS_PER_DAY && (
-                  <span className="px-1 text-[0.6875rem] text-muted-foreground">+{items.length - MAX_CHIPS_PER_DAY} more</span>
+                  <span className="px-1 text-2xs text-muted-foreground">+{items.length - MAX_CHIPS_PER_DAY} more</span>
                 )}
               </div>
             </div>

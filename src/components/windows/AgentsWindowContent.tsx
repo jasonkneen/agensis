@@ -1037,7 +1037,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 <button
                   type="button"
                   onClick={startCustom}
-                  className="group flex min-h-[104px] flex-col items-start gap-2 rounded-xl border-2 border-dashed border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
+                  className="group flex min-h-[104px] flex-col items-start gap-2 rounded-xl border-2 border-dashed border-border bg-card/40 p-4 text-left transition-[transform,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
                   <span className="grid size-9 place-items-center rounded-lg bg-muted"><Plus className="size-5" /></span>
                   <span className="text-sm font-semibold">Custom</span>
                   <span className="text-xs text-muted-foreground">Build your own agent from scratch.</span>
@@ -1045,7 +1045,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                 <button
                   type="button"
                   onClick={onOpenConnections}
-                  className="group flex min-h-[104px] flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
+                  className="group flex min-h-[104px] flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-[transform,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
                   <span className="grid size-9 place-items-center rounded-lg bg-muted"><Plug className="size-5" /></span>
                   <span className="text-sm font-semibold">Workspace control</span>
                   <span className="text-xs text-muted-foreground">Connect a trusted MCP client that may register agents and create shared resources.</span>
@@ -1207,7 +1207,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                           <button
                             type="button"
                             onClick={() => applyTemplate(tpl)}
-                            className="flex min-h-[132px] w-full flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
+                            className="flex min-h-[132px] w-full flex-col items-start gap-2 rounded-xl border border-border bg-card/40 p-4 text-left transition-[transform,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/80 hover:shadow-lg hover:shadow-black/10 dark:hover:shadow-black/30">
                             <span className="grid size-9 place-items-center rounded-lg bg-muted"><TplIcon className="size-5" /></span>
                             <span className="text-sm font-semibold">{tpl.name}</span>
                             <span className="line-clamp-2 text-xs text-muted-foreground">{tpl.description}</span>
@@ -1484,7 +1484,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                         className={cn(
                           // agents-list-card carries the selected wash (accent
                           // over card, index.css) and the neo depth treatment.
-                          'agents-list-card group relative flex flex-col items-center gap-2.5 overflow-hidden rounded-2xl border bg-card/60 p-4 text-center shadow-sm shadow-black/5 backdrop-blur-md transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:shadow-black/20 dark:hover:shadow-black/30',
+                          'agents-list-card group relative flex flex-col items-center gap-2.5 overflow-hidden rounded-2xl border bg-card/60 p-4 text-center shadow-sm shadow-black/5 backdrop-blur-md transition-[transform,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card/85 hover:shadow-lg hover:shadow-black/10 dark:shadow-black/20 dark:hover:shadow-black/30',
                           selected && 'border-primary/50',
                           !active && 'opacity-60',
                         )}
@@ -1522,7 +1522,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   <button
                     type="button"
                     onClick={() => setCreateStep('choose')}
-                    className="flex min-h-[124px] flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-border bg-card/20 p-4 text-center text-muted-foreground transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/60 hover:text-foreground"
+                    className="flex min-h-[124px] flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-border bg-card/20 p-4 text-center text-muted-foreground transition-[transform,border-color,background-color,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-primary/60 hover:bg-card/60 hover:text-foreground"
                   >
                     <span className="grid size-16 place-items-center rounded-2xl border-2 border-dashed border-border/70">
                       <Plus className="size-6" />

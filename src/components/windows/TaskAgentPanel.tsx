@@ -29,11 +29,11 @@ export function TaskAgentPanel({
 
   return (
     <section
-      className="mx-4 my-3 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3"
+      className="mx-4 my-3 rounded-lg border border-agent-border bg-agent-subtle p-3"
       aria-label="Agent working on this task"
     >
       <div className="flex items-center gap-2">
-        <span className="rounded-full border border-violet-500/40 px-1.5 text-xs text-violet-400">{state.agent.name || 'Agent'}</span>
+        <span className="rounded-full border border-agent-border px-1.5 text-xs text-agent">{state.agent.name || 'Agent'}</span>
         <span className="text-xs text-muted-foreground">@{agentHandle(state.agent)}</span>
         <span
           className={cn(

@@ -1,6 +1,28 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  /**
+   * Pane-scoped zoom. Cmd+= / Cmd+- / Cmd+0 are taken at the keyboard (see
+   * interceptZoomChords in main.cjs) and forwarded here, because the stock
+   * Electron zoom roles scale the WHOLE application. `handler` returns true when
+   * a pane actually zoomed; a `false` is reported back on `zoom:app` and the
+   * shell zooms the application itself, exactly as it used to, so the shortcut
+   * can never become a dead key.
+   */
+  onZoomCommand: (handler) => {
+    const listener = (_event, command) => {
+      let handled = false;
+      try {
+        handled = handler(command) === true;
+      } catch {
+        handled = false;
+      }
+      if (!handled) ipcRenderer.send('zoom:app', command);
+    };
+    ipcRenderer.on('zoom:dispatch', listener);
+    return () => ipcRenderer.removeListener('zoom:dispatch', listener);
+  },
+
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
   /** Fired when Finder/File Explorer opens a .agn bundle in the desktop app. */
   onAgentBundleOpen: (callback) => {

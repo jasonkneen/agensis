@@ -30,7 +30,7 @@ export function OwnerMessageBanner() {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 text-sm font-semibold">
           {message.title}
-          <span className="text-[0.65rem] font-semibold tracking-wide text-primary">FOR YOU</span>
+          <span className="text-3xs font-semibold tracking-wide text-primary">FOR YOU</span>
         </div>
         <p className="whitespace-pre-line text-xs text-muted-foreground">{message.body}</p>
       </div>

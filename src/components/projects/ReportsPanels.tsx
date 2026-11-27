@@ -77,7 +77,7 @@ export function WorkloadBars({ rows, members, agents }: { rows: WorkloadRow[]; m
         const name = agent ? `@${agentHandle(agent)}` : member?.email?.split('@')[0] || 'Member';
         return (
           <li key={row.id} className="grid grid-cols-[5.5rem_1fr_1.5rem] items-center gap-2 text-xs">
-            <span className={cn('truncate', agent && 'text-violet-500')} title={name}>
+            <span className={cn('truncate', agent && 'text-agent')} title={name}>
               {name}
             </span>
             <span className="flex h-2 overflow-hidden rounded-full bg-muted" style={{ width: `${(row.total / max) * 100}%`, minWidth: '0.5rem' }}>
@@ -340,7 +340,7 @@ export function WorkspaceDashboard({
                 const agent = agents.find(item => item.id === task.assignee_id);
                 return (
                   <li key={task.id} className="flex items-center gap-2 py-2 text-sm">
-                    <span className="shrink-0 rounded-full border border-violet-500/50 px-2 text-[0.6875rem] text-violet-500">{agent ? agentHandle(agent) : 'agent'}</span>
+                    <span className="shrink-0 rounded-full border border-agent-border px-2 text-2xs text-agent">{agent ? agentHandle(agent) : 'agent'}</span>
                     <span className="truncate">{task.title}</span>
                     <span className="ml-auto shrink-0 text-xs text-muted-foreground">{projectName(task.project_id)}</span>
                   </li>

@@ -128,6 +128,102 @@ function startLocalBackend() {
   return startBackendServer();
 }
 
+// ── Pane-scoped zoom ─────────────────────────────────────────────────────────
+// Chromium's stock zoom roles (Cmd+= / Cmd+- / Cmd+0) call webContents
+// setZoomFactor, i.e. they scale the ENTIRE application: the sidebar, the window
+// chrome and every open window. In a browser Cmd+= means "zoom the page I am
+// looking at", and inside the terminal window it must mean "zoom this shell's
+// text" — so the chord is intercepted and routed to a pane instead.
+//
+// HOW THE INTERCEPTION WORKS
+//
+// Main→renderer synchronous IPC does not exist (`webContents.sendSync` is not an
+// API — only ipcRenderer.sendSync is, and that goes the other way), so the menu
+// handler cannot ask the renderer a question and wait. The keyboard path is
+// therefore taken over BELOW the menu:
+//
+//   1. `before-input-event` on the window fires for every keystroke and its
+//      preventDefault() stops the menu accelerator from running at all
+//      (measured: with the intercept in place the zoom factor never moved).
+//   2. The chord is forwarded to the renderer as `zoom:dispatch`. The renderer
+//      owns which pane is focused, zooms it if it can, and otherwise replies on
+//      `zoom:app` — which is the app's own zoom, unchanged.
+//
+// A <webview> guest is a separate renderer, so it gets the same intercept on its
+// own webContents and is zoomed in place; a guest keeps its own zoom factor, so
+// that is page zoom and the application stays at 100%.
+const ZOOM_CHORDS = new Map([
+  ['=', 'in'],
+  ['+', 'in'],
+  ['-', 'out'],
+  ['_', 'out'],
+  ['0', 'reset'],
+]);
+
+/** Resolve a `before-input-event` payload into a zoom command, or null. */
+function zoomCommandFromInput(input) {
+  if (input.type !== 'keyDown') return null;
+  const modifier = process.platform === 'darwin' ? input.meta : input.control;
+  // Alt/Option combinations belong to typing (Option+= is "≠" on macOS).
+  if (!modifier || input.alt) return null;
+  return ZOOM_CHORDS.get(input.key) ?? null;
+}
+
+/**
+ * Install the interrupt on one webContents: an embedder, or an attached guest.
+ * `isGuest` picks the routing — a guest is zoomed directly, an embedder defers
+ * to the renderer's focused pane.
+ */
+function interceptZoomChords(contents, { isGuest }) {
+  contents.on('before-input-event', (event, input) => {
+    const command = zoomCommandFromInput(input);
+    if (!command) return;
+    event.preventDefault();
+    if (isGuest) {
+      const current = typeof contents.getZoomFactor === 'function' ? contents.getZoomFactor() : 1;
+      contents.setZoomFactor(command === 'reset' ? 1 : zoomStep(current, command));
+      return;
+    }
+    try {
+      contents.send('zoom:dispatch', command);
+    } catch {
+      // A renderer that is reloading/navigating cannot take the chord; the
+      // keystroke is simply swallowed rather than scaling the whole app.
+    }
+  });
+}
+
+/** Chrome's own ladder, mirrored from src/lib/zoom.ts (kept in step by a test). */
+const APP_ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
+
+function zoomStep(current, command) {
+  if (command === 'reset') return 1;
+  const bounded = Math.min(5, Math.max(0.25, Number(current) || 1));
+  if (command === 'in') {
+    for (const step of APP_ZOOM_STEPS) if (step > bounded + 1e-9) return step;
+    return APP_ZOOM_STEPS[APP_ZOOM_STEPS.length - 1];
+  }
+  for (let i = APP_ZOOM_STEPS.length - 1; i >= 0; i -= 1) {
+    if (APP_ZOOM_STEPS[i] < bounded - 1e-9) return APP_ZOOM_STEPS[i];
+  }
+  return APP_ZOOM_STEPS[0];
+}
+
+/**
+ * The renderer's verdict for a chord no pane wanted: zoom the whole application.
+ * This is the old behaviour, kept deliberately so the shortcut is never a dead
+ * key — a chat window with nothing zoomable in it still scales like it used to.
+ */
+function installZoomFallback() {
+  ipcMain.on('zoom:app', (event, command) => {
+    if (command !== 'in' && command !== 'out' && command !== 'reset') return;
+    if (!trustedIpcSender(event)) return;
+    const target = event.sender;
+    const current = target.getZoomFactor();
+    target.setZoomFactor(command === 'reset' ? 1 : zoomStep(current, command));
+  });
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1400,
@@ -191,6 +287,14 @@ function createWindow() {
       mainWindow = null;
       rendererReady = false;
     }
+  });
+
+  // Cmd+= zooms the focused pane, not the application (see interceptZoomChords).
+  interceptZoomChords(win.webContents, { isGuest: false });
+  // A guest is its own renderer, so it needs its own intercept — this is what
+  // gives the browser pane its independent page zoom.
+  win.webContents.on('did-attach-webview', (_event, guest) => {
+    interceptZoomChords(guest, { isGuest: true });
   });
 
   // Guests are UNTRUSTED remote pages. Electron would otherwise let the tag's
@@ -826,6 +930,9 @@ ipcMain.handle('local-runtime:list-autostart', async (event) => {
 
 app.whenReady().then(async () => {
   if (!singleInstanceLock) return;
+  // Pane-scoped zoom: take the chords below the menu, and keep the app-level
+  // fallback for chords no pane claims (see interceptZoomChords).
+  installZoomFallback();
   // Opt-in only. Default packaged behaviour talks to the hosted backend baked
   // into the renderer; AGENSIS_BACKEND_EXTERNAL (set by electron:dev) is still
   // honoured as a hard "never start local" so dev's own `npm run backend`

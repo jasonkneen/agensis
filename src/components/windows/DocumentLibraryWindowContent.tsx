@@ -63,7 +63,7 @@ function SourceChip({ source, onOpen }: { source: LibrarySource; onOpen: () => v
         onOpen();
       }}
       title={describeSource(source)}
-      className={`inline-flex max-w-[11rem] items-center gap-1 rounded-sm py-0.5 pr-1 text-[0.6875rem] font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
+      className={`inline-flex max-w-[11rem] items-center gap-1 rounded-sm py-0.5 pr-1 text-2xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
         // A CONNECTED agent's copy is filled; an offline agent's is outlined.
         // Same fill/outline vocabulary the Skills window uses for
         // advertised-vs-configured, and the same underlying question: is this
@@ -74,7 +74,7 @@ function SourceChip({ source, onOpen }: { source: LibrarySource; onOpen: () => v
       }`}
     >
       <span
-        className={`flex size-3.5 shrink-0 items-center justify-center rounded-full text-[7px] font-semibold leading-none text-white ${agent?.connected || !agent ? '' : 'opacity-60'}`}
+        className={`flex size-3.5 shrink-0 items-center justify-center rounded-full text-avatar font-semibold leading-none text-white ${agent?.connected || !agent ? '' : 'opacity-60'}`}
         style={{ backgroundColor: agent?.color || 'var(--primary)' }}
         aria-hidden="true"
       >
@@ -84,7 +84,7 @@ function SourceChip({ source, onOpen }: { source: LibrarySource; onOpen: () => v
             name={agent.name}
             initials={agent.initials}
             className="size-3.5 rounded-full"
-            fallbackClassName="bg-transparent text-[7px] text-white"
+            fallbackClassName="bg-transparent text-avatar text-white"
           />
         ) : 'WS'}
       </span>
@@ -354,19 +354,19 @@ export function DocumentLibraryWindowContent({
                       >
                         <div className="flex items-center gap-2">
                           <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-                          <span className="truncate text-[0.8125rem] font-medium text-foreground">{entry.title}</span>
+                          <span className="truncate text-xs-plus font-medium text-foreground">{entry.title}</span>
                           {/* The count is the library's whole reason for existing:
                               it says "several places have this" at list level,
                               where the comparison is actually made. */}
                           {entry.sources.length > 1 && (
-                            <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[0.6875rem] text-muted-foreground" title={`${entry.sources.length} copies`}>
+                            <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-2xs text-muted-foreground" title={`${entry.sources.length} copies`}>
                               <Users className="size-3" />
                               {entry.sources.length}
                             </span>
                           )}
                         </div>
                         {entry.primary.summary && (
-                          <p className="mt-0.5 line-clamp-1 pl-5.5 text-[0.6875rem] leading-snug text-muted-foreground">
+                          <p className="mt-0.5 line-clamp-1 pl-5.5 text-2xs leading-snug text-muted-foreground">
                             {entry.primary.summary}
                           </p>
                         )}
@@ -456,7 +456,7 @@ export function DocumentLibraryWindowContent({
                       }`}
                     >
                       <span
-                        className="flex size-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold leading-none text-white"
+                        className="flex size-5 shrink-0 items-center justify-center rounded-full text-4xs font-semibold leading-none text-white"
                         style={{ backgroundColor: source.agent?.color || 'var(--primary)' }}
                         aria-hidden="true"
                       >
@@ -466,19 +466,19 @@ export function DocumentLibraryWindowContent({
                             name={source.agent.name}
                             initials={source.agent.initials}
                             className="size-5 rounded-full"
-                            fallbackClassName="bg-transparent text-[9px] text-white"
+                            fallbackClassName="bg-transparent text-4xs text-white"
                           />
                         ) : 'WS'}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[0.8125rem] text-foreground">
+                        <span className="block truncate text-xs-plus text-foreground">
                           {source.agent?.name || 'This workspace'}
                         </span>
                         <span className="block truncate font-mono text-3xs text-muted-foreground">
                           {source.path || LIBRARY_SOURCE_LABELS[source.kind]}
                         </span>
                       </span>
-                      <span className={`shrink-0 text-[0.6875rem] font-medium ${agreement === 'different' ? 'text-primary' : 'text-muted-foreground'}`}>
+                      <span className={`shrink-0 text-2xs font-medium ${agreement === 'different' ? 'text-primary' : 'text-muted-foreground'}`}>
                         {isPrimary ? 'latest' : agreement === 'identical' ? 'same' : agreement === 'different' ? 'differs' : 'compare'}
                       </span>
                     </button>

@@ -207,7 +207,7 @@ export function ComposerAddContent({
                 name={agent.name}
                 initials={agent.name.slice(0, 2).toUpperCase()}
                 className="size-4 rounded-md"
-                fallbackClassName="bg-transparent text-[8px] text-muted-foreground"
+                fallbackClassName="bg-transparent text-avatar text-muted-foreground"
               />
             )}
             label={agent.name}

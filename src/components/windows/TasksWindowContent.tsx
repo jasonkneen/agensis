@@ -179,7 +179,7 @@ const TASK_COMMENT_AVATAR_COLORS = [
   'bg-green-500',
   'bg-cyan-500',
   'bg-blue-500',
-  'bg-violet-500',
+  'bg-agent',
   'bg-pink-500',
 ];
 
@@ -2301,7 +2301,7 @@ function TaskCommentItem({
           name={author.label}
           initials={author.label.slice(0, 2).toUpperCase()}
           className="size-5 rounded-full bg-primary/15 text-primary"
-          fallbackClassName="bg-transparent text-[9px] text-primary"
+          fallbackClassName="bg-transparent text-4xs text-primary"
         />
       ) : (
         <TaskCommentAvatar email={author.email} seed={comment.user_id || comment.id} />
@@ -2310,7 +2310,7 @@ function TaskCommentItem({
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 truncate text-2xs font-semibold text-foreground">{author.label}</span>
           {isAgent && (
-            <Badge variant="secondary" className="h-3.5 px-1 py-0 text-[9px] leading-none">agent</Badge>
+            <Badge variant="secondary" className="h-3.5 px-1 py-0 text-4xs leading-none">agent</Badge>
           )}
           <span className="shrink-0 text-3xs text-muted-foreground">{formatRelativeTime(comment.created_at)}</span>
         </div>
@@ -2378,7 +2378,7 @@ function TaskCommentAvatar({ email, seed }: { email?: string; seed: string }) {
 
   return (
     <Avatar size="sm" className="size-5">
-      <AvatarFallback className={cn(color, 'text-[9px] font-bold text-white')}>
+      <AvatarFallback className={cn(color, 'text-4xs font-bold text-white')}>
         {taskCommentInitial(email || seed)}
       </AvatarFallback>
     </Avatar>

@@ -152,7 +152,7 @@ function HuddleAgentFace({ agent }: { agent: HuddleAgentOption }) {
       initials={initials}
       alt=""
       className="size-6 shrink-0 rounded"
-      fallbackClassName="bg-foreground/5 text-[9px] font-semibold leading-none"
+      fallbackClassName="bg-foreground/5 text-4xs font-semibold leading-none"
     />
   );
 }

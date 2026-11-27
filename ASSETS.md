@@ -214,7 +214,31 @@ built site.
 | `@fontsource/space-grotesk` | 5.2.10 | Space Grotesk | OFL-1.1 |
 | `@fontsource/space-mono` | 5.2.9 | Space Mono | OFL-1.1 |
 
-`src/index.css` also names families it does not bundle — `JetBrains Mono`,
+### Terminal face (committed)
+
+The terminal window is the one exception to the rule above, and it is a
+deliberate one. It needs a face whose glyphs cover the Nerd Fonts codepoint
+ranges *and* keep IBM Plex Mono's 0.6em advance, because xterm lays out on a cell
+grid sized from the primary face. No published npm package carries that
+combination (Nerd Fonts publishes the patch as a zip, not a package; symbol-only
+packages such as `@azurity/pure-nerd-font` advance 1em and would overflow every
+cell), so the patched face is committed here instead:
+
+| Path | Origin | Licence |
+| --- | --- | --- |
+| `src/fonts/blex-nerd-font-mono/BlexMonoNerdFontMono-Regular.woff2` | Nerd Fonts v3.5.1 `IBMPlexMono.zip`, `BlexMonoNerdFontMono-Regular.ttf`, converted to woff2 | OFL-1.1 |
+| `src/fonts/blex-nerd-font-mono/BlexMonoNerdFontMono-Bold.woff2` | the same release, Bold cut, converted to woff2 | OFL-1.1 |
+| `src/fonts/blex-nerd-font-mono/LICENSE.txt` | the licence file shipped inside that release | OFL-1.1 |
+
+Upstream is IBM Plex Mono 2.004 (IBM, Copyright 2017 IBM Corp., Reserved Font
+Name "Plex") patched by the Nerd Fonts project, which already renamed the family
+to `BlexMono` to honour that reservation — the Reserved Font Name obligation is
+therefore discharged upstream, and this repository redistributes it unmodified
+apart from the TTF-to-woff2 container change. The icon sets the patch adds
+(Codicons, Devicons, Font Awesome, Material Design, Octicons, Powerline, Seti and
+others) and their individual licences are listed in the upstream README.
+
+`src/index.css` also names families it does not bundle`src/index.css` also names families it does not bundle — `JetBrains Mono`,
 `Fira Code`, `SFMono-Regular`, `Menlo`, `Segoe UI`, `system-ui` — inside
 `font-family` fallback stacks. Those are resolved from the reader's operating
 system if present and are never distributed by this project, so they carry no

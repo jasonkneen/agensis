@@ -8,6 +8,16 @@ import { Badge } from '@agensis/ui/components/badge';
 import { Button } from '@agensis/ui/components/button';
 import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
+import { contrast } from '@/lib/theme/expoColors';
+
+/**
+ * The two inks a sticky note can use. `contrast()` (from the expo colour maths,
+ * already the app's WCAG luminance implementation) picks whichever reads better
+ * on the note's chosen fill — see readableInkOn below. Exported for the test
+ * that pins the choice, so the rule cannot silently rot.
+ */
+const NOTE_INK_DARK = '#1a1a1a';
+const NOTE_INK_LIGHT = '#ffffff';
 
 interface DrawingLayerProps {
   objects: CanvasObject[];
@@ -1609,6 +1619,10 @@ function StickyNoteEditor({
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { ref.current?.focus(); }, []);
 
+  /** The note's own ink: whichever of the two note inks reads best on its fill. */
+  const readableInkOn = (fill: string): string =>
+    contrast(fill, NOTE_INK_DARK) >= contrast(fill, NOTE_INK_LIGHT) ? NOTE_INK_DARK : NOTE_INK_LIGHT;
+
   return (
     <div style={{
       position: 'absolute', left: px, top: py, width: pw, height: ph,
@@ -1623,7 +1637,11 @@ function StickyNoteEditor({
         defaultValue={obj.text_content}
         onBlur={(e) => { onTextChange(e.target.value); onStopEditing(); }}
         onKeyDown={(e) => { if (e.key === 'Escape') { onTextChange(e.currentTarget.value); onStopEditing(); } }}
-        className="min-h-0 flex-1 resize-none rounded-none border-0 bg-transparent p-3 text-sm leading-relaxed text-neutral-950 shadow-none focus-visible:ring-0"
+        className="min-h-0 flex-1 resize-none rounded-none border-0 bg-transparent p-3 text-sm leading-relaxed shadow-none focus-visible:ring-0"
+        /* The note's fill is chosen by the person, so the ink cannot be a theme
+           token: text-neutral-950 was unreadable on the dark slate and violet
+           swatches and too heavy on white. Pick the readable ink for THAT fill. */
+        style={{ color: readableInkOn(obj.fill) }}
       />
     </div>
   );

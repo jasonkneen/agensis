@@ -51,7 +51,7 @@ function Face({ face }: { face: ReaderFace }) {
           name={face.name}
           initials={face.initials}
           className="size-full"
-          fallbackClassName="bg-transparent text-[8px] font-semibold leading-none"
+          fallbackClassName="bg-transparent text-avatar font-semibold leading-none"
         />
       ) : avatar && isPetSpritesheetAvatar(avatar) ? (
         <span className="animated-pet-avatar-shell size-full">
@@ -60,11 +60,11 @@ function Face({ face }: { face: ReaderFace }) {
       ) : avatar && isImageAvatar(avatar) ? (
         <img src={renderablePetAssetUrl(avatar)} alt="" className="size-full object-cover" loading="lazy" draggable={false} />
       ) : face.name ? (
-        <span className="text-[8px] font-semibold leading-none">{face.initials}</span>
+        <span className="text-avatar font-semibold leading-none">{face.initials}</span>
       ) : face.isAgent ? (
         <Bot className="size-2.5" />
       ) : (
-        <span className="text-[8px] font-semibold leading-none">{face.initials}</span>
+        <span className="text-avatar font-semibold leading-none">{face.initials}</span>
       )}
     </span>
   );

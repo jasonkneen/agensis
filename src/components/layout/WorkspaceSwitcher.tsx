@@ -48,7 +48,7 @@ function Tile({ tile, className }: { tile: Pick<WorkspaceRailTile, 'glyph' | 'co
   return (
     <span
       aria-hidden="true"
-      className={cn('workspace-tile-swatch flex shrink-0 items-center justify-center rounded-[9px] font-semibold tracking-tight text-white', className)}
+      className={cn('workspace-tile-swatch flex shrink-0 items-center justify-center rounded-tile font-semibold tracking-tight text-white', className)}
       style={{ backgroundColor: tile.color }}
     >
       {tile.glyph}
@@ -121,7 +121,7 @@ export function WorkspaceSwitcher({
       >
         {showLoading ? (
           <>
-            <span aria-hidden="true" className="size-8 shrink-0 animate-pulse rounded-[9px] bg-muted" />
+            <span aria-hidden="true" className="size-8 shrink-0 animate-pulse rounded-tile bg-muted" />
             <span className="truncate text-muted-foreground">Loading workspaces…</span>
           </>
         ) : (
@@ -173,7 +173,7 @@ export function WorkspaceSwitcher({
                     setRenamingId(null);
                   }}
                 >
-                  <Tile tile={tile} className="size-7 text-[0.6875rem]" />
+                  <Tile tile={tile} className="size-7 text-2xs" />
                   <input
                     name="name"
                     defaultValue={tile.name}
@@ -200,7 +200,7 @@ export function WorkspaceSwitcher({
                   onClick={() => { onSelectWorkspace(tile.id); close(); }}
                   className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1.5 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <Tile tile={tile} className="size-7 text-[0.6875rem]" />
+                  <Tile tile={tile} className="size-7 text-2xs" />
                   <span className="min-w-0 flex-1 truncate">{tile.name}</span>
                   {tile.active && <Check className="size-4 shrink-0" aria-hidden />}
                 </button>
@@ -344,7 +344,7 @@ export function PinnedWorkspaces({
         >
           <Tile
             tile={tile}
-            className={cn(grid ? 'size-full rounded-xl text-[0.8125rem]' : 'size-6 rounded-[7px] text-[0.625rem]', !tile.active && grid && 'opacity-70 hover:opacity-100')}
+            className={cn(grid ? 'size-full rounded-xl text-xs-plus' : 'size-6 rounded-tile-tight text-3xs', !tile.active && grid && 'opacity-70 hover:opacity-100')}
           />
           {!grid && <span className="min-w-0 flex-1 truncate">{tile.name}</span>}
         </button>

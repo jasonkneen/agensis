@@ -1,6 +1,7 @@
 import { StrictMode, Suspense, lazy } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
+import { ZoomPaneBridge } from './components/windows/ZoomPaneBridge.tsx';
 import App from './App.tsx';
 import { FarmIntegrationApproval } from './components/integrations/FarmIntegrationApproval.tsx';
 import { installDiagnosticsCapture } from './lib/feedbackDiagnostics.ts';
@@ -41,6 +42,10 @@ const PublicWorkspacePage = lazy(() => import('./components/public/PublicWorkspa
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
+      {/* Pane-scoped zoom: hands Cmd+= / Cmd+- / Cmd+0 to the focused terminal
+          or browser pane instead of scaling the whole application. Inert in a
+          browser tab, where the native zoom is already per-page. */}
+      <ZoomPaneBridge />
       {isShowcase
         ? <Suspense fallback={null}><Showcase /></Suspense>
         : isScreens

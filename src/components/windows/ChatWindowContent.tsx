@@ -3264,7 +3264,7 @@ function ThreadReplySummaryButton({
             <span
               key={participant.key}
               className={cn(
-                'flex size-5 items-center justify-center overflow-hidden rounded-md bg-muted text-[8px] font-semibold text-muted-foreground ring-1 ring-background',
+                'flex size-5 items-center justify-center overflow-hidden rounded-md bg-muted text-avatar font-semibold text-muted-foreground ring-1 ring-background',
                 index > 0 && '-ml-1.5',
               )}
               title={participant.name}
@@ -3278,7 +3278,7 @@ function ThreadReplySummaryButton({
             </span>
           ))}
           {replyOverflow > 0 && (
-            <span className="-ml-1.5 flex size-5 items-center justify-center rounded-md bg-muted text-[8px] font-semibold text-muted-foreground ring-1 ring-background">
+            <span className="-ml-1.5 flex size-5 items-center justify-center rounded-md bg-muted text-avatar font-semibold text-muted-foreground ring-1 ring-background">
               +{replyOverflow}
             </span>
           )}
@@ -4074,8 +4074,8 @@ const GIT_STATUS_CLASS: Record<GitChangeEntry['status'], string> = {
   modified: 'bg-warning/15 text-warning',
   added: 'bg-success/15 text-success',
   deleted: 'bg-destructive/15 text-destructive',
-  untracked: 'bg-sky-500/15 text-sky-700 dark:text-sky-400',
-  renamed: 'bg-violet-500/15 text-violet-700 dark:text-violet-400',
+  untracked: 'bg-info-subtle text-info',
+  renamed: 'bg-agent-subtle text-agent dark:text-agent',
 };
 
 // Working-tree diff + stage/commit view for a workspace's git repo. Status/diff

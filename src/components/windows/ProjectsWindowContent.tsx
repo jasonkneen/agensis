@@ -187,12 +187,12 @@ function AssigneeChip({ task, members, agents }: { task: Task; members: Workspac
   const agent = agents.find(item => item.id === task.assignee_id);
   if (agent) {
     return (
-      <span className="rounded-full border border-violet-500/40 px-1.5 text-[0.6875rem] text-violet-400">{agent.name || 'Agent'}</span>
+      <span className="rounded-full border border-agent-border px-1.5 text-2xs text-agent">{agent.name || 'Agent'}</span>
     );
   }
   const member = members.find(item => item.user_id === task.assignee_id);
   return (
-    <span className="grid size-5 place-items-center rounded-full bg-primary/20 text-[0.5625rem] font-semibold" title={member?.email}>
+    <span className="grid size-5 place-items-center rounded-full bg-primary/20 text-4xs font-semibold" title={member?.email}>
       {initials(member?.email)}
     </span>
   );
@@ -386,10 +386,10 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
                 <ProjectIconTile icon={project.icon} color={project.color} size="sm" />
                 <span className="truncate font-semibold">{project.name}</span>
                 {project.visibility === 'private' && <Lock className="size-3 shrink-0 text-muted-foreground" aria-label="Private project" />}
-                {project.project_key && <span className="font-mono text-[0.6875rem] text-muted-foreground">{project.project_key}</span>}
+                {project.project_key && <span className="font-mono text-2xs text-muted-foreground">{project.project_key}</span>}
                 <span
                   className={cn(
-                    'ml-auto shrink-0 rounded-full border px-2 text-[0.6875rem]',
+                    'ml-auto shrink-0 rounded-full border px-2 text-2xs',
                     project.status === 'at_risk' ? 'border-destructive/50 text-destructive' : project.status === 'active' ? 'border-success/50 text-success' : 'border-border text-muted-foreground',
                   )}
                 >
@@ -400,7 +400,7 @@ export function ProjectsWindowContent({ tasksProps, onCreateChannel, onCreateBri
                 {people.length > 0 && (
                   <span className="flex -space-x-1.5">
                     {people.map(member => (
-                      <span key={member.user_id} className="grid size-5 place-items-center rounded-full border-2 border-card bg-primary/20 text-[0.5625rem] font-semibold text-foreground">
+                      <span key={member.user_id} className="grid size-5 place-items-center rounded-full border-2 border-card bg-primary/20 text-4xs font-semibold text-foreground">
                         {initials(member.email)}
                       </span>
                     ))}
@@ -492,7 +492,7 @@ function ProjectLanding({
         <div className="flex-1" />
         <span className="flex -space-x-1.5">
           {people.slice(0, 5).map(member => (
-            <span key={member.user_id} className="grid size-7 place-items-center rounded-full border-2 border-background bg-primary/20 text-[0.625rem] font-semibold" title={member.email}>
+            <span key={member.user_id} className="grid size-7 place-items-center rounded-full border-2 border-background bg-primary/20 text-3xs font-semibold" title={member.email}>
               {initials(member.email)}
             </span>
           ))}
@@ -642,7 +642,7 @@ function ProjectActivityTab({ projectTasks, tasksProps }: { projectTasks: Task[]
         const member = members.find(candidate => candidate.user_id === item.user_id);
         return (
           <li key={item.id} className="flex items-center gap-2.5 border-b border-border py-2.5 text-sm last:border-b-0">
-            <span className="grid size-6 shrink-0 place-items-center rounded-full bg-primary/20 text-[0.5625rem] font-semibold" title={member?.email ?? 'An agent or the system'}>
+            <span className="grid size-6 shrink-0 place-items-center rounded-full bg-primary/20 text-4xs font-semibold" title={member?.email ?? 'An agent or the system'}>
               {member ? initials(member.email) : 'AI'}
             </span>
             <span className="min-w-0 flex-1 truncate">{item.title}</span>

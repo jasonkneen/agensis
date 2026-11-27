@@ -145,6 +145,11 @@ export function ComponentPickerOverlay({
         <div
           ref={catcherRef}
           {...{ [IGNORE_ATTR]: '' }}
+          // A full-viewport element CATCHER: it turns a click on any app element
+          // into a pick. Pointer-only by design — the picker is cancelled with
+          // Escape, which is the keyboard equivalent — so it is presentation,
+          // never a focusable control.
+          role="presentation"
           className="fixed inset-0 z-[9998] cursor-crosshair"
           onMouseMove={handleMove}
           onClick={handleClick}

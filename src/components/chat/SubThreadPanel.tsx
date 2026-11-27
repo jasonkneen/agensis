@@ -367,7 +367,7 @@ export function SubThreadPanel({
                 name={p.name || p.handle}
                 initials={(p.name || p.handle || 'A').slice(0, 2).toUpperCase()}
                 className="size-5 rounded"
-                fallbackClassName="bg-transparent text-[8px] text-muted-foreground"
+                fallbackClassName="bg-transparent text-avatar text-muted-foreground"
               />
               {p.handle || p.name}
             </button>

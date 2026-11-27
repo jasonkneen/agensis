@@ -39,7 +39,7 @@ function FeedAvatar({ avatar, name, kind }: { avatar: string | null; name: strin
         name={name}
         initials={name.slice(0, 2).toUpperCase()}
         className="size-full"
-        fallbackClassName="bg-transparent text-[8px] text-foreground"
+        fallbackClassName="bg-transparent text-avatar text-foreground"
       />
     </span>
   );
@@ -70,13 +70,13 @@ function FeedRow({ update, onDismiss }: { update: AgentStatusUpdate; onDismiss: 
       <FeedAvatar avatar={update.avatar} name={update.name} kind={update.kind} />
       <div className="min-w-0 flex-1">
         <div className="pixel-bubble min-w-0">
-          <div className="pixel-font flex items-center gap-1 text-[7px] uppercase text-muted-foreground">
+          <div className="pixel-font flex items-center gap-1 text-pixel uppercase text-muted-foreground">
             <span className="truncate">{update.handle ? `@${update.handle}` : update.name}</span>
             <button type="button" className="pixel-btn ml-auto" onClick={onDismiss} aria-label="Dismiss update">
               <X className="size-2.5" />
             </button>
           </div>
-          <div className="pixel-bubble-text pixel-font mt-1 break-words text-[8px] text-foreground">
+          <div className="pixel-bubble-text pixel-font mt-1 break-words text-pixel text-foreground">
             {update.text}
           </div>
         </div>
@@ -126,7 +126,7 @@ export function AgentStatusFeed({ feed }: { feed: AgentStatusFeedState }) {
           <button type="button" className="pixel-btn" onClick={feed.toggleExpanded} aria-label="Collapse updates">
             <ChevronDown className="size-2.5" />
           </button>
-          <span className="pixel-font text-[7px] uppercase text-muted-foreground">
+          <span className="pixel-font text-pixel uppercase text-muted-foreground">
             {queue.length} update{queue.length === 1 ? '' : 's'}
           </span>
           <button
@@ -169,7 +169,7 @@ export function AgentStatusFeed({ feed }: { feed: AgentStatusFeedState }) {
             />
           ))}
           <div className="pixel-bubble relative z-10 min-w-0">
-            <div className="pixel-font flex items-center gap-1 text-[7px] uppercase text-muted-foreground">
+            <div className="pixel-font flex items-center gap-1 text-pixel uppercase text-muted-foreground">
               <span className="truncate">{current.handle ? `@${current.handle}` : current.name}</span>
               {pending > 0 && (
                 <button
@@ -184,7 +184,7 @@ export function AgentStatusFeed({ feed }: { feed: AgentStatusFeedState }) {
               )}
             </div>
             <div
-              className={`pixel-bubble-text pixel-font mt-1 break-words text-[8px] text-foreground ${done ? '' : 'pixel-caret'}`}
+              className={`pixel-bubble-text pixel-font mt-1 break-words text-pixel text-foreground ${done ? '' : 'pixel-caret'}`}
             >
               {shown}
             </div>

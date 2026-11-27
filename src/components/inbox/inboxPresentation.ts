@@ -29,7 +29,7 @@ import { TEXT_META } from '@/components/common/presentation';
 // are `text-sm`, so is a chat message body (components/ui/message.tsx), so is
 // the Activity detail.
 //
-// The inbox was the one surface written in absolute px (`text-[13px]` /
+// The inbox was the one surface written in absolute px (`text-xs-plus` /
 // `text-2xs`). At the default 16px base that is a coincidental match —
 // `text-sm` computes to 14px — so it looked right and nobody noticed. Turn
 // the base up and it stops being a match: measured at an 17px base, the sidebar
@@ -63,7 +63,7 @@ export const CATEGORY_ICON: Record<InboxCategory, ComponentType<{ className?: st
  * as muted glyphs so a full list stays calm.
  */
 export function categoryAccent(category: InboxCategory): string {
-  if (category === 'approval' || category === 'blocker') return 'text-amber-500';
+  if (category === 'approval' || category === 'blocker') return 'text-warning';
   if (category === 'error') return 'text-destructive';
   return '';
 }

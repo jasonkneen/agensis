@@ -41,6 +41,39 @@
 /* The Expo family (replaced Paper) lives in its own sheet. */
 @import "./styles/expo.css";
 
+/* The TERMINAL face: BlexMono Nerd Font Mono — IBM Plex Mono with the Nerd
+   Fonts glyph sets patched in. It is bundled here rather than resolved from an
+   @fontsource package because no published package carries a patched Plex:
+   nerd-fonts publishes IBMPlexMono.zip (the upstream patch) and this is its
+   "Nerd Font Mono" cut, converted to woff2. Licensing is OFL-1.1 and the
+   upstream family is already renamed away from the Reserved Font Name "Plex"
+   (see src/fonts/blex-nerd-font-mono/LICENSE.txt and NOTICE).
+
+   Why it is not a fallback face beside Plex: xterm lays out on a cell grid sized
+   from the primary face. Plex advances 0.6em; a symbol-only face advances 1em,
+   so as a fallback every icon would overflow its cell and a powerline prompt
+   would stop being contiguous. BlexMono keeps the 0.6em advance EXACTLY, so
+   coverage grew without reflowing a single existing line.
+
+   font-display: swap would be wrong here — a terminal that paints in a
+   temporary face measures the cell from it and then reflows when the real face
+   lands. block keeps the first paint correct. */
+@font-face {
+  font-family: 'BlexMono Nerd Font Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./fonts/blex-nerd-font-mono/BlexMonoNerdFontMono-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'BlexMono Nerd Font Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('./fonts/blex-nerd-font-mono/BlexMonoNerdFontMono-Bold.woff2') format('woff2');
+}
+
 /* shadcn dark variant is driven by the app's existing [data-theme="dark"]
    attribute (set by useTheme) — one theme system, no .dark class. */
 @custom-variant dark ([data-theme="dark"] &);
@@ -87,6 +120,14 @@
  --radius-sm: 6px;
  --radius-md: 10px;
  --radius-lg: 14px;
+ /* The TILE radius. Workspace-rail tiles, tenant avatars, workspace swatches
+    and their skeletons are all 28-36px squares wearing a deliberately
+    "squircle" corner: softer than the surface containing them, tighter than a
+    pill. It was spelled rounded-[7px] / [9px] / [11px] across 11 call sites,
+    so the same tile was three different shapes depending on which file drew
+    it. These two steps are that shape, named once. */
+ --radius-tile: 9px;
+ --radius-tile-tight: 7px;
  --radius-xl: 20px;
 
  --transition-fast: 120ms ease;
@@ -193,6 +234,31 @@
  --error: #f87171;
  --error-subtle: rgba(248, 113, 113, 0.12);
 
+ /* The AGENT accent: the one hue that means "this is an agent, not a person".
+    It existed only as a Tailwind literal (violet-500/400/600) in ~30 call
+    sites, so agent chips stayed violet in every theme and in both light and
+    dark, and the same "agent" affordance was three slightly different violets.
+    One token now carries it, with the paired -subtle for tinted surfaces, and
+    it is deliberately distinct from --accent (interactive) and --success. */
+ --agent: #a78bfa;
+ --agent-subtle: rgba(167, 139, 250, 0.14);
+ --agent-border: rgba(167, 139, 250, 0.4);
+
+ /* INFORMATIONAL: neither success nor warning — a neutral "for your attention"
+    state (an info dot, an untracked file badge). It was spelled bg-sky-500 and
+    text-sky-700/dark:text-sky-300 at each call site, i.e. the only state hue in
+    the app with no token, so it did not follow the theme. */
+ --info: #38bdf8;
+ --info-subtle: rgba(56, 189, 248, 0.14);
+ --info-border: rgba(56, 189, 248, 0.4);
+
+ /* KNOWLEDGE / memory contribution: the one hue that says "this asset is feeding
+    the workspace knowledge base". It was text-pink-500 / bg-pink-500/10 /
+    text-pink-600 dark:text-pink-400 in one menu, which meant it was the only
+    semantic colour in the app with no token and no light-mode equivalent. */
+ --knowledge: #f472b6;
+ --knowledge-subtle: rgba(244, 114, 182, 0.12);
+
  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6);
@@ -245,12 +311,23 @@
  --accent-subtle: rgba(37, 99, 235, 0.08);
  --accent-border: rgba(37, 99, 235, 0.25);
 
- --success: #16a34a;
+ --success: #14672f;
  --success-subtle: rgba(22, 163, 74, 0.08);
- --warning: #d97706;
+ --warning: #7a5600;
  --warning-subtle: rgba(217, 119, 6, 0.08);
  --error: #dc2626;
  --error-subtle: rgba(220, 38, 38, 0.08);
+
+ --agent: #7c3aed;
+ --agent-subtle: rgba(124, 58, 237, 0.10);
+ --agent-border: rgba(124, 58, 237, 0.32);
+
+ --info: #0369a1;
+ --info-subtle: rgba(2, 132, 199, 0.10);
+ --info-border: rgba(2, 132, 199, 0.30);
+
+ --knowledge: #be185d;
+ --knowledge-subtle: rgba(219, 39, 119, 0.09);
 
  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
@@ -3248,6 +3325,23 @@ body {
     reflow every call site. */
  --text-2xs: 0.6875rem;
  --text-3xs: 0.625rem;
+ /* Two more steps the chrome had been spelling as arbitrary values.
+    --text-xs-plus is the 13px row/label size used by the rail, task tables and
+    the update dialog (17 call sites); it sits between text-xs (12px) and
+    text-sm (14px), which is exactly the gap that made every author reach for a
+    bracket. --text-4xs is the 9px micro-label under avatars and in the status
+    feed. Named on the same ramp as 2xs/3xs so the ladder reads upwards:
+    4xs (9) < 3xs (10) < 2xs (11) < xs (12) < xs-plus (13) < sm (14). */
+ --text-4xs: 0.5625rem;
+ --text-xs-plus: 0.8125rem;
+ /* Two ROLE sizes, not ramp steps. An avatar monogram and the pixel-font status
+    feed are sized to their container (a 14px tile, a 3-4 line bubble) rather
+    than to the text hierarchy, which is why every call site wanted 7-8px and
+    never text-3xs. Naming the roles stops the same magic px being retyped:
+    --text-avatar is the monogram inside a 14-16px tile; --text-pixel is the
+    pixel face used by the agent status feed. */
+ --text-avatar: 0.5rem;
+ --text-pixel: 0.4375rem;
  --color-sidebar-ring: var(--sidebar-ring);
  --color-sidebar-border: var(--sidebar-border);
  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -3270,6 +3364,14 @@ body {
     generates them; without these mappings state was painted with raw
     emerald-500 / amber-500 classes that ignore the theme entirely. */
  --color-success: var(--success);
+ --color-agent: var(--agent);
+ --color-agent-subtle: var(--agent-subtle);
+ --color-agent-border: var(--agent-border);
+ --color-info: var(--info);
+ --color-info-subtle: var(--info-subtle);
+ --color-info-border: var(--info-border);
+ --color-knowledge: var(--knowledge);
+ --color-knowledge-subtle: var(--knowledge-subtle);
  --color-warning: var(--warning);
  --color-accent-foreground: var(--sh-accent-foreground);
  --color-accent: var(--sh-accent);
@@ -3294,6 +3396,8 @@ body {
  --radius-2xl: 28px;
  --radius-3xl: 36px;
  --radius-4xl: 44px;
+ --radius-tile: var(--radius-tile);
+ --radius-tile-tight: var(--radius-tile-tight);
 }
 
 /* ── Normal-theme roundness cap (Minimal / Developer / Tinted) ──────────────
@@ -3404,16 +3508,15 @@ body {
  transition: margin-inline-start 150ms ease, transform 150ms ease, box-shadow 150ms ease;
 }
 
-/* A tighter resting stack than before (-0.2rem → -0.3rem) so the cluster reads
-   as one overlapping pile rather than a near-spaced row. The status dot is
-   unaffected: it sits bottom-right and the first avatar carries the highest
-   z-index (z-5, descending), so each disc's dot always paints on top of its
-   right-hand neighbour. We stop short of -0.35rem, where the neighbour's 2px
-   ring pushed the cut to 7.6px of a 24px circle and clipped the first letter,
-   making "CH CO HE" read as one run-on blob. */
+/* Resting state is a tight overlapping stack (-0.65rem). This does clip the
+   neighbour's first initial, which is accepted at rest because hovering the
+   row fans the discs out (see the :hover rule below) so every initial reads.
+   The status dot is unaffected: it sits bottom-right and the first avatar
+   carries the highest z-index (z-5, descending), so each disc's dot always
+   paints on top of its right-hand neighbour. */
 .presence-avatar-group [data-slot="avatar"]+[data-slot="avatar"],
 .presence-avatar-group [data-slot="avatar"]+[data-slot="avatar-group-count"] {
- margin-inline-start: -0.3rem;
+ margin-inline-start: -0.65rem;
 }
 
 .presence-avatar-group [data-slot="avatar"]:nth-child(1) {

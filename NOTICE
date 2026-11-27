@@ -127,6 +127,26 @@ OFL-1.1 also carries a Reserved Font Name restriction: a modified version of
 Press Start 2P may not be distributed under that name. This project does not
 modify any of these fonts.
 
+The TERMINAL window's face is the one font COMMITTED to this repository rather
+than resolved from an @fontsource package (see ASSETS.md for why: it has to keep
+IBM Plex Mono's 0.6em cell while covering the Nerd Fonts codepoint ranges, and no
+npm package ships that combination). It is bundled from
+src/fonts/blex-nerd-font-mono/:
+
+  BlexMono Nerd Font Mono  (Nerd Fonts v3.5.1, IBMPlexMono patch)
+    Copyright 2017 IBM Corp. with Reserved Font Name "Plex"
+    Patched glyph sets by the Nerd Fonts project
+    https://github.com/ryanoasis/nerd-fonts
+    Licensed under OFL-1.1. The full licence text ships with the font at
+    src/fonts/blex-nerd-font-mono/LICENSE.txt.
+    The Reserved Font Name obligation is discharged UPSTREAM: the Nerd Fonts
+    patch already renamed the family to "BlexMono", so no reserved name is used
+    by this distribution. The icon sets added by the patch (Codicons, Devicons,
+    Font Awesome, Font Awesome Extension, Font Logos, Material Design, Octicons,
+    Pomicons, Powerline Symbols, Powerline Extra, Power Symbols IEC, Seti and
+    Weather Icons) carry their own licences, enumerated in the upstream README
+    inside that release.
+
 --------------------------------------------------------------------------------
 DOMPurify — dual licensed
 --------------------------------------------------------------------------------
