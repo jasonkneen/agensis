@@ -2092,31 +2092,36 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            <Button type="button" variant={sidePanel === null || sidePanel === 'thread' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel(null)} aria-label={compactNav ? 'Messages' : undefined} title={compactNav ? 'Messages' : undefined}>
-              <MessageSquare data-icon={compactNav ? undefined : 'inline-start'} />
-              {!compactNav && 'Messages'}
-            </Button>
-            <Button type="button" variant={sidePanel === 'files' ? 'secondary' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel('files')} aria-label={compactNav ? 'Files' : undefined} title={compactNav ? 'Files' : undefined}>
-              <Paperclip data-icon={compactNav ? undefined : 'inline-start'} />
-              {!compactNav && 'Files'}
-            </Button>
-            <Button
-              type="button"
-              variant={sidePanel === 'sub-threads' ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-8 px-2"
-              onClick={() => setSidePanel(sidePanel === 'sub-threads' ? null : 'sub-threads')}
-              aria-label={compactNav ? 'Threads' : undefined}
-              title={compactNav ? 'Threads' : undefined}
-            >
-              <GitBranch data-icon={compactNav ? undefined : 'inline-start'} />
-              {!compactNav && 'Threads'}
-              {subThreadCount > 0 && (
-                <span className={cn('rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium leading-none text-muted-foreground', !compactNav && 'ml-1')}>
-                  {subThreadCount}
-                </span>
-              )}
-            </Button>
+            {/* The view tabs sit in the same segmented tray as the Agents
+                status filter: default (accent) when selected, ghost otherwise. */}
+            <div className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-border bg-card/40 p-0.5">
+              <Button type="button" variant={sidePanel === null || sidePanel === 'thread' ? 'default' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel(null)} aria-pressed={sidePanel === null || sidePanel === 'thread'} aria-label={compactNav ? 'Messages' : undefined} title={compactNav ? 'Messages' : undefined}>
+                <MessageSquare data-icon={compactNav ? undefined : 'inline-start'} />
+                {!compactNav && 'Messages'}
+              </Button>
+              <Button type="button" variant={sidePanel === 'files' ? 'default' : 'ghost'} size="sm" className="h-8 px-2" onClick={() => setSidePanel('files')} aria-pressed={sidePanel === 'files'} aria-label={compactNav ? 'Files' : undefined} title={compactNav ? 'Files' : undefined}>
+                <Paperclip data-icon={compactNav ? undefined : 'inline-start'} />
+                {!compactNav && 'Files'}
+              </Button>
+              <Button
+                type="button"
+                variant={sidePanel === 'sub-threads' ? 'default' : 'ghost'}
+                size="sm"
+                className="h-8 px-2"
+                onClick={() => setSidePanel(sidePanel === 'sub-threads' ? null : 'sub-threads')}
+                aria-pressed={sidePanel === 'sub-threads'}
+                aria-label={compactNav ? 'Threads' : undefined}
+                title={compactNav ? 'Threads' : undefined}
+              >
+                <GitBranch data-icon={compactNav ? undefined : 'inline-start'} />
+                {!compactNav && 'Threads'}
+                {subThreadCount > 0 && (
+                  <span className={cn('rounded-full bg-muted px-1.5 py-0.5 text-3xs font-medium leading-none text-muted-foreground', !compactNav && 'ml-1')}>
+                    {subThreadCount}
+                  </span>
+                )}
+              </Button>
+            </div>
             {showHuddle && (
               <HuddleToolbarButton
                 workspaceId={workspaceId}
