@@ -176,9 +176,24 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
  border-color: transparent !important;
  box-shadow: inset 0 0 0 1.5px var(--expo-edge), var(--shadow-window) !important;
 }
-/* Window panes carry the workspace switcher's 50%-white top shine. */
+/* Window panes carry the workspace switcher's 50%-white top shine. The edge and
+   shine are drawn on an ::after overlay, not as inset shadows on the surface:
+   an inset shadow paints UNDER the children, so any opaque window body (the
+   inbox's bg-card) covered the left, right and bottom edge. The surface keeps
+   only the outer drop; isolation keeps the overlay's z-index inside this window. */
 :root[data-ui-theme="expo"] [data-window-surface] {
- box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px var(--expo-edge), var(--shadow-window) !important;
+ position: relative;
+ isolation: isolate;
+ box-shadow: var(--shadow-window) !important;
+}
+:root[data-ui-theme="expo"] [data-window-surface]::after {
+ content: "";
+ position: absolute;
+ inset: 0;
+ z-index: 100;
+ border-radius: inherit;
+ pointer-events: none;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px var(--expo-edge);
 }
 
 :root[data-ui-theme="expo"] [data-slot="popover-content"],
