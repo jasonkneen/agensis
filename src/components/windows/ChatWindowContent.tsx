@@ -58,7 +58,6 @@ import {
 import { ComponentPickerOverlay } from '../chat/ComponentPickerOverlay';
 import { buildPickContext, parsePickContext, type ElementPick } from '../../lib/componentPicker';
 import { PickedElementsCard } from '../chat/PickedElementsCard';
-import { MarkupToolbarControl, type MarkupAgent } from '../chat/MarkupToolbarControl';
 import { FileDetailPanel, ProjectFileRow, UploadedFileRow } from '../files/FilePanelItems';
 import { panelFileName, type SelectedPanelFile } from '../../lib/uploadedFiles';
 import { ThreadWidgetRail } from './ThreadWidgetRail';
@@ -431,11 +430,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const [pickerActive, setPickerActive] = useState(false);
   const [picks, setPicks] = useState<ElementPick[]>([]);
   const pickSeqRef = useRef(0);
-  // The agent the toolbar markup control sends to without asking ("always
-  // send"). Stored as a handle per session; re-validated against the live
-  // roster before it is trusted (an agent that has left the channel must not
-  // silently swallow a send into a mention that wakes nobody).
-  const [alwaysMarkupHandle, setAlwaysMarkupHandle] = useState<string | null>(null);
   const [showDocPicker, setShowDocPicker] = useState(false);
   const [showGroupPicker, setShowGroupPicker] = useState(false);
   const [showSlashPicker, setShowSlashPicker] = useState(false);
@@ -674,25 +668,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
   const removePick = (id: string) => {
     // Renumber so the circled markers and chips stay 1..n contiguous.
     setPicks(prev => prev.filter(p => p.id !== id).map((p, i) => ({ ...p, index: i + 1 })));
-  };
-
-  // Send the collected markup straight to one agent from the toolbar pill —
-  // independent of the composer box. Deliberately does NOT reuse handleSend's
-  // `!input.trim()` guard: there is no typed text here, the picks ARE the
-  // message. The @handle prefix routes through the normal mention/dispatch path
-  // so the chosen agent actually wakes. Same optimistic-clear-then-rollback
-  // shape as handleSend: a rejected send restores the picks rather than losing
-  // every clicked element.
-  const handleSendPicks = async (handle: string) => {
-    if (picks.length === 0 || streaming || !handle) return;
-    const content = `@${handle}\n\n${buildPickContext(picks)}`;
-    const draftPicks = picks;
-    setPicks([]);
-    setPickerActive(false);
-    const outcome = await onSendMessage(content, memoryFacts);
-    if (outcome && outcome.delivered === false) {
-      setPicks(draftPicks);
-    }
   };
 
   const addLinkedDoc = (doc: Document) => {
@@ -1499,47 +1474,6 @@ export const ChatWindowContent = React.memo(function ChatWindowContent({
     [agents, persistedParticipants, huddleVoiceIds],
   );
 
-  // Agents the toolbar markup control can send to: the channel's agent roster,
-  // resolved to a real handle + avatar and dropping disabled agents (a send to
-  // a disabled agent wakes no one).
-  const markupAgents = useMemo<MarkupAgent[]>(
-    () => participants
-      .filter(participant => participant.kind === 'agent')
-      .map((participant): MarkupAgent | null => {
-        const agent = agents.find(item => agentMatchesLookupKey(item, participant.agent_id || participant.handle || participant.name));
-        if (agent && agent.enabled === false) return null;
-        const handle = agent ? agentHandle(agent) : (participant.handle || '');
-        if (!handle) return null;
-        return {
-          id: agent?.id || participant.id,
-          handle,
-          name: agent?.name || participant.name || handle,
-          avatar: agent?.avatar,
-        };
-      })
-      .filter((entry): entry is MarkupAgent => entry !== null),
-    [participants, agents],
-  );
-  // Load/clear the remembered "always send" agent when the session changes.
-  const alwaysMarkupKey = sessionId ? `agensis_markup_always_send_${sessionId}` : null;
-  useEffect(() => {
-    if (!alwaysMarkupKey) { setAlwaysMarkupHandle(null); return; }
-    try { setAlwaysMarkupHandle(localStorage.getItem(alwaysMarkupKey)); }
-    catch { setAlwaysMarkupHandle(null); }
-  }, [alwaysMarkupKey]);
-  const setAlwaysMarkup = useCallback((handle: string | null) => {
-    setAlwaysMarkupHandle(handle);
-    if (!alwaysMarkupKey) return;
-    try {
-      if (handle) localStorage.setItem(alwaysMarkupKey, handle);
-      else localStorage.removeItem(alwaysMarkupKey);
-    } catch { /* ignore quota */ }
-  }, [alwaysMarkupKey]);
-  // Only trust the stored handle while that agent is still a sendable member —
-  // otherwise fall back to asking, so a departed agent never silently eats a send.
-  const resolvedAlwaysMarkup = alwaysMarkupHandle && markupAgents.some(a => a.handle === alwaysMarkupHandle)
-    ? alwaysMarkupHandle
-    : null;
   // A huddle marker in the transcript ("You were in a huddle · 12:04 · Ada,
   // Sam") opens that huddle in the DOCK. There is no huddle side panel any
   // more: the channel had a strip, a side panel and a toolbar button all
@@ -2252,19 +2186,6 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 CHANNEL menu; FloatingWindowShell's own "..." owns WINDOW actions
                 (share, maximize, close) and is not rendered at all for grouped
                 panes, so channel actions cannot live there. */}
-            {!readOnly && (
-              <MarkupToolbarControl
-                open={pickerActive || picks.length > 0}
-                picking={pickerActive}
-                pickCount={picks.length}
-                agents={markupAgents}
-                alwaysHandle={resolvedAlwaysMarkup}
-                onTogglePicking={() => setPickerActive(v => !v)}
-                onClear={() => { setPicks([]); setPickerActive(false); }}
-                onSend={handleSendPicks}
-                onSetAlways={setAlwaysMarkup}
-              />
-            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button type="button" variant="ghost" size="sm" className="h-8 px-2" aria-label="More channel actions">
