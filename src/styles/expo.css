@@ -493,6 +493,13 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
 :root[data-ui-theme="expo"] .sidebar-item-row[data-active="true"] svg {
  color: var(--expo-coral) !important;
 }
+/* The selected DM agent row takes the shiny edge (top highlight + rim). */
+:root[data-ui-theme="expo"] .sidebar-agent-row[data-active="true"] {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.55), inset 0 0 0 1.5px var(--expo-edge), 0 2px 0 var(--expo-lip) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] .sidebar-agent-row[data-active="true"] {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 2px 0 var(--expo-lip) !important;
+}
 
 /* No rule under a window's toolbar band (Memory's "All" row and the like). */
 :root[data-ui-theme="expo"] [data-window-surface] .shrink-0.border-b {
