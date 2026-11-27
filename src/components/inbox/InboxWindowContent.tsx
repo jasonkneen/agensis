@@ -10,7 +10,7 @@ import { InboxDetail } from './InboxDetailPane';
 import { InboxRow } from './InboxRow';
 import { InboxSelectionBar } from './InboxSelectionBar';
 import { ROW_PADDING } from '@/components/common/presentation';
-import { FOCUS_RING, LIST_COLUMN_CLASS, PANE_HEADER, SCROLL_VIEWPORT_BLOCK } from '@/components/common/presentation';
+import { FOCUS_RING, LIST_COLUMN_CLASS, PANE_HEADER, SCROLL_VIEWPORT_BLOCK, SEGMENTED, SEGMENT_ITEM } from '@/components/common/presentation';
 import { booleanPreference, viewPreferenceKey } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
 import { useSplitResize } from '../../hooks/useSplitResize';
@@ -343,7 +343,7 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
           {/* Two views, like any mail client: everything, or what you have not
               read. Approvals and blockers need no tab of their own — they are
               pinned to the top of both, under "Needs you now". */}
-          <div className="flex min-w-0 flex-1 items-center gap-1" role="group" aria-label="Show">
+          <div className={cn(SEGMENTED, 'mr-auto')} role="group" aria-label="Show">
             {([[false, 'All'], [true, 'Unread']] as const).map(([value, label]) => {
               const active = unreadOnly === value;
               return (
@@ -352,15 +352,11 @@ export const InboxWindowContent = React.memo(function InboxWindowContent({
                   type="button"
                   aria-pressed={active}
                   onClick={() => setUnreadOnly(value)}
-                  className={cn(
-                    'flex h-6 shrink-0 items-center gap-1 rounded-md px-2 text-sm transition-colors',
-                    active ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground',
-                    FOCUS_RING,
-                  )}
+                  className={cn(SEGMENT_ITEM, 'py-0.5', FOCUS_RING)}
                 >
                   {label}
                   {value && unreadCount > 0 && (
-                    <span className="text-xs text-muted-foreground">{unreadCount > 99 ? '99+' : unreadCount}</span>
+                    <span className="tabular-nums opacity-70">{unreadCount > 99 ? '99+' : unreadCount}</span>
                   )}
                 </button>
               );
