@@ -185,7 +185,7 @@ import {
 } from '../../lib/agentsView';
 import { ResizeHandle } from '@/components/common/ResizeHandle';
 import { AgentTriageStrip, agentTriageCounts } from '@/components/agents/AgentTriageStrip';
-import { FILTER_CHIP_OFF, FILTER_CHIP_ON, SEGMENTED, SEGMENT_ITEM, WINDOW_SHELL, WINDOW_TOOLBAR } from '@/components/common/presentation';
+import { FILTER_CHIP_OFF, FILTER_CHIP_ON, FOCUS_RING, SEGMENTED, SEGMENT_ITEM, WINDOW_SHELL, WINDOW_TOOLBAR } from '@/components/common/presentation';
 import { SearchField } from '@/components/common/SearchField';
 import { Label } from '@agensis/ui/components/label';
 import { RadioGroup, RadioGroupItem } from '@agensis/ui/components/radio-group';
@@ -1365,18 +1365,16 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
               </ToggleGroup>
             )}
             {agents.length > 0 && (
-              <div className="agents-status-filter mb-3 inline-flex flex-wrap items-center gap-0.5 self-start rounded-lg border border-border bg-card/40 p-0.5">
-                <Button
+              <div className={cn(SEGMENTED, 'agents-status-filter mb-3 flex-wrap self-start')} role="group" aria-label="Filter by status">
+                <button
                   type="button"
-                  size="sm"
-                  variant={statusFilter.size === 0 ? 'default' : 'ghost'}
                   onClick={() => setStatusFilter(new Set())}
                   aria-pressed={statusFilter.size === 0}
                   className={STATUS_CHIP}
                 >
                   All
                   <span className="tabular-nums opacity-70">{agents.length}</span>
-                </Button>
+                </button>
                 {(() => {
                   const activeCount = presenceCounts.busy + presenceCounts.idle;
                   const isActiveFilter = statusFilter.size === 2 && statusFilter.has('busy') && statusFilter.has('idle');
@@ -1384,10 +1382,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   // the filter in force, which must stay reachable to undo.
                   if (activeCount === 0 && !isActiveFilter) return null;
                   return (
-                    <Button
+                    <button
                       type="button"
-                      size="sm"
-                      variant={isActiveFilter ? 'default' : 'ghost'}
                       onClick={() => setStatusFilter(new Set(['busy', 'idle']))}
                       aria-pressed={isActiveFilter}
                       className={STATUS_CHIP}
@@ -1395,18 +1391,16 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                       <span className="size-1.5 rounded-full bg-success" aria-hidden />
                       Active
                       <span className="tabular-nums opacity-70">{activeCount}</span>
-                    </Button>
+                    </button>
                   );
                 })()}
                 {AGENT_PRESENCE_FILTERS.map(filter => {
                   const active = statusFilter.has(filter.key);
                   if (presenceCounts[filter.key] === 0 && !active) return null;
                   return (
-                    <Button
+                    <button
                       key={filter.key}
                       type="button"
-                      size="sm"
-                      variant={active ? 'default' : 'ghost'}
                       onClick={() => toggleStatusFilter(filter.key)}
                       aria-pressed={active}
                       className={STATUS_CHIP}
@@ -1414,7 +1408,7 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                       <span className={cn('size-1.5 rounded-full', filter.tone)} aria-hidden />
                       {filter.label}
                       <span className="tabular-nums opacity-70">{presenceCounts[filter.key]}</span>
-                    </Button>
+                    </button>
                   );
                 })}
               </div>
@@ -4149,9 +4143,9 @@ const OWNER_FILTER_ITEM = SEGMENT_ITEM;
 
 /** The status/presence filter row's chip. Three chips, three different
  *  selection rules (clear all, set both active states, toggle one) but one
- *  shape — a Button (default when on, ghost when off) in the same tray as the
- *  grid/map view toggle in the toolbar, so the two controls match. */
-const STATUS_CHIP = 'gap-1.5 text-xs';
+ *  shape — a shared segment item, so the pressed chip gets the same shiny pill
+ *  as every other segmented bar. */
+const STATUS_CHIP = cn(SEGMENT_ITEM, 'py-0.5', FOCUS_RING);
 
 const PERMISSION_MODE_OPTIONS: { value: AgentPermissionMode; label: string; hint: string }[] = [
   {
