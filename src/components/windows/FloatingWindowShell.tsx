@@ -21,7 +21,6 @@ import { GROUP_FRAME_PADDING, GROUP_HEADER_HEIGHT } from '../../lib/windowGroups
 // The element picker's title-bar trigger. Renders null unless a PickerProvider
 // is mounted at the app root, so this stays safe for any standalone use of the
 // shell (Showcase, tests) where the provider is absent.
-import { GlobalPickerTitlebarControl } from '../../providers/PickerProvider';
 
 const SNAP_THRESHOLD = 44;
 const MAXIMIZED_TOP_RESERVE = WORKSPACE_TOP_RESERVE;
@@ -889,10 +888,6 @@ export function FloatingWindowShell({
                 every control. Ungrouping is still reachable from the dock. */}
             {!groupRole && (
             <div className="flex shrink-0 flex-nowrap items-center gap-1">
-              {/* Element picker — reachable from every window's title bar so you
-                  can point at anything on screen and send it to an agent even
-                  when no chat is focused. Sits left of the "..." menu. */}
-              <GlobalPickerTitlebarControl className="mr-0.5" />
               {/* Actions pinned from the "..." menu, in menu order. */}
               {menuGroups.flat().filter(action => titlebarPins.includes(action.id)).map(action => (
                 <Button
