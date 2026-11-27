@@ -50,6 +50,7 @@ import {
  Star,
  UserRound,
  Check,
+ Pin,
   Zap,
 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
@@ -88,7 +89,7 @@ import { partitionSidebarSessions } from '../../lib/sidebarSessions';
 import { splitNostrChannelGroups } from '../../lib/nostrChannelGroups';
 import type { NostrConnection, NostrChannelSubscription } from '../../lib/nostrCommunities';
 import { isHuddleSession } from '../../lib/huddleTranscript';
-import { oneOf, viewPreferenceKey } from '../../lib/viewPreferences';
+import { oneOf, setOf, viewPreferenceKey } from '../../lib/viewPreferences';
 import { cn } from '../../lib/utils';
 import { useThreadInbox } from '../../hooks/useThreadInbox';
 import { threadReplyLabel, threadRowSource, threadRowTitle } from '../../lib/threadInbox';
@@ -99,6 +100,16 @@ import { ResizeHandle } from '@/components/common/ResizeHandle';
 // Which agents the DM section lists, remembered per workspace alongside the
 // other view preferences (see src/lib/viewPreferences.ts).
 const DM_FILTER_PREF = oneOf<DmFilter>(['active', 'idle', 'busy', 'all']);
+
+// Top-level destinations. Every one lives in the account menu; the pinned ones
+// are also shown as rows under the sections band. Pins persist per workspace.
+const LAUNCHER_IDS = [
+ 'skills', 'library', 'activity', 'agents', 'resources', 'users',
+ 'automations', 'artifacts', 'browser', 'terminal',
+] as const;
+type LauncherId = typeof LAUNCHER_IDS[number];
+const PINNED_LAUNCHERS_PREF = setOf<LauncherId>(LAUNCHER_IDS);
+const DEFAULT_PINNED_LAUNCHERS: ReadonlySet<LauncherId> = new Set<LauncherId>(['agents', 'users', 'browser', 'terminal']);
 
 const SIDEBAR_WIDTH_KEY = 'agensis_sidebar_width';
 const AGENT_FAVORITES_KEY = 'agensis_sidebar_agent_favorites';
@@ -475,6 +486,16 @@ export const Sidebar = React.memo(function Sidebar({
   if (dmFilter === 'busy') return directMessageTargets.filter(a => a.status === 'busy');
   return directMessageTargets.filter(a => !a.status || (a.status !== 'online' && a.status !== 'busy'));
  }, [directMessageTargets, dmFilter]);
+ const [pinnedLaunchers, setPinnedLaunchers] = usePersistedPreference(
+  viewPreferenceKey('sidebar.pinned-launchers', workspace?.id), PINNED_LAUNCHERS_PREF, DEFAULT_PINNED_LAUNCHERS as Set<LauncherId>,
+ );
+ const toggleLauncherPin = React.useCallback((id: LauncherId) => {
+  setPinnedLaunchers(current => {
+   const next = new Set(current);
+   if (next.has(id)) next.delete(id); else next.add(id);
+   return next;
+  });
+ }, [setPinnedLaunchers]);
 
 
  // The Threads SECTION is about message threads — replies under a message —
@@ -526,6 +547,21 @@ export const Sidebar = React.memo(function Sidebar({
    !topWindow || win.zIndex > topWindow.zIndex ? win : topWindow
   ), null);
  const focusedWindowType = focusedWindow?.type;
+ // Order here is the order in both the menu and the pinned rows.
+ // Schedules live inside Automations now (two tabs, one window).
+ const openAutomations = onOpenAutomations || onOpenSchedules;
+ const launchers = ([
+  onOpenSkills && { id: 'skills', icon: <Sparkles />, label: 'Skills', active: focusedWindowType === 'skills', onClick: onOpenSkills },
+  onOpenLibrary && { id: 'library', icon: <Library />, label: 'Library', active: focusedWindowType === 'library', onClick: () => onOpenLibrary() },
+  onOpenActivity && { id: 'activity', icon: <ActivityIcon />, label: 'Activity', active: focusedWindowType === 'activity', onClick: onOpenActivity },
+  onOpenAgents && { id: 'agents', icon: <Bot />, label: 'Agents', count: agents.length, active: focusedWindowType === 'agents', onClick: onOpenAgents },
+  onOpenResources && { id: 'resources', icon: <Database />, label: 'Resources', active: focusedWindowType === 'resources', onClick: onOpenResources },
+  onOpenUsers && { id: 'users', icon: <Users />, label: 'Users', active: focusedWindowType === 'users', onClick: onOpenUsers },
+  openAutomations && { id: 'automations', icon: <Zap />, label: 'Automations', active: focusedWindowType === 'automations' || focusedWindowType === 'schedules', onClick: openAutomations },
+  onOpenTemplates && { id: 'artifacts', icon: <LayoutTemplate />, label: 'Artifacts', onClick: onOpenTemplates },
+  onOpenBrowser && { id: 'browser', icon: <Globe />, label: 'Browser', active: focusedWindowType === 'browser', onClick: onOpenBrowser },
+  onOpenTerminal && { id: 'terminal', icon: <SquareTerminal />, label: 'Terminal', active: focusedWindowType === 'terminal', onClick: onOpenTerminal },
+ ] as const).filter(Boolean) as Array<{ id: LauncherId; icon: React.ReactNode; label: string; count?: number; active?: boolean; onClick: () => void }>;
  const workspaceLabel = activeLayerName || workspace?.name || 'Personal';
 
  // Traffic-light clearance measured from the sidebar's OWN left edge: the rail
@@ -1153,17 +1189,9 @@ export const Sidebar = React.memo(function Sidebar({
           than "after the Archive header". Paired with the rule above THREADS —
           together they bracket the sections so the five read as one band. */}
       <div aria-hidden="true" className="sidebar-group-divider" />
-      {onOpenSkills && <ActionTile icon={<Sparkles />} label="Skills" active={focusedWindowType === 'skills'} onClick={onOpenSkills} />}
-      {onOpenLibrary && <ActionTile icon={<Library />} label="Library" active={focusedWindowType === 'library'} onClick={() => onOpenLibrary()} />}
-      {onOpenActivity && <ActionTile icon={<ActivityIcon />} label="Activity" active={focusedWindowType === 'activity'} onClick={onOpenActivity} />}
-      {onOpenAgents && <ActionTile icon={<Bot />} label="Agents" count={agents.length} active={focusedWindowType === 'agents'} onClick={onOpenAgents} />}
-      {onOpenResources && <ActionTile icon={<Database />} label="Resources" active={focusedWindowType === 'resources'} onClick={onOpenResources} />}
-      {onOpenUsers && <ActionTile icon={<Users />} label="Users" active={focusedWindowType === 'users'} onClick={onOpenUsers} />}
-      {/* Schedules live inside Automations now (two tabs, one window). */}
-      {(onOpenAutomations || onOpenSchedules) && <ActionTile icon={<Zap />} label="Automations" active={focusedWindowType === 'automations' || focusedWindowType === 'schedules'} onClick={(onOpenAutomations || onOpenSchedules)!} />}
-      {onOpenTemplates && <ActionTile icon={<LayoutTemplate />} label="Artifacts" onClick={onOpenTemplates} />}
-      {onOpenBrowser && <ActionTile icon={<Globe />} label="Browser" active={focusedWindowType === 'browser'} onClick={onOpenBrowser} />}
-      {onOpenTerminal && <ActionTile icon={<SquareTerminal />} label="Terminal" active={focusedWindowType === 'terminal'} onClick={onOpenTerminal} />}
+      {launchers.filter(l => pinnedLaunchers.has(l.id)).map(l => (
+       <ActionTile key={l.id} icon={l.icon} label={l.label} count={l.count} active={l.active} onClick={l.onClick} />
+      ))}
      </div>
     </ScrollArea>
 
@@ -1187,6 +1215,35 @@ export const Sidebar = React.memo(function Sidebar({
         </button>
        </DropdownMenuTrigger>
        <DropdownMenuContent align="start" side="top" className="w-56">
+        {/* Every top-level destination. The pin on the right adds/removes it
+            from the sidebar rows; clicking the pin keeps the menu open. */}
+        {launchers.map(l => {
+         const pinned = pinnedLaunchers.has(l.id);
+         return (
+          <DropdownMenuItem key={l.id} onSelect={l.onClick} className="group/launcher">
+           <span className="flex size-4 shrink-0 items-center justify-center [&_svg]:size-4">{l.icon}</span>
+           <span className="min-w-0 flex-1 truncate">{l.label}</span>
+           <button
+            type="button"
+            className={cn(
+             'ml-auto flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground',
+             pinned ? 'text-foreground' : 'opacity-40 group-hover/launcher:opacity-100 group-data-[highlighted]/launcher:opacity-100',
+            )}
+            aria-label={pinned ? `Unpin ${l.label} from sidebar` : `Pin ${l.label} to sidebar`}
+            aria-pressed={pinned}
+            title={pinned ? 'Unpin from sidebar' : 'Pin to sidebar'}
+            onClick={event => {
+             event.preventDefault();
+             event.stopPropagation();
+             toggleLauncherPin(l.id);
+            }}
+           >
+            <Pin className={cn('size-3.5', pinned && 'fill-current')} />
+           </button>
+          </DropdownMenuItem>
+         );
+        })}
+        {launchers.length > 0 && <DropdownMenuSeparator />}
         {/* What the workspace rail used to carry at its foot. */}
         {workspaceSwitcherSlot && (
          <DropdownMenuItem onSelect={onCreateWorkspace}>
