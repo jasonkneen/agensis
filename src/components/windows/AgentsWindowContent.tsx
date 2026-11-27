@@ -1506,8 +1506,8 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                       >
                         {/* Outer relative has no overflow — live badge must sit outside the
                             rounded clip or the corner radius crops it to a crescent. */}
-                        <span className="relative grid size-16 shrink-0 place-items-center">
-                          <span className="agents-list-card-avatar relative grid size-full place-items-center overflow-hidden rounded-2xl bg-muted text-2xl ring-1 ring-inset ring-black/5 dark:ring-white/10">
+                        <span className="relative grid size-20 shrink-0 place-items-center">
+                          <span className="agents-list-card-avatar relative grid size-full place-items-center overflow-hidden rounded-2xl bg-muted text-2xl">
                             <AgentAvatarPreview value={agent.avatar} seed={agent.name} className="size-full" />
                           </span>
                           {live && (

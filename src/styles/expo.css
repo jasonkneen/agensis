@@ -634,12 +634,6 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
  background-color: color-mix(in oklab, var(--card), white 6%) !important;
 }
 :root[data-ui-theme="expo"] .agents-status-filter > button:active { transform: translateY(1px); }
-:root[data-ui-theme="expo"] .agents-list-card-avatar {
- box-shadow: inset 0 0 0 1.5px var(--expo-edge), 0 2px 0 var(--expo-lip) !important;
-}
-:root[data-ui-theme="expo"][data-theme="dark"] .agents-list-card-avatar {
- box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 2px 0 var(--expo-lip) !important;
-}
 
 /* Home composer: the one big prompt on the desktop is a raised Expo card over
    the wallpaper — a lighter surface, the top shine, an edge and a lip with a
