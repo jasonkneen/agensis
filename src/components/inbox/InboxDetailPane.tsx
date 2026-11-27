@@ -4,6 +4,7 @@ import { Button } from '@agensis/ui/components/button';
 import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Textarea } from '@agensis/ui/components/textarea';
 import { cn } from '@/lib/utils';
+import { AgentAvatar } from '@/components/agents/AgentAvatar';
 import { CATEGORY_ICON, categoryAccent } from './inboxPresentation';
 import { MICRO_LABEL, PANE_HEADER, SCROLL_VIEWPORT_BLOCK } from '@/components/common/presentation';
 import {
@@ -92,6 +93,9 @@ export function InboxDetail({
   const label = inboxTypeLabel(group);
   const sender = senderLabel(group);
   const initials = senderInitials(sender);
+  // Same name match the list row uses, so the face doesn't change on open.
+  const senderKey = sender.trim().toLowerCase();
+  const senderAgent = agents?.find(agent => agent.name.trim().toLowerCase() === senderKey) ?? null;
   const body = inboxPreview(group);
   const earlier = group.items.slice(1);
   const openTarget = inboxOpenTarget(group);
@@ -151,9 +155,13 @@ export function InboxDetail({
           <div className="flex min-w-0 items-start gap-2.5">
             <span
               aria-hidden="true"
-              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground"
+              className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-xs font-semibold text-muted-foreground"
             >
-              {initials || <Icon className="size-3.5" />}
+              {senderAgent ? (
+                <AgentAvatar avatar={senderAgent.avatar} name={senderAgent.name} initials={initials} className="size-8" />
+              ) : (
+                initials || <Icon className="size-3.5" />
+              )}
             </span>
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-semibold leading-5 text-foreground">{sender}</div>
