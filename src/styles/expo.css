@@ -532,12 +532,6 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
 :root[data-ui-theme="expo"][data-theme="dark"] [data-slot="toggle-group-item"]:not([data-state="on"]) {
  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 3px 0 var(--expo-lip) !important;
 }
-/* The agents status-filter chips draw their own 1px border, so they take
-   only the top shine, keeping the control-outer-ring halo it replaces. */
-:root[data-ui-theme="expo"][data-theme="dark"] .agents-status-filter > button {
- box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), 0 0 0 1px var(--control-outer-ring) !important;
-}
-
 /* Switcher: the selected workspace / desktop row is the raised coral pill;
    the trigger is a paper card on a lip. */
 :root[data-ui-theme="expo"] [data-switcher-option][data-selected="true"] {
@@ -614,26 +608,15 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
  display: none;
 }
 
-/* Agents: the status-filter chips and the avatar tiles sit on the same hard
-   dark lip as the buttons, and the chips and agent cards take a slightly
-   lighter surface than the window so they read as objects on it (Jason). */
-:root[data-ui-theme="expo"] .agents-status-filter > button,
-:root[data-ui-theme="expo"][data-theme="dark"] .agents-status-filter > button {
- border-color: transparent !important;
- box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px var(--expo-edge), 0 2px 0 var(--expo-lip) !important;
-}
-:root[data-ui-theme="expo"][data-theme="dark"] .agents-status-filter > button {
- box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.35), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 2px 0 var(--expo-lip) !important;
-}
-:root[data-ui-theme="expo"] .agents-status-filter > button:not([aria-pressed="true"]),
+/* Agents: the agent cards take a slightly lighter surface than the window so
+   they read as objects on it (Jason). The status filter above them is a
+   segmented tray of plain Buttons, styled exactly like the grid/map toggle. */
 :root[data-ui-theme="expo"] .agents-list-card {
  background-color: color-mix(in oklab, var(--card), white 45%) !important;
 }
-:root[data-ui-theme="expo"][data-theme="dark"] .agents-status-filter > button:not([aria-pressed="true"]),
 :root[data-ui-theme="expo"][data-theme="dark"] .agents-list-card {
  background-color: color-mix(in oklab, var(--card), white 6%) !important;
 }
-:root[data-ui-theme="expo"] .agents-status-filter > button:active { transform: translateY(1px); }
 
 /* Home composer: the one big prompt on the desktop is a raised Expo card over
    the wallpaper — a lighter surface, the top shine, an edge and a lip with a

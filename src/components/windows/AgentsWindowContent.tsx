@@ -1365,21 +1365,18 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
               </ToggleGroup>
             )}
             {agents.length > 0 && (
-              <div className="agents-status-filter mb-3 flex flex-wrap items-center gap-1.5">
-                <button
+              <div className="agents-status-filter mb-3 inline-flex flex-wrap items-center gap-0.5 self-start rounded-lg border border-border bg-card/40 p-0.5">
+                <Button
                   type="button"
+                  size="sm"
+                  variant={statusFilter.size === 0 ? 'default' : 'ghost'}
                   onClick={() => setStatusFilter(new Set())}
                   aria-pressed={statusFilter.size === 0}
-                  className={cn(
-                    STATUS_CHIP,
-                    statusFilter.size === 0
-                      ? FILTER_CHIP_ON
-                      : FILTER_CHIP_OFF,
-                  )}
+                  className={STATUS_CHIP}
                 >
                   All
                   <span className="tabular-nums opacity-70">{agents.length}</span>
-                </button>
+                </Button>
                 {(() => {
                   const activeCount = presenceCounts.busy + presenceCounts.idle;
                   const isActiveFilter = statusFilter.size === 2 && statusFilter.has('busy') && statusFilter.has('idle');
@@ -1387,43 +1384,37 @@ export const AgentsWindowContent = memo(function AgentsWindowContent({
                   // the filter in force, which must stay reachable to undo.
                   if (activeCount === 0 && !isActiveFilter) return null;
                   return (
-                    <button
+                    <Button
                       type="button"
+                      size="sm"
+                      variant={isActiveFilter ? 'default' : 'ghost'}
                       onClick={() => setStatusFilter(new Set(['busy', 'idle']))}
                       aria-pressed={isActiveFilter}
-                      className={cn(
-                        STATUS_CHIP,
-                        isActiveFilter
-                          ? FILTER_CHIP_ON
-                          : FILTER_CHIP_OFF,
-                      )}
+                      className={STATUS_CHIP}
                     >
                       <span className="size-1.5 rounded-full bg-success" aria-hidden />
                       Active
                       <span className="tabular-nums opacity-70">{activeCount}</span>
-                    </button>
+                    </Button>
                   );
                 })()}
                 {AGENT_PRESENCE_FILTERS.map(filter => {
                   const active = statusFilter.has(filter.key);
                   if (presenceCounts[filter.key] === 0 && !active) return null;
                   return (
-                    <button
+                    <Button
                       key={filter.key}
                       type="button"
+                      size="sm"
+                      variant={active ? 'default' : 'ghost'}
                       onClick={() => toggleStatusFilter(filter.key)}
                       aria-pressed={active}
-                      className={cn(
-                        STATUS_CHIP,
-                        active
-                          ? FILTER_CHIP_ON
-                          : FILTER_CHIP_OFF,
-                      )}
+                      className={STATUS_CHIP}
                     >
                       <span className={cn('size-1.5 rounded-full', filter.tone)} aria-hidden />
                       {filter.label}
                       <span className="tabular-nums opacity-70">{presenceCounts[filter.key]}</span>
-                    </button>
+                    </Button>
                   );
                 })}
               </div>
@@ -4158,9 +4149,9 @@ const OWNER_FILTER_ITEM = SEGMENT_ITEM;
 
 /** The status/presence filter row's chip. Three chips, three different
  *  selection rules (clear all, set both active states, toggle one) but one
- *  shape — the colours come from FILTER_CHIP_ON/OFF, shared with the channel
- *  template picker and the marketplace. */
-const STATUS_CHIP = 'control-outer-ring inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition';
+ *  shape — a Button (default when on, ghost when off) in the same tray as the
+ *  grid/map view toggle in the toolbar, so the two controls match. */
+const STATUS_CHIP = 'gap-1.5 text-xs';
 
 const PERMISSION_MODE_OPTIONS: { value: AgentPermissionMode; label: string; hint: string }[] = [
   {
