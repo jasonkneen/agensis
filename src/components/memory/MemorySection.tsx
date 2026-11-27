@@ -33,7 +33,8 @@ import { ScrollArea } from '@agensis/ui/components/scroll-area';
 import { Textarea } from '@agensis/ui/components/textarea';
 import { viewPreferenceKey, type PreferenceCodec } from '../../lib/viewPreferences';
 import { usePersistedPreference } from '../../hooks/usePersistedPreference';
-import { WINDOW_SHELL } from '@/components/common/presentation';
+import { FOCUS_RING, SEGMENTED, SEGMENT_ITEM, WINDOW_SHELL } from '@/components/common/presentation';
+import { cn } from '@/lib/utils';
 
 // The one filter here whose options are user-defined, so there is no closed set
 // to validate against on read: anything non-empty parses, and `activeCategory`
@@ -107,31 +108,25 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
 
   return (
     <div className={WINDOW_SHELL}>
-      <div className="flex h-9 shrink-0 gap-1 border-b border-border bg-card px-2">
-        <button
-          type="button"
-          onClick={() => setTab('facts')}
-          className={`inline-flex items-center gap-1.5 border-b-2 px-2.5 text-sm font-medium ${tab === 'facts' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
-        >
-          <Brain className="size-4" />
-          Team facts
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab('files')}
-          className={`inline-flex items-center gap-1.5 border-b-2 px-2.5 text-sm font-medium ${tab === 'files' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
-        >
-          <FileText className="size-4" />
-          Agent files
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab('suggestions')}
-          className={`inline-flex items-center gap-1.5 border-b-2 px-2.5 text-sm font-medium ${tab === 'suggestions' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
-        >
-          <Lightbulb className="size-4" />
-          Suggestions
-        </button>
+      <div className="flex h-9 shrink-0 items-center border-b border-border bg-card px-2">
+        <div className={cn(SEGMENTED, 'text-sm')} role="group" aria-label="Memory view">
+          {([
+            ['facts', Brain, 'Team facts'],
+            ['files', FileText, 'Agent files'],
+            ['suggestions', Lightbulb, 'Suggestions'],
+          ] as const).map(([value, Icon, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={tab === value}
+              onClick={() => setTab(value)}
+              className={cn(SEGMENT_ITEM, 'py-0.5', FOCUS_RING)}
+            >
+              <Icon className="size-4" />
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {tab === 'suggestions' ? (
