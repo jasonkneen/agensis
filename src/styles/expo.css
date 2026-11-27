@@ -297,12 +297,13 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
  background: color-mix(in oklab, var(--expo-navy), black 12%) !important;
  box-shadow: inset 0 2px 3px rgba(0, 0, 0, 0.35), inset 0 0 0 1.5px var(--expo-edge) !important;
 }
-/* The inbox reply composer carries the buttons' 50%-white top shine and a
-   visible edge over its pressed-in well, so it reads on the dark pane. */
-:root[data-ui-theme="expo"] [data-inbox-reply] > [data-slot="input-group"] {
+/* The inbox reply composer and the channel composer carry the buttons'
+   50%-white top shine and a visible edge over their pressed-in well, so they
+   read on the dark pane. */
+:root[data-ui-theme="expo"] :is([data-inbox-reply] > [data-slot="input-group"], .channel-composer [data-slot="input-group"]) {
  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.7), inset 0 2px 3px rgba(43, 45, 72, 0.16), inset 0 0 0 1.5px var(--expo-edge) !important;
 }
-:root[data-ui-theme="expo"][data-theme="dark"] [data-inbox-reply] > [data-slot="input-group"] {
+:root[data-ui-theme="expo"][data-theme="dark"] :is([data-inbox-reply] > [data-slot="input-group"], .channel-composer [data-slot="input-group"]) {
  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 2px 3px rgba(0, 0, 0, 0.35), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%) !important;
 }
 /* The Tasks window's search, sort, views and add-task fields take the same
