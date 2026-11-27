@@ -109,7 +109,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
   return (
     <div className={WINDOW_SHELL}>
       <div className="flex h-9 shrink-0 items-center border-b border-border bg-card px-2">
-        <div className={cn(SEGMENTED, 'text-sm')} role="group" aria-label="Memory view">
+        <div className={SEGMENTED} role="group" aria-label="Memory view">
           {([
             ['facts', Brain, 'Team facts'],
             ['files', FileText, 'Agent files'],
@@ -122,7 +122,7 @@ export function MemorySection({ facts, categories, onAdd, onUpdate, onDelete, wo
               onClick={() => setTab(value)}
               className={cn(SEGMENT_ITEM, 'py-0.5', FOCUS_RING)}
             >
-              <Icon className="size-4" />
+              <Icon className="size-3.5" />
               {label}
             </button>
           ))}
