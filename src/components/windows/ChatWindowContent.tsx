@@ -2071,9 +2071,9 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                 <DropdownMenuTrigger asChild>
                   <Button
                     type="button"
-                    variant="secondary"
+                    variant="ghost"
                     size="sm"
-                    className="participant-count-chip h-8 gap-1.5 pr-2 pl-1"
+                    className="participant-count-chip h-8 gap-1.5 border-border bg-card/40 pr-2 pl-1"
                     title={`${participants.length} participant${participants.length === 1 ? '' : 's'}`}
                   >
                     {/* Avatar stack instead of a generic person icon: show who is
@@ -2085,7 +2085,7 @@ function dialogParticipantKey(participant: { id?: unknown; kind?: unknown; agent
                         {participants.slice(0, 3).map(participant => (
                           <span
                             key={participant.id}
-                            className="relative grid size-5 shrink-0 place-items-center overflow-hidden rounded-md bg-muted text-3xs font-semibold ring-2 ring-secondary"
+                            className="relative grid size-5 shrink-0 place-items-center overflow-hidden rounded-md bg-muted text-3xs font-semibold ring-2 ring-card"
                           >
                             {participant.kind === 'agent' ? (
                               <AgentAvatar
