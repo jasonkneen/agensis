@@ -1010,34 +1010,18 @@ export const Sidebar = React.memo(function Sidebar({
        actionLabel="New document"
        onAction={onNewDocument}
        headerActions={(
-        <>
-         {onOpenLibrary && (
-          <button
-           type="button"
-           className="sidebar-section-action"
-           aria-label="Open the library"
-           title="Open the library"
-           onClick={event => {
-            event.stopPropagation();
-            onOpenLibrary();
-           }}
-          >
-           <Library className="size-4" />
-          </button>
-         )}
-         <button
-          type="button"
-          className="sidebar-section-action"
-          aria-label="Upload files"
-          title="Upload files"
-          onClick={event => {
-           event.stopPropagation();
-           openUploadPicker();
-          }}
-         >
-          <Upload className="size-4" />
-         </button>
-        </>
+        <button
+         type="button"
+         className="sidebar-section-action"
+         aria-label="Upload files"
+         title="Upload files"
+         onClick={event => {
+          event.stopPropagation();
+          openUploadPicker();
+         }}
+        >
+         <Upload className="size-4" />
+        </button>
        )}
        open={openSections.has('documents')}
        onOpenChange={open => toggleSection('documents', open)}
