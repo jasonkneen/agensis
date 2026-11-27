@@ -722,7 +722,7 @@ export const Sidebar = React.memo(function Sidebar({
       '--sidebar-titlebar-inset': `${titlebarLeftInset}px`,
      } as React.CSSProperties}
     >
-     <div className="sidebar-workspace-pill flex min-w-0 w-full items-center gap-1 rounded-lg border border-border bg-popover/60 p-1 shadow-sm">
+     <div className="sidebar-workspace-pill relative -top-0.5 flex min-w-0 w-full items-center gap-1 rounded-lg border border-border bg-popover/60 p-1 shadow-sm">
       <Button type="button" variant="ghost" size="icon-sm" onClick={onToggleCollapse} aria-label="Collapse sidebar">
        <PanelLeftClose />
       </Button>
