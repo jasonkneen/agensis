@@ -465,6 +465,15 @@ html[data-ui-theme="expo"] { background-color: var(--background); }
 :root[data-ui-theme="expo"] .channel-header [data-slot="button"][data-variant="secondary"][data-size="sm"] {
  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px var(--expo-edge), 0 2px 0 var(--expo-lip) !important;
 }
+/* The participant chip is a dropdown trigger, so its data-slot is no longer
+   "button" and the rule above misses it; it takes the same shiny edge. */
+:root[data-ui-theme="expo"] .channel-header .participant-count-chip {
+ border-color: transparent !important;
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.55), inset 0 0 0 1.5px var(--expo-edge), 0 2px 0 var(--expo-lip) !important;
+}
+:root[data-ui-theme="expo"][data-theme="dark"] .channel-header .participant-count-chip {
+ box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 1.5px color-mix(in oklab, var(--expo-navy), white 26%), 0 2px 0 var(--expo-lip) !important;
+}
 
 /* Sidebar selection: a lifted paper card with a coral icon — no heavy lip. */
 :root[data-ui-theme="expo"] .sidebar-action-row[data-active="true"],
